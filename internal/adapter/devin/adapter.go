@@ -73,13 +73,20 @@ type SkillBundle struct {
 	BundlePath   string
 }
 
+// SkillReference is the stable source-plus-relative-path identity of one
+// selected global Skill Bundle.
+type SkillReference struct {
+	Source       GlobalSource
+	RelativePath string
+}
+
 type Session struct {
 	RootDir          string
 	HomeDir          string
 	WorkingDirectory string
 	Environment      []string
 
-	expectedCatalog []string
+	expectedCatalog []SkillReference
 }
 
 func New(config Config) (*Adapter, error) {
@@ -105,8 +112,8 @@ func (a *Adapter) PrepareSession(rootDir, workingDirectory string, selected []Sk
 		}
 	}
 
-	expected := make([]string, 0, len(selected))
-	seen := make(map[string]struct{}, len(selected))
+	expected := make([]SkillReference, 0, len(selected))
+	seen := make(map[SkillReference]struct{}, len(selected))
 	for _, bundle := range selected {
 		rule, ok := sourceRule(bundle.Source)
 		if !ok {
@@ -116,19 +123,20 @@ func (a *Adapter) PrepareSession(rootDir, workingDirectory string, selected []Sk
 		if err != nil {
 			return nil, fmt.Errorf("prepare Devin Session: %w", err)
 		}
-		identity := skillIdentity(bundle.Source, relativePath)
-		if _, exists := seen[identity]; exists {
+		reference := SkillReference{Source: bundle.Source, RelativePath: relativePath}
+		identity := reference.diagnosticIdentity()
+		if _, exists := seen[reference]; exists {
 			return nil, fmt.Errorf("prepare Devin Session: duplicate Skill Reference %q", identity)
 		}
-		seen[identity] = struct{}{}
-		expected = append(expected, identity)
+		seen[reference] = struct{}{}
+		expected = append(expected, reference)
 
 		destination := filepath.Join(homeDir, rule.RelativeDirectory, relativePath)
 		if err := copyBundle(bundle.BundlePath, destination); err != nil {
 			return nil, fmt.Errorf("prepare Devin Session Skill Bundle %q: %w", identity, err)
 		}
 	}
-	sort.Strings(expected)
+	sortSkillReferences(expected)
 
 	credentialSource := filepath.Join(a.existingHomeDir, filepath.FromSlash(credentialsRelativePath))
 	credentialDestination := filepath.Join(homeDir, filepath.FromSlash(credentialsRelativePath))
@@ -148,15 +156,15 @@ func (a *Adapter) PrepareSession(rootDir, workingDirectory string, selected []Sk
 // Preflight asks the installed Devin CLI to report its observed skills and
 // authentication state. It returns only sanitized capability diagnostics.
 func (a *Adapter) Preflight(ctx context.Context, session *Session) error {
-	observed, ok := a.observeGlobalCatalog(ctx, session)
-	if !ok {
-		return &PreflightError{Capability: CapabilitySkillIsolation, reason: reasonInspectionFailed}
+	observed, failure := a.observeGlobalCatalog(ctx, session)
+	if failure != 0 {
+		return &PreflightError{Capability: CapabilitySkillIsolation, reason: failure}
 	}
-	if !equalStrings(session.expectedCatalog, observed) {
+	if len(observed.unmanaged) != 0 || !equalSkillReferences(session.expectedCatalog, observed.managed) {
 		return &PreflightError{
 			Capability: CapabilitySkillIsolation,
-			Expected:   append([]string(nil), session.expectedCatalog...),
-			Observed:   observed,
+			Expected:   diagnosticIdentities(session.expectedCatalog, nil),
+			Observed:   diagnosticIdentities(observed.managed, observed.unmanaged),
 			reason:     reasonCatalogMismatch,
 		}
 	}
@@ -165,7 +173,10 @@ func (a *Adapter) Preflight(ctx context.Context, session *Session) error {
 	command.Dir = session.WorkingDirectory
 	command.Env = session.Environment
 	output, err := command.CombinedOutput()
-	if err != nil || !strings.HasPrefix(strings.TrimSpace(string(output)), "Logged in") {
+	if err != nil {
+		return &PreflightError{Capability: CapabilityAuthentication, reason: commandFailureReason(ctx, err, reasonAuthenticationCommandFailed)}
+	}
+	if !strings.HasPrefix(strings.TrimSpace(string(output)), "Logged in") {
 		return &PreflightError{Capability: CapabilityAuthentication, reason: reasonAuthenticationUnavailable}
 	}
 	return nil
@@ -177,7 +188,12 @@ type observedSkill struct {
 	BaseDir  string `json:"base_dir"`
 }
 
-func (a *Adapter) observeGlobalCatalog(ctx context.Context, session *Session) ([]string, bool) {
+type catalogObservation struct {
+	managed   []SkillReference
+	unmanaged []string
+}
+
+func (a *Adapter) observeGlobalCatalog(ctx context.Context, session *Session) (catalogObservation, preflightFailureReason) {
 	command := exec.CommandContext(ctx, a.binaryPath, "skills", "list", "--json")
 	command.Dir = session.WorkingDirectory
 	command.Env = session.Environment
@@ -185,16 +201,16 @@ func (a *Adapter) observeGlobalCatalog(ctx context.Context, session *Session) ([
 	command.Stdout = &stdout
 	command.Stderr = io.Discard
 	if err := command.Run(); err != nil {
-		return nil, false
+		return catalogObservation{}, commandFailureReason(ctx, err, reasonSkillInspectionCommandFailed)
 	}
 
 	var skills []observedSkill
 	if err := json.Unmarshal(stdout.Bytes(), &skills); err != nil {
-		return nil, false
+		return catalogObservation{}, reasonSkillInspectionOutputInvalid
 	}
 
 	projectBundles := discoverProjectBundles(session.WorkingDirectory)
-	observed := make([]string, 0, len(skills))
+	observed := catalogObservation{managed: make([]SkillReference, 0, len(skills))}
 	for _, skill := range skills {
 		if skill.Provider == "Builtin" {
 			continue
@@ -203,29 +219,30 @@ func (a *Adapter) observeGlobalCatalog(ctx context.Context, session *Session) ([
 			continue
 		}
 
-		identity, managed := managedIdentity(session.HomeDir, skill.BaseDir)
+		reference, managed := managedReference(session.HomeDir, skill.BaseDir)
 		if managed {
-			observed = append(observed, identity)
+			observed.managed = append(observed.managed, reference)
 			continue
 		}
 
 		// Any non-built-in skill outside the two known project roots is a new
 		// global source that ACS cannot safely claim to isolate.
-		observed = append(observed, "unmanaged:"+sanitizedIdentityPart(skill.Name))
+		observed.unmanaged = append(observed.unmanaged, "unmanaged:"+sanitizedIdentityPart(skill.Name))
 	}
-	sort.Strings(observed)
-	return observed, true
+	sortSkillReferences(observed.managed)
+	sort.Strings(observed.unmanaged)
+	return observed, 0
 }
 
-func managedIdentity(homeDir, baseDir string) (string, bool) {
+func managedReference(homeDir, baseDir string) (SkillReference, bool) {
 	for _, rule := range globalSourceRules {
 		root := filepath.Join(homeDir, rule.RelativeDirectory)
 		relative, ok := relativeWithin(root, baseDir)
 		if ok && relative != "." {
-			return skillIdentity(rule.Source, relative), true
+			return SkillReference{Source: rule.Source, RelativePath: relative}, true
 		}
 	}
-	return "", false
+	return SkillReference{}, false
 }
 
 func discoverProjectBundles(workingDirectory string) map[string]bool {
@@ -264,8 +281,8 @@ func cleanBundleRelativePath(path string) (string, error) {
 	return cleaned, nil
 }
 
-func skillIdentity(source GlobalSource, relativePath string) string {
-	return string(source) + ":" + filepath.ToSlash(relativePath)
+func (reference SkillReference) diagnosticIdentity() string {
+	return string(reference.Source) + ":" + sanitizedIdentityPart(filepath.ToSlash(reference.RelativePath))
 }
 
 func relativeWithin(root, candidate string) (string, bool) {
@@ -279,7 +296,7 @@ func relativeWithin(root, candidate string) (string, bool) {
 func sanitizedIdentityPart(value string) string {
 	var builder strings.Builder
 	for _, character := range value {
-		if character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z' || character >= '0' && character <= '9' || strings.ContainsRune("._-:", character) {
+		if character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z' || character >= '0' && character <= '9' || strings.ContainsRune("._-:/", character) {
 			builder.WriteRune(character)
 		}
 	}
@@ -289,7 +306,7 @@ func sanitizedIdentityPart(value string) string {
 	return builder.String()
 }
 
-func equalStrings(left, right []string) bool {
+func equalSkillReferences(left, right []SkillReference) bool {
 	if len(left) != len(right) {
 		return false
 	}
@@ -299,6 +316,36 @@ func equalStrings(left, right []string) bool {
 		}
 	}
 	return true
+}
+
+func sortSkillReferences(references []SkillReference) {
+	sort.Slice(references, func(left, right int) bool {
+		if references[left].Source != references[right].Source {
+			return references[left].Source < references[right].Source
+		}
+		return references[left].RelativePath < references[right].RelativePath
+	})
+}
+
+func diagnosticIdentities(references []SkillReference, extra []string) []string {
+	identities := make([]string, 0, len(references)+len(extra))
+	for _, reference := range references {
+		identities = append(identities, reference.diagnosticIdentity())
+	}
+	identities = append(identities, extra...)
+	sort.Strings(identities)
+	return identities
+}
+
+func commandFailureReason(ctx context.Context, err error, commandFailed preflightFailureReason) preflightFailureReason {
+	if ctx.Err() != nil {
+		return reasonVerificationInterrupted
+	}
+	var executableError *exec.Error
+	if errors.As(err, &executableError) || errors.Is(err, os.ErrNotExist) {
+		return reasonExecutableUnavailable
+	}
+	return commandFailed
 }
 
 func isolatedEnvironment(homeDir string) []string {

@@ -46,6 +46,40 @@ func TestPreflightReportsSanitizedCatalogMismatch(t *testing.T) {
 	}
 }
 
+func TestPreflightSanitizesManagedSkillIdentities(t *testing.T) {
+	fixture := newFakeDevinFixture(t, nil, "Logged in (via Devin).", 0)
+	fixture.selectedRelativePath = "acs-selected\n\x1b[31mforged"
+
+	adapter, session := fixture.prepare(t)
+	err := adapter.Preflight(context.Background(), session)
+	if err == nil {
+		t.Fatal("Preflight succeeded with a missing selected Skill Bundle")
+	}
+	if strings.ContainsAny(err.Error(), "\n\r\x1b") {
+		t.Fatalf("diagnostic contains terminal control characters: %q", err.Error())
+	}
+}
+
+func TestPreflightReportsMissingExecutableInsteadOfSuggestingLoginOrCommandSupport(t *testing.T) {
+	fixture := newFakeDevinFixture(t, nil, "", 0)
+	adapter, session := fixture.prepare(t)
+	if err := os.Remove(filepath.Join(fixture.testRoot, "fake-devin")); err != nil {
+		t.Fatal(err)
+	}
+
+	err := adapter.Preflight(context.Background(), session)
+	if err == nil {
+		t.Fatal("Preflight succeeded without a Devin executable")
+	}
+	diagnostic := err.Error()
+	if !strings.Contains(diagnostic, "executable") || !strings.Contains(diagnostic, "installed") {
+		t.Fatalf("missing-executable diagnostic is not actionable: %q", diagnostic)
+	}
+	if strings.Contains(diagnostic, "auth login") || strings.Contains(diagnostic, "supports `devin skills") {
+		t.Fatalf("missing-executable diagnostic suggests the wrong remedy: %q", diagnostic)
+	}
+}
+
 func TestPreflightReportsSanitizedUnavailableAuthentication(t *testing.T) {
 	fixture := newFakeDevinFixture(t, []fakeObservedSkill{{
 		Name:     "acs-selected-fixture",
@@ -161,17 +195,18 @@ type fakeObservedSkill struct {
 }
 
 type fakeDevinFixture struct {
-	testRoot       string
-	existingHome   string
-	skills         []fakeObservedSkill
-	skillsStderr   string
-	authOutput     string
-	authExitStatus int
+	testRoot             string
+	existingHome         string
+	skills               []fakeObservedSkill
+	skillsStderr         string
+	authOutput           string
+	authExitStatus       int
+	selectedRelativePath string
 }
 
 func newFakeDevinFixture(t *testing.T, skills []fakeObservedSkill, authOutput string, authExitStatus int) *fakeDevinFixture {
 	t.Helper()
-	root := testRoot(t)
+	root := testRootPath(t)
 	existingHome := filepath.Join(root, "existing-home")
 	credentialPath := filepath.Join(existingHome, ".local", "share", "devin", "credentials.toml")
 	if err := os.MkdirAll(filepath.Dir(credentialPath), 0o700); err != nil {
@@ -181,11 +216,12 @@ func newFakeDevinFixture(t *testing.T, skills []fakeObservedSkill, authOutput st
 		t.Fatal(err)
 	}
 	return &fakeDevinFixture{
-		testRoot:       root,
-		existingHome:   existingHome,
-		skills:         skills,
-		authOutput:     authOutput,
-		authExitStatus: authExitStatus,
+		testRoot:             root,
+		existingHome:         existingHome,
+		skills:               skills,
+		authOutput:           authOutput,
+		authExitStatus:       authExitStatus,
+		selectedRelativePath: "acs-selected-fixture",
 	}
 }
 
@@ -239,7 +275,7 @@ exit 64
 		plannedWorkingDirectory(t),
 		[]devin.SkillBundle{{
 			Source:       devin.GlobalSourceDevinConfig,
-			RelativePath: "acs-selected-fixture",
+			RelativePath: fixture.selectedRelativePath,
 			BundlePath:   filepath.Join("testdata", "selected-skill"),
 		}},
 	)
@@ -247,11 +283,6 @@ exit 64
 		t.Fatal(err)
 	}
 	return adapter, session
-}
-
-func testRoot(t *testing.T) string {
-	t.Helper()
-	return testRootPath(t)
 }
 
 func plannedSessionHome(t *testing.T) string {

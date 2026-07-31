@@ -12,8 +12,12 @@ const (
 type preflightFailureReason uint8
 
 const (
-	reasonInspectionFailed preflightFailureReason = iota + 1
+	reasonExecutableUnavailable preflightFailureReason = iota + 1
+	reasonVerificationInterrupted
+	reasonSkillInspectionCommandFailed
+	reasonSkillInspectionOutputInvalid
 	reasonCatalogMismatch
+	reasonAuthenticationCommandFailed
 	reasonAuthenticationUnavailable
 )
 
@@ -28,10 +32,18 @@ type PreflightError struct {
 
 func (e *PreflightError) Error() string {
 	switch e.reason {
-	case reasonInspectionFailed:
-		return "Devin Adapter Preflight failed: skill isolation could not be inspected; verify the installed Devin CLI supports `devin skills list --json`"
+	case reasonExecutableUnavailable:
+		return "Devin Adapter Preflight failed: the Devin executable could not be started; verify Devin is installed and the configured executable path is valid"
+	case reasonVerificationInterrupted:
+		return fmt.Sprintf("Devin Adapter Preflight failed: %s verification was canceled or timed out; retry with a live Session", e.Capability)
+	case reasonSkillInspectionCommandFailed:
+		return "Devin Adapter Preflight failed: the skill isolation probe failed; run `devin skills list --json` outside ACS and resolve the reported CLI error"
+	case reasonSkillInspectionOutputInvalid:
+		return "Devin Adapter Preflight failed: Devin returned an incompatible global Skill Catalog response; update Devin or ACS before retrying"
 	case reasonCatalogMismatch:
 		return fmt.Sprintf("Devin Adapter Preflight failed: skill isolation could not be verified (expected global Skill Catalog %v; observed %v); the installed Devin CLI is incompatible with ACS isolation", e.Expected, e.Observed)
+	case reasonAuthenticationCommandFailed:
+		return "Devin Adapter Preflight failed: the authentication probe failed; run `devin auth status` outside ACS and resolve the reported CLI error"
 	case reasonAuthenticationUnavailable:
 		return "Devin Adapter Preflight failed: usable existing authentication could not be verified; run `devin auth login` outside ACS and retry"
 	default:
