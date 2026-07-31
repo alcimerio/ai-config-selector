@@ -22,14 +22,12 @@ func TestCreateProfileSelectsSameNamedSkillBundlesIndependently(t *testing.T) {
 		{
 			Reference:   skills.SkillReference{Source: "devin-config", RelativePath: "review"},
 			DisplayName: "review",
-			SourceRoot:  "/global/devin/skills",
-			Path:        "/global/devin/skills/review",
+			BundlePath:  "/global/devin/skills/review",
 		},
 		{
 			Reference:   skills.SkillReference{Source: "shared-agents", RelativePath: "review"},
 			DisplayName: "review",
-			SourceRoot:  "/global/agents/skills",
-			Path:        "/global/agents/skills/review",
+			BundlePath:  "/global/agents/skills/review",
 		},
 	}}
 	var stdout bytes.Buffer
@@ -86,7 +84,7 @@ func TestCreateProfileEscapesCatalogControlCharactersInSelector(t *testing.T) {
 		Catalog: staticCatalog{bundles: []skills.SkillBundle{{
 			Reference:   skills.SkillReference{Source: "devin-config", RelativePath: "review\nforged"},
 			DisplayName: "review\nforged",
-			Path:        "/global/review\x1b[31m",
+			BundlePath:  "/global/review\x1b[31m",
 		}}},
 		Profiles:    profiles,
 		Input:       strings.NewReader("1\n"),
@@ -190,8 +188,8 @@ func TestCreateProfileRejectsInvalidNameBeforeDiscoveryOrWrite(t *testing.T) {
 func TestCreateProfileRejectsDuplicateNameWithoutOverwriting(t *testing.T) {
 	profiles := profile.NewStore(t.TempDir())
 	catalog := staticCatalog{bundles: []skills.SkillBundle{
-		{Reference: skills.SkillReference{Source: "devin-config", RelativePath: "first"}, DisplayName: "first", Path: "/devin/first"},
-		{Reference: skills.SkillReference{Source: "shared-agents", RelativePath: "second"}, DisplayName: "second", Path: "/agents/second"},
+		{Reference: skills.SkillReference{Source: "devin-config", RelativePath: "first"}, DisplayName: "first", BundlePath: "/devin/first"},
+		{Reference: skills.SkillReference{Source: "shared-agents", RelativePath: "second"}, DisplayName: "second", BundlePath: "/agents/second"},
 	}}
 	run := func(input string) (int, string) {
 		t.Helper()

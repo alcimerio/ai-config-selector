@@ -43,14 +43,12 @@ func TestDiscoverGlobalSkillCatalogKeepsSourceIdentityForDuplicateNames(t *testi
 		{
 			Reference:   skills.SkillReference{Source: "devin-config", RelativePath: "review"},
 			DisplayName: "review",
-			SourceRoot:  filepath.Dir(devinBundle),
-			Path:        devinBundle,
+			BundlePath:  devinBundle,
 		},
 		{
 			Reference:   skills.SkillReference{Source: "shared-agents", RelativePath: "review"},
 			DisplayName: "review",
-			SourceRoot:  filepath.Dir(agentsBundle),
-			Path:        agentsBundle,
+			BundlePath:  agentsBundle,
 		},
 	}
 	if !reflect.DeepEqual(got, want) {
@@ -341,7 +339,7 @@ exit 64
 				Source:       devin.GlobalSourceDevinConfig,
 				RelativePath: fixture.selectedRelativePath,
 			},
-			Path: filepath.Join("testdata", "selected-skill"),
+			BundlePath: filepath.Join("testdata", "selected-skill"),
 		}},
 	)
 	if err != nil {

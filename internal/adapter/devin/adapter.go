@@ -128,7 +128,7 @@ func (a *Adapter) PrepareSession(rootDir, workingDirectory string, selected []Sk
 		expected = append(expected, reference)
 
 		destination := filepath.Join(homeDir, rule.RelativeDirectory, relativePath)
-		if err := copyBundle(bundle.Path, destination); err != nil {
+		if err := copyBundle(bundle.BundlePath, destination); err != nil {
 			return nil, fmt.Errorf("prepare Devin Session Skill Bundle %q: %w", identity, err)
 		}
 	}

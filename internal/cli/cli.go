@@ -51,7 +51,7 @@ func (app App) Run(ctx context.Context, args []string) int {
 			index+1,
 			safeTerminalText(bundle.DisplayName),
 			safeTerminalText(string(bundle.Reference.Source)),
-			safeTerminalText(bundle.Path),
+			safeTerminalText(bundle.BundlePath),
 		)
 	}
 	fmt.Fprint(app.Output, "\nEnter comma-separated numbers (blank for none): ")

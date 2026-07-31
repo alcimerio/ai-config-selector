@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 
 	"github.com/alcimerio/ai-config-selector/internal/adapter/devin"
 	"github.com/alcimerio/ai-config-selector/internal/cli"
@@ -12,6 +13,10 @@ import (
 )
 
 func main() {
+	if err := requireSupportedPlatform(runtime.GOOS); err != nil {
+		fmt.Fprintf(os.Stderr, "acs: %v\n", err)
+		os.Exit(1)
+	}
 	existingHome, err := os.UserHomeDir()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "acs: resolve user home: %v\n", err)
@@ -34,4 +39,11 @@ func main() {
 		ErrorOutput: os.Stderr,
 	}
 	os.Exit(application.Run(context.Background(), os.Args[1:]))
+}
+
+func requireSupportedPlatform(goos string) error {
+	if goos != "darwin" {
+		return fmt.Errorf("ACS supports macOS only; current platform is %s", goos)
+	}
+	return nil
 }

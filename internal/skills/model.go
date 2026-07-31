@@ -15,6 +15,5 @@ type SkillReference struct {
 type SkillBundle struct {
 	Reference   SkillReference
 	DisplayName string
-	SourceRoot  string
-	Path        string
+	BundlePath  string
 }

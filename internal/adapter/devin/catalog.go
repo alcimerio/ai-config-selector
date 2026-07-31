@@ -47,8 +47,7 @@ func (a *Adapter) DiscoverGlobalSkillCatalog(ctx context.Context) ([]skills.Skil
 					RelativePath: entry.Name(),
 				},
 				DisplayName: entry.Name(),
-				SourceRoot:  sourceRoot,
-				Path:        bundlePath,
+				BundlePath:  bundlePath,
 			})
 		}
 	}
