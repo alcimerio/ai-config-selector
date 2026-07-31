@@ -14,10 +14,12 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/alcimerio/ai-config-selector/internal/skills"
 )
 
 // GlobalSource identifies one explicit Devin user-global Skill Bundle source.
-type GlobalSource string
+type GlobalSource = skills.Source
 
 const (
 	GlobalSourceDevinConfig  GlobalSource = "devin-config"
@@ -68,17 +70,11 @@ type Adapter struct {
 	existingHomeDir string
 }
 
-type SkillBundle struct {
-	Reference  SkillReference
-	BundlePath string
-}
+type SkillBundle = skills.SkillBundle
 
 // SkillReference is the stable source-plus-relative-path identity of one
 // selected global Skill Bundle.
-type SkillReference struct {
-	Source       GlobalSource
-	RelativePath string
-}
+type SkillReference = skills.SkillReference
 
 type Session struct {
 	RootDir          string
@@ -124,7 +120,7 @@ func (a *Adapter) PrepareSession(rootDir, workingDirectory string, selected []Sk
 			return nil, fmt.Errorf("prepare Devin Session: %w", err)
 		}
 		reference := SkillReference{Source: bundle.Reference.Source, RelativePath: relativePath}
-		identity := reference.diagnosticIdentity()
+		identity := diagnosticIdentity(reference)
 		if _, exists := seen[reference]; exists {
 			return nil, fmt.Errorf("prepare Devin Session: duplicate Skill Reference %q", identity)
 		}
@@ -132,7 +128,7 @@ func (a *Adapter) PrepareSession(rootDir, workingDirectory string, selected []Sk
 		expected = append(expected, reference)
 
 		destination := filepath.Join(homeDir, rule.RelativeDirectory, relativePath)
-		if err := copyBundle(bundle.BundlePath, destination); err != nil {
+		if err := copyBundle(bundle.Path, destination); err != nil {
 			return nil, fmt.Errorf("prepare Devin Session Skill Bundle %q: %w", identity, err)
 		}
 	}
@@ -281,7 +277,7 @@ func cleanBundleRelativePath(path string) (string, error) {
 	return cleaned, nil
 }
 
-func (reference SkillReference) diagnosticIdentity() string {
+func diagnosticIdentity(reference SkillReference) string {
 	return escapedDiagnosticIdentity(string(reference.Source) + ":" + filepath.ToSlash(reference.RelativePath))
 }
 
@@ -322,7 +318,7 @@ func sortSkillReferences(references []SkillReference) {
 func diagnosticIdentities(references []SkillReference, extra []string) []string {
 	identities := make([]string, 0, len(references)+len(extra))
 	for _, reference := range references {
-		identities = append(identities, reference.diagnosticIdentity())
+		identities = append(identities, diagnosticIdentity(reference))
 	}
 	identities = append(identities, extra...)
 	sort.Strings(identities)

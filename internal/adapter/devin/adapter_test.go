@@ -12,7 +12,51 @@ import (
 	"testing"
 
 	"github.com/alcimerio/ai-config-selector/internal/adapter/devin"
+	"github.com/alcimerio/ai-config-selector/internal/skills"
 )
+
+func TestDiscoverGlobalSkillCatalogKeepsSourceIdentityForDuplicateNames(t *testing.T) {
+	existingHome := t.TempDir()
+	devinBundle := filepath.Join(existingHome, ".config", "devin", "skills", "review")
+	agentsBundle := filepath.Join(existingHome, ".agents", "skills", "review")
+	invalidBundle := filepath.Join(existingHome, ".config", "devin", "skills", "not-a-skill")
+	for _, bundlePath := range []string{devinBundle, agentsBundle, invalidBundle} {
+		if err := os.MkdirAll(bundlePath, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, bundlePath := range []string{devinBundle, agentsBundle} {
+		if err := os.WriteFile(filepath.Join(bundlePath, "SKILL.md"), []byte("# review\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	adapter, err := devin.New(devin.Config{BinaryPath: "devin", ExistingHomeDir: existingHome})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := adapter.DiscoverGlobalSkillCatalog(context.Background())
+	if err != nil {
+		t.Fatalf("discover global Skill Catalog: %v", err)
+	}
+	want := []skills.SkillBundle{
+		{
+			Reference:   skills.SkillReference{Source: "devin-config", RelativePath: "review"},
+			DisplayName: "review",
+			SourceRoot:  filepath.Dir(devinBundle),
+			Path:        devinBundle,
+		},
+		{
+			Reference:   skills.SkillReference{Source: "shared-agents", RelativePath: "review"},
+			DisplayName: "review",
+			SourceRoot:  filepath.Dir(agentsBundle),
+			Path:        agentsBundle,
+		},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("global Skill Catalog = %#v, want %#v", got, want)
+	}
+}
 
 func TestPreflightReportsSanitizedCatalogMismatch(t *testing.T) {
 	fixture := newFakeDevinFixture(t, []fakeObservedSkill{{
@@ -297,7 +341,7 @@ exit 64
 				Source:       devin.GlobalSourceDevinConfig,
 				RelativePath: fixture.selectedRelativePath,
 			},
-			BundlePath: filepath.Join("testdata", "selected-skill"),
+			Path: filepath.Join("testdata", "selected-skill"),
 		}},
 	)
 	if err != nil {
