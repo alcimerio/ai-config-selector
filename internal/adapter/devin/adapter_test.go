@@ -60,6 +60,25 @@ func TestPreflightSanitizesManagedSkillIdentities(t *testing.T) {
 	}
 }
 
+func TestPreflightKeepsSanitizedManagedIdentitiesDistinct(t *testing.T) {
+	fixture := newFakeDevinFixture(t, []fakeObservedSkill{{
+		Name:     "café",
+		Provider: "Devin",
+		BaseDir:  filepath.Join(plannedSessionHome(t), ".config", "devin", "skills", "café"),
+	}}, "Logged in (via Devin).", 0)
+	fixture.selectedRelativePath = "caf"
+
+	adapter, session := fixture.prepare(t)
+	err := adapter.Preflight(context.Background(), session)
+	if err == nil {
+		t.Fatal("Preflight succeeded with different managed Skill References")
+	}
+	diagnostic := err.Error()
+	if !strings.Contains(diagnostic, `devin-config:caf\u00e9`) {
+		t.Fatalf("diagnostic did not preserve the distinct escaped identity: %q", diagnostic)
+	}
+}
+
 func TestPreflightReportsMissingExecutableInsteadOfSuggestingLoginOrCommandSupport(t *testing.T) {
 	fixture := newFakeDevinFixture(t, nil, "", 0)
 	adapter, session := fixture.prepare(t)
@@ -274,9 +293,11 @@ exit 64
 		filepath.Join(fixture.testRoot, "session"),
 		plannedWorkingDirectory(t),
 		[]devin.SkillBundle{{
-			Source:       devin.GlobalSourceDevinConfig,
-			RelativePath: fixture.selectedRelativePath,
-			BundlePath:   filepath.Join("testdata", "selected-skill"),
+			Reference: devin.SkillReference{
+				Source:       devin.GlobalSourceDevinConfig,
+				RelativePath: fixture.selectedRelativePath,
+			},
+			BundlePath: filepath.Join("testdata", "selected-skill"),
 		}},
 	)
 	if err != nil {

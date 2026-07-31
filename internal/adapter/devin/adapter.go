@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -68,9 +69,8 @@ type Adapter struct {
 }
 
 type SkillBundle struct {
-	Source       GlobalSource
-	RelativePath string
-	BundlePath   string
+	Reference  SkillReference
+	BundlePath string
 }
 
 // SkillReference is the stable source-plus-relative-path identity of one
@@ -115,15 +115,15 @@ func (a *Adapter) PrepareSession(rootDir, workingDirectory string, selected []Sk
 	expected := make([]SkillReference, 0, len(selected))
 	seen := make(map[SkillReference]struct{}, len(selected))
 	for _, bundle := range selected {
-		rule, ok := sourceRule(bundle.Source)
+		rule, ok := sourceRule(bundle.Reference.Source)
 		if !ok {
-			return nil, fmt.Errorf("prepare Devin Session: unsupported global source %q", bundle.Source)
+			return nil, fmt.Errorf("prepare Devin Session: unsupported global source %q", bundle.Reference.Source)
 		}
-		relativePath, err := cleanBundleRelativePath(bundle.RelativePath)
+		relativePath, err := cleanBundleRelativePath(bundle.Reference.RelativePath)
 		if err != nil {
 			return nil, fmt.Errorf("prepare Devin Session: %w", err)
 		}
-		reference := SkillReference{Source: bundle.Source, RelativePath: relativePath}
+		reference := SkillReference{Source: bundle.Reference.Source, RelativePath: relativePath}
 		identity := reference.diagnosticIdentity()
 		if _, exists := seen[reference]; exists {
 			return nil, fmt.Errorf("prepare Devin Session: duplicate Skill Reference %q", identity)
@@ -227,7 +227,7 @@ func (a *Adapter) observeGlobalCatalog(ctx context.Context, session *Session) (c
 
 		// Any non-built-in skill outside the two known project roots is a new
 		// global source that ACS cannot safely claim to isolate.
-		observed.unmanaged = append(observed.unmanaged, "unmanaged:"+sanitizedIdentityPart(skill.Name))
+		observed.unmanaged = append(observed.unmanaged, escapedDiagnosticIdentity("unmanaged:"+skill.Name))
 	}
 	sortSkillReferences(observed.managed)
 	sort.Strings(observed.unmanaged)
@@ -282,7 +282,7 @@ func cleanBundleRelativePath(path string) (string, error) {
 }
 
 func (reference SkillReference) diagnosticIdentity() string {
-	return string(reference.Source) + ":" + sanitizedIdentityPart(filepath.ToSlash(reference.RelativePath))
+	return escapedDiagnosticIdentity(string(reference.Source) + ":" + filepath.ToSlash(reference.RelativePath))
 }
 
 func relativeWithin(root, candidate string) (string, bool) {
@@ -293,17 +293,9 @@ func relativeWithin(root, candidate string) (string, bool) {
 	return relative, true
 }
 
-func sanitizedIdentityPart(value string) string {
-	var builder strings.Builder
-	for _, character := range value {
-		if character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z' || character >= '0' && character <= '9' || strings.ContainsRune("._-:/", character) {
-			builder.WriteRune(character)
-		}
-	}
-	if builder.Len() == 0 {
-		return "unknown"
-	}
-	return builder.String()
+func escapedDiagnosticIdentity(value string) string {
+	quoted := strconv.QuoteToASCII(value)
+	return quoted[1 : len(quoted)-1]
 }
 
 func equalSkillReferences(left, right []SkillReference) bool {

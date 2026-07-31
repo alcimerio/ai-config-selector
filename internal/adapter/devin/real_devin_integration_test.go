@@ -33,14 +33,18 @@ func TestRealDevinPreflightPreservesExactGlobalCatalogAndExistingLogin(t *testin
 
 	session, err := adapter.PrepareSession(t.TempDir(), t.TempDir(), []devin.SkillBundle{
 		{
-			Source:       devin.GlobalSourceDevinConfig,
-			RelativePath: "acs-selected-devin",
-			BundlePath:   filepath.Join("testdata", "selected-skill"),
+			Reference: devin.SkillReference{
+				Source:       devin.GlobalSourceDevinConfig,
+				RelativePath: "acs-selected-devin",
+			},
+			BundlePath: filepath.Join("testdata", "selected-skill"),
 		},
 		{
-			Source:       devin.GlobalSourceSharedAgents,
-			RelativePath: "acs-selected-agents",
-			BundlePath:   filepath.Join("testdata", "selected-skill"),
+			Reference: devin.SkillReference{
+				Source:       devin.GlobalSourceSharedAgents,
+				RelativePath: "acs-selected-agents",
+			},
+			BundlePath: filepath.Join("testdata", "selected-skill"),
 		},
 	})
 	if err != nil {
