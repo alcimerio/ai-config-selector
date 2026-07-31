@@ -1,0 +1,327 @@
+// Package devin implements the Devin-specific boundary for ACS Sessions.
+package devin
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"sort"
+	"strings"
+)
+
+// GlobalSource identifies one explicit Devin user-global Skill Bundle source.
+type GlobalSource string
+
+const (
+	GlobalSourceDevinConfig  GlobalSource = "devin-config"
+	GlobalSourceSharedAgents GlobalSource = "shared-agents"
+)
+
+// SourceRule records a Devin discovery rule relative to the Session home.
+type SourceRule struct {
+	Source            GlobalSource
+	RelativeDirectory string
+}
+
+var globalSourceRules = []SourceRule{
+	{Source: GlobalSourceDevinConfig, RelativeDirectory: filepath.Join(".config", "devin", "skills")},
+	{Source: GlobalSourceSharedAgents, RelativeDirectory: filepath.Join(".agents", "skills")},
+}
+
+var projectSourceDirectories = []string{
+	filepath.Join(".devin", "skills"),
+	filepath.Join(".agents", "skills"),
+}
+
+const credentialsRelativePath = ".local/share/devin/credentials.toml"
+
+// GlobalSourceRules returns the complete set of global Skill Catalog sources
+// managed by the Devin Adapter. Project-local sources are deliberately absent.
+func GlobalSourceRules() []SourceRule {
+	rules := make([]SourceRule, len(globalSourceRules))
+	copy(rules, globalSourceRules)
+	return rules
+}
+
+// ProjectSourceDirectories returns Devin's known repository-local skill roots.
+// ACS observes but does not materialize or filter these roots.
+func ProjectSourceDirectories() []string {
+	directories := make([]string, len(projectSourceDirectories))
+	copy(directories, projectSourceDirectories)
+	return directories
+}
+
+type Config struct {
+	BinaryPath      string
+	ExistingHomeDir string
+}
+
+type Adapter struct {
+	binaryPath      string
+	existingHomeDir string
+}
+
+type SkillBundle struct {
+	Source       GlobalSource
+	RelativePath string
+	BundlePath   string
+}
+
+type Session struct {
+	RootDir          string
+	HomeDir          string
+	WorkingDirectory string
+	Environment      []string
+
+	expectedCatalog []string
+}
+
+func New(config Config) (*Adapter, error) {
+	if config.BinaryPath == "" {
+		return nil, errors.New("create Devin Adapter: binary path is required")
+	}
+	if config.ExistingHomeDir == "" {
+		return nil, errors.New("create Devin Adapter: existing home directory is required")
+	}
+	return &Adapter{
+		binaryPath:      config.BinaryPath,
+		existingHomeDir: filepath.Clean(config.ExistingHomeDir),
+	}, nil
+}
+
+// PrepareSession creates the synthetic Devin home, copies selected Skill
+// Bundles, and preserves only the allowlisted credential file.
+func (a *Adapter) PrepareSession(rootDir, workingDirectory string, selected []SkillBundle) (*Session, error) {
+	homeDir := filepath.Join(rootDir, "home")
+	for _, rule := range globalSourceRules {
+		if err := os.MkdirAll(filepath.Join(homeDir, rule.RelativeDirectory), 0o700); err != nil {
+			return nil, fmt.Errorf("prepare Devin Session global source %q: %w", rule.Source, err)
+		}
+	}
+
+	expected := make([]string, 0, len(selected))
+	seen := make(map[string]struct{}, len(selected))
+	for _, bundle := range selected {
+		rule, ok := sourceRule(bundle.Source)
+		if !ok {
+			return nil, fmt.Errorf("prepare Devin Session: unsupported global source %q", bundle.Source)
+		}
+		relativePath, err := cleanBundleRelativePath(bundle.RelativePath)
+		if err != nil {
+			return nil, fmt.Errorf("prepare Devin Session: %w", err)
+		}
+		identity := skillIdentity(bundle.Source, relativePath)
+		if _, exists := seen[identity]; exists {
+			return nil, fmt.Errorf("prepare Devin Session: duplicate Skill Reference %q", identity)
+		}
+		seen[identity] = struct{}{}
+		expected = append(expected, identity)
+
+		destination := filepath.Join(homeDir, rule.RelativeDirectory, relativePath)
+		if err := copyBundle(bundle.BundlePath, destination); err != nil {
+			return nil, fmt.Errorf("prepare Devin Session Skill Bundle %q: %w", identity, err)
+		}
+	}
+	sort.Strings(expected)
+
+	credentialSource := filepath.Join(a.existingHomeDir, filepath.FromSlash(credentialsRelativePath))
+	credentialDestination := filepath.Join(homeDir, filepath.FromSlash(credentialsRelativePath))
+	if err := copyCredentialIfPresent(credentialSource, credentialDestination); err != nil {
+		return nil, fmt.Errorf("prepare Devin Session authentication allowlist: %w", err)
+	}
+
+	return &Session{
+		RootDir:          filepath.Clean(rootDir),
+		HomeDir:          homeDir,
+		WorkingDirectory: filepath.Clean(workingDirectory),
+		Environment:      isolatedEnvironment(homeDir),
+		expectedCatalog:  expected,
+	}, nil
+}
+
+// Preflight asks the installed Devin CLI to report its observed skills and
+// authentication state. It returns only sanitized capability diagnostics.
+func (a *Adapter) Preflight(ctx context.Context, session *Session) error {
+	observed, ok := a.observeGlobalCatalog(ctx, session)
+	if !ok {
+		return &PreflightError{Capability: CapabilitySkillIsolation, reason: reasonInspectionFailed}
+	}
+	if !equalStrings(session.expectedCatalog, observed) {
+		return &PreflightError{
+			Capability: CapabilitySkillIsolation,
+			Expected:   append([]string(nil), session.expectedCatalog...),
+			Observed:   observed,
+			reason:     reasonCatalogMismatch,
+		}
+	}
+
+	command := exec.CommandContext(ctx, a.binaryPath, "auth", "status")
+	command.Dir = session.WorkingDirectory
+	command.Env = session.Environment
+	output, err := command.CombinedOutput()
+	if err != nil || !strings.HasPrefix(strings.TrimSpace(string(output)), "Logged in") {
+		return &PreflightError{Capability: CapabilityAuthentication, reason: reasonAuthenticationUnavailable}
+	}
+	return nil
+}
+
+type observedSkill struct {
+	Name     string `json:"name"`
+	Provider string `json:"provider"`
+	BaseDir  string `json:"base_dir"`
+}
+
+func (a *Adapter) observeGlobalCatalog(ctx context.Context, session *Session) ([]string, bool) {
+	command := exec.CommandContext(ctx, a.binaryPath, "skills", "list", "--json")
+	command.Dir = session.WorkingDirectory
+	command.Env = session.Environment
+	var stdout bytes.Buffer
+	command.Stdout = &stdout
+	command.Stderr = io.Discard
+	if err := command.Run(); err != nil {
+		return nil, false
+	}
+
+	var skills []observedSkill
+	if err := json.Unmarshal(stdout.Bytes(), &skills); err != nil {
+		return nil, false
+	}
+
+	projectBundles := discoverProjectBundles(session.WorkingDirectory)
+	observed := make([]string, 0, len(skills))
+	for _, skill := range skills {
+		if skill.Provider == "Builtin" {
+			continue
+		}
+		if projectBundles[filepath.Clean(skill.BaseDir)] {
+			continue
+		}
+
+		identity, managed := managedIdentity(session.HomeDir, skill.BaseDir)
+		if managed {
+			observed = append(observed, identity)
+			continue
+		}
+
+		// Any non-built-in skill outside the two known project roots is a new
+		// global source that ACS cannot safely claim to isolate.
+		observed = append(observed, "unmanaged:"+sanitizedIdentityPart(skill.Name))
+	}
+	sort.Strings(observed)
+	return observed, true
+}
+
+func managedIdentity(homeDir, baseDir string) (string, bool) {
+	for _, rule := range globalSourceRules {
+		root := filepath.Join(homeDir, rule.RelativeDirectory)
+		relative, ok := relativeWithin(root, baseDir)
+		if ok && relative != "." {
+			return skillIdentity(rule.Source, relative), true
+		}
+	}
+	return "", false
+}
+
+func discoverProjectBundles(workingDirectory string) map[string]bool {
+	bundles := make(map[string]bool)
+	for _, relativeRoot := range projectSourceDirectories {
+		root := filepath.Join(workingDirectory, relativeRoot)
+		entries, err := os.ReadDir(root)
+		if err != nil {
+			continue
+		}
+		for _, entry := range entries {
+			bundlePath := filepath.Join(root, entry.Name())
+			bundles[filepath.Clean(bundlePath)] = true
+			if resolved, err := filepath.EvalSymlinks(bundlePath); err == nil {
+				bundles[filepath.Clean(resolved)] = true
+			}
+		}
+	}
+	return bundles
+}
+
+func sourceRule(source GlobalSource) (SourceRule, bool) {
+	for _, rule := range globalSourceRules {
+		if rule.Source == source {
+			return rule, true
+		}
+	}
+	return SourceRule{}, false
+}
+
+func cleanBundleRelativePath(path string) (string, error) {
+	cleaned := filepath.Clean(path)
+	if path == "" || cleaned == "." || filepath.IsAbs(cleaned) || cleaned == ".." || strings.HasPrefix(cleaned, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("invalid Skill Bundle-relative path %q", path)
+	}
+	return cleaned, nil
+}
+
+func skillIdentity(source GlobalSource, relativePath string) string {
+	return string(source) + ":" + filepath.ToSlash(relativePath)
+}
+
+func relativeWithin(root, candidate string) (string, bool) {
+	relative, err := filepath.Rel(filepath.Clean(root), filepath.Clean(candidate))
+	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return "", false
+	}
+	return relative, true
+}
+
+func sanitizedIdentityPart(value string) string {
+	var builder strings.Builder
+	for _, character := range value {
+		if character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z' || character >= '0' && character <= '9' || strings.ContainsRune("._-:", character) {
+			builder.WriteRune(character)
+		}
+	}
+	if builder.Len() == 0 {
+		return "unknown"
+	}
+	return builder.String()
+}
+
+func equalStrings(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
+}
+
+func isolatedEnvironment(homeDir string) []string {
+	overrides := map[string]string{
+		"HOME":            homeDir,
+		"XDG_CONFIG_HOME": filepath.Join(homeDir, ".config"),
+		"XDG_DATA_HOME":   filepath.Join(homeDir, ".local", "share"),
+		"XDG_CACHE_HOME":  filepath.Join(homeDir, ".cache"),
+		"XDG_STATE_HOME":  filepath.Join(homeDir, ".local", "state"),
+	}
+
+	environment := make([]string, 0, len(os.Environ())+len(overrides))
+	for _, entry := range os.Environ() {
+		key, _, found := strings.Cut(entry, "=")
+		if found {
+			if _, overridden := overrides[key]; overridden {
+				continue
+			}
+		}
+		environment = append(environment, entry)
+	}
+	for key, value := range overrides {
+		environment = append(environment, key+"="+value)
+	}
+	return environment
+}
