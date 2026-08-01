@@ -31,19 +31,14 @@ func (a *Adapter) Launch(
 	supervisor := newSignalSupervisor(cancelPreflight, terminalFile)
 	defer supervisor.stop()
 
-	if err := os.MkdirAll(sessionsDirectory, 0o700); err != nil {
-		return 1, fmt.Errorf("create ACS Sessions directory: %w", err)
-	}
-	if err := os.Chmod(sessionsDirectory, 0o700); err != nil {
-		return 1, fmt.Errorf("secure ACS Sessions directory: %w", err)
-	}
-	sessionRoot, err := os.MkdirTemp(sessionsDirectory, "session-*")
+	sessionLease, err := launch.CreateSession(sessionsDirectory)
 	if err != nil {
-		return 1, fmt.Errorf("create ACS Session: %w", err)
+		return 1, err
 	}
+	sessionRoot := sessionLease.RootDir
 	defer func() {
-		if err := os.RemoveAll(sessionRoot); err != nil {
-			cleanupFailure := errors.New("delete ACS Session: cleanup failed")
+		if err := sessionLease.Remove(); err != nil {
+			cleanupFailure := err
 			if resultErr != nil {
 				resultErr = errors.Join(resultErr, cleanupFailure)
 			} else {

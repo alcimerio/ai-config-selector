@@ -141,6 +141,85 @@ exit 23
 	}
 }
 
+func TestLaunchRemovesAbandonedSessionFromAnEarlierRun(t *testing.T) {
+	fixture := newLaunchTestFixture(t)
+	abandonedSession := filepath.Join(fixture.sessionsDirectory, "session-abandoned")
+	if err := os.MkdirAll(filepath.Join(abandonedSession, "home"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(abandonedSession, "left-behind"), []byte("stale"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	script := successfulDevinScript("exit 0\n")
+	application := fixture.application(
+		t,
+		writeFakeDevin(t, script),
+		t.TempDir(),
+		strings.NewReader(""),
+		&bytes.Buffer{},
+		&bytes.Buffer{},
+	)
+
+	if exitCode := application.Run(context.Background(), []string{"devin", "--profile", "reviews"}); exitCode != 0 {
+		t.Fatalf("launch exit code = %d, want 0", exitCode)
+	}
+	if _, err := os.Stat(abandonedSession); !os.IsNotExist(err) {
+		t.Fatalf("later launch did not remove abandoned Session: %v", err)
+	}
+}
+
+func TestLaterLaunchPreservesAConcurrentActiveSession(t *testing.T) {
+	fixture := newLaunchTestFixture(t)
+	claimPath := filepath.Join(t.TempDir(), "first-claimed")
+	readyPath := filepath.Join(t.TempDir(), "first-ready")
+	releasePath := filepath.Join(t.TempDir(), "release-first")
+	t.Setenv("FAKE_DEVIN_FIRST_CLAIM", claimPath)
+	t.Setenv("FAKE_DEVIN_FIRST_READY", readyPath)
+	t.Setenv("FAKE_DEVIN_RELEASE_FIRST", releasePath)
+	script := successfulDevinScript(`if mkdir "$FAKE_DEVIN_FIRST_CLAIM" 2>/dev/null; then
+  printf '%s\n' "$HOME" > "$FAKE_DEVIN_FIRST_READY"
+  while [ ! -e "$FAKE_DEVIN_RELEASE_FIRST" ]; do sleep 0.05; done
+fi
+exit 0
+`)
+	binaryPath := writeFakeDevin(t, script)
+	firstApplication := fixture.application(t, binaryPath, t.TempDir(), strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
+	secondApplication := fixture.application(t, binaryPath, t.TempDir(), strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
+
+	firstExitCodes := make(chan int, 1)
+	go func() {
+		firstExitCodes <- firstApplication.Run(context.Background(), []string{"devin", "--profile", "reviews"})
+	}()
+	waitForFile(t, readyPath)
+	homeBytes, err := os.ReadFile(readyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstSession := filepath.Dir(strings.TrimSpace(string(homeBytes)))
+
+	secondExitCode := secondApplication.Run(context.Background(), []string{"devin", "--profile", "reviews"})
+	_, activeSessionErr := os.Stat(firstSession)
+	if err := os.WriteFile(releasePath, []byte("release"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case firstExitCode := <-firstExitCodes:
+		if firstExitCode != 0 {
+			t.Errorf("first launch exit code = %d, want 0", firstExitCode)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for first launch to exit")
+	}
+	if secondExitCode != 0 {
+		t.Errorf("second launch exit code = %d, want 0", secondExitCode)
+	}
+	if activeSessionErr != nil {
+		t.Fatalf("later launch removed a concurrent active Session: %v", activeSessionErr)
+	}
+}
+
 func TestLaunchForwardsSignalsToDevinAndCleansUpSession(t *testing.T) {
 	fixture := newLaunchTestFixture(t)
 
@@ -148,19 +227,10 @@ func TestLaunchForwardsSignalsToDevinAndCleansUpSession(t *testing.T) {
 	signalPath := filepath.Join(t.TempDir(), "signal")
 	t.Setenv("FAKE_DEVIN_READY", readyPath)
 	t.Setenv("FAKE_DEVIN_SIGNAL", signalPath)
-	script := `#!/bin/sh
-if [ "$1" = "skills" ]; then
-  printf '[{"name":"review","provider":"Devin","base_dir":"%s"}]\n' "$HOME/.config/devin/skills/review"
-  exit 0
-fi
-if [ "$1" = "auth" ]; then
-  printf 'Logged in (via fixture).\n'
-  exit 0
-fi
-trap 'printf "SIGTERM\n" > "$FAKE_DEVIN_SIGNAL"; exit 42' TERM
+	script := successfulDevinScript(`trap 'printf "SIGTERM\n" > "$FAKE_DEVIN_SIGNAL"; exit 42' TERM
 touch "$FAKE_DEVIN_READY"
 while :; do sleep 1; done
-`
+`)
 	binaryPath := writeFakeDevin(t, script)
 	application := fixture.application(t, binaryPath, t.TempDir(), strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
 
@@ -194,6 +264,52 @@ while :; do sleep 1; done
 	}
 	if len(entries) != 0 {
 		t.Fatalf("signaled launch left Session data behind: %v", entries)
+	}
+}
+
+func TestLaunchForwardsTerminalResizeEventToDevin(t *testing.T) {
+	fixture := newLaunchTestFixture(t)
+	readyPath := filepath.Join(t.TempDir(), "ready")
+	resizePath := filepath.Join(t.TempDir(), "resize")
+	t.Setenv("FAKE_DEVIN_READY", readyPath)
+	t.Setenv("FAKE_DEVIN_RESIZE", resizePath)
+	script := successfulDevinScript(`trap 'printf "SIGWINCH\n" > "$FAKE_DEVIN_RESIZE"' WINCH
+touch "$FAKE_DEVIN_READY"
+while [ ! -e "$FAKE_DEVIN_RESIZE" ]; do sleep 0.05; done
+exit 0
+`)
+	application := fixture.application(
+		t,
+		writeFakeDevin(t, script),
+		t.TempDir(),
+		strings.NewReader(""),
+		&bytes.Buffer{},
+		&bytes.Buffer{},
+	)
+
+	exitCodes := make(chan int, 1)
+	go func() {
+		exitCodes <- application.Run(context.Background(), []string{"devin", "--profile", "reviews"})
+	}()
+	waitForFile(t, readyPath)
+	if err := syscall.Kill(os.Getpid(), syscall.SIGWINCH); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case exitCode := <-exitCodes:
+		if exitCode != 0 {
+			t.Fatalf("exit code = %d, want 0 after resize", exitCode)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for resized Devin to exit")
+	}
+	resize, err := os.ReadFile(resizePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(resize) != "SIGWINCH\n" {
+		t.Fatalf("resize record = %q, want SIGWINCH", resize)
 	}
 }
 
@@ -776,6 +892,19 @@ func writeFakeDevin(t *testing.T, script string) string {
 		t.Fatal(err)
 	}
 	return binaryPath
+}
+
+func successfulDevinScript(interactiveBody string) string {
+	return `#!/bin/sh
+if [ "$1" = "skills" ]; then
+  printf '[{"name":"review","provider":"Devin","base_dir":"%s"}]\n' "$HOME/.config/devin/skills/review"
+  exit 0
+fi
+if [ "$1" = "auth" ]; then
+  printf 'Logged in (via fixture).\n'
+  exit 0
+fi
+` + interactiveBody
 }
 
 func waitForFile(t *testing.T, path string) {
