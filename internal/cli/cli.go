@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/alcimerio/ai-config-selector/internal/launch"
 	"github.com/alcimerio/ai-config-selector/internal/profile"
 	"github.com/alcimerio/ai-config-selector/internal/skills"
 )
@@ -18,23 +19,37 @@ type SkillCatalog interface {
 	DiscoverGlobalSkillCatalog(context.Context) ([]skills.SkillBundle, error)
 }
 
-type ProfileCreator interface {
+type ProfileStore interface {
 	Create(profile.Profile) (string, error)
+	Load(string) (profile.Profile, error)
+}
+
+type LaunchPlanner interface {
+	PlanLaunch(context.Context, string, []skills.SkillBundle) (launch.Plan, error)
 }
 
 type App struct {
-	Catalog     SkillCatalog
-	Profiles    ProfileCreator
-	Input       io.Reader
-	Output      io.Writer
-	ErrorOutput io.Writer
+	Catalog          SkillCatalog
+	Planner          LaunchPlanner
+	Profiles         ProfileStore
+	WorkingDirectory string
+	Input            io.Reader
+	Output           io.Writer
+	ErrorOutput      io.Writer
 }
 
 func (app App) Run(ctx context.Context, args []string) int {
-	if len(args) != 4 || args[0] != "devin" || args[1] != "create-profile" || args[2] != "--name" || args[3] == "" {
-		return app.fail("usage: acs devin create-profile --name <name>")
+	if len(args) == 4 && args[0] == "devin" && args[1] == "create-profile" && args[2] == "--name" && args[3] != "" {
+		return app.createProfile(ctx, args[3])
 	}
-	if err := profile.ValidateName(args[3]); err != nil {
+	if len(args) == 4 && args[0] == "devin" && args[1] == "--profile" && args[2] != "" && args[3] == "--dry-run" {
+		return app.dryRun(ctx, args[2])
+	}
+	return app.fail("usage: acs devin create-profile --name <name> | acs devin --profile <name> --dry-run")
+}
+
+func (app App) createProfile(ctx context.Context, name string) int {
+	if err := profile.ValidateName(name); err != nil {
 		return app.fail("%v", err)
 	}
 
@@ -43,7 +58,7 @@ func (app App) Run(ctx context.Context, args []string) int {
 		return app.fail("discover Devin global Skill Catalog: %v", err)
 	}
 
-	fmt.Fprintf(app.Output, "Create Profile %q\n\nSelect global Skill Bundles:\n", args[3])
+	fmt.Fprintf(app.Output, "Create Profile %q\n\nSelect global Skill Bundles:\n", name)
 	for index, bundle := range bundles {
 		fmt.Fprintf(
 			app.Output,
@@ -83,7 +98,7 @@ func (app App) Run(ctx context.Context, args []string) int {
 	}
 	created := profile.Profile{
 		Version:         profile.CurrentVersion,
-		Name:            args[3],
+		Name:            name,
 		Target:          "devin",
 		SkillReferences: references,
 	}
@@ -92,6 +107,52 @@ func (app App) Run(ctx context.Context, args []string) int {
 		return app.fail("create Profile %q: %v", created.Name, err)
 	}
 	fmt.Fprintf(app.Output, "\nCreated Profile %q with %d Skill Bundles at %s\n", created.Name, len(references), safeTerminalText(path))
+	return 0
+}
+
+func (app App) dryRun(ctx context.Context, name string) int {
+	if err := profile.ValidateName(name); err != nil {
+		return app.fail("%v", err)
+	}
+	loaded, err := app.Profiles.Load(name)
+	if err != nil {
+		return app.fail("load Profile %q: %v", name, err)
+	}
+	catalog, err := app.Catalog.DiscoverGlobalSkillCatalog(ctx)
+	if err != nil {
+		return app.fail("discover Devin global Skill Catalog: %v", err)
+	}
+	selected, err := skills.ResolveReferences(loaded.SkillReferences, catalog)
+	if err != nil {
+		return app.fail("resolve Profile %q: %v", name, err)
+	}
+	plan, err := app.Planner.PlanLaunch(ctx, app.WorkingDirectory, selected)
+	if err != nil {
+		return app.fail("plan Profile %q launch: %v", name, err)
+	}
+
+	fmt.Fprintf(app.Output, "Dry run for Profile %q\n\nSelected global Skill Bundles managed by ACS:\n", name)
+	if len(plan.SelectedGlobalSkillBundles) == 0 {
+		fmt.Fprintln(app.Output, "  (none)")
+	}
+	for _, planned := range plan.SelectedGlobalSkillBundles {
+		fmt.Fprintf(
+			app.Output,
+			"  %s [%s]\n    source: %s\n    Session: %s\n",
+			safeTerminalText(planned.Bundle.DisplayName),
+			safeTerminalText(string(planned.Bundle.Reference.Source)),
+			safeTerminalText(planned.Bundle.BundlePath),
+			safeTerminalText(planned.SessionPath),
+		)
+	}
+	fmt.Fprintln(app.Output, "\nProject-local Skill Bundles inherited by Devin (not managed by ACS):")
+	if len(plan.ProjectLocalSkillBundles) == 0 {
+		fmt.Fprintln(app.Output, "  (none)")
+	}
+	for _, bundle := range plan.ProjectLocalSkillBundles {
+		fmt.Fprintf(app.Output, "  %s %s\n", safeTerminalText(bundle.DisplayName), safeTerminalText(bundle.BundlePath))
+	}
+	fmt.Fprintln(app.Output, "\nNo Session was created and Devin was not started.")
 	return 0
 }
 

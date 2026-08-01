@@ -30,13 +30,20 @@ func main() {
 		fmt.Fprintf(os.Stderr, "acs: configure Devin Adapter: %v\n", err)
 		os.Exit(1)
 	}
+	workingDirectory, err := os.Getwd()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "acs: resolve working directory: %v\n", err)
+		os.Exit(1)
+	}
 
 	application := cli.App{
-		Catalog:     adapter,
-		Profiles:    profile.NewStore(filepath.Join(existingHome, ".acs")),
-		Input:       os.Stdin,
-		Output:      os.Stdout,
-		ErrorOutput: os.Stderr,
+		Catalog:          adapter,
+		Planner:          adapter,
+		Profiles:         profile.NewStore(filepath.Join(existingHome, ".acs")),
+		WorkingDirectory: workingDirectory,
+		Input:            os.Stdin,
+		Output:           os.Stdout,
+		ErrorOutput:      os.Stderr,
 	}
 	os.Exit(application.Run(context.Background(), os.Args[1:]))
 }

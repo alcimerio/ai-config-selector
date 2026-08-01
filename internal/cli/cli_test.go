@@ -10,10 +10,164 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/alcimerio/ai-config-selector/internal/adapter/devin"
 	"github.com/alcimerio/ai-config-selector/internal/cli"
 	"github.com/alcimerio/ai-config-selector/internal/profile"
 	"github.com/alcimerio/ai-config-selector/internal/skills"
 )
+
+func TestDryRunReportsResolvedGlobalAndInheritedProjectSkillBundlesWithoutCreatingSession(t *testing.T) {
+	existingHome := t.TempDir()
+	acsHome := filepath.Join(existingHome, ".acs")
+	profiles := profile.NewStore(acsHome)
+	workingDirectory := t.TempDir()
+
+	globalBundle := filepath.Join(existingHome, ".config", "devin", "skills", "review")
+	projectBundle := filepath.Join(workingDirectory, ".agents", "skills", "project-review")
+	for _, bundlePath := range []string{globalBundle, projectBundle} {
+		if err := os.MkdirAll(bundlePath, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(bundlePath, "SKILL.md"), []byte("# fixture\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := profiles.Create(profile.Profile{
+		Version: profile.CurrentVersion,
+		Name:    "reviews",
+		Target:  "devin",
+		SkillReferences: []skills.SkillReference{{
+			Source:       devin.GlobalSourceDevinConfig,
+			RelativePath: "review",
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	adapter, err := devin.New(devin.Config{BinaryPath: "devin", ExistingHomeDir: existingHome})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	application := cli.App{
+		Catalog:          adapter,
+		Planner:          adapter,
+		Profiles:         profiles,
+		WorkingDirectory: workingDirectory,
+		Input:            strings.NewReader(""),
+		Output:           &stdout,
+		ErrorOutput:      &stderr,
+	}
+	exitCode := application.Run(context.Background(), []string{"devin", "--profile", "reviews", "--dry-run"})
+	if exitCode != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr: %s", exitCode, stderr.String())
+	}
+
+	for _, detail := range []string{
+		`Dry run for Profile "reviews"`,
+		"Selected global Skill Bundles managed by ACS:",
+		"review [devin-config]",
+		"source: " + globalBundle,
+		"Session: <session>/home/.config/devin/skills/review",
+		"Project-local Skill Bundles inherited by Devin (not managed by ACS):",
+		"project-review " + projectBundle,
+		"No Session was created and Devin was not started.",
+	} {
+		if !strings.Contains(stdout.String(), detail) {
+			t.Errorf("dry-run output does not contain %q:\n%s", detail, stdout.String())
+		}
+	}
+	if _, err := os.Stat(filepath.Join(acsHome, "sessions")); !os.IsNotExist(err) {
+		t.Fatalf("dry run created a Session directory: %v", err)
+	}
+}
+
+func TestDryRunRequiresAnExistingNamedProfile(t *testing.T) {
+	existingHome := t.TempDir()
+	adapter, err := devin.New(devin.Config{BinaryPath: "devin", ExistingHomeDir: existingHome})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stderr bytes.Buffer
+	application := cli.App{
+		Catalog:          adapter,
+		Planner:          adapter,
+		Profiles:         profile.NewStore(filepath.Join(existingHome, ".acs")),
+		WorkingDirectory: t.TempDir(),
+		Input:            strings.NewReader(""),
+		Output:           &bytes.Buffer{},
+		ErrorOutput:      &stderr,
+	}
+
+	exitCode := application.Run(context.Background(), []string{"devin", "--profile", "missing", "--dry-run"})
+	if exitCode == 0 {
+		t.Fatal("dry run succeeded without an existing named Profile")
+	}
+	if !strings.Contains(stderr.String(), `load Profile "missing"`) || !strings.Contains(stderr.String(), "no such file") {
+		t.Fatalf("missing-Profile error is unclear: %s", stderr.String())
+	}
+}
+
+func TestDryRunRejectsMissingMovedAndAmbiguousSkillReferences(t *testing.T) {
+	tests := []struct {
+		name          string
+		reference     skills.SkillReference
+		catalog       []skills.SkillBundle
+		wantErrorText string
+	}{
+		{
+			name:      "moved",
+			reference: skills.SkillReference{Source: "devin-config", RelativePath: "original-review"},
+			catalog: []skills.SkillBundle{{
+				Reference:   skills.SkillReference{Source: "devin-config", RelativePath: "moved-review"},
+				DisplayName: "review",
+				BundlePath:  "/global/devin/skills/moved-review",
+			}},
+			wantErrorText: `Skill Reference "devin-config:original-review" is missing`,
+		},
+		{
+			name:      "ambiguous",
+			reference: skills.SkillReference{Source: "devin-config", RelativePath: "review"},
+			catalog: []skills.SkillBundle{
+				{Reference: skills.SkillReference{Source: "devin-config", RelativePath: "review"}, DisplayName: "review", BundlePath: "/first/review"},
+				{Reference: skills.SkillReference{Source: "devin-config", RelativePath: "review"}, DisplayName: "review", BundlePath: "/second/review"},
+			},
+			wantErrorText: `Skill Reference "devin-config:review" is ambiguous`,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			profiles := profile.NewStore(t.TempDir())
+			if _, err := profiles.Create(profile.Profile{
+				Version:         profile.CurrentVersion,
+				Name:            test.name,
+				Target:          "devin",
+				SkillReferences: []skills.SkillReference{test.reference},
+			}); err != nil {
+				t.Fatal(err)
+			}
+			var stderr bytes.Buffer
+			application := cli.App{
+				Catalog:          staticCatalog{bundles: test.catalog},
+				Profiles:         profiles,
+				WorkingDirectory: t.TempDir(),
+				Input:            strings.NewReader(""),
+				Output:           &bytes.Buffer{},
+				ErrorOutput:      &stderr,
+			}
+
+			exitCode := application.Run(context.Background(), []string{"devin", "--profile", test.name, "--dry-run"})
+			if exitCode == 0 {
+				t.Fatalf("dry run succeeded with a %s Skill Reference", test.name)
+			}
+			if !strings.Contains(stderr.String(), test.wantErrorText) {
+				t.Fatalf("%s-reference error is unclear: %s", test.name, stderr.String())
+			}
+		})
+	}
+}
 
 func TestCreateProfileSelectsSameNamedSkillBundlesIndependently(t *testing.T) {
 	acsHome := t.TempDir()

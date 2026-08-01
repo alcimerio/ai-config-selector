@@ -111,15 +111,10 @@ func (a *Adapter) PrepareSession(rootDir, workingDirectory string, selected []Sk
 	expected := make([]SkillReference, 0, len(selected))
 	seen := make(map[SkillReference]struct{}, len(selected))
 	for _, bundle := range selected {
-		rule, ok := sourceRule(bundle.Reference.Source)
-		if !ok {
-			return nil, fmt.Errorf("prepare Devin Session: unsupported global source %q", bundle.Reference.Source)
-		}
-		relativePath, err := cleanBundleRelativePath(bundle.Reference.RelativePath)
+		reference, destination, err := bundlePlacement(homeDir, bundle.Reference)
 		if err != nil {
 			return nil, fmt.Errorf("prepare Devin Session: %w", err)
 		}
-		reference := SkillReference{Source: bundle.Reference.Source, RelativePath: relativePath}
 		identity := diagnosticIdentity(reference)
 		if _, exists := seen[reference]; exists {
 			return nil, fmt.Errorf("prepare Devin Session: duplicate Skill Reference %q", identity)
@@ -127,7 +122,6 @@ func (a *Adapter) PrepareSession(rootDir, workingDirectory string, selected []Sk
 		seen[reference] = struct{}{}
 		expected = append(expected, reference)
 
-		destination := filepath.Join(homeDir, rule.RelativeDirectory, relativePath)
 		if err := copyBundle(bundle.BundlePath, destination); err != nil {
 			return nil, fmt.Errorf("prepare Devin Session Skill Bundle %q: %w", identity, err)
 		}
