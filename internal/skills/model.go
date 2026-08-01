@@ -1,7 +1,11 @@
 // Package skills contains the CLI-neutral Skill Catalog domain types.
 package skills
 
-import "fmt"
+import (
+	"fmt"
+	"sort"
+	"strconv"
+)
 
 // Source identifies one CLI Adapter-owned global Skill Bundle source.
 type Source string
@@ -24,6 +28,7 @@ type SkillBundle struct {
 // Skill Catalog without rebinding missing or ambiguous references.
 func ResolveReferences(references []SkillReference, catalog []SkillBundle) ([]SkillBundle, error) {
 	selected := make([]SkillBundle, 0, len(references))
+	observed := catalogDiagnosticIdentities(catalog)
 	for _, reference := range references {
 		matches := make([]SkillBundle, 0, 1)
 		for _, bundle := range catalog {
@@ -31,15 +36,28 @@ func ResolveReferences(references []SkillReference, catalog []SkillBundle) ([]Sk
 				matches = append(matches, bundle)
 			}
 		}
-		identity := string(reference.Source) + ":" + reference.RelativePath
+		identity := diagnosticIdentity(reference)
 		switch len(matches) {
 		case 0:
-			return nil, fmt.Errorf("Skill Reference %q is missing from the current Skill Catalog", identity)
+			return nil, fmt.Errorf("Skill Reference %s is missing from the current Skill Catalog (observed Skill References %v)", identity, observed)
 		case 1:
 			selected = append(selected, matches[0])
 		default:
-			return nil, fmt.Errorf("Skill Reference %q is ambiguous in the current Skill Catalog", identity)
+			return nil, fmt.Errorf("Skill Reference %s is ambiguous in the current Skill Catalog (observed Skill References %v)", identity, observed)
 		}
 	}
 	return selected, nil
+}
+
+func catalogDiagnosticIdentities(catalog []SkillBundle) []string {
+	identities := make([]string, 0, len(catalog))
+	for _, bundle := range catalog {
+		identities = append(identities, diagnosticIdentity(bundle.Reference))
+	}
+	sort.Strings(identities)
+	return identities
+}
+
+func diagnosticIdentity(reference SkillReference) string {
+	return strconv.QuoteToASCII(string(reference.Source) + ":" + reference.RelativePath)
 }

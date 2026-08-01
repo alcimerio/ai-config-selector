@@ -14,6 +14,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
+	"time"
 
 	"github.com/alcimerio/ai-config-selector/internal/skills"
 )
@@ -159,7 +161,7 @@ func (a *Adapter) Preflight(ctx context.Context, session *Session) error {
 		}
 	}
 
-	command := exec.CommandContext(ctx, a.binaryPath, "auth", "status")
+	command := preflightCommand(ctx, a.binaryPath, "auth", "status")
 	command.Dir = session.WorkingDirectory
 	command.Env = session.Environment
 	output, err := command.CombinedOutput()
@@ -184,7 +186,7 @@ type catalogObservation struct {
 }
 
 func (a *Adapter) observeGlobalCatalog(ctx context.Context, session *Session) (catalogObservation, preflightFailureReason) {
-	command := exec.CommandContext(ctx, a.binaryPath, "skills", "list", "--json")
+	command := preflightCommand(ctx, a.binaryPath, "skills", "list", "--json")
 	command.Dir = session.WorkingDirectory
 	command.Env = session.Environment
 	var stdout bytes.Buffer
@@ -328,6 +330,20 @@ func commandFailureReason(ctx context.Context, err error, commandFailed prefligh
 		return reasonExecutableUnavailable
 	}
 	return commandFailed
+}
+
+func preflightCommand(ctx context.Context, binaryPath string, arguments ...string) *exec.Cmd {
+	command := exec.CommandContext(ctx, binaryPath, arguments...)
+	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	command.Cancel = func() error {
+		err := syscall.Kill(-command.Process.Pid, syscall.SIGKILL)
+		if errors.Is(err, syscall.ESRCH) {
+			return os.ErrProcessDone
+		}
+		return err
+	}
+	command.WaitDelay = time.Second
+	return command
 }
 
 func isolatedEnvironment(homeDir string) []string {

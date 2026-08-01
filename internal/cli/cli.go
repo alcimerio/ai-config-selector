@@ -28,14 +28,20 @@ type LaunchPlanner interface {
 	PlanLaunch(context.Context, string, []skills.SkillBundle) (launch.Plan, error)
 }
 
+type ProfileLauncher interface {
+	Launch(context.Context, string, string, []skills.SkillBundle, launch.Terminal) (int, error)
+}
+
 type App struct {
-	Catalog          SkillCatalog
-	Planner          LaunchPlanner
-	Profiles         ProfileStore
-	WorkingDirectory string
-	Input            io.Reader
-	Output           io.Writer
-	ErrorOutput      io.Writer
+	Catalog           SkillCatalog
+	Planner           LaunchPlanner
+	Launcher          ProfileLauncher
+	Profiles          ProfileStore
+	SessionsDirectory string
+	WorkingDirectory  string
+	Input             io.Reader
+	Output            io.Writer
+	ErrorOutput       io.Writer
 }
 
 func (app App) Run(ctx context.Context, args []string) int {
@@ -45,7 +51,10 @@ func (app App) Run(ctx context.Context, args []string) int {
 	if len(args) == 4 && args[0] == "devin" && args[1] == "--profile" && args[2] != "" && args[3] == "--dry-run" {
 		return app.dryRun(ctx, args[2])
 	}
-	return app.fail("usage: acs devin create-profile --name <name> | acs devin --profile <name> --dry-run")
+	if len(args) == 3 && args[0] == "devin" && args[1] == "--profile" && args[2] != "" {
+		return app.launchProfile(ctx, args[2])
+	}
+	return app.fail("usage: acs devin create-profile --name <name> | acs devin --profile <name> [--dry-run]")
 }
 
 func (app App) createProfile(ctx context.Context, name string) int {
@@ -111,20 +120,9 @@ func (app App) createProfile(ctx context.Context, name string) int {
 }
 
 func (app App) dryRun(ctx context.Context, name string) int {
-	if err := profile.ValidateName(name); err != nil {
+	selected, err := app.resolveDevinProfile(ctx, name)
+	if err != nil {
 		return app.fail("%v", err)
-	}
-	loaded, err := app.Profiles.Load(name)
-	if err != nil {
-		return app.fail("load Profile %q: %v", name, err)
-	}
-	catalog, err := app.Catalog.DiscoverGlobalSkillCatalog(ctx)
-	if err != nil {
-		return app.fail("discover Devin global Skill Catalog: %v", err)
-	}
-	selected, err := skills.ResolveReferences(loaded.SkillReferences, catalog)
-	if err != nil {
-		return app.fail("resolve Profile %q: %v", name, err)
 	}
 	plan, err := app.Planner.PlanLaunch(ctx, app.WorkingDirectory, selected)
 	if err != nil {
@@ -154,6 +152,49 @@ func (app App) dryRun(ctx context.Context, name string) int {
 	}
 	fmt.Fprintln(app.Output, "\nNo Session was created and Devin was not started.")
 	return 0
+}
+
+func (app App) launchProfile(ctx context.Context, name string) int {
+	selected, err := app.resolveDevinProfile(ctx, name)
+	if err != nil {
+		return app.fail("%v", err)
+	}
+	exitCode, err := app.Launcher.Launch(
+		ctx,
+		app.SessionsDirectory,
+		app.WorkingDirectory,
+		selected,
+		launch.Terminal{Input: app.Input, Output: app.Output, ErrorOutput: app.ErrorOutput},
+	)
+	if err != nil {
+		return app.fail("launch Profile %q: %v", name, err)
+	}
+	return exitCode
+}
+
+func (app App) resolveDevinProfile(ctx context.Context, name string) ([]skills.SkillBundle, error) {
+	if err := profile.ValidateName(name); err != nil {
+		return nil, err
+	}
+	loaded, err := app.Profiles.Load(name)
+	if err != nil {
+		return nil, fmt.Errorf("load Profile %q: %w", name, err)
+	}
+	if loaded.Target != "devin" {
+		return nil, fmt.Errorf("Profile %q targets %q, not Devin", name, loaded.Target)
+	}
+	if loaded.Version != profile.CurrentVersion {
+		return nil, fmt.Errorf("Profile %q uses unsupported schema version %d", name, loaded.Version)
+	}
+	catalog, err := app.Catalog.DiscoverGlobalSkillCatalog(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("discover Devin global Skill Catalog: %w", err)
+	}
+	selected, err := skills.ResolveReferences(loaded.SkillReferences, catalog)
+	if err != nil {
+		return nil, fmt.Errorf("resolve Profile %q: %w", name, err)
+	}
+	return selected, nil
 }
 
 func (app App) fail(format string, arguments ...any) int {

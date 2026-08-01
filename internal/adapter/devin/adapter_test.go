@@ -232,6 +232,22 @@ func TestPrepareSessionCopiesOnlySelectedBundlesAndCredentialAllowlist(t *testin
 	if _, err := os.Stat(filepath.Join(session.HomeDir, ".config", "devin", "hooks")); !os.IsNotExist(err) {
 		t.Fatal("PrepareSession copied unrestricted Devin hooks")
 	}
+	for _, relativePath := range []string{
+		filepath.Join("SKILL.md"),
+		filepath.Join("references", "proof.txt"),
+		filepath.Join("scripts", "prove.sh"),
+	} {
+		if _, err := os.Stat(filepath.Join(session.HomeDir, ".config", "devin", "skills", "acs-selected-fixture", relativePath)); err != nil {
+			t.Errorf("selected Skill Bundle file %q was not copied: %v", relativePath, err)
+		}
+	}
+	executable, err := os.Stat(filepath.Join(session.HomeDir, ".config", "devin", "skills", "acs-selected-fixture", "scripts", "prove.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if executable.Mode().Perm() != 0o755 {
+		t.Errorf("selected Skill Bundle executable permissions = %o, want 755", executable.Mode().Perm())
+	}
 }
 
 func TestSourceRulesSeparateGlobalAndProjectLocalSkills(t *testing.T) {

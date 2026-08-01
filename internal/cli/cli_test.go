@@ -4,11 +4,14 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/alcimerio/ai-config-selector/internal/adapter/devin"
 	"github.com/alcimerio/ai-config-selector/internal/cli"
@@ -80,6 +83,331 @@ func TestDryRunReportsResolvedGlobalAndInheritedProjectSkillBundlesWithoutCreati
 	}
 	if _, err := os.Stat(filepath.Join(acsHome, "sessions")); !os.IsNotExist(err) {
 		t.Fatalf("dry run created a Session directory: %v", err)
+	}
+}
+
+func TestLaunchRunsPreflightBeforeInteractiveDevinAndCleansUpSession(t *testing.T) {
+	fixture := newLaunchTestFixture(t)
+	workingDirectory := t.TempDir()
+
+	eventsPath := filepath.Join(t.TempDir(), "events")
+	t.Setenv("FAKE_DEVIN_EVENTS", eventsPath)
+	script := `#!/bin/sh
+if [ "$1" = "skills" ]; then
+  printf 'preflight-skills\n' >> "$FAKE_DEVIN_EVENTS"
+  printf '[{"name":"review","provider":"Devin","base_dir":"%s"}]\n' "$HOME/.config/devin/skills/review"
+  exit 0
+fi
+if [ "$1" = "auth" ]; then
+  printf 'preflight-auth\n' >> "$FAKE_DEVIN_EVENTS"
+  printf 'Logged in (via fixture).\n'
+  exit 0
+fi
+printf 'launch-args=%s:%s\n' "$#" "$*" >> "$FAKE_DEVIN_EVENTS"
+IFS= read -r line
+printf 'stdout:%s\n' "$line"
+printf 'stderr:%s\n' "$line" >&2
+exit 23
+`
+	binaryPath := writeFakeDevin(t, script)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	application := fixture.application(t, binaryPath, workingDirectory, strings.NewReader("terminal input\n"), &stdout, &stderr)
+
+	exitCode := application.Run(context.Background(), []string{"devin", "--profile", "reviews"})
+	if exitCode != 23 {
+		t.Fatalf("exit code = %d, want child exit code 23; stderr: %s", exitCode, stderr.String())
+	}
+	if stdout.String() != "stdout:terminal input\n" {
+		t.Fatalf("Devin stdout = %q, want attached terminal output", stdout.String())
+	}
+	if stderr.String() != "stderr:terminal input\n" {
+		t.Fatalf("Devin stderr = %q, want attached terminal error output", stderr.String())
+	}
+	events, err := os.ReadFile(eventsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := string(events), "preflight-skills\npreflight-auth\nlaunch-args=0:\n"; got != want {
+		t.Fatalf("Devin events = %q, want %q", got, want)
+	}
+	entries, err := os.ReadDir(fixture.sessionsDirectory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("launch left Session data behind: %v", entries)
+	}
+}
+
+func TestLaunchForwardsSignalsToDevinAndCleansUpSession(t *testing.T) {
+	fixture := newLaunchTestFixture(t)
+
+	readyPath := filepath.Join(t.TempDir(), "ready")
+	signalPath := filepath.Join(t.TempDir(), "signal")
+	t.Setenv("FAKE_DEVIN_READY", readyPath)
+	t.Setenv("FAKE_DEVIN_SIGNAL", signalPath)
+	script := `#!/bin/sh
+if [ "$1" = "skills" ]; then
+  printf '[{"name":"review","provider":"Devin","base_dir":"%s"}]\n' "$HOME/.config/devin/skills/review"
+  exit 0
+fi
+if [ "$1" = "auth" ]; then
+  printf 'Logged in (via fixture).\n'
+  exit 0
+fi
+trap 'printf "SIGTERM\n" > "$FAKE_DEVIN_SIGNAL"; exit 42' TERM
+touch "$FAKE_DEVIN_READY"
+while :; do sleep 1; done
+`
+	binaryPath := writeFakeDevin(t, script)
+	application := fixture.application(t, binaryPath, t.TempDir(), strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
+
+	exitCodes := make(chan int, 1)
+	go func() {
+		exitCodes <- application.Run(context.Background(), []string{"devin", "--profile", "reviews"})
+	}()
+	waitForFile(t, readyPath)
+	if err := syscall.Kill(os.Getpid(), syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case exitCode := <-exitCodes:
+		if exitCode != 42 {
+			t.Fatalf("exit code = %d, want signaled Devin exit code 42", exitCode)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for signaled Devin to exit")
+	}
+	signal, err := os.ReadFile(signalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(signal) != "SIGTERM\n" {
+		t.Fatalf("forwarded signal record = %q, want SIGTERM", signal)
+	}
+	entries, err := os.ReadDir(fixture.sessionsDirectory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("signaled launch left Session data behind: %v", entries)
+	}
+}
+
+func TestLaunchSignalDuringPreflightCancelsVerificationAndCleansUpSession(t *testing.T) {
+	fixture := newLaunchTestFixture(t)
+	readyPath := filepath.Join(t.TempDir(), "preflight-ready")
+	t.Setenv("FAKE_DEVIN_PREFLIGHT_READY", readyPath)
+	script := `#!/bin/sh
+if [ "$1" = "skills" ]; then
+  touch "$FAKE_DEVIN_PREFLIGHT_READY"
+  sleep 30
+  exit 0
+fi
+exit 64
+`
+	binaryPath := writeFakeDevin(t, script)
+	var stderr bytes.Buffer
+	application := fixture.application(t, binaryPath, t.TempDir(), strings.NewReader(""), &bytes.Buffer{}, &stderr)
+
+	exitCodes := make(chan int, 1)
+	go func() {
+		exitCodes <- application.Run(context.Background(), []string{"devin", "--profile", "reviews"})
+	}()
+	waitForFile(t, readyPath)
+	if err := syscall.Kill(os.Getpid(), syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case exitCode := <-exitCodes:
+		if exitCode == 0 {
+			t.Fatal("launch succeeded after preflight was interrupted")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for interrupted preflight to exit")
+	}
+	if !strings.Contains(stderr.String(), "verification was canceled or timed out") {
+		t.Fatalf("interrupted-preflight error is unclear: %s", stderr.String())
+	}
+	entries, err := os.ReadDir(fixture.sessionsDirectory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("interrupted preflight left Session data behind: %v", entries)
+	}
+}
+
+func TestLaunchPreflightFailureReportsSanitizedCatalogAndCleansUpSession(t *testing.T) {
+	fixture := newLaunchTestFixture(t)
+
+	launchMarker := filepath.Join(t.TempDir(), "launched")
+	t.Setenv("FAKE_DEVIN_LAUNCH_MARKER", launchMarker)
+	script := `#!/bin/sh
+if [ "$1" = "skills" ]; then
+  printf '[{"name":"unselected","provider":"Devin","base_dir":"%s"}]\n' "$HOME/.config/devin/skills/unselected"
+  printf 'token=SUPER_SECRET\n' >&2
+  exit 0
+fi
+if [ "$1" = "auth" ]; then
+  printf 'Logged in (via fixture).\n'
+  exit 0
+fi
+touch "$FAKE_DEVIN_LAUNCH_MARKER"
+exit 0
+`
+	binaryPath := writeFakeDevin(t, script)
+	var stderr bytes.Buffer
+	application := fixture.application(t, binaryPath, t.TempDir(), strings.NewReader(""), &bytes.Buffer{}, &stderr)
+
+	if exitCode := application.Run(context.Background(), []string{"devin", "--profile", "reviews"}); exitCode == 0 {
+		t.Fatal("launch succeeded after Adapter Preflight catalog mismatch")
+	}
+	for _, identity := range []string{"expected global Skill Catalog [devin-config:review]", "observed [devin-config:unselected]"} {
+		if !strings.Contains(stderr.String(), identity) {
+			t.Errorf("preflight diagnostic does not contain %q: %s", identity, stderr.String())
+		}
+	}
+	if strings.Contains(stderr.String(), "SUPER_SECRET") {
+		t.Fatalf("preflight diagnostic leaked subprocess output: %s", stderr.String())
+	}
+	if _, err := os.Stat(launchMarker); !os.IsNotExist(err) {
+		t.Fatalf("Devin started after failed preflight: %v", err)
+	}
+	entries, err := os.ReadDir(fixture.sessionsDirectory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("failed preflight left Session data behind: %v", entries)
+	}
+}
+
+func TestLaunchStrictResolutionFailureDoesNotCreateSession(t *testing.T) {
+	existingHome := t.TempDir()
+	acsHome := filepath.Join(existingHome, ".acs")
+	profiles := profile.NewStore(acsHome)
+	if _, err := profiles.Create(profile.Profile{
+		Version: profile.CurrentVersion,
+		Name:    "missing",
+		Target:  "devin",
+		SkillReferences: []skills.SkillReference{{
+			Source:       devin.GlobalSourceDevinConfig,
+			RelativePath: "not-installed\n\x1b[31m",
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	adapter, err := devin.New(devin.Config{BinaryPath: "devin", ExistingHomeDir: existingHome})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stderr bytes.Buffer
+	sessionsDirectory := filepath.Join(acsHome, "sessions")
+	application := cli.App{
+		Catalog:           adapter,
+		Planner:           adapter,
+		Launcher:          adapter,
+		Profiles:          profiles,
+		SessionsDirectory: sessionsDirectory,
+		WorkingDirectory:  t.TempDir(),
+		Input:             strings.NewReader(""),
+		Output:            &bytes.Buffer{},
+		ErrorOutput:       &stderr,
+	}
+
+	if exitCode := application.Run(context.Background(), []string{"devin", "--profile", "missing"}); exitCode == 0 {
+		t.Fatal("launch succeeded with a missing Skill Reference")
+	}
+	if !strings.Contains(stderr.String(), `Skill Reference "devin-config:not-installed\n\x1b[31m" is missing`) {
+		t.Fatalf("strict-resolution error is unclear: %s", stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "observed Skill References []") {
+		t.Fatalf("strict-resolution error omits the sanitized observed catalog: %s", stderr.String())
+	}
+	if strings.ContainsAny(strings.TrimSuffix(stderr.String(), "\n"), "\n\r\x1b") {
+		t.Fatalf("strict-resolution error contains terminal control characters: %q", stderr.String())
+	}
+	if _, err := os.Stat(sessionsDirectory); !os.IsNotExist(err) {
+		t.Fatalf("strict resolution created a Session directory: %v", err)
+	}
+}
+
+func TestLaunchRejectsDevinPassThroughOptions(t *testing.T) {
+	var stderr bytes.Buffer
+	application := cli.App{ErrorOutput: &stderr}
+
+	if exitCode := application.Run(context.Background(), []string{"devin", "--profile", "reviews", "--dangerous-devin-option"}); exitCode == 0 {
+		t.Fatal("launch accepted an arbitrary Devin pass-through option")
+	}
+	if !strings.Contains(stderr.String(), "usage: acs devin") {
+		t.Fatalf("rejected pass-through option did not report ACS usage: %s", stderr.String())
+	}
+}
+
+func TestLaunchRejectsProfileForAnotherTargetBeforeCreatingSession(t *testing.T) {
+	existingHome := t.TempDir()
+	acsHome := filepath.Join(existingHome, ".acs")
+	profiles := profile.NewStore(acsHome)
+	if _, err := profiles.Create(profile.Profile{
+		Version:         profile.CurrentVersion,
+		Name:            "other-cli",
+		Target:          "codex",
+		SkillReferences: []skills.SkillReference{},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var stderr bytes.Buffer
+	sessionsDirectory := filepath.Join(acsHome, "sessions")
+	application := cli.App{
+		Profiles:          profiles,
+		SessionsDirectory: sessionsDirectory,
+		ErrorOutput:       &stderr,
+	}
+
+	if exitCode := application.Run(context.Background(), []string{"devin", "--profile", "other-cli"}); exitCode == 0 {
+		t.Fatal("launch accepted a Profile for another CLI")
+	}
+	if !strings.Contains(stderr.String(), `Profile "other-cli" targets "codex", not Devin`) {
+		t.Fatalf("wrong-target error is unclear: %s", stderr.String())
+	}
+	if _, err := os.Stat(sessionsDirectory); !os.IsNotExist(err) {
+		t.Fatalf("wrong-target Profile created a Session directory: %v", err)
+	}
+}
+
+func TestLaunchRejectsUnsupportedProfileSchemaVersionBeforeCreatingSession(t *testing.T) {
+	existingHome := t.TempDir()
+	acsHome := filepath.Join(existingHome, ".acs")
+	profiles := profile.NewStore(acsHome)
+	if _, err := profiles.Create(profile.Profile{
+		Version:         profile.CurrentVersion + 1,
+		Name:            "future",
+		Target:          "devin",
+		SkillReferences: []skills.SkillReference{},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var stderr bytes.Buffer
+	sessionsDirectory := filepath.Join(acsHome, "sessions")
+	application := cli.App{
+		Profiles:          profiles,
+		SessionsDirectory: sessionsDirectory,
+		ErrorOutput:       &stderr,
+	}
+
+	if exitCode := application.Run(context.Background(), []string{"devin", "--profile", "future"}); exitCode == 0 {
+		t.Fatal("launch accepted an unsupported Profile schema version")
+	}
+	if !strings.Contains(stderr.String(), `Profile "future" uses unsupported schema version 2`) {
+		t.Fatalf("unsupported-version error is unclear: %s", stderr.String())
+	}
+	if _, err := os.Stat(sessionsDirectory); !os.IsNotExist(err) {
+		t.Fatalf("unsupported Profile version created a Session directory: %v", err)
 	}
 }
 
@@ -377,6 +705,91 @@ func TestCreateProfileRejectsDuplicateNameWithoutOverwriting(t *testing.T) {
 type staticCatalog struct {
 	bundles []skills.SkillBundle
 	err     error
+}
+
+type launchTestFixture struct {
+	existingHome      string
+	profiles          *profile.Store
+	sessionsDirectory string
+}
+
+func newLaunchTestFixture(t *testing.T) launchTestFixture {
+	t.Helper()
+	existingHome := t.TempDir()
+	acsHome := filepath.Join(existingHome, ".acs")
+	bundlePath := filepath.Join(existingHome, ".config", "devin", "skills", "review")
+	if err := os.MkdirAll(bundlePath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bundlePath, "SKILL.md"), []byte("# review\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	profiles := profile.NewStore(acsHome)
+	if _, err := profiles.Create(profile.Profile{
+		Version: profile.CurrentVersion,
+		Name:    "reviews",
+		Target:  "devin",
+		SkillReferences: []skills.SkillReference{{
+			Source:       devin.GlobalSourceDevinConfig,
+			RelativePath: "review",
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return launchTestFixture{
+		existingHome:      existingHome,
+		profiles:          profiles,
+		sessionsDirectory: filepath.Join(acsHome, "sessions"),
+	}
+}
+
+func (fixture launchTestFixture) application(
+	t *testing.T,
+	binaryPath string,
+	workingDirectory string,
+	input io.Reader,
+	output io.Writer,
+	errorOutput io.Writer,
+) cli.App {
+	t.Helper()
+	adapter, err := devin.New(devin.Config{BinaryPath: binaryPath, ExistingHomeDir: fixture.existingHome})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cli.App{
+		Catalog:           adapter,
+		Planner:           adapter,
+		Launcher:          adapter,
+		Profiles:          fixture.profiles,
+		SessionsDirectory: fixture.sessionsDirectory,
+		WorkingDirectory:  workingDirectory,
+		Input:             input,
+		Output:            output,
+		ErrorOutput:       errorOutput,
+	}
+}
+
+func writeFakeDevin(t *testing.T, script string) string {
+	t.Helper()
+	binaryPath := filepath.Join(t.TempDir(), "devin")
+	if err := os.WriteFile(binaryPath, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return binaryPath
+}
+
+func waitForFile(t *testing.T, path string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(path); err == nil {
+			return
+		} else if !os.IsNotExist(err) {
+			t.Fatal(err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %q", path)
 }
 
 func (catalog staticCatalog) DiscoverGlobalSkillCatalog(context.Context) ([]skills.SkillBundle, error) {
