@@ -251,11 +251,198 @@ repository. ACS reports them but does not filter, copy, or manage them.
   status.
 - Session cleanup does not remove a Session held by a concurrent process.
 
+## Accepted design: modular interactive Profile creation
+
+**Status:** Planned. The current comma-separated selection prompt and version-1
+Profile schema remain implemented until this work lands.
+
+The interactive builder will keep `acs devin create-profile --name <name>` as
+its public command. It will validate the name, reject an existing Profile name,
+and require interactive stdin and stdout before opening the TUI. The interface
+will use English text and keyboard input.
+
+### Product concepts
+
+**Profile Component Category**: A target-supported kind of selectable Profile
+content. Skills is the first category. Each category has its own catalog,
+editor, selection schema, saved-selection resolution, and launch contribution.
+
+**Profile Draft**: The unsaved category selections and editor state assembled
+during Profile creation. Moving between categories preserves the draft.
+Creating the Profile persists it; cancellation discards it.
+
+Each CLI Adapter will provide a fixed, ordered set of supported categories.
+Categories will be compiled into ACS. Loading third-party category plugins is
+outside this design.
+
+### Interaction contract
+
+The builder overview will show every supported category, its selection count,
+and the `Create Profile` and `Cancel` actions:
+
+```text
+Create Profile "backend-review"
+
+> Skills                         2 selected
+  Create Profile
+  Cancel
+
+↑/↓ navigate   Space/Enter/→ open   Esc cancel
+```
+
+`Space`, `Enter`, or Right opens a category. Left or `Esc` returns to the
+overview when the category list has focus. Each category may provide a
+different editor.
+
+The Skills editor will use a searchable multi-select list:
+
+```text
+Skills                                      2 selected
+Search: post
+
+> [x] postgres-review             shared-agents
+  [ ] postgres-docs               devin-config
+
+↑/↓ navigate   Space/Enter toggle   / search   ← back
+```
+
+The highlighted Skill will show its source and full path in a detail area.
+Search will be fuzzy and case-insensitive across display name, source, and
+path, with display-name matches ranked first. Filtering will not clear hidden
+selections. Without a query, Skills will sort case-insensitively by display
+name, then by source and relative path. The saved Skills selection will sort by
+stable identity because selection order has no meaning.
+
+The builder will apply these rules:
+
+- `/` focuses search. Left and Right edit the query while search has focus.
+  `Esc` clears search and returns focus to the list.
+- Category query, cursor, scroll position, and selection remain in the Profile
+  Draft when the user returns to the overview.
+- A contextual footer lists valid keys. Symbols and text convey every state;
+  color only reinforces them and respects `NO_COLOR`.
+- A terminal below the minimum usable size shows a resize message and keeps the
+  draft. The implementation will set the final minimum after measuring the UI.
+- Catalog discovery starts when the user first opens a category. A load error
+  offers `Retry` and `Back`.
+- Creating an empty Profile requires confirmation. If a category load failed,
+  creation requires another confirmation that names the failed categories.
+- `Cancel`, overview `Esc`, and `Ctrl+C` share the discard flow. A changed draft
+  requires confirmation. Confirmed cancellation writes nothing, prints
+  `Profile creation cancelled.`, and exits with status 130.
+- Saving runs asynchronously after `Create Profile`. The root model enters a
+  saving state with an immutable draft snapshot. Success exits the TUI;
+  failure keeps the draft and offers `Retry` or `Cancel`.
+- After success restores the terminal, ACS prints the Profile name, category
+  selection counts, and saved path.
+
+Mouse input, a non-TTY fallback, interactive Profile-name entry, and Select All
+remain outside this change.
+
+### Version-2 Profile schema
+
+New Profiles will store one versioned payload for every supported category,
+including empty selections:
+
+```json
+{
+  "version": 2,
+  "name": "backend-review",
+  "target": "devin",
+  "categories": {
+    "skills": {
+      "schemaVersion": 1,
+      "selection": [
+        {
+          "source": "devin-config",
+          "relativePath": "code-review"
+        }
+      ]
+    }
+  }
+}
+```
+
+The Profile version covers the envelope. Each category owns its stable ID,
+category schema version, validation, and deterministic `selection` encoding.
+An older Profile that lacks a newly supported category receives that
+category's empty selection, so an ACS upgrade does not enable capabilities.
+
+ACS will read version-1 Profiles by normalizing `skillReferences` to a
+version-2-shaped Skills payload in memory. It will not rewrite the source file.
+New creation writes version 2. Unknown category IDs, unsupported category
+schema versions, malformed selections, and unresolved references fail with a
+clear error.
+
+### Category module seam
+
+An ordered category Registry will form the interface used by common CLI code.
+The Registry will hide category defaults, schema dispatch, draft construction,
+saved-selection resolution, error annotation, and launch contribution order.
+The CLI will not switch on category IDs or import Skills types.
+
+Generic binders will keep each category's selection and resolved values typed
+inside its implementation. Skills will bind `[]SkillReference` to
+`[]SkillBundle`. A test-only category will use unrelated selection, editor, and
+launch types. Registering that category must not require changes to the
+Profile store, builder shell, Registry, or launch coordinator.
+
+Each production category will own its target-specific lifecycle:
+
+1. discover its catalog;
+2. edit and summarize its selection;
+3. validate and encode its payload;
+4. resolve saved intent against the current target environment;
+5. contribute declarative dry-run, materialization, and verification steps to
+   the launch plan.
+
+The TUI will keep a separate visual editor Registry. This isolates Bubble Tea
+types from Profile, category, and launch interfaces while allowing each
+category to use a different editor. Application assembly will reject duplicate
+category IDs, invalid schema versions, and missing or mismatched editors.
+
+### TUI runtime and verification
+
+The builder will use Bubble Tea v2 as its terminal runtime and selected Bubbles
+v2 packages for list, filtering, text input, viewport, and contextual help.
+ACS will own the set of selected Skill identities instead of treating list
+indexes or fuzzy ranks as identity.
+
+One root Bubble Tea model will own the alternate screen, terminal dimensions,
+overview, Profile Draft, modal state, category load state, saving state, and
+exit outcome. Category editors will be child models. ACS will not start nested
+Bubble Tea programs.
+
+Most tests will drive pure model and Registry transitions. A smaller runtime
+suite will inject input, output, and window dimensions. A macOS PTY suite will
+cover resize, `Ctrl+C`, alternate-screen exit, panic and error cleanup, and
+terminal restoration. A synthetic catalog of 10,000 Skills will guard fuzzy
+search and navigation responsiveness.
+
+### Implementation sequence
+
+1. Add the version-2 Profile envelope, canonical category payload encoding,
+   version-1 normalization, and compatibility tests.
+2. Add the deep ordered Registry, typed binders, declarative launch builder,
+   and test-only category. Move Skills resolution and launch contributions
+   behind the new seam.
+3. Add the root Bubble Tea builder, terminal checks, navigation, modal,
+   loading, saving, and exit state machines.
+4. Add the Skills editor with lazy discovery, fuzzy search, retained UI state,
+   stable-identity selection, details, and deterministic encoding.
+5. Wire `create-profile` to the builder and atomic Profile store, including
+   duplicate-name preflight, retryable save errors, summaries, and exit codes.
+6. Add runtime, PTY, terminal-safety, control-character sanitization, and
+   10,000-item performance coverage. Update public examples when the builder
+   becomes the implemented behavior.
+
 ## Current limitations
 
 - ACS rejects platforms other than macOS.
 - ACS ships only the Devin Adapter.
 - The shared Profile schema and capability interfaces currently model Skills.
+- Profile creation currently uses a comma-separated numbered selection prompt;
+  the accepted TUI design above is not implemented yet.
 - Profiles cannot be edited, deleted, imported, or exported through the CLI.
 - ACS does not filter repository-local Skills.
 - ACS does not provide whole-process filesystem or network containment.
