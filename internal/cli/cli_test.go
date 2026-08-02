@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -35,15 +36,10 @@ func TestDryRunReportsResolvedGlobalAndInheritedProjectSkillBundlesWithoutCreati
 			t.Fatal(err)
 		}
 	}
-	if _, err := profiles.Create(profile.Profile{
-		Version: profile.CurrentVersion,
-		Name:    "reviews",
-		Target:  "devin",
-		SkillReferences: []skills.SkillReference{{
-			Source:       devin.GlobalSourceDevinConfig,
-			RelativePath: "review",
-		}},
-	}); err != nil {
+	if _, err := profiles.Create(profile.NewSkillsProfile("reviews", "devin", []skills.SkillReference{{
+		Source:       devin.GlobalSourceDevinConfig,
+		RelativePath: "review",
+	}})); err != nil {
 		t.Fatal(err)
 	}
 	adapter, err := devin.New(devin.Config{BinaryPath: "devin", ExistingHomeDir: existingHome})
@@ -84,6 +80,42 @@ func TestDryRunReportsResolvedGlobalAndInheritedProjectSkillBundlesWithoutCreati
 	if _, err := os.Stat(filepath.Join(acsHome, "sessions")); !os.IsNotExist(err) {
 		t.Fatalf("dry run created a Session directory: %v", err)
 	}
+}
+
+func TestDryRunLoadsVersionOneProfileWithoutRewritingIt(t *testing.T) {
+	existingHome := t.TempDir()
+	acsHome := filepath.Join(existingHome, ".acs")
+	legacyPath, legacy := writeVersionOneProfile(t, acsHome, "legacy")
+	bundlePath := filepath.Join(existingHome, ".config", "devin", "skills", "review")
+	if err := os.MkdirAll(bundlePath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bundlePath, "SKILL.md"), []byte("# fixture\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	adapter, err := devin.New(devin.Config{BinaryPath: "devin", ExistingHomeDir: existingHome})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	application := cli.App{
+		Catalog:          adapter,
+		Planner:          adapter,
+		Profiles:         profile.NewStore(acsHome),
+		WorkingDirectory: t.TempDir(),
+		Input:            strings.NewReader(""),
+		Output:           &stdout,
+		ErrorOutput:      &stderr,
+	}
+
+	if exitCode := application.Run(context.Background(), []string{"devin", "--profile", "legacy", "--dry-run"}); exitCode != 0 {
+		t.Fatalf("version-1 dry run exit code = %d, want 0; stderr: %s", exitCode, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "review [devin-config]") {
+		t.Fatalf("version-1 dry run did not resolve the selected Skill Bundle:\n%s", stdout.String())
+	}
+	assertFileContents(t, legacyPath, legacy, "dry run rewrote the version-1 Profile")
 }
 
 func TestLaunchRunsPreflightBeforeInteractiveDevinAndCleansUpSession(t *testing.T) {
@@ -139,6 +171,24 @@ exit 23
 	if len(entries) != 0 {
 		t.Fatalf("launch left Session data behind: %v", entries)
 	}
+}
+
+func TestLaunchLoadsVersionOneProfileWithoutRewritingIt(t *testing.T) {
+	fixture := newLaunchTestFixture(t)
+	legacyPath, legacy := writeVersionOneProfile(t, filepath.Join(fixture.existingHome, ".acs"), "reviews")
+	application := fixture.application(
+		t,
+		writeFakeDevin(t, successfulDevinScript("exit 0\n")),
+		t.TempDir(),
+		strings.NewReader(""),
+		&bytes.Buffer{},
+		&bytes.Buffer{},
+	)
+
+	if exitCode := application.Run(context.Background(), []string{"devin", "--profile", "reviews"}); exitCode != 0 {
+		t.Fatalf("version-1 launch exit code = %d, want 0", exitCode)
+	}
+	assertFileContents(t, legacyPath, legacy, "launch rewrote the version-1 Profile")
 }
 
 func TestLaunchRemovesAbandonedSessionFromAnEarlierRun(t *testing.T) {
@@ -407,15 +457,10 @@ func TestLaunchStrictResolutionFailureDoesNotCreateSession(t *testing.T) {
 	existingHome := t.TempDir()
 	acsHome := filepath.Join(existingHome, ".acs")
 	profiles := profile.NewStore(acsHome)
-	if _, err := profiles.Create(profile.Profile{
-		Version: profile.CurrentVersion,
-		Name:    "missing",
-		Target:  "devin",
-		SkillReferences: []skills.SkillReference{{
-			Source:       devin.GlobalSourceDevinConfig,
-			RelativePath: "not-installed\n\x1b[31m",
-		}},
-	}); err != nil {
+	if _, err := profiles.Create(profile.NewSkillsProfile("missing", "devin", []skills.SkillReference{{
+		Source:       devin.GlobalSourceDevinConfig,
+		RelativePath: "not-installed\n\x1b[31m",
+	}})); err != nil {
 		t.Fatal(err)
 	}
 	adapter, err := devin.New(devin.Config{BinaryPath: "devin", ExistingHomeDir: existingHome})
@@ -469,12 +514,7 @@ func TestLaunchRejectsProfileForAnotherTargetBeforeCreatingSession(t *testing.T)
 	existingHome := t.TempDir()
 	acsHome := filepath.Join(existingHome, ".acs")
 	profiles := profile.NewStore(acsHome)
-	if _, err := profiles.Create(profile.Profile{
-		Version:         profile.CurrentVersion,
-		Name:            "other-cli",
-		Target:          "codex",
-		SkillReferences: []skills.SkillReference{},
-	}); err != nil {
+	if _, err := profiles.Create(profile.NewSkillsProfile("other-cli", "codex", nil)); err != nil {
 		t.Fatal(err)
 	}
 	var stderr bytes.Buffer
@@ -500,12 +540,15 @@ func TestLaunchRejectsUnsupportedProfileSchemaVersionBeforeCreatingSession(t *te
 	existingHome := t.TempDir()
 	acsHome := filepath.Join(existingHome, ".acs")
 	profiles := profile.NewStore(acsHome)
-	if _, err := profiles.Create(profile.Profile{
-		Version:         profile.CurrentVersion + 1,
-		Name:            "future",
-		Target:          "devin",
-		SkillReferences: []skills.SkillReference{},
-	}); err != nil {
+	profilesDirectory := filepath.Join(acsHome, "profiles")
+	if err := os.MkdirAll(profilesDirectory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(profilesDirectory, "future.json"),
+		[]byte(`{"version":3,"name":"future","target":"devin","categories":{}}`),
+		0o600,
+	); err != nil {
 		t.Fatal(err)
 	}
 	var stderr bytes.Buffer
@@ -519,11 +562,39 @@ func TestLaunchRejectsUnsupportedProfileSchemaVersionBeforeCreatingSession(t *te
 	if exitCode := application.Run(context.Background(), []string{"devin", "--profile", "future"}); exitCode == 0 {
 		t.Fatal("launch accepted an unsupported Profile schema version")
 	}
-	if !strings.Contains(stderr.String(), `Profile "future" uses unsupported schema version 2`) {
+	if !strings.Contains(stderr.String(), `decode Profile "future": unsupported schema version 3`) {
 		t.Fatalf("unsupported-version error is unclear: %s", stderr.String())
 	}
 	if _, err := os.Stat(sessionsDirectory); !os.IsNotExist(err) {
 		t.Fatalf("unsupported Profile version created a Session directory: %v", err)
+	}
+}
+
+func TestDryRunRejectsUnknownProfileCategoryBeforeDiscovery(t *testing.T) {
+	acsHome := t.TempDir()
+	profilesDirectory := filepath.Join(acsHome, "profiles")
+	if err := os.MkdirAll(profilesDirectory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(profilesDirectory, "unknown.json"),
+		[]byte(`{"version":2,"name":"unknown","target":"devin","categories":{"agents":{"schemaVersion":1,"selection":[]}}}`),
+		0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+	var stderr bytes.Buffer
+	application := cli.App{
+		Catalog:     staticCatalog{err: errors.New("catalog should not be called")},
+		Profiles:    profile.NewStore(acsHome),
+		ErrorOutput: &stderr,
+	}
+
+	if exitCode := application.Run(context.Background(), []string{"devin", "--profile", "unknown", "--dry-run"}); exitCode == 0 {
+		t.Fatal("dry run accepted an unknown Profile category")
+	}
+	if !strings.Contains(stderr.String(), `unknown Profile category "agents"`) {
+		t.Fatalf("unknown-category error is unclear: %s", stderr.String())
 	}
 }
 
@@ -584,12 +655,7 @@ func TestDryRunRejectsMissingMovedAndAmbiguousSkillReferences(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			profiles := profile.NewStore(t.TempDir())
-			if _, err := profiles.Create(profile.Profile{
-				Version:         profile.CurrentVersion,
-				Name:            test.name,
-				Target:          "devin",
-				SkillReferences: []skills.SkillReference{test.reference},
-			}); err != nil {
+			if _, err := profiles.Create(profile.NewSkillsProfile(test.name, "devin", []skills.SkillReference{test.reference})); err != nil {
 				t.Fatal(err)
 			}
 			var stderr bytes.Buffer
@@ -633,7 +699,7 @@ func TestCreateProfileSelectsSameNamedSkillBundlesIndependently(t *testing.T) {
 	application := cli.App{
 		Catalog:     catalog,
 		Profiles:    profiles,
-		Input:       strings.NewReader("1,2\n"),
+		Input:       strings.NewReader("2,1\n"),
 		Output:      &stdout,
 		ErrorOutput: &stderr,
 	}
@@ -655,17 +721,19 @@ func TestCreateProfileSelectsSameNamedSkillBundlesIndependently(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load created Profile: %v", err)
 	}
-	want := profile.Profile{
-		Version: 1,
-		Name:    "reviews",
-		Target:  "devin",
-		SkillReferences: []skills.SkillReference{
-			{Source: "devin-config", RelativePath: "review"},
-			{Source: "shared-agents", RelativePath: "review"},
-		},
+	if saved.Version != profile.CurrentVersion {
+		t.Fatalf("saved Profile version = %d, want %d", saved.Version, profile.CurrentVersion)
 	}
-	if !reflect.DeepEqual(saved, want) {
-		t.Fatalf("saved Profile = %#v, want %#v", saved, want)
+	references, err := profile.SkillReferences(saved)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantReferences := []skills.SkillReference{
+		{Source: "devin-config", RelativePath: "review"},
+		{Source: "shared-agents", RelativePath: "review"},
+	}
+	if !reflect.DeepEqual(references, wantReferences) {
+		t.Fatalf("saved Skill References = %#v, want %#v", references, wantReferences)
 	}
 
 	wantPath := filepath.Join(acsHome, "profiles", "reviews.json")
@@ -704,7 +772,8 @@ func TestCreateProfileEscapesCatalogControlCharactersInSelector(t *testing.T) {
 }
 
 func TestCreateProfileSavesEmptySelectionOnlyAfterExplicitConfirmation(t *testing.T) {
-	profiles := profile.NewStore(t.TempDir())
+	acsHome := t.TempDir()
+	profiles := profile.NewStore(acsHome)
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	application := cli.App{
@@ -726,8 +795,19 @@ func TestCreateProfileSavesEmptySelectionOnlyAfterExplicitConfirmation(t *testin
 	if err != nil {
 		t.Fatalf("load empty Profile: %v", err)
 	}
-	if saved.SkillReferences == nil || len(saved.SkillReferences) != 0 {
-		t.Fatalf("saved Skill References = %#v, want a deliberate empty selection", saved.SkillReferences)
+	references, err := profile.SkillReferences(saved)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if references == nil || len(references) != 0 {
+		t.Fatalf("saved Skill References = %#v, want a deliberate empty selection", references)
+	}
+	contents, err := os.ReadFile(filepath.Join(acsHome, "profiles", "empty.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(contents), `"selection": []`) || strings.Contains(string(contents), "skillReferences") {
+		t.Fatalf("empty Profile does not persist an explicit version-2 Skills selection:\n%s", contents)
 	}
 }
 
@@ -813,7 +893,11 @@ func TestCreateProfileRejectsDuplicateNameWithoutOverwriting(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := skills.SkillReference{Source: "devin-config", RelativePath: "first"}
-	if len(saved.SkillReferences) != 1 || saved.SkillReferences[0] != want {
+	references, err := profile.SkillReferences(saved)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(references) != 1 || references[0] != want {
 		t.Fatalf("duplicate create overwrote original Profile: %#v", saved)
 	}
 }
@@ -841,15 +925,10 @@ func newLaunchTestFixture(t *testing.T) launchTestFixture {
 		t.Fatal(err)
 	}
 	profiles := profile.NewStore(acsHome)
-	if _, err := profiles.Create(profile.Profile{
-		Version: profile.CurrentVersion,
-		Name:    "reviews",
-		Target:  "devin",
-		SkillReferences: []skills.SkillReference{{
-			Source:       devin.GlobalSourceDevinConfig,
-			RelativePath: "review",
-		}},
-	}); err != nil {
+	if _, err := profiles.Create(profile.NewSkillsProfile("reviews", "devin", []skills.SkillReference{{
+		Source:       devin.GlobalSourceDevinConfig,
+		RelativePath: "review",
+	}})); err != nil {
 		t.Fatal(err)
 	}
 	return launchTestFixture{
@@ -919,6 +998,34 @@ func waitForFile(t *testing.T, path string) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("timed out waiting for %q", path)
+}
+
+func writeVersionOneProfile(t *testing.T, acsHome, name string) (string, []byte) {
+	t.Helper()
+	profilesDirectory := filepath.Join(acsHome, "profiles")
+	if err := os.MkdirAll(profilesDirectory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	contents := []byte(fmt.Sprintf(
+		`{"version":1,"name":%q,"target":"devin","skillReferences":[{"source":"devin-config","relativePath":"review"}]}`,
+		name,
+	))
+	path := filepath.Join(profilesDirectory, name+".json")
+	if err := os.WriteFile(path, contents, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path, contents
+}
+
+func assertFileContents(t *testing.T, path string, want []byte, message string) {
+	t.Helper()
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("%s: %s", message, got)
+	}
 }
 
 func (catalog staticCatalog) DiscoverGlobalSkillCatalog(context.Context) ([]skills.SkillBundle, error) {

@@ -253,8 +253,9 @@ repository. ACS reports them but does not filter, copy, or manage them.
 
 ## Accepted design: modular interactive Profile creation
 
-**Status:** Planned. The current comma-separated selection prompt and version-1
-Profile schema remain implemented until this work lands.
+**Status:** Partially implemented. New Profiles use the version-2 category
+envelope, and ACS normalizes version-1 Profiles in memory. The current
+comma-separated selection prompt and Skills-specific coordination remain.
 
 The interactive builder will keep `acs devin create-profile --name <name>` as
 its public command. It will validate the name, reject an existing Profile name,
@@ -339,9 +340,9 @@ The builder will apply these rules:
 Mouse input, a non-TTY fallback, interactive Profile-name entry, and Select All
 remain outside this change.
 
-### Version-2 Profile schema
+### Implemented version-2 Profile schema
 
-New Profiles will store one versioned payload for every supported category,
+New Profiles store one versioned payload for every supported category,
 including empty selections:
 
 ```json
@@ -368,8 +369,8 @@ category schema version, validation, and deterministic `selection` encoding.
 An older Profile that lacks a newly supported category receives that
 category's empty selection, so an ACS upgrade does not enable capabilities.
 
-ACS will read version-1 Profiles by normalizing `skillReferences` to a
-version-2-shaped Skills payload in memory. It will not rewrite the source file.
+ACS reads version-1 Profiles by normalizing `skillReferences` to a
+version-2-shaped Skills payload in memory. It does not rewrite the source file.
 New creation writes version 2. Unknown category IDs, unsupported category
 schema versions, malformed selections, and unresolved references fail with a
 clear error.
@@ -419,28 +420,12 @@ cover resize, `Ctrl+C`, alternate-screen exit, panic and error cleanup, and
 terminal restoration. A synthetic catalog of 10,000 Skills will guard fuzzy
 search and navigation responsiveness.
 
-### Implementation sequence
-
-1. Add the version-2 Profile envelope, canonical category payload encoding,
-   version-1 normalization, and compatibility tests.
-2. Add the deep ordered Registry, typed binders, declarative launch builder,
-   and test-only category. Move Skills resolution and launch contributions
-   behind the new seam.
-3. Add the root Bubble Tea builder, terminal checks, navigation, modal,
-   loading, saving, and exit state machines.
-4. Add the Skills editor with lazy discovery, fuzzy search, retained UI state,
-   stable-identity selection, details, and deterministic encoding.
-5. Wire `create-profile` to the builder and atomic Profile store, including
-   duplicate-name preflight, retryable save errors, summaries, and exit codes.
-6. Add runtime, PTY, terminal-safety, control-character sanitization, and
-   10,000-item performance coverage. Update public examples when the builder
-   becomes the implemented behavior.
-
 ## Current limitations
 
 - ACS rejects platforms other than macOS.
 - ACS ships only the Devin Adapter.
-- The shared Profile schema and capability interfaces currently model Skills.
+- Profile decoding and CLI coordination currently support only the Skills
+  category; the ordered category Registry is not implemented yet.
 - Profile creation currently uses a comma-separated numbered selection prompt;
   the accepted TUI design above is not implemented yet.
 - Profiles cannot be edited, deleted, imported, or exported through the CLI.
