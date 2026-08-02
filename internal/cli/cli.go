@@ -105,12 +105,7 @@ func (app App) createProfile(ctx context.Context, name string) int {
 	for _, bundle := range selected {
 		references = append(references, bundle.Reference)
 	}
-	created := profile.Profile{
-		Version:         profile.CurrentVersion,
-		Name:            name,
-		Target:          "devin",
-		SkillReferences: references,
-	}
+	created := profile.NewSkillsProfile(name, "devin", references)
 	path, err := app.Profiles.Create(created)
 	if err != nil {
 		return app.fail("create Profile %q: %v", created.Name, err)
@@ -183,14 +178,15 @@ func (app App) resolveDevinProfile(ctx context.Context, name string) ([]skills.S
 	if loaded.Target != "devin" {
 		return nil, fmt.Errorf("Profile %q targets %q, not Devin", name, loaded.Target)
 	}
-	if loaded.Version != profile.CurrentVersion {
-		return nil, fmt.Errorf("Profile %q uses unsupported schema version %d", name, loaded.Version)
+	references, err := profile.SkillReferences(loaded)
+	if err != nil {
+		return nil, fmt.Errorf("load Profile %q Skills selection: %w", name, err)
 	}
 	catalog, err := app.Catalog.DiscoverGlobalSkillCatalog(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("discover Devin global Skill Catalog: %w", err)
 	}
-	selected, err := skills.ResolveReferences(loaded.SkillReferences, catalog)
+	selected, err := skills.ResolveReferences(references, catalog)
 	if err != nil {
 		return nil, fmt.Errorf("resolve Profile %q: %w", name, err)
 	}
