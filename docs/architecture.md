@@ -1,252 +1,261 @@
-# AI Config Selector: MVP architecture decisions
+# Architecture
 
-**Status:** Accepted for the first MVP  
-**Scope:** Documentation only; no implementation is included in this change.
+AI Config Selector (ACS) creates named Profiles of capabilities and applies
+them when it launches a supported AI coding CLI. Each CLI Adapter translates a
+Profile into target-specific discovery paths, runtime configuration, preflight
+checks, and launch behavior.
 
-## Product hypothesis
+## Product model
 
-AI Config Selector (ACS) launches an AI coding CLI with a reusable, explicit selection of capabilities instead of exposing every globally installed capability by default.
+A Profile belongs to one target CLI. It records the user's capability choices
+through stable references and leaves target-specific discovery and runtime
+rules to a CLI Adapter. Shared modules own Profile persistence, reference
+resolution, Session lifecycle, and the interactive process contract.
 
-The first hypothesis to validate is deliberately narrow:
+The current vertical slice implements Skills as the first capability type and
+Devin as the first CLI Adapter. The product boundary permits additional
+capability types and CLI Adapters.
 
-> A developer can create a named Devin profile by interactively selecting individual skills, then launch Devin later with exactly that saved global-skill selection.
+## Implemented scope
 
-ACS is a profile launcher. It is not initially a general configuration manager or a security sandbox.
+The current implementation supports:
 
-## MVP scope
+- macOS;
+- one CLI Adapter, for Devin;
+- user-global Skills discovered from Devin and shared-agent locations;
+- named Profiles stored on the local machine;
+- interactive Profile creation;
+- dry-run inspection;
+- interactive Devin launches through an ephemeral Session.
 
-The first MVP supports:
+The current Profile schema does not represent MCP servers, hooks, instructions,
+agents, or arbitrary target settings. The Devin Adapter leaves
+repository-local Skills under Devin's control.
 
-- one CLI: Devin;
-- one configurable component: skills;
-- discovery of globally available skills;
-- interactive creation of named profiles;
-- reuse of a profile when launching Devin;
-- materialization of each selected skill as a complete bundle;
-- a synthetic configuration environment that does not modify the user's global installation;
-- a dry-run view of the resolved execution plan.
+## Core concepts
 
-The first MVP does not support:
+**Profile**: A named, machine-local selection for one target CLI. A Profile
+stores Skill References rather than copies of Skills.
 
-- Codex, Claude Code, or other CLIs;
-- selecting arbitrary Devin settings or config files;
-- hooks, MCP servers, agents, or instructions as separate selectable components;
-- the proposed `--raw` mode;
-- a strong OS security boundary;
-- filtering repository-local skills.
+**Skill Reference**: The stable identity of a selected global Skill Bundle. It
+combines an adapter-owned source with a bundle-relative path, such as
+`devin-config:code-review`.
 
-## Primary user flow
+**Skill Bundle**: A selectable Skill directory, including its `SKILL.md` and
+any relative scripts, references, or assets.
 
-Create a profile:
+**Skill Catalog**: The global Skill Bundles ACS can discover at a point in
+time. The catalog can contain the same display name from different sources.
 
-```bash
-acs devin create-profile --name backend-review
+**CLI Adapter**: The target-specific boundary that discovers capabilities,
+builds a launch plan, prepares target state, verifies compatibility, and starts
+the target CLI.
+
+**Session**: An ephemeral launch environment under
+`~/.acs/sessions/session-*`. It contains a synthetic home, selected Skill
+Bundles, and the target state needed for the child process. The current Devin
+Adapter adds an allowlisted Devin credential.
+
+## Module boundaries
+
+| Module | Responsibility |
+| --- | --- |
+| `cmd/acs` | Enforces platform support, resolves host paths, and assembles the application. |
+| `internal/cli` | Parses public commands and coordinates Profile creation, dry runs, and launches through narrow interfaces. |
+| `internal/profile` | Validates Profile names and owns local JSON persistence. |
+| `internal/skills` | Defines Skill Catalog types and resolves strict Skill References. |
+| `internal/adapter/devin` | Encapsulates Devin discovery paths, Session layout, preflight checks, launch planning, and process supervision. |
+| `internal/launch` | Owns Session leases and the CLI-neutral launch plan and terminal types. |
+
+```mermaid
+flowchart LR
+    User[User]
+
+    subgraph Core[ACS shared modules]
+        direction LR
+        CLI[ACS CLI]
+        Profiles[(Profile Store)]
+        Capabilities[Capability Model<br/>Skills today]
+
+        CLI -->|save / load| Profiles
+        CLI -->|resolve references| Capabilities
+    end
+
+    subgraph AdapterBoundary[Target-specific adapter boundary]
+        Adapter[CLI Adapter<br/>discover · plan · preflight · launch<br/>Devin today]
+    end
+
+    Global[Global capabilities<br/>adapter-owned discovery roots]
+    Allowed[Allowlisted target state<br/>credential today]
+
+    subgraph SessionBoundary[Synthetic home — configuration isolation only]
+        Session[Ephemeral Session<br/>selected bundles + target state]
+    end
+
+    Repository[Repository-local capabilities<br/>target-native discovery]
+    Target[Target AI coding CLI]
+
+    User --> CLI
+    CLI -->|discover / plan / launch| Adapter
+    Adapter -->|read| Global
+    Adapter -->|materialize| Session
+    Allowed -->|allowlisted copy| Session
+    Session -.->|HOME + XDG| Target
+    Adapter -->|preflight / start| Target
+    Repository -.->|inherited discovery| Target
 ```
 
-ACS discovers supported global skills and presents an interactive selector. The user selects skills individually, not an entire source directory.
+The CLI layer depends on catalog, storage, planning, and launch interfaces. A
+CLI Adapter implements target-specific catalog, planner, and launcher behavior.
+Profile storage and Skill Reference resolution do not depend on target paths.
+The Session boundary in the diagram represents configuration isolation; it is
+not an OS sandbox around the target process.
 
-Conceptually:
+## Profile lifecycle
+
+ACS creates a Profile through this sequence:
+
+1. validate the Profile name;
+2. discover the current global Skill Catalog;
+3. collect the user's selection;
+4. store the selected source-and-path references in a versioned Profile.
+
+Profiles live at `~/.acs/profiles/<name>.json`. ACS restricts the profiles
+directory to the user (`0700`) and each Profile file to the user (`0600`). It
+writes and syncs a temporary file in the profiles directory, then publishes it
+without replacing an existing Profile name.
+
+Before a dry run or launch, ACS loads the Profile and validates its schema
+version and target. It discovers a new Skill Catalog and requires each saved
+Skill Reference to match exactly one current bundle. Missing and ambiguous
+references fail instead of binding to a different Skill.
+
+## Dry-run lifecycle
+
+A dry run resolves the Profile and asks its CLI Adapter for a launch plan. The
+current Devin plan reports:
+
+- selected global Skill Bundles and their planned Session paths;
+- repository-local Skill Bundles that Devin may inherit.
+
+A dry run does not create a Session or start Devin.
+
+## Launch lifecycle
+
+```mermaid
+sequenceDiagram
+    actor User
+    participant ACS as ACS CLI
+    participant Store as Profile Store
+    participant Model as Capability Model
+    participant Adapter as CLI Adapter
+    participant Session
+    participant Target as Target AI coding CLI
+
+    User->>ACS: Launch Profile
+    ACS->>Store: Load Profile
+    Store-->>ACS: Saved capability references
+    ACS->>Adapter: Discover current catalog
+    Adapter-->>ACS: Catalog
+    ACS->>Model: Resolve saved references against catalog
+    Model-->>ACS: Resolved bundles or error
+    ACS->>Adapter: Launch resolved Profile
+    Adapter->>Session: Create lease
+    Adapter->>Session: Materialize bundles and allowlisted state
+    Note over Session,Target: Synthetic home changes configuration discovery
+    Note over Session,Target: Repository-local capabilities remain visible
+    Adapter->>Target: Run preflight with Session environment
+    Target-->>Adapter: Capability and authentication status
+    Adapter->>Target: Start interactive process with Session environment
+    Target-->>Adapter: Exit status
+    Adapter->>Session: Remove Session
+    Adapter-->>ACS: Exit status
+    ACS-->>User: Return exit status
+```
+
+The current Devin Adapter creates a synthetic home, copies each selected Skill
+Bundle into its Devin discovery location, and copies the existing Devin
+credential when present. It points `HOME` and the XDG configuration, data,
+cache, and state variables at the synthetic home before preflight and launch.
+The interactive process inherits the invoking terminal. ACS preserves signals,
+resize events, and the child exit status.
+
+Session leases let concurrent launches coexist. A later launch removes an
+abandoned Session only when no process holds its lease.
+
+## Implemented adapter: Devin
+
+The adapter discovers user-global Skill Bundles from:
 
 ```text
-Create profile: backend-review
-
-Select skills:
-
-[x] code-review
-[x] postgres-review
-[ ] frontend-design
-[ ] pdf
-
-2 skills selected
+$HOME/.config/devin/skills/
+$HOME/.agents/skills/
 ```
 
-Run Devin with the saved selection:
-
-```bash
-acs devin --profile backend-review
-```
-
-Inspect what would be loaded without starting Devin:
-
-```bash
-acs devin --profile backend-review --dry-run
-```
-
-## Decision: profiles are the primary interface
-
-The primary workflow is profile-based rather than a long list of flags on every invocation.
-
-A profile initially records:
-
-- the target CLI, which is always Devin in the MVP;
-- the profile name;
-- the identities and sources of the selected skills.
-
-The exact on-disk serialization format and storage location are intentionally not fixed by this decision. They should be chosen during implementation without expanding the product scope.
-
-A future direct mode may allow commands such as:
-
-```bash
-acs devin --raw --skill skill1 --skill skill2 --hook hook1
-```
-
-That syntax is reserved as a design direction, not part of the MVP contract.
-
-## Decision: skills are selected individually
-
-A skill source directory is used for discovery. It is not the unit the user selects.
-
-The units are:
-
-- **skill source:** a directory containing zero or more skills;
-- **skill:** one selectable capability identified by its directory and `SKILL.md`;
-- **skill bundle:** the complete selected directory, including scripts, references, and assets.
-
-If the user selects `postgres-review`, ACS materializes the entire skill directory. Copying only `SKILL.md` would break skills that use relative resources.
-
-The initial discovery sources are the supported global locations for Devin and the shared agent convention, including:
+It recognizes repository-local Skill Bundles under:
 
 ```text
-~/.agents/skills/
-~/.config/devin/skills/
+<repository>/.devin/skills/
+<repository>/.agents/skills/
 ```
 
-The first implementation spike must verify Devin's current discovery behavior and paths before treating them as a stable adapter contract.
+ACS manages the global sources. Devin may inherit the repository-local sources,
+so the dry run reports them separately.
 
-When two sources expose the same skill name, ACS must not silently choose one. The selector and dry-run output must show enough source information for the user to disambiguate them.
-
-## Decision: CLI-specific behavior belongs in an adapter
-
-Although only Devin is supported initially, Devin-specific knowledge should not leak throughout the ACS core.
-
-The Devin adapter is responsible for answering questions such as:
-
-- which global locations contain discoverable skills;
-- where selected skills must appear at runtime;
-- which command starts Devin;
-- which environment variables or paths can redirect Devin's configuration environment;
-- which authentication, settings, and state are required for a normal launch.
-
-The core remains responsible for profile loading, selection, validation, materialization, and process supervision.
-
-This boundary allows future adapters for Codex and Claude Code without prematurely implementing them.
-
-## Decision: create a synthetic configuration environment
-
-ACS must not mutate or temporarily rewrite the user's real global Devin or shared-agent directories.
-
-At launch, ACS resolves the profile and creates an isolated configuration view containing only the selected global skills at the locations Devin expects.
-
-Conceptually:
+The adapter copies only this existing Devin state into a Session:
 
 ```text
-Global skill sources
-        |
-        v
-Discovery and catalog
-        |
-        v
-Named profile selection
-        |
-        v
-Devin adapter
-        |
-        v
-Synthetic configuration environment
-        |
-        v
-Devin process
+$HOME/.local/share/devin/credentials.toml
 ```
 
-Small configuration files may be copied into the temporary environment. Read-only mappings or links may be considered where appropriate, but symlinks alone must not be described as a security boundary.
+It does not copy the surrounding Devin configuration, MCP configuration, hooks,
+rules, or unselected global Skills.
 
-## Decision: preserve the normal Devin experience where possible
+Before the interactive process starts, the adapter runs two probes inside the
+Session environment:
 
-The MVP focuses on filtering global skills, not forcing the user to reauthenticate or losing unrelated Devin preferences and state.
+1. `devin skills list --json` must report exactly the selected managed global
+   Skill Bundles after built-in and repository-local Skills are excluded;
+2. `devin auth status` must report a usable existing login.
 
-The runtime should preserve the authentication, settings, and state needed for a normal Devin session while replacing the global skill view with the profile's selection.
+Command failures, incompatible output, unmanaged global sources, catalog
+mismatches, and unavailable authentication abort the launch. Preflight errors
+expose capability-level diagnostics without returning subprocess output,
+credentials, environment values, or account details.
 
-This is a technical risk, not a solved implementation detail. The first spike must prove that ACS can preserve the required Devin data without reintroducing every global skill through a shared parent directory.
+## Isolation boundaries
 
-If that separation is not possible with Devin's supported configuration mechanisms, the implementation must document the limitation before weakening the profile semantics.
+The synthetic home isolates Devin's normal configuration discovery from the
+user's global Skill directories. ACS copies only selected global Skill Bundles
+and the allowlisted credential into that home.
 
-## Decision: synthetic environment is not a security sandbox
+The current runtime does not place the Devin process inside an OS filesystem
+sandbox. A process that knows an absolute host path may still read it. ACS also
+preserves Devin's normal network access. The Session provides configuration
+isolation, not containment for hostile code.
 
-The MVP provides configuration isolation: unselected global skills are not placed in Devin's normal discovery paths inside the ACS-managed environment.
+Repository-local Skills remain visible because Devin runs in the selected
+repository. ACS reports them but does not filter, copy, or manage them.
 
-It does not claim that the Devin process is unable to read arbitrary host paths. Without an OS sandbox, a process that knows an absolute path may still access it.
+## Invariants
 
-Strong isolation may later be implemented with platform-specific backends such as:
+- ACS never modifies the user's global Skill directories when creating or
+  launching a Profile.
+- A Skill Reference never silently rebinds after a bundle moves or disappears.
+- ACS materializes the complete selected Skill Bundle.
+- Adapter preflight fails closed when ACS cannot verify the selected global
+  catalog and usable authentication.
+- Dry-run output distinguishes ACS-managed global Skills from inherited
+  repository-local Skills.
+- Interactive launch preserves the invoking terminal and the target CLI exit
+  status.
+- Session cleanup does not remove a Session held by a concurrent process.
 
-- Bubblewrap (`bwrap`) on Linux;
-- Seatbelt/`sandbox-exec` on macOS, with its legacy status treated as a portability risk;
-- a compatible external backend such as `ai-jail`.
+## Current limitations
 
-Sandboxing remains separate from profile resolution so it can be added without redesigning profiles.
-
-## Repository-local skills
-
-The MVP selects and filters global skills only.
-
-Skills already present in the working repository may still be discovered by Devin according to Devin's own project rules. ACS must not claim that a profile is the only source of all skills until repository-local discovery can also be controlled.
-
-The dry-run output should distinguish:
-
-- selected global skills managed by ACS;
-- project-local skills that Devin may inherit and that ACS does not filter in the MVP.
-
-A future profile policy may support `inherit`, `mask`, or `overlay` behavior for project-local components.
-
-## Execution sequence
-
-When running a profile, ACS should:
-
-1. load the named profile;
-2. resolve each saved skill against the current skill catalog;
-3. fail clearly if a selected skill is missing or ambiguous;
-4. ask the Devin adapter for an execution plan;
-5. create the synthetic configuration environment;
-6. materialize only the selected global skill bundles;
-7. preserve the required Devin authentication, settings, and state;
-8. show the plan and exit when `--dry-run` is used;
-9. otherwise launch Devin interactively;
-10. forward terminal signals, resize events, and the child exit code;
-11. clean up temporary session data.
-
-## MVP acceptance criteria
-
-The MVP is successful when a user can:
-
-1. create a named Devin profile through an interactive skill-by-skill selector;
-2. see skill names and their source locations, including duplicate-name conflicts;
-3. run Devin later using that profile;
-4. confirm through `--dry-run` which global skills will be materialized;
-5. use Devin without modifying the real global skill directories;
-6. receive a clear error when a saved skill no longer exists.
-
-## Deferred decisions
-
-The following are intentionally deferred:
-
-- the profile file format and storage path;
-- profile editing, deletion, export, and import commands;
-- direct `--skill` selection without a profile;
-- exact `--raw` semantics;
-- hooks, MCP servers, instructions, agents, and native CLI config selection;
-- adapters for other AI CLIs;
-- project-local component filtering;
-- persistent versus ephemeral per-profile state;
-- copying versus read-only mounting skill bundles;
-- strong sandbox backends and network policies.
-
-## Architectural guardrails
-
-Future work should preserve these boundaries:
-
-- profiles describe user intent;
-- adapters translate that intent into CLI-specific paths and commands;
-- the runtime materializes an execution environment;
-- sandbox backends enforce security policy;
-- process supervision preserves the interactive CLI experience.
-
-This keeps skill selection useful on its own while leaving a clear path toward broader profiles and stronger isolation.
+- ACS rejects platforms other than macOS.
+- ACS ships only the Devin Adapter.
+- The shared Profile schema and capability interfaces currently model Skills.
+- Profiles cannot be edited, deleted, imported, or exported through the CLI.
+- ACS does not filter repository-local Skills.
+- ACS does not provide whole-process filesystem or network containment.

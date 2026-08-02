@@ -1,13 +1,7 @@
-## Agent skills
+## Documentation
 
-### Issue tracker
+Keep repository documentation public-facing and focused on domain terminology,
+architecture boundaries, observable behavior, and invariants.
 
-Issues and PRDs are tracked in GitHub Issues. See `docs/agents/issue-tracker.md`.
-
-### Triage labels
-
-Uses the default five canonical triage labels. See `docs/agents/triage-labels.md`.
-
-### Domain docs
-
-Uses a single-context layout. See `docs/agents/domain.md`.
+Personal project planning, private ADRs, issue-tracker procedures, and
+agent-specific workflow notes do not belong in this repository.
