@@ -1,0 +1,63 @@
+# Contributing to AI Config Selector
+
+Thanks for contributing to AI Config Selector (ACS).
+
+## Before you start
+
+ACS currently supports macOS and the Devin CLI. Read
+[`docs/architecture.md`](docs/architecture.md) before changing Profile,
+Session, discovery, isolation, or launch behavior.
+
+Open a GitHub issue before starting a feature, architecture change, or large
+refactor. Small bug fixes and documentation corrections may go directly to a
+pull request. Keep each pull request focused on one problem.
+
+## Local setup
+
+Install Go 1.25 or later, clone the repository, and run:
+
+```bash
+go test ./...
+go build ./cmd/acs
+```
+
+ACS can create files under `~/.acs` and launch an installed target CLI. Use
+temporary homes, fake target binaries, or test fixtures while developing. Do
+not point tests at a user's real global Skill directories or credentials.
+
+## Development guidelines
+
+- Preserve the configuration-isolation boundaries and invariants documented
+  in the architecture.
+- Keep shared Profile and launch behavior independent of target-specific paths.
+- Add regression tests for behavior changes and bug fixes. Prefer public seams
+  such as the Profile Store and CLI application over private helpers.
+- Keep terminal output free of raw control characters from discovered names,
+  paths, subprocess output, or errors.
+- Update `docs/architecture.md` when a change alters observable behavior or a
+  system boundary.
+
+Format and verify the change before opening a pull request:
+
+```bash
+go fmt ./...
+go vet ./...
+go test ./...
+git diff --check
+```
+
+## Pull requests
+
+Each pull request should:
+
+- explain the problem and the behavior delivered;
+- link the issue or discussion that defines the work, when one exists;
+- describe compatibility or migration risks;
+- list the exact validation commands that passed;
+- include terminal output, screenshots, or a recording when interaction or
+  presentation changes;
+- identify macOS behavior that was tested and any relevant behavior that was
+  not tested.
+
+Maintainers may ask to narrow, redesign, or split a contribution before
+merging it.
