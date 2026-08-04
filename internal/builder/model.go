@@ -31,6 +31,7 @@ type Model struct {
 	loadCatalog    func(context.Context) ([]skills.SkillBundle, error)
 	loadState      loadState
 	loadError      error
+	confirmFailed  bool
 	screen         screen
 	overviewCursor int
 	width          int
@@ -138,6 +139,11 @@ func (m Model) updateOverview(press tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(press, controls.open):
 		switch m.overviewCursor {
 		case len(categories):
+			if m.loadState == loadFailed {
+				m.confirmFailed = true
+				m.screen = confirmScreen
+				return m, nil
+			}
 			if m.selectedCount() == 0 {
 				m.screen = confirmScreen
 				return m, nil
@@ -191,6 +197,12 @@ func (m Model) discoveryCommand() tea.Cmd {
 func (m Model) updateConfirmation(press tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case key.Matches(press, controls.accept):
+		if m.confirmFailed {
+			m.confirmFailed = false
+			if m.selectedCount() == 0 {
+				return m, nil
+			}
+		}
 		m.outcome = Outcome{Draft: m.draft, Create: true}
 		return m, tea.Quit
 	case key.Matches(press, controls.decline):
@@ -249,7 +261,11 @@ func (m Model) View() tea.View {
 	case skillsScreen:
 		content.WriteString(m.editor.View().Content)
 	case confirmScreen:
-		content.WriteString("Create an empty Profile?\n\nThis Profile will not select any Skills.\n\nY/Enter create  N/Esc return")
+		if m.confirmFailed {
+			content.WriteString("Skills failed to load. Create Profile anyway?\n\nY/Enter create  N/Esc return")
+		} else {
+			content.WriteString("Create an empty Profile?\n\nThis Profile will not select any Skills.\n\nY/Enter create  N/Esc return")
+		}
 	}
 	if m.screen == overviewScreen && m.loadState == loading {
 		content.WriteString("\nLoading Skills...\n")
