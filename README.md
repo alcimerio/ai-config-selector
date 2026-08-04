@@ -54,9 +54,14 @@ Create a named Profile for the target:
 ./bin/acs devin create-profile --name backend-review
 ```
 
-ACS opens a keyboard-driven Profile Builder. Open Skills, use Space or Enter
-to select bundles, return to the overview, and choose Create Profile. It stores
-the resulting Profile under `~/.acs/profiles/`.
+ACS opens a keyboard-driven Profile Builder. Open Skills with Enter, Space, or
+Right; use Space or Enter to select bundles; use `/` to search; then return to
+the overview with Left or Escape and choose Create Profile. Every screen shows
+its valid keys. If the terminal is smaller than 64 columns by 18 rows, resize
+it to restore the active screen without losing the draft. `Ctrl+C`, Escape on
+the overview, and Cancel share the same discard flow. ACS stores a completed
+Profile under `~/.acs/profiles/` and prints cancellation only after restoring
+the terminal.
 
 Profile names contain 1 to 64 letters, numbers, dots, underscores, or hyphens
 and must start with a letter or number. ACS will not overwrite an existing

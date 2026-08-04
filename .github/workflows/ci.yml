@@ -44,6 +44,13 @@ jobs:
       - name: Vet
         run: go vet ./...
 
+      - name: Verify module metadata
+        shell: bash
+        run: |
+          go mod tidy
+          git diff --exit-code -- go.mod go.sum
+          go mod verify
+
       - name: Test
         run: go test ./...
 
