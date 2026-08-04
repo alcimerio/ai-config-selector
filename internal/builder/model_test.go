@@ -44,8 +44,16 @@ func TestModelCreatesProfileFromSelectedSkills(t *testing.T) {
 	}
 
 	draft := registry.NewDraft()
-	model := NewModel("reviews", draft, NewSkillsEditor(draft, binding, []skills.SkillBundle{bundle}))
+	sameNamed := bundle
+	sameNamed.Reference = skills.SkillReference{Source: "shared-agents", RelativePath: "review"}
+	sameNamed.BundlePath = "/shared/review"
+	model := NewModel("reviews", draft, NewSkillsEditor(draft, binding, []skills.SkillBundle{bundle, sameNamed}))
 	model = update(t, model, tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	model = update(t, model, tea.KeyPressMsg(tea.Key{Code: '/', Text: "/"}))
+	model = update(t, model, tea.KeyPressMsg(tea.Key{Code: tea.KeyEsc}))
+	if model.screen != skillsScreen {
+		t.Fatal("Escape while search has focus returned to overview")
+	}
 	model = update(t, model, tea.KeyPressMsg(tea.Key{Code: tea.KeySpace}))
 	model = update(t, model, tea.KeyPressMsg(tea.Key{Code: tea.KeyLeft}))
 	model = update(t, model, tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
@@ -202,6 +210,9 @@ func TestSkillsEditorRanksNameMatchesAndRetainsHiddenSelections(t *testing.T) {
 	if len(selected) != 1 || selected[0] != catalog[2].Reference {
 		t.Fatalf("selection did not survive filtering: %#v", selected)
 	}
+	if !strings.Contains(editor.View().Content, "Skills                         1 selected") {
+		t.Fatal("selected count disappeared after filtering")
+	}
 }
 
 func TestSkillsEditorSanitizesDetailPathAndScalesToLargeCatalog(t *testing.T) {
@@ -225,6 +236,8 @@ func TestSkillsEditorSanitizesDetailPathAndScalesToLargeCatalog(t *testing.T) {
 	catalog[0].BundlePath = "/global/unsafe\x1b[31m\npath"
 	editor := NewSkillsEditor(registry.NewDraft(), binding, catalog)
 	updated, _ := editor.Update(tea.KeyPressMsg(tea.Key{Code: '/', Text: "/"}))
+	editor = updated.(skillsEditor)
+	updated, _ = editor.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
 	editor = updated.(skillsEditor)
 	updated, _ = editor.Update(tea.KeyPressMsg(tea.Key{Code: '9', Text: "9"}))
 	editor = updated.(skillsEditor)

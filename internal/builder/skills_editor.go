@@ -64,7 +64,7 @@ func (m skillsEditor) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	switch {
 	case press.String() == "/":
 		m.searchFocus = true
-		m.queryCursor = len(m.query)
+		m.queryCursor = len([]rune(m.query))
 	case key.Matches(press, controls.up):
 		if m.cursor > 0 {
 			m.cursor--
@@ -94,19 +94,19 @@ func (m *skillsEditor) updateSearch(press tea.KeyPressMsg) {
 			m.queryCursor--
 		}
 	case "right":
-		if m.queryCursor < len(m.query) {
+		if m.queryCursor < len([]rune(m.query)) {
 			m.queryCursor++
 		}
 	case "backspace":
 		if m.queryCursor > 0 {
-			m.query = m.query[:m.queryCursor-1] + m.query[m.queryCursor:]
+			m.query = replaceRunes(m.query, m.queryCursor-1, m.queryCursor, "")
 			m.queryCursor--
 		}
 	default:
 		text := press.Key().Text
 		if text != "" && !strings.ContainsFunc(text, unicode.IsControl) {
-			m.query = m.query[:m.queryCursor] + text + m.query[m.queryCursor:]
-			m.queryCursor += len(text)
+			m.query = replaceRunes(m.query, m.queryCursor, m.queryCursor, text)
+			m.queryCursor += len([]rune(text))
 		}
 	}
 }
@@ -146,7 +146,8 @@ func (m *skillsEditor) toggle(reference skills.SkillReference) {
 
 func (m skillsEditor) View() tea.View {
 	var content strings.Builder
-	content.WriteString("Skills\n")
+	selected, _ := m.selection(m.draft)
+	content.WriteString("Skills                         " + strconv.Itoa(len(selected)) + " selected\n")
 	if m.searchFocus {
 		content.WriteString("Search: " + safe(m.query) + "\n")
 	} else if m.query != "" {
@@ -223,16 +224,21 @@ func bundleMatch(bundle skills.SkillBundle, query string) (int, int, bool) {
 }
 
 func fuzzyScore(value, query string) (int, bool) {
-	value, query = strings.ToLower(value), strings.ToLower(query)
+	valueRunes, queryRunes := []rune(strings.ToLower(value)), []rune(strings.ToLower(query))
 	position, score := 0, 0
-	for _, character := range query {
-		next := strings.IndexRune(value[position:], character)
+	for _, character := range queryRunes {
+		next := -1
+		for index := position; index < len(valueRunes); index++ {
+			if valueRunes[index] == character {
+				next = index
+				break
+			}
+		}
 		if next < 0 {
 			return 0, false
 		}
-		position += next
-		score += next
-		position++
+		score += next - position
+		position = next + 1
 	}
 	return score, true
 }
@@ -244,7 +250,10 @@ func catalogOrder(left, right skills.SkillBundle) bool {
 		}
 		return strings.ToLower(pair[0]) < strings.ToLower(pair[1])
 	}
-	return false
+	if left.Reference.Source != right.Reference.Source {
+		return left.Reference.Source < right.Reference.Source
+	}
+	return left.Reference.RelativePath < right.Reference.RelativePath
 }
 
 func (m skillsEditor) isSelected(reference skills.SkillReference) bool {
@@ -263,6 +272,10 @@ func (m skillsEditor) isSelected(reference skills.SkillReference) bool {
 func safe(value string) string {
 	quoted := strconv.QuoteToASCII(value)
 	return quoted[1 : len(quoted)-1]
+}
+func replaceRunes(value string, start, end int, replacement string) string {
+	runes := []rune(value)
+	return string(append(append(runes[:start:start], []rune(replacement)...), runes[end:]...))
 }
 func min(left, right int) int {
 	if left < right {
