@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/alcimerio/ai-config-selector/internal/adapter/devin"
+	"github.com/alcimerio/ai-config-selector/internal/builder"
 	"github.com/alcimerio/ai-config-selector/internal/category"
 	"github.com/alcimerio/ai-config-selector/internal/cli"
 	"github.com/alcimerio/ai-config-selector/internal/launch"
@@ -1007,9 +1008,90 @@ func TestCreateProfileRejectsDuplicateNameWithoutOverwriting(t *testing.T) {
 	}
 }
 
+func TestCreateProfileUsesTheInteractiveBuilderAndPersistsItsDraft(t *testing.T) {
+	fixture := newStaticCategoryFixture(t, staticCatalog{})
+	draft := fixture.registry.NewDraft()
+	want := skills.SkillReference{Source: "devin-config", RelativePath: "review"}
+	if err := category.SetSelection(&draft, fixture.binding, []skills.SkillReference{want}); err != nil {
+		t.Fatal(err)
+	}
+	profileBuilder := &staticBuilder{outcome: builder.Outcome{Draft: draft, Create: true}}
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	profiles := profile.NewStore(t.TempDir(), fixture.registry)
+	application := cli.App{
+		Categories:  fixture.registry,
+		Builder:     profileBuilder,
+		Profiles:    profiles,
+		Input:       strings.NewReader(""),
+		Output:      &stdout,
+		ErrorOutput: &stderr,
+		Interactive: func(io.Reader, io.Writer) bool { return true },
+	}
+
+	if exitCode := application.Run(context.Background(), []string{"devin", "create-profile", "--name", "reviews"}); exitCode != 0 {
+		t.Fatalf("exit code = %d, stderr = %s", exitCode, stderr.String())
+	}
+	if !profileBuilder.called || profileBuilder.name != "reviews" {
+		t.Fatalf("interactive Builder call = %#v, want one call for reviews", profileBuilder)
+	}
+	if strings.Contains(stdout.String(), "comma-separated numbers") {
+		t.Fatalf("legacy numbered prompt was used:\n%s", stdout.String())
+	}
+	saved, err := profiles.Load("reviews")
+	if err != nil {
+		t.Fatal(err)
+	}
+	references, err := devin.SkillReferences(saved)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(references, []skills.SkillReference{want}) {
+		t.Fatalf("saved references = %#v, want %#v", references, []skills.SkillReference{want})
+	}
+}
+
+func TestCreateProfileRejectsNonInteractiveStreamsBeforeBuilderStarts(t *testing.T) {
+	fixture := newStaticCategoryFixture(t, staticCatalog{})
+	builder := &staticBuilder{}
+	var stderr bytes.Buffer
+	application := cli.App{
+		Categories:  fixture.registry,
+		Builder:     builder,
+		Profiles:    profile.NewStore(t.TempDir(), fixture.registry),
+		Input:       strings.NewReader(""),
+		Output:      &bytes.Buffer{},
+		ErrorOutput: &stderr,
+		Interactive: func(io.Reader, io.Writer) bool { return false },
+	}
+
+	if exitCode := application.Run(context.Background(), []string{"devin", "create-profile", "--name", "reviews"}); exitCode == 0 {
+		t.Fatal("non-interactive Profile creation succeeded")
+	}
+	if builder.called {
+		t.Fatal("Builder started for non-interactive streams")
+	}
+	if !strings.Contains(stderr.String(), "interactive stdin and stdout") {
+		t.Fatalf("TTY error = %q", stderr.String())
+	}
+}
+
 type staticCatalog struct {
 	bundles []skills.SkillBundle
 	err     error
+}
+
+type staticBuilder struct {
+	called  bool
+	name    string
+	outcome builder.Outcome
+	err     error
+}
+
+func (stub *staticBuilder) BuildProfile(_ context.Context, name string, _ category.Draft, _ io.Reader, _ io.Writer) (builder.Outcome, error) {
+	stub.called = true
+	stub.name = name
+	return stub.outcome, stub.err
 }
 
 type staticCategoryFixture struct {

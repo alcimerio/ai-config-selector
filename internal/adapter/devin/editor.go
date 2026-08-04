@@ -9,9 +9,20 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/alcimerio/ai-config-selector/internal/builder"
 	"github.com/alcimerio/ai-config-selector/internal/category"
 	"github.com/alcimerio/ai-config-selector/internal/skills"
 )
+
+// BuildProfile runs the first complete Profile Builder using this adapter's
+// typed Skills category. The root model is the only Bubble Tea program.
+func (a *Adapter) BuildProfile(ctx context.Context, name string, draft category.Draft, input io.Reader, output io.Writer) (builder.Outcome, error) {
+	bundles, err := a.DiscoverGlobalSkillCatalog(ctx)
+	if err != nil {
+		return builder.Outcome{}, fmt.Errorf("discover Devin global Skill Catalog: %w", err)
+	}
+	return builder.Run(ctx, builder.NewModel(name, draft, a.skillsCategory, bundles), input, output)
+}
 
 // EditProfileDraft presents the current line-oriented Skills editor. The
 // category-neutral CLI delegates editing here until the interactive category

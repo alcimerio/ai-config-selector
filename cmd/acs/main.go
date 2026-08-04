@@ -38,7 +38,7 @@ func main() {
 
 	application := cli.App{
 		Categories:        adapter.Categories(),
-		DraftEditor:       adapter,
+		Builder:           adapter,
 		Planner:           adapter,
 		Launcher:          adapter,
 		Profiles:          profile.NewStore(filepath.Join(existingHome, ".acs"), adapter.Categories()),
@@ -47,6 +47,7 @@ func main() {
 		Input:             os.Stdin,
 		Output:            os.Stdout,
 		ErrorOutput:       os.Stderr,
+		Interactive:       cli.StandardStreamsInteractive,
 	}
 	os.Exit(application.Run(context.Background(), os.Args[1:]))
 }
