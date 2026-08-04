@@ -9,8 +9,10 @@ checks, and launch behavior.
 
 A Profile belongs to one target CLI. It records the user's capability choices
 through stable references and leaves target-specific discovery and runtime
-rules to a CLI Adapter. Shared modules own Profile persistence, reference
-resolution, Session lifecycle, and the interactive process contract.
+rules to a CLI Adapter. Shared modules own Profile persistence, ordered
+category coordination, Session lifecycle, and the interactive process
+contract. Each registered category owns its reference resolution and launch
+contribution.
 
 The current vertical slice implements Skills as the first capability type and
 Devin as the first CLI Adapter. The product boundary permits additional
@@ -51,6 +53,14 @@ time. The catalog can contain the same display name from different sources.
 builds a launch plan, prepares target state, verifies compatibility, and starts
 the target CLI.
 
+**Category Registry**: The adapter-owned, fixed ordering of supported Profile
+Component Categories. It constructs typed drafts, normalizes saved category
+payloads, resolves saved selections, and runs category contributions in order.
+
+**Profile Draft**: The typed, unsaved selections for every registered category.
+The Registry encodes every draft category, including empty selections, into a
+Profile.
+
 **Session**: An ephemeral launch environment under
 `~/.acs/sessions/session-*`. It contains a synthetic home, selected Skill
 Bundles, and the target state needed for the child process. The current Devin
@@ -63,6 +73,7 @@ Adapter adds an allowlisted Devin credential.
 | `cmd/acs` | Enforces platform support, resolves host paths, and assembles the application. |
 | `internal/cli` | Parses public commands and coordinates Profile creation, dry runs, and launches through narrow interfaces. |
 | `internal/profile` | Validates Profile names and owns local JSON persistence. |
+| `internal/category` | Binds typed category modules and owns ordered draft, schema, resolution, and launch-contribution coordination. |
 | `internal/skills` | Defines Skill Catalog types and resolves strict Skill References. |
 | `internal/adapter/devin` | Encapsulates Devin discovery paths, Session layout, preflight checks, launch planning, and process supervision. |
 | `internal/launch` | Owns Session leases and the CLI-neutral launch plan and terminal types. |
@@ -75,10 +86,10 @@ flowchart LR
         direction LR
         CLI[ACS CLI]
         Profiles[(Profile Store)]
-        Capabilities[Capability Model<br/>Skills today]
+        Registry[Ordered Category Registry]
 
         CLI -->|save / load| Profiles
-        CLI -->|resolve references| Capabilities
+        CLI -->|draft / normalize / resolve| Registry
     end
 
     subgraph AdapterBoundary[Target-specific adapter boundary]
@@ -96,7 +107,8 @@ flowchart LR
     Target[Target AI coding CLI]
 
     User --> CLI
-    CLI -->|discover / plan / launch| Adapter
+    Registry -->|ordered contributions| Adapter
+    CLI -->|edit / plan / launch| Adapter
     Adapter -->|read| Global
     Adapter -->|materialize| Session
     Allowed -->|allowlisted copy| Session
@@ -105,9 +117,11 @@ flowchart LR
     Repository -.->|inherited discovery| Target
 ```
 
-The CLI layer depends on catalog, storage, planning, and launch interfaces. A
-CLI Adapter implements target-specific catalog, planner, and launcher behavior.
-Profile storage and Skill Reference resolution do not depend on target paths.
+The CLI layer depends on the ordered Category Registry, storage, draft editing,
+planning, and launch interfaces. It does not import Skills types or switch on
+category IDs. A CLI Adapter assembles its fixed Registry and implements
+target-specific editing and process behavior. Profile storage delegates schema
+normalization to that Registry and does not depend on target paths.
 The Session boundary in the diagram represents configuration isolation; it is
 not an OS sandbox around the target process.
 
@@ -116,24 +130,28 @@ not an OS sandbox around the target process.
 ACS creates a Profile through this sequence:
 
 1. validate the Profile name;
-2. discover the current global Skill Catalog;
-3. collect the user's selection;
-4. store the selected source-and-path references in a versioned Profile.
+2. create a typed draft containing every registered category's empty selection;
+3. delegate category editing to the CLI Adapter;
+4. ask the Registry to encode every category into a versioned Profile;
+5. persist the Profile.
 
 Profiles live at `~/.acs/profiles/<name>.json`. ACS restricts the profiles
 directory to the user (`0700`) and each Profile file to the user (`0600`). It
 writes and syncs a temporary file in the profiles directory, then publishes it
 without replacing an existing Profile name.
 
-Before a dry run or launch, ACS loads the Profile and validates its schema
-version and target. It discovers a new Skill Catalog and requires each saved
-Skill Reference to match exactly one current bundle. Missing and ambiguous
-references fail instead of binding to a different Skill.
+Before a dry run or launch, the Profile Store delegates envelope migration,
+category defaults, schema dispatch, validation, and canonical encoding to the
+Registry. The Registry then resolves each category in its fixed order. The
+Skills category discovers a new Skill Catalog and requires each saved Skill
+Reference to match exactly one current bundle. Missing and ambiguous references
+fail instead of binding to a different Skill.
 
 ## Dry-run lifecycle
 
-A dry run resolves the Profile and asks its CLI Adapter for a launch plan. The
-current Devin plan reports:
+A dry run resolves the Profile and applies each category's declarative plan
+contribution in Registry order. Shared CLI code renders the resulting generic
+sections. The current Skills contribution reports:
 
 - selected global Skill Bundles and their planned Session paths;
 - repository-local Skill Bundles that Devin may inherit.
@@ -147,24 +165,25 @@ sequenceDiagram
     actor User
     participant ACS as ACS CLI
     participant Store as Profile Store
-    participant Model as Capability Model
+    participant Registry as Category Registry
     participant Adapter as CLI Adapter
     participant Session
     participant Target as Target AI coding CLI
 
     User->>ACS: Launch Profile
     ACS->>Store: Load Profile
-    Store-->>ACS: Saved capability references
-    ACS->>Adapter: Discover current catalog
-    Adapter-->>ACS: Catalog
-    ACS->>Model: Resolve saved references against catalog
-    Model-->>ACS: Resolved bundles or error
+    Store->>Registry: Normalize envelope and category payloads
+    Store-->>ACS: Normalized Profile
+    ACS->>Registry: Resolve registered categories in order
+    Registry-->>ACS: Ordered launch contributions or error
     ACS->>Adapter: Launch resolved Profile
     Adapter->>Session: Create lease
-    Adapter->>Session: Materialize bundles and allowlisted state
+    Adapter->>Registry: Materialize category contributions
+    Adapter->>Session: Copy allowlisted target state
     Note over Session,Target: Synthetic home changes configuration discovery
     Note over Session,Target: Repository-local capabilities remain visible
-    Adapter->>Target: Run preflight with Session environment
+    Adapter->>Registry: Verify category contributions
+    Adapter->>Target: Verify target authentication
     Target-->>Adapter: Capability and authentication status
     Adapter->>Target: Start interactive process with Session environment
     Target-->>Adapter: Exit status
@@ -254,8 +273,9 @@ repository. ACS reports them but does not filter, copy, or manage them.
 ## Accepted design: modular interactive Profile creation
 
 **Status:** Partially implemented. New Profiles use the version-2 category
-envelope, and ACS normalizes version-1 Profiles in memory. The current
-comma-separated selection prompt and Skills-specific coordination remain.
+envelope, the ordered Category Registry coordinates the full Profile lifecycle,
+and ACS normalizes version-1 Profiles in memory. The current comma-separated
+Skills editor remains; the Bubble Tea interface is not implemented yet.
 
 The interactive builder will keep `acs devin create-profile --name <name>` as
 its public command. It will validate the name, reject an existing Profile name,
@@ -377,18 +397,18 @@ clear error.
 
 ### Category module seam
 
-An ordered category Registry will form the interface used by common CLI code.
-The Registry will hide category defaults, schema dispatch, draft construction,
+An ordered category Registry forms the interface used by common CLI code. The
+Registry hides category defaults, schema dispatch, draft construction,
 saved-selection resolution, error annotation, and launch contribution order.
 The CLI will not switch on category IDs or import Skills types.
 
-Generic binders will keep each category's selection and resolved values typed
+Generic binders keep each category's selection and resolved values typed
 inside its implementation. Skills will bind `[]SkillReference` to
 `[]SkillBundle`. A test-only category will use unrelated selection, editor, and
 launch types. Registering that category must not require changes to the
 Profile store, builder shell, Registry, or launch coordinator.
 
-Each production category will own its target-specific lifecycle:
+Each production category owns its target-specific lifecycle:
 
 1. discover its catalog;
 2. edit and summarize its selection;
@@ -424,8 +444,7 @@ search and navigation responsiveness.
 
 - ACS rejects platforms other than macOS.
 - ACS ships only the Devin Adapter.
-- Profile decoding and CLI coordination currently support only the Skills
-  category; the ordered category Registry is not implemented yet.
+- The Devin Registry currently contains only the Skills category.
 - Profile creation currently uses a comma-separated numbered selection prompt;
   the accepted TUI design above is not implemented yet.
 - Profiles cannot be edited, deleted, imported, or exported through the CLI.

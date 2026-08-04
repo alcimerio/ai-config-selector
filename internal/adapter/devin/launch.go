@@ -11,8 +11,8 @@ import (
 	"syscall"
 	"unsafe"
 
+	"github.com/alcimerio/ai-config-selector/internal/category"
 	"github.com/alcimerio/ai-config-selector/internal/launch"
-	"github.com/alcimerio/ai-config-selector/internal/skills"
 )
 
 // Launch creates an ephemeral ACS Session, verifies the Devin Adapter
@@ -22,7 +22,7 @@ func (a *Adapter) Launch(
 	ctx context.Context,
 	sessionsDirectory string,
 	workingDirectory string,
-	selected []skills.SkillBundle,
+	resolved category.ResolvedProfile,
 	terminal launch.Terminal,
 ) (exitCode int, resultErr error) {
 	preflightContext, cancelPreflight := context.WithCancel(ctx)
@@ -47,11 +47,18 @@ func (a *Adapter) Launch(
 			exitCode = 1
 		}
 	}()
-	session, err := a.PrepareSession(sessionRoot, workingDirectory, selected)
+	session, err := a.prepareResolvedSession(sessionRoot, workingDirectory, resolved)
 	if err != nil {
 		return 1, err
 	}
-	if err := a.Preflight(preflightContext, session); err != nil {
+	if err := resolved.Verify(preflightContext, launch.VerificationContext{
+		SessionHome:      session.HomeDir,
+		WorkingDirectory: session.WorkingDirectory,
+		Environment:      session.Environment,
+	}); err != nil {
+		return 1, err
+	}
+	if err := a.verifyAuthentication(preflightContext, session); err != nil {
 		return 1, err
 	}
 

@@ -17,6 +17,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/alcimerio/ai-config-selector/internal/category"
 	"github.com/alcimerio/ai-config-selector/internal/skills"
 )
 
@@ -70,6 +71,8 @@ type Config struct {
 type Adapter struct {
 	binaryPath      string
 	existingHomeDir string
+	categories      *category.Registry
+	skillsCategory  category.Binding[[]skills.SkillReference, []skills.SkillBundle, skillsContribution]
 }
 
 type SkillBundle = skills.SkillBundle
@@ -94,10 +97,23 @@ func New(config Config) (*Adapter, error) {
 	if config.ExistingHomeDir == "" {
 		return nil, errors.New("create Devin Adapter: existing home directory is required")
 	}
-	return &Adapter{
+	adapter := &Adapter{
 		binaryPath:      config.BinaryPath,
 		existingHomeDir: filepath.Clean(config.ExistingHomeDir),
-	}, nil
+	}
+	registry, binding, err := newCategoryRegistry(adapter)
+	if err != nil {
+		return nil, fmt.Errorf("create Devin Adapter categories: %w", err)
+	}
+	adapter.categories = registry
+	adapter.skillsCategory = binding
+	return adapter, nil
+}
+
+// Categories returns the fixed ordered Profile Component Categories supported
+// by the Devin Adapter.
+func (a *Adapter) Categories() *category.Registry {
+	return a.categories
 }
 
 // PrepareSession creates the synthetic Devin home, copies selected Skill
@@ -145,9 +161,48 @@ func (a *Adapter) PrepareSession(rootDir, workingDirectory string, selected []Sk
 	}, nil
 }
 
+func (a *Adapter) prepareResolvedSession(rootDir, workingDirectory string, resolved category.ResolvedProfile) (*Session, error) {
+	homeDir := filepath.Join(rootDir, "home")
+	if err := resolved.Materialize(homeDir); err != nil {
+		return nil, err
+	}
+	credentialSource := filepath.Join(a.existingHomeDir, filepath.FromSlash(credentialsRelativePath))
+	credentialDestination := filepath.Join(homeDir, filepath.FromSlash(credentialsRelativePath))
+	if err := copyCredentialIfPresent(credentialSource, credentialDestination); err != nil {
+		return nil, fmt.Errorf("prepare Devin Session authentication allowlist: %w", err)
+	}
+	return &Session{
+		RootDir:          filepath.Clean(rootDir),
+		HomeDir:          homeDir,
+		WorkingDirectory: filepath.Clean(workingDirectory),
+		Environment:      isolatedEnvironment(homeDir),
+	}, nil
+}
+
 // Preflight asks the installed Devin CLI to report its observed skills and
 // authentication state. It returns only sanitized capability diagnostics.
 func (a *Adapter) Preflight(ctx context.Context, session *Session) error {
+	if err := a.verifySkillIsolation(ctx, session); err != nil {
+		return err
+	}
+	return a.verifyAuthentication(ctx, session)
+}
+
+func (a *Adapter) verifyAuthentication(ctx context.Context, session *Session) error {
+	command := preflightCommand(ctx, a.binaryPath, "auth", "status")
+	command.Dir = session.WorkingDirectory
+	command.Env = session.Environment
+	output, err := command.CombinedOutput()
+	if err != nil {
+		return &PreflightError{Capability: CapabilityAuthentication, reason: commandFailureReason(ctx, err, reasonAuthenticationCommandFailed)}
+	}
+	if !strings.HasPrefix(strings.TrimSpace(string(output)), "Logged in") {
+		return &PreflightError{Capability: CapabilityAuthentication, reason: reasonAuthenticationUnavailable}
+	}
+	return nil
+}
+
+func (a *Adapter) verifySkillIsolation(ctx context.Context, session *Session) error {
 	observed, failure := a.observeGlobalCatalog(ctx, session)
 	if failure != 0 {
 		return &PreflightError{Capability: CapabilitySkillIsolation, reason: failure}
@@ -161,16 +216,6 @@ func (a *Adapter) Preflight(ctx context.Context, session *Session) error {
 		}
 	}
 
-	command := preflightCommand(ctx, a.binaryPath, "auth", "status")
-	command.Dir = session.WorkingDirectory
-	command.Env = session.Environment
-	output, err := command.CombinedOutput()
-	if err != nil {
-		return &PreflightError{Capability: CapabilityAuthentication, reason: commandFailureReason(ctx, err, reasonAuthenticationCommandFailed)}
-	}
-	if !strings.HasPrefix(strings.TrimSpace(string(output)), "Logged in") {
-		return &PreflightError{Capability: CapabilityAuthentication, reason: reasonAuthenticationUnavailable}
-	}
 	return nil
 }
 
