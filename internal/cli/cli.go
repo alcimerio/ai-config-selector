@@ -3,10 +3,13 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"os"
 	"strconv"
 
+	"github.com/alcimerio/ai-config-selector/internal/builder"
 	"github.com/alcimerio/ai-config-selector/internal/category"
 	"github.com/alcimerio/ai-config-selector/internal/launch"
 	"github.com/alcimerio/ai-config-selector/internal/profile"
@@ -14,6 +17,11 @@ import (
 
 type ProfileDraftEditor interface {
 	EditProfileDraft(context.Context, category.Draft, io.Reader, io.Writer) (category.Draft, error)
+}
+
+// ProfileBuilder owns the terminal UI and returns its post-terminal outcome.
+type ProfileBuilder interface {
+	BuildProfile(context.Context, string, category.Draft, io.Reader, io.Writer) (builder.Outcome, error)
 }
 
 type ProfileStore interface {
@@ -31,6 +39,7 @@ type ProfileLauncher interface {
 
 type App struct {
 	Categories        *category.Registry
+	Builder           ProfileBuilder
 	DraftEditor       ProfileDraftEditor
 	Planner           LaunchPlanner
 	Launcher          ProfileLauncher
@@ -40,6 +49,20 @@ type App struct {
 	Input             io.Reader
 	Output            io.Writer
 	ErrorOutput       io.Writer
+	Interactive       func(io.Reader, io.Writer) bool
+}
+
+// StandardStreamsInteractive reports whether both endpoints are terminal
+// devices. Callers can inject a narrower capability check in tests.
+func StandardStreamsInteractive(input io.Reader, output io.Writer) bool {
+	inputFile, inputIsFile := input.(*os.File)
+	outputFile, outputIsFile := output.(*os.File)
+	if !inputIsFile || !outputIsFile {
+		return false
+	}
+	inputInfo, inputErr := inputFile.Stat()
+	outputInfo, outputErr := outputFile.Stat()
+	return inputErr == nil && outputErr == nil && inputInfo.Mode()&os.ModeCharDevice != 0 && outputInfo.Mode()&os.ModeCharDevice != 0
 }
 
 func (app App) Run(ctx context.Context, args []string) int {
@@ -59,14 +82,37 @@ func (app App) createProfile(ctx context.Context, name string) int {
 	if err := profile.ValidateName(name); err != nil {
 		return app.fail("%v", err)
 	}
+	if _, err := app.Profiles.Load(name); err == nil {
+		return app.fail("create Profile %q: %v: %q", name, profile.ErrProfileExists, name)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return app.fail("check Profile %q: %v", name, err)
+	}
 
 	draft := app.Categories.NewDraft()
-	fmt.Fprintf(app.Output, "Create Profile %q\n\n", name)
-	edited, err := app.DraftEditor.EditProfileDraft(ctx, draft, app.Input, app.Output)
-	if err != nil {
-		return app.fail("edit Profile %q: %v", name, err)
+	if app.Builder != nil {
+		if app.Interactive == nil || !app.Interactive(app.Input, app.Output) {
+			return app.fail("create Profile requires interactive stdin and stdout")
+		}
+		outcome, err := app.Builder.BuildProfile(ctx, name, draft, app.Input, app.Output)
+		if err != nil {
+			return app.fail("edit Profile %q: %v", name, err)
+		}
+		if outcome.Cancelled {
+			return 0
+		}
+		if !outcome.Create {
+			return app.fail("edit Profile %q: Profile Builder ended without an outcome", name)
+		}
+		draft = outcome.Draft
+	} else {
+		fmt.Fprintf(app.Output, "Create Profile %q\n\n", name)
+		edited, err := app.DraftEditor.EditProfileDraft(ctx, draft, app.Input, app.Output)
+		if err != nil {
+			return app.fail("edit Profile %q: %v", name, err)
+		}
+		draft = edited
 	}
-	created, err := app.Categories.NewProfile(name, edited)
+	created, err := app.Categories.NewProfile(name, draft)
 	if err != nil {
 		return app.fail("build Profile %q: %v", name, err)
 	}
@@ -74,11 +120,10 @@ func (app App) createProfile(ctx context.Context, name string) int {
 	if err != nil {
 		return app.fail("create Profile %q: %v", created.Name, err)
 	}
-	selectedCount := 0
-	for _, summary := range edited.Summaries() {
-		selectedCount += summary.Count
+	fmt.Fprintf(app.Output, "\nCreated Profile %q at %s\n", created.Name, safeTerminalText(path))
+	for _, summary := range draft.Summaries() {
+		fmt.Fprintf(app.Output, "  %s: %d selected\n", safeTerminalText(summary.ID), summary.Count)
 	}
-	fmt.Fprintf(app.Output, "\nCreated Profile %q with %d selected items at %s\n", created.Name, selectedCount, safeTerminalText(path))
 	return 0
 }
 

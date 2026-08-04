@@ -40,6 +40,14 @@ func (binding Binding[S, R, C]) Registration() Registration {
 	return *binding.registration
 }
 
+// ID returns the stable category ID represented by this typed Binding.
+func (binding Binding[S, R, C]) ID() string {
+	if binding.registration == nil {
+		return ""
+	}
+	return binding.registration.id
+}
+
 // Registration is one validated category entry accepted by NewRegistry.
 type Registration struct {
 	id            string
