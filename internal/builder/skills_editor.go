@@ -187,9 +187,9 @@ func (m skillsEditor) View() tea.View {
 		content.WriteString("\nSource: " + safe(string(bundle.Reference.Source)) + "\nPath: " + safe(bundle.BundlePath) + "\n")
 	}
 	if m.searchFocus {
-		content.WriteString("\nType to search  Left/Right move cursor  Backspace delete  Esc clear search")
+		content.WriteString("\nType to search  Left/Right move cursor\nBackspace delete  Esc clear search  Ctrl+C cancel")
 	} else {
-		content.WriteString("\nUp/Down navigate  Space/Enter toggle  / search  Left/Esc back")
+		content.WriteString("\nUp/Down navigate  Space/Enter toggle  / search\nLeft/Esc back  Ctrl+C cancel")
 	}
 	return tea.NewView(content.String())
 }

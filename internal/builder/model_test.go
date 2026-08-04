@@ -1,14 +1,18 @@
 package builder
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"io"
 	"reflect"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/alcimerio/ai-config-selector/internal/category"
 	"github.com/alcimerio/ai-config-selector/internal/launch"
@@ -129,6 +133,165 @@ func TestModelRetainsTerminalDimensionsAcrossInput(t *testing.T) {
 		t.Fatalf("dimensions = %dx%d, want 120x40", model.width, model.height)
 	}
 }
+
+func TestModelSmallTerminalRetainsStateAndResizeRestoresActiveScreen(t *testing.T) {
+	binding, registry := newBuilderFixture(t)
+	draft := registry.NewDraft()
+	catalog := []skills.SkillBundle{{
+		Reference:   skills.SkillReference{Source: "devin-config", RelativePath: "review"},
+		DisplayName: "review", BundlePath: "/global/review",
+	}}
+	model := NewModel("sizes", draft, NewSkillsEditor(draft, binding, catalog))
+	model = update(t, model, tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	model = update(t, model, tea.KeyPressMsg(tea.Key{Code: tea.KeySpace}))
+	model = update(t, model, tea.WindowSizeMsg{Width: MinimumWidth - 1, Height: MinimumHeight - 1})
+	if !strings.Contains(model.View().Content, "Terminal too small") {
+		t.Fatalf("small-terminal view = %q", model.View().Content)
+	}
+	model = update(t, model, tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
+	model = update(t, model, tea.WindowSizeMsg{Width: MinimumWidth, Height: MinimumHeight})
+	if model.screen != skillsScreen || !strings.Contains(model.View().Content, "Skills                         1 selected") {
+		t.Fatalf("resize did not restore Skills state:\n%s", model.View().Content)
+	}
+	model = update(t, model, tea.KeyPressMsg(tea.Key{Code: '/', Text: "/"}))
+	lines := strings.Split(model.View().Content, "\n")
+	if len(lines) > MinimumHeight {
+		t.Fatalf("minimum-size Skills view uses %d rows, want at most %d:\n%s", len(lines), MinimumHeight, model.View().Content)
+	}
+	for _, line := range lines {
+		if len([]rune(line)) > MinimumWidth {
+			t.Fatalf("minimum-size Skills line uses %d columns, want at most %d: %q", len([]rune(line)), MinimumWidth, line)
+		}
+	}
+	references, err := category.Selection(model.draft, binding)
+	if err != nil || !reflect.DeepEqual(references, []skills.SkillReference{catalog[0].Reference}) {
+		t.Fatalf("resize lost Draft selection: %#v, %v", references, err)
+	}
+}
+
+func TestModelContextualPresentationUsesTextAndSymbolsWithoutColor(t *testing.T) {
+	t.Setenv("NO_COLOR", "1")
+	binding, registry := newBuilderFixture(t)
+	draft := registry.NewDraft()
+	model := NewModel("presentation", draft, NewSkillsEditor(draft, binding, []skills.SkillBundle{{
+		Reference:   skills.SkillReference{Source: "devin-config", RelativePath: "review"},
+		DisplayName: "review", BundlePath: "/global/review",
+	}}))
+
+	cases := []struct {
+		name   string
+		screen screen
+		want   []string
+	}{
+		{name: "overview", screen: overviewScreen, want: []string{"> Skills", "Up/Down navigate", "Esc cancel", "Ctrl+C cancel"}},
+		{name: "loading", screen: loadingScreen, want: []string{"Loading Skills...", "Ctrl+C cancel"}},
+		{name: "load failure", screen: loadFailureScreen, want: []string{"Error: Skills", "R/Enter/Space retry", "Left/Esc back", "Ctrl+C cancel"}},
+		{name: "empty confirmation", screen: confirmScreen, want: []string{"Confirm:", "Y/Enter create", "N/Esc/Left return", "Ctrl+C cancel"}},
+		{name: "saving", screen: savingScreen, want: []string{"Saving Profile...", "Ctrl+C cancel save"}},
+		{name: "save failure", screen: saveFailureScreen, want: []string{"Error: Profile", "R/Enter/Space retry", "Esc cancel", "Ctrl+C cancel"}},
+		{name: "discard", screen: discardScreen, want: []string{"Confirm:", "Y/Enter discard", "N/Esc/Left keep editing"}},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			current := model
+			current.screen = test.screen
+			current.saveError = errors.New("disk failed")
+			view := current.View().Content
+			if strings.Contains(view, "\x1b[") {
+				t.Fatalf("NO_COLOR view contains ANSI: %q", view)
+			}
+			for _, want := range test.want {
+				if !strings.Contains(view, want) {
+					t.Errorf("view omits %q:\n%s", want, view)
+				}
+			}
+		})
+	}
+}
+
+func TestMinimumWidthConstrainsMaximumNamesCatalogTextAndErrors(t *testing.T) {
+	binding, registry := newBuilderFixture(t)
+	draft := registry.NewDraft()
+	long := strings.Repeat("界", 80)
+	model := NewModel(strings.Repeat("n", 64), draft, NewSkillsEditor(draft, binding, []skills.SkillBundle{{
+		Reference:   skills.SkillReference{Source: skills.Source(long), RelativePath: long},
+		DisplayName: long, BundlePath: "/" + long,
+	}}))
+	model = update(t, model, tea.WindowSizeMsg{Width: MinimumWidth, Height: MinimumHeight})
+	model.saveError = errors.New(long)
+	for _, currentScreen := range []screen{overviewScreen, skillsScreen, saveFailureScreen} {
+		model.screen = currentScreen
+		view := model.View().Content
+		lines := strings.Split(view, "\n")
+		if len(lines) > MinimumHeight {
+			t.Errorf("screen %v uses %d rows at minimum size:\n%s", currentScreen, len(lines), view)
+		}
+		for _, line := range lines {
+			if width := ansi.StringWidth(line); width > MinimumWidth {
+				t.Errorf("screen %v line uses %d columns at minimum size: %q", currentScreen, width, line)
+			}
+		}
+	}
+}
+
+func TestSmallTerminalShowsOnlyControlsValidForTheHiddenState(t *testing.T) {
+	binding, registry := newBuilderFixture(t)
+	draft := registry.NewDraft()
+	model := NewModel("small-modal", draft, NewSkillsEditor(draft, binding, nil))
+	model = update(t, model, tea.WindowSizeMsg{Width: MinimumWidth - 1, Height: MinimumHeight - 1})
+	model.screen = discardScreen
+	if view := model.View().Content; strings.Contains(view, "Ctrl+C") || !strings.Contains(view, "Resize the terminal to continue") {
+		t.Fatalf("discard resize controls are not contextual: %q", view)
+	}
+	model.screen = savingScreen
+	if view := model.View().Content; !strings.Contains(view, "Ctrl+C cancel save") {
+		t.Fatalf("saving resize controls are not contextual: %q", view)
+	}
+}
+
+func TestInjectedRuntimeOwnsOneAlternateScreenAndReturnsNormalizedOutput(t *testing.T) {
+	binding, registry := newBuilderFixture(t)
+	draft := registry.NewDraft()
+	var output bytes.Buffer
+	input, writer := io.Pipe()
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		_, _ = writer.Write([]byte("\x03"))
+		_ = writer.Close()
+	}()
+	program := tea.NewProgram(
+		NewModel("runtime", draft, NewSkillsEditor(draft, binding, nil)),
+		tea.WithInput(input), tea.WithOutput(&output),
+		tea.WithWindowSize(80, 24),
+		tea.WithEnvironment([]string{"TERM=xterm-256color", "NO_COLOR=1"}),
+	)
+	outcome, err := finishRuntime(program)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !outcome.Cancelled {
+		t.Fatalf("runtime outcome = %#v", outcome)
+	}
+	raw := output.String()
+	if strings.Count(raw, "\x1b[?1049h") != 1 || strings.Count(raw, "\x1b[?1049l") != 1 {
+		t.Fatalf("alternate-screen transitions = %q", raw)
+	}
+	normalized := ansi.Strip(raw)
+	if !strings.Contains(normalized, "Create Profile") {
+		t.Fatalf("raw runtime output = %q; normalized = %q", raw, normalized)
+	}
+}
+
+func TestRunPropagatesInjectedRuntimeError(t *testing.T) {
+	want := errors.New("runtime failed")
+	if _, err := finishRuntime(failingRuntime{err: want}); !errors.Is(err, want) {
+		t.Fatalf("runtime error = %v, want %v", err, want)
+	}
+}
+
+type failingRuntime struct{ err error }
+
+func (runtime failingRuntime) Run() (tea.Model, error) { return nil, runtime.err }
 
 func TestModelOverviewListsEveryRegistryCategoryInOrder(t *testing.T) {
 	skillsBinding, err := category.Bind(category.Definition[[]skills.SkillReference, []skills.SkillBundle, testContribution]{

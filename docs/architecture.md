@@ -272,18 +272,17 @@ repository. ACS reports them but does not filter, copy, or manage them.
 
 ## Accepted design: modular interactive Profile creation
 
-**Status:** Partially implemented. New Profiles use the version-2 category
-envelope, the ordered Category Registry coordinates the full Profile lifecycle,
-and ACS normalizes version-1 Profiles in memory. Profile creation now opens a
-Bubble Tea builder with a category overview, searchable Skills selection, lazy
-discovery, empty and failed-discovery confirmation, recoverable saving,
-changed-draft cancellation, and TTY validation. Presentation hardening remains
-to be completed.
+**Status:** Implemented. New Profiles use the version-2 category envelope, the
+ordered Category Registry coordinates the full Profile lifecycle, and ACS
+normalizes version-1 Profiles in memory. Profile creation opens a Bubble Tea
+builder with a category overview, searchable Skills selection, lazy discovery,
+empty and failed-discovery confirmation, recoverable saving, changed-draft
+cancellation, minimum-size handling, contextual controls, and TTY validation.
 
-The interactive builder will keep `acs devin create-profile --name <name>` as
-its public command. It will validate the name, reject an existing Profile name,
-and require interactive stdin and stdout before opening the TUI. The interface
-will use English text and keyboard input.
+The interactive builder keeps `acs devin create-profile --name <name>` as its
+public command. It validates the name, rejects an existing Profile name, and
+requires interactive stdin and stdout before opening the TUI. The interface
+uses English text and keyboard input.
 
 ### Product concepts
 
@@ -295,13 +294,13 @@ editor, selection schema, saved-selection resolution, and launch contribution.
 during Profile creation. Moving between categories preserves the draft.
 Creating the Profile persists it; cancellation discards it.
 
-Each CLI Adapter will provide a fixed, ordered set of supported categories.
-Categories will be compiled into ACS. Loading third-party category plugins is
+Each CLI Adapter provides a fixed, ordered set of supported categories.
+Categories are compiled into ACS. Loading third-party category plugins is
 outside this design.
 
 ### Interaction contract
 
-The builder overview will show every supported category, its selection count,
+The builder overview shows every supported category, its selection count,
 and the `Create Profile` and `Cancel` actions:
 
 ```text
@@ -311,33 +310,38 @@ Create Profile "backend-review"
   Create Profile
   Cancel
 
-↑/↓ navigate   Space/Enter/→ open   Esc cancel
+Up/Down navigate  Space/Enter/Right open
+Esc cancel  Ctrl+C cancel
 ```
 
 `Space`, `Enter`, or Right opens a category. Left or `Esc` returns to the
 overview when the category list has focus. Each category may provide a
 different editor.
 
-The Skills editor will use a searchable multi-select list:
+The Skills editor uses a searchable multi-select list:
 
 ```text
-Skills                                      2 selected
+Skills                         2 selected
 Search: post
 
-> [x] postgres-review             shared-agents
-  [ ] postgres-docs               devin-config
+> [x] postgres-review [shared-agents]
+  [ ] postgres-docs [devin-config]
 
-↑/↓ navigate   Space/Enter toggle   / search   ← back
+Source: shared-agents
+Path: /Users/example/.agents/skills/postgres-review
+
+Up/Down navigate  Space/Enter toggle  / search
+Left/Esc back  Ctrl+C cancel
 ```
 
-The highlighted Skill will show its source and full path in a detail area.
-Search will be fuzzy and case-insensitive across display name, source, and
-path, with display-name matches ranked first. Filtering will not clear hidden
-selections. Without a query, Skills will sort case-insensitively by display
-name, then by source and relative path. The saved Skills selection will sort by
+The highlighted Skill shows its source and full path in a detail area. Search
+is fuzzy and case-insensitive across display name, source, and path, with
+display-name matches ranked first. Filtering does not clear hidden selections.
+Without a query, Skills sort case-insensitively by display name, then by source
+and relative path. The saved Skills selection sorts by
 stable identity because selection order has no meaning.
 
-The builder will apply these rules:
+The builder applies these rules:
 
 - `/` focuses search. Left and Right edit the query while search has focus.
   `Esc` clears search and returns focus to the list.
@@ -345,8 +349,8 @@ The builder will apply these rules:
   Draft when the user returns to the overview.
 - A contextual footer lists valid keys. Symbols and text convey every state;
   color only reinforces them and respects `NO_COLOR`.
-- A terminal below the minimum usable size shows a resize message and keeps the
-  draft. The implementation will set the final minimum after measuring the UI.
+- A terminal smaller than 64 columns by 18 rows shows a resize message and
+  keeps the complete draft and active screen for restoration after resizing.
 - Catalog discovery starts when the user first opens a category. A load error
   offers `Retry` and `Back`.
 - Creating an empty Profile requires confirmation. If a category load failed,
@@ -403,12 +407,12 @@ clear error.
 An ordered category Registry forms the interface used by common CLI code. The
 Registry hides category defaults, schema dispatch, draft construction,
 saved-selection resolution, error annotation, and launch contribution order.
-The CLI will not switch on category IDs or import Skills types.
+The CLI does not switch on category IDs or import Skills types.
 
 Generic binders keep each category's selection and resolved values typed
-inside its implementation. Skills will bind `[]SkillReference` to
-`[]SkillBundle`. A test-only category will use unrelated selection, editor, and
-launch types. Registering that category must not require changes to the
+inside its implementation. Skills bind `[]SkillReference` to
+`[]SkillBundle`. A test-only category uses unrelated selection, editor, and
+launch types. Registering that category does not require changes to the
 Profile store, builder shell, Registry, or launch coordinator.
 
 Each production category owns its target-specific lifecycle:
@@ -420,37 +424,37 @@ Each production category owns its target-specific lifecycle:
 5. contribute declarative dry-run, materialization, and verification steps to
    the launch plan.
 
-The TUI will keep a separate visual editor Registry. This isolates Bubble Tea
+The TUI keeps a separate visual editor Registry. This isolates Bubble Tea
 types from Profile, category, and launch interfaces while allowing each
-category to use a different editor. Application assembly will reject duplicate
+category to use a different editor. Application assembly rejects duplicate
 category IDs, invalid schema versions, and missing or mismatched editors.
 
 ### TUI runtime and verification
 
-The builder will use Bubble Tea v2 as its terminal runtime and selected Bubbles
+The builder uses Bubble Tea v2 as its terminal runtime and selected Bubbles
 v2 packages for list, filtering, text input, viewport, and contextual help.
-ACS will own the set of selected Skill identities instead of treating list
+ACS owns the set of selected Skill identities instead of treating list
 indexes or fuzzy ranks as identity.
 
-One root Bubble Tea model will own the alternate screen, terminal dimensions,
+One root Bubble Tea model owns the alternate screen, terminal dimensions,
 overview, Profile Draft, modal state, category load state, saving state, and
-exit outcome. Category editors will be child models. ACS will not start nested
+exit outcome. Category editors are child models. ACS does not start nested
 Bubble Tea programs.
 
-Most tests will drive pure model and Registry transitions. A smaller runtime
-suite will inject input, output, and window dimensions. A macOS PTY suite will
-cover resize, `Ctrl+C`, alternate-screen exit, panic and error cleanup, and
-terminal restoration. A synthetic catalog of 10,000 Skills will guard fuzzy
-search and navigation responsiveness.
+Most tests drive pure model and Registry transitions. A smaller runtime suite
+injects input, output, and fixed window dimensions. A macOS PTY subprocess
+suite covers resize, `Ctrl+C`, alternate-screen exit, panic and error cleanup,
+and restored canonical terminal mode. A synthetic catalog of 10,000 Skills
+guards fuzzy search and navigation responsiveness.
 
 ## Current limitations
 
 - ACS rejects platforms other than macOS.
 - ACS ships only the Devin Adapter.
 - The Devin Registry currently contains only the Skills category.
-- Profile creation uses the Bubble Tea builder with search, lazy category
-  discovery, recoverable saving, and changed-draft cancellation. Terminal
-  presentation hardening is not implemented yet.
+- Profile creation uses the hardened Bubble Tea builder with search, lazy
+  category discovery, recoverable saving, changed-draft cancellation,
+  minimum-size recovery, and contextual controls.
 - Profiles cannot be edited, deleted, imported, or exported through the CLI.
 - ACS does not filter repository-local Skills.
 - ACS does not provide whole-process filesystem or network containment.

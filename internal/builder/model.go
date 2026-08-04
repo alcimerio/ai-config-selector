@@ -5,14 +5,22 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"strconv"
 	"strings"
 
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/alcimerio/ai-config-selector/internal/category"
 	"github.com/alcimerio/ai-config-selector/internal/skills"
+)
+
+// MinimumWidth and MinimumHeight define the smallest supported builder layout.
+const (
+	MinimumWidth  = 64
+	MinimumHeight = 18
 )
 
 // SaveFunc persists one immutable Profile Draft snapshot and returns its path.
@@ -46,6 +54,7 @@ type Model struct {
 	overviewCursor int
 	width          int
 	height         int
+	sizeKnown      bool
 	saveError      error
 	outcome        Outcome
 }
@@ -167,6 +176,7 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	case tea.WindowSizeMsg:
 		m.width, m.height = message.Width, message.Height
+		m.sizeKnown = true
 		return m, nil
 	case tea.KeyPressMsg:
 		if message.String() == "ctrl+c" && m.screen == savingScreen {
@@ -176,6 +186,9 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if message.String() == "ctrl+c" && m.screen != cancellingSaveScreen && m.screen != discardScreen {
 			return m.beginCancellation()
+		}
+		if m.tooSmall() {
+			return m, nil
 		}
 		switch m.screen {
 		case overviewScreen:
@@ -310,7 +323,7 @@ func (m Model) updateSaveFailure(press tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if key.Matches(press, controls.retry) {
 		return m.startSave()
 	}
-	if key.Matches(press, controls.cancel) || press.String() == "c" {
+	if key.Matches(press, controls.cancel) {
 		return m.beginCancellation()
 	}
 	return m, nil
@@ -347,10 +360,12 @@ func (m Model) selectedCount() int {
 // Outcome returns the current terminal outcome, if any.
 func (m Model) Outcome() Outcome { return m.outcome }
 
-// Run starts the sole Bubble Tea program for a Profile Builder session.
-func Run(ctx context.Context, model Model, input io.Reader, output io.Writer) (Outcome, error) {
-	program := tea.NewProgram(model.WithContext(ctx), tea.WithContext(ctx), tea.WithInput(input), tea.WithOutput(output))
-	completed, err := program.Run()
+type programRuntime interface {
+	Run() (tea.Model, error)
+}
+
+func finishRuntime(runtime programRuntime) (Outcome, error) {
+	completed, err := runtime.Run()
 	if err != nil {
 		return Outcome{}, err
 	}
@@ -361,8 +376,37 @@ func Run(ctx context.Context, model Model, input io.Reader, output io.Writer) (O
 	return final.Outcome(), nil
 }
 
+// Run starts the sole Bubble Tea program for a Profile Builder session.
+func Run(ctx context.Context, model Model, input io.Reader, output io.Writer) (Outcome, error) {
+	program := tea.NewProgram(
+		model.WithContext(ctx),
+		tea.WithContext(ctx),
+		tea.WithInput(input),
+		tea.WithOutput(output),
+		tea.WithEnvironment(os.Environ()),
+	)
+	return finishRuntime(program)
+}
+
 // View renders the single alternate-screen builder UI.
 func (m Model) View() tea.View {
+	if m.tooSmall() {
+		footer := "\n\nResize the terminal to continue."
+		switch m.screen {
+		case savingScreen:
+			footer = "\n\nCtrl+C cancel save"
+		case discardScreen, cancellingSaveScreen:
+		default:
+			footer = "\n\nCtrl+C cancel"
+		}
+		content := fmt.Sprintf(
+			"Terminal too small\n\nResize to at least %d columns by %d rows.\nCurrent size: %d by %d.\n\nYour Profile Draft is preserved.%s",
+			MinimumWidth, MinimumHeight, m.width, m.height, footer,
+		)
+		view := tea.NewView(content)
+		view.AltScreen = true
+		return view
+	}
 	var content strings.Builder
 	switch m.screen {
 	case overviewScreen:
@@ -382,31 +426,47 @@ func (m Model) View() tea.View {
 			}
 			content.WriteString(marker + row + "\n")
 		}
-		content.WriteString("\nUp/Down navigate  Space/Enter/Right open  Esc cancel")
+		content.WriteString("\nUp/Down navigate  Space/Enter/Right open\nEsc cancel  Ctrl+C cancel")
 	case skillsScreen:
 		content.WriteString(m.editor.View().Content)
 	case confirmScreen:
 		if m.confirmFailed {
-			content.WriteString("Skills failed to load. Create Profile anyway?\n\nY/Enter create  N/Esc return")
+			content.WriteString("Confirm: Skills failed to load. Create Profile anyway?\n\nY/Enter create  N/Esc/Left return\nCtrl+C cancel")
 		} else {
-			content.WriteString("Create an empty Profile?\n\nThis Profile will not select any Skills.\n\nY/Enter create  N/Esc return")
+			content.WriteString("Confirm: Create an empty Profile?\n\nThis Profile will not select any Skills.\n\nY/Enter create  N/Esc/Left return\nCtrl+C cancel")
 		}
 	case loadingScreen:
-		content.WriteString("Loading Skills...")
+		content.WriteString("Loading Skills...\n\nCtrl+C cancel")
 	case loadFailureScreen:
-		content.WriteString("Skills failed to load.\n\nR/Enter/Space retry  Esc back")
+		content.WriteString("Error: Skills failed to load.\n\nR/Enter/Space retry  Left/Esc back\nCtrl+C cancel")
 	case savingScreen:
-		content.WriteString("Saving Profile...")
+		content.WriteString("Saving Profile...\n\nCtrl+C cancel save")
 	case cancellingSaveScreen:
-		content.WriteString("Cancelling save...")
+		content.WriteString("Cancelling save...\n\nPlease wait")
 	case saveFailureScreen:
-		content.WriteString("Profile could not be saved: " + safe(m.saveError.Error()) + "\n\nR/Enter retry  Esc cancel")
+		content.WriteString("Error: Profile could not be saved: " + safe(m.saveError.Error()) + "\n\nR/Enter/Space retry  Esc cancel\nCtrl+C cancel")
 	case discardScreen:
-		content.WriteString("Discard changes?\n\nNo Profile will be created.\n\nY/Enter discard  N/Esc keep editing")
+		content.WriteString("Confirm: Discard changes?\n\nNo Profile will be created.\n\nY/Enter discard  N/Esc/Left keep editing")
 	}
-	view := tea.NewView(content.String())
+	rendered := content.String()
+	if m.sizeKnown {
+		rendered = fitWidth(rendered, m.width)
+	}
+	view := tea.NewView(rendered)
 	view.AltScreen = true
 	return view
+}
+
+func (m Model) tooSmall() bool {
+	return m.sizeKnown && (m.width < MinimumWidth || m.height < MinimumHeight)
+}
+
+func fitWidth(content string, width int) string {
+	lines := strings.Split(content, "\n")
+	for index, line := range lines {
+		lines[index] = ansi.Truncate(line, width, "…")
+	}
+	return strings.Join(lines, "\n")
 }
 
 func plural(count int, suffix string) string { return strconv.Itoa(count) + " " + suffix }
