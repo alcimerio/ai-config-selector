@@ -18,8 +18,12 @@ const skillsViewportRows = 8
 
 // NewSkillsEditor constructs the Skills child model. It never starts a
 // Bubble Tea program; the root model remains the runtime owner.
-func NewSkillsEditor[C launch.Contribution](draft category.Draft, binding category.Binding[[]skills.SkillReference, []skills.SkillBundle, C], catalog []skills.SkillBundle) skillsEditor {
-	ordered := append([]skills.SkillBundle(nil), catalog...)
+func NewSkillsEditor[C launch.Contribution](draft category.Draft, binding category.Binding[[]skills.SkillReference, []skills.SkillBundle, C], catalog ...[]skills.SkillBundle) skillsEditor {
+	var discovered []skills.SkillBundle
+	if len(catalog) != 0 {
+		discovered = catalog[0]
+	}
+	ordered := append([]skills.SkillBundle(nil), discovered...)
 	sort.SliceStable(ordered, func(left, right int) bool { return catalogOrder(ordered[left], ordered[right]) })
 	return skillsEditor{
 		draft: draft,
@@ -31,6 +35,14 @@ func NewSkillsEditor[C launch.Contribution](draft category.Draft, binding catego
 		},
 		id: binding.ID(), catalog: ordered,
 	}
+}
+
+func (m skillsEditor) WithCatalog(catalog []skills.SkillBundle) skillsEditor {
+	ordered := append([]skills.SkillBundle(nil), catalog...)
+	sort.SliceStable(ordered, func(left, right int) bool { return catalogOrder(ordered[left], ordered[right]) })
+	m.catalog = ordered
+	m.clamp()
+	return m
 }
 
 type skillsEditor struct {
