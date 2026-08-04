@@ -21,7 +21,8 @@ func (a *Adapter) BuildProfile(ctx context.Context, name string, draft category.
 	if err != nil {
 		return builder.Outcome{}, fmt.Errorf("discover Devin global Skill Catalog: %w", err)
 	}
-	return builder.Run(ctx, builder.NewModel(name, draft, a.skillsCategory, bundles), input, output)
+	editor := builder.NewSkillsEditor(draft, a.skillsCategory, bundles)
+	return builder.Run(ctx, builder.NewModel(name, draft, editor), input, output)
 }
 
 // EditProfileDraft presents the current line-oriented Skills editor. The

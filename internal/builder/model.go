@@ -12,8 +12,6 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/alcimerio/ai-config-selector/internal/category"
-	"github.com/alcimerio/ai-config-selector/internal/launch"
-	"github.com/alcimerio/ai-config-selector/internal/skills"
 )
 
 // Outcome is the terminal result selected by a Profile Builder session.
@@ -23,18 +21,14 @@ type Outcome struct {
 	Cancelled bool
 }
 
-// Model is the root Bubble Tea model. It owns the Profile Draft and all
-// navigation state; category editors are represented inside this one program.
+// Model is the root Bubble Tea model. It owns navigation, dimensions, the
+// Profile Draft, modal state, and the one child category editor.
 type Model struct {
 	name           string
 	draft          category.Draft
-	selection      func(category.Draft) ([]skills.SkillReference, error)
-	setSelection   func(*category.Draft, []skills.SkillReference) error
-	skillsID       string
-	catalog        []skills.SkillBundle
+	editor         categoryEditor
 	screen         screen
 	overviewCursor int
-	skillsCursor   int
 	width          int
 	height         int
 	outcome        Outcome
@@ -47,6 +41,12 @@ const (
 	skillsScreen
 	confirmScreen
 )
+
+type categoryEditor interface {
+	tea.Model
+	ID() string
+	Draft() category.Draft
+}
 
 var controls = struct {
 	up, down, open, back, toggle, cancel, accept, decline key.Binding
@@ -61,27 +61,15 @@ var controls = struct {
 	decline: key.NewBinding(key.WithKeys("n", "esc", "left"), key.WithHelp("N/Esc", "return")),
 }
 
-// NewModel constructs the root model with a discovered Skills catalog.
-func NewModel[C launch.Contribution](name string, draft category.Draft, binding category.Binding[[]skills.SkillReference, []skills.SkillBundle, C], catalog []skills.SkillBundle) Model {
-	return Model{
-		name:  name,
-		draft: draft,
-		selection: func(draft category.Draft) ([]skills.SkillReference, error) {
-			return category.Selection(draft, binding)
-		},
-		setSelection: func(draft *category.Draft, selection []skills.SkillReference) error {
-			return category.SetSelection(draft, binding, selection)
-		},
-		skillsID: binding.ID(),
-		catalog:  append([]skills.SkillBundle(nil), catalog...),
-		screen:   overviewScreen,
-	}
+// NewModel constructs the root model around one category child model.
+func NewModel(name string, draft category.Draft, editor categoryEditor) Model {
+	return Model{name: name, draft: draft, editor: editor, screen: overviewScreen}
 }
 
-// Init starts no nested programs or background work in the initial slice.
+// Init starts no nested programs or background work in this initial slice.
 func (m Model) Init() tea.Cmd { return nil }
 
-// Update applies user input to the root builder state.
+// Update applies terminal and user events to the root builder state.
 func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	switch message := message.(type) {
 	case tea.WindowSizeMsg:
@@ -93,7 +81,7 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		case overviewScreen:
 			return m.updateOverview(message)
 		case skillsScreen:
-			return m.updateSkills(message)
+			return m.updateEditor(message)
 		case confirmScreen:
 			return m.updateConfirmation(message)
 		}
@@ -102,29 +90,30 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) updateOverview(press tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	categories := m.categories()
 	switch {
 	case key.Matches(press, controls.up):
 		if m.overviewCursor > 0 {
 			m.overviewCursor--
 		}
 	case key.Matches(press, controls.down):
-		if m.overviewCursor < len(m.categories())+1 {
+		if m.overviewCursor < len(categories)+1 {
 			m.overviewCursor++
 		}
 	case key.Matches(press, controls.open):
 		switch m.overviewCursor {
-		case len(m.categories()):
+		case len(categories):
 			if m.selectedCount() == 0 {
 				m.screen = confirmScreen
 				return m, nil
 			}
 			m.outcome = Outcome{Draft: m.draft, Create: true}
 			return m, tea.Quit
-		case len(m.categories()) + 1:
+		case len(categories) + 1:
 			m.outcome = Outcome{Draft: m.draft, Cancelled: true}
 			return m, tea.Quit
 		default:
-			if m.categories()[m.overviewCursor].ID == m.skillsID {
+			if categories[m.overviewCursor].ID == m.editor.ID() {
 				m.screen = skillsScreen
 			}
 		}
@@ -135,24 +124,20 @@ func (m Model) updateOverview(press tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m Model) updateSkills(press tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	switch {
-	case key.Matches(press, controls.up):
-		if m.skillsCursor > 0 {
-			m.skillsCursor--
-		}
-	case key.Matches(press, controls.down):
-		if m.skillsCursor < len(m.catalog)-1 {
-			m.skillsCursor++
-		}
-	case key.Matches(press, controls.back):
+func (m Model) updateEditor(press tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	if key.Matches(press, controls.back) {
+		m.draft = m.editor.Draft()
 		m.screen = overviewScreen
-	case key.Matches(press, controls.toggle):
-		if len(m.catalog) != 0 {
-			m.toggleSkill(m.catalog[m.skillsCursor].Reference)
-		}
+		return m, nil
 	}
-	return m, nil
+	updated, command := m.editor.Update(press)
+	editor, ok := updated.(categoryEditor)
+	if !ok {
+		return m, nil
+	}
+	m.editor = editor
+	m.draft = editor.Draft()
+	return m, command
 }
 
 func (m Model) updateConfirmation(press tea.KeyPressMsg) (tea.Model, tea.Cmd) {
@@ -164,22 +149,6 @@ func (m Model) updateConfirmation(press tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.screen = overviewScreen
 	}
 	return m, nil
-}
-
-func (m *Model) toggleSkill(reference skills.SkillReference) {
-	selected, err := m.selection(m.draft)
-	if err != nil {
-		return
-	}
-	for index, current := range selected {
-		if current == reference {
-			selected = append(selected[:index], selected[index+1:]...)
-			_ = m.setSelection(&m.draft, selected)
-			return
-		}
-	}
-	selected = append(selected, reference)
-	_ = m.setSelection(&m.draft, selected)
 }
 
 func (m Model) selectedCount() int {
@@ -230,19 +199,7 @@ func (m Model) View() tea.View {
 		}
 		content.WriteString("\nUp/Down navigate  Space/Enter/Right open  Esc cancel")
 	case skillsScreen:
-		content.WriteString("Skills\n\n")
-		for index, bundle := range m.catalog {
-			marker := "  "
-			if index == m.skillsCursor {
-				marker = "> "
-			}
-			selected := "[ ]"
-			if m.isSelected(bundle.Reference) {
-				selected = "[x]"
-			}
-			content.WriteString(marker + selected + " " + safe(bundle.DisplayName) + " [" + safe(string(bundle.Reference.Source)) + "]\n")
-		}
-		content.WriteString("\nUp/Down navigate  Space/Enter toggle  Left/Esc back")
+		content.WriteString(m.editor.View().Content)
 	case confirmScreen:
 		content.WriteString("Create an empty Profile?\n\nThis Profile will not select any Skills.\n\nY/Enter create  N/Esc return")
 	}
@@ -251,22 +208,7 @@ func (m Model) View() tea.View {
 	return view
 }
 
-func (m Model) isSelected(reference skills.SkillReference) bool {
-	selected, err := m.selection(m.draft)
-	if err != nil {
-		return false
-	}
-	for _, current := range selected {
-		if current == reference {
-			return true
-		}
-	}
-	return false
-}
-
-func plural(count int, suffix string) string {
-	return strconv.Itoa(count) + " " + suffix
-}
+func plural(count int, suffix string) string { return strconv.Itoa(count) + " " + suffix }
 
 func categoryName(id string) string {
 	words := strings.FieldsFunc(id, func(character rune) bool { return character == '-' || character == '_' })
@@ -278,11 +220,4 @@ func categoryName(id string) string {
 	return strings.Join(words, " ")
 }
 
-func (m Model) categories() []category.Summary {
-	return m.draft.Summaries()
-}
-
-func safe(value string) string {
-	quoted := strconv.QuoteToASCII(value)
-	return quoted[1 : len(quoted)-1]
-}
+func (m Model) categories() []category.Summary { return m.draft.Summaries() }

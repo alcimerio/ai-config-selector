@@ -42,7 +42,8 @@ func TestModelCreatesProfileFromSelectedSkills(t *testing.T) {
 		BundlePath:  "/global/review",
 	}
 
-	model := NewModel("reviews", registry.NewDraft(), binding, []skills.SkillBundle{bundle})
+	draft := registry.NewDraft()
+	model := NewModel("reviews", draft, NewSkillsEditor(draft, binding, []skills.SkillBundle{bundle}))
 	model = update(t, model, tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 	model = update(t, model, tea.KeyPressMsg(tea.Key{Code: tea.KeySpace}))
 	model = update(t, model, tea.KeyPressMsg(tea.Key{Code: tea.KeyLeft}))
@@ -79,7 +80,8 @@ func TestModelRequiresConfirmationBeforeCreatingEmptyProfile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	model := NewModel("empty", registry.NewDraft(), binding, nil)
+	draft := registry.NewDraft()
+	model := NewModel("empty", draft, NewSkillsEditor(draft, binding, nil))
 	model = update(t, model, tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
 	model = update(t, model, tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 	if model.Outcome().Create {
@@ -108,7 +110,8 @@ func TestModelRetainsTerminalDimensionsAcrossInput(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	model := NewModel("dimensions", registry.NewDraft(), binding, nil)
+	draft := registry.NewDraft()
+	model := NewModel("dimensions", draft, NewSkillsEditor(draft, binding, nil))
 	model = update(t, model, tea.WindowSizeMsg{Width: 120, Height: 40})
 	model = update(t, model, tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
 	if model.width != 120 || model.height != 40 {
@@ -144,7 +147,8 @@ func TestModelOverviewListsEveryRegistryCategoryInOrder(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	view := NewModel("all-categories", registry.NewDraft(), skillsBinding, nil).View().Content
+	draft := registry.NewDraft()
+	view := NewModel("all-categories", draft, NewSkillsEditor(draft, skillsBinding, nil)).View().Content
 	if !strings.Contains(view, "Skills                         0 selected\n  Notes                         0 selected") {
 		t.Fatalf("overview does not preserve Registry category order:\n%s", view)
 	}
