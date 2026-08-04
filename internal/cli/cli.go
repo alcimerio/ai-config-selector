@@ -120,11 +120,10 @@ func (app App) createProfile(ctx context.Context, name string) int {
 	if err != nil {
 		return app.fail("create Profile %q: %v", created.Name, err)
 	}
-	selectedCount := 0
+	fmt.Fprintf(app.Output, "\nCreated Profile %q at %s\n", created.Name, safeTerminalText(path))
 	for _, summary := range draft.Summaries() {
-		selectedCount += summary.Count
+		fmt.Fprintf(app.Output, "  %s: %d selected\n", safeTerminalText(summary.ID), summary.Count)
 	}
-	fmt.Fprintf(app.Output, "\nCreated Profile %q with %d selected items at %s\n", created.Name, selectedCount, safeTerminalText(path))
 	return 0
 }
 

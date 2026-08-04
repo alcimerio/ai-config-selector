@@ -54,9 +54,9 @@ Create a named Profile for the target:
 ./bin/acs devin create-profile --name backend-review
 ```
 
-ACS displays the discovered global Skill Bundles and asks for a
-comma-separated selection of their numbers. It stores the resulting Profile
-under `~/.acs/profiles/`.
+ACS opens a keyboard-driven Profile Builder. Open Skills, use Space or Enter
+to select bundles, return to the overview, and choose Create Profile. It stores
+the resulting Profile under `~/.acs/profiles/`.
 
 Profile names contain 1 to 64 letters, numbers, dots, underscores, or hyphens
 and must start with a letter or number. ACS will not overwrite an existing

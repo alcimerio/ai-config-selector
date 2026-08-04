@@ -1038,6 +1038,9 @@ func TestCreateProfileUsesTheInteractiveBuilderAndPersistsItsDraft(t *testing.T)
 	if strings.Contains(stdout.String(), "comma-separated numbers") {
 		t.Fatalf("legacy numbered prompt was used:\n%s", stdout.String())
 	}
+	if !strings.Contains(stdout.String(), "skills: 1 selected") {
+		t.Fatalf("success summary does not contain category count:\n%s", stdout.String())
+	}
 	saved, err := profiles.Load("reviews")
 	if err != nil {
 		t.Fatal(err)

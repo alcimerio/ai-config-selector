@@ -30,10 +30,13 @@ type Model struct {
 	draft          category.Draft
 	selection      func(category.Draft) ([]skills.SkillReference, error)
 	setSelection   func(*category.Draft, []skills.SkillReference) error
+	skillsID       string
 	catalog        []skills.SkillBundle
 	screen         screen
 	overviewCursor int
 	skillsCursor   int
+	width          int
+	height         int
 	outcome        Outcome
 }
 
@@ -69,8 +72,9 @@ func NewModel[C launch.Contribution](name string, draft category.Draft, binding 
 		setSelection: func(draft *category.Draft, selection []skills.SkillReference) error {
 			return category.SetSelection(draft, binding, selection)
 		},
-		catalog: append([]skills.SkillBundle(nil), catalog...),
-		screen:  overviewScreen,
+		skillsID: binding.ID(),
+		catalog:  append([]skills.SkillBundle(nil), catalog...),
+		screen:   overviewScreen,
 	}
 }
 
@@ -79,21 +83,22 @@ func (m Model) Init() tea.Cmd { return nil }
 
 // Update applies user input to the root builder state.
 func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
-	key, ok := message.(tea.KeyPressMsg)
-	if !ok {
+	switch message := message.(type) {
+	case tea.WindowSizeMsg:
+		m.width = message.Width
+		m.height = message.Height
 		return m, nil
+	case tea.KeyPressMsg:
+		switch m.screen {
+		case overviewScreen:
+			return m.updateOverview(message)
+		case skillsScreen:
+			return m.updateSkills(message)
+		case confirmScreen:
+			return m.updateConfirmation(message)
+		}
 	}
-
-	switch m.screen {
-	case overviewScreen:
-		return m.updateOverview(key)
-	case skillsScreen:
-		return m.updateSkills(key)
-	case confirmScreen:
-		return m.updateConfirmation(key)
-	default:
-		return m, nil
-	}
+	return m, nil
 }
 
 func (m Model) updateOverview(press tea.KeyPressMsg) (tea.Model, tea.Cmd) {
@@ -103,23 +108,25 @@ func (m Model) updateOverview(press tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.overviewCursor--
 		}
 	case key.Matches(press, controls.down):
-		if m.overviewCursor < 2 {
+		if m.overviewCursor < len(m.categories())+1 {
 			m.overviewCursor++
 		}
 	case key.Matches(press, controls.open):
 		switch m.overviewCursor {
-		case 0:
-			m.screen = skillsScreen
-		case 1:
-			if m.selectionCount() == 0 {
+		case len(m.categories()):
+			if m.selectedCount() == 0 {
 				m.screen = confirmScreen
 				return m, nil
 			}
 			m.outcome = Outcome{Draft: m.draft, Create: true}
 			return m, tea.Quit
-		case 2:
+		case len(m.categories()) + 1:
 			m.outcome = Outcome{Draft: m.draft, Cancelled: true}
 			return m, tea.Quit
+		default:
+			if m.categories()[m.overviewCursor].ID == m.skillsID {
+				m.screen = skillsScreen
+			}
 		}
 	case key.Matches(press, controls.cancel):
 		m.outcome = Outcome{Draft: m.draft, Cancelled: true}
@@ -175,13 +182,12 @@ func (m *Model) toggleSkill(reference skills.SkillReference) {
 	_ = m.setSelection(&m.draft, selected)
 }
 
-func (m Model) selectionCount() int {
-	for _, summary := range m.draft.Summaries() {
-		if summary.ID == "skills" {
-			return summary.Count
-		}
+func (m Model) selectedCount() int {
+	count := 0
+	for _, summary := range m.categories() {
+		count += summary.Count
 	}
-	return 0
+	return count
 }
 
 // Outcome returns the current terminal outcome, if any.
@@ -209,11 +215,12 @@ func (m Model) View() tea.View {
 		content.WriteString("Create Profile \"")
 		content.WriteString(m.name)
 		content.WriteString("\"\n\n")
-		rows := []string{
-			"Skills                         " + plural(m.selectionCount(), "selected"),
-			"Create Profile",
-			"Cancel",
+		categories := m.categories()
+		rows := make([]string, 0, len(categories)+2)
+		for _, summary := range categories {
+			rows = append(rows, categoryName(summary.ID)+"                         "+plural(summary.Count, "selected"))
 		}
+		rows = append(rows, "Create Profile", "Cancel")
 		for index, row := range rows {
 			marker := "  "
 			if index == m.overviewCursor {
@@ -259,6 +266,20 @@ func (m Model) isSelected(reference skills.SkillReference) bool {
 
 func plural(count int, suffix string) string {
 	return strconv.Itoa(count) + " " + suffix
+}
+
+func categoryName(id string) string {
+	words := strings.FieldsFunc(id, func(character rune) bool { return character == '-' || character == '_' })
+	for index, word := range words {
+		if word != "" {
+			words[index] = strings.ToUpper(word[:1]) + word[1:]
+		}
+	}
+	return strings.Join(words, " ")
+}
+
+func (m Model) categories() []category.Summary {
+	return m.draft.Summaries()
 }
 
 func safe(value string) string {
