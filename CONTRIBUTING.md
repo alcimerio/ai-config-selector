@@ -59,5 +59,9 @@ Each pull request should:
 - identify macOS behavior that was tested and any relevant behavior that was
   not tested.
 
+Keep the pull request title in Conventional Commit form. When squash-merging,
+set the resulting commit subject to `<pull request title> (#<pull request
+number>)` and verify that exact subject from the merged commit SHA.
+
 Maintainers may ask to narrow, redesign, or split a contribution before
 merging it.
