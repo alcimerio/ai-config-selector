@@ -12,6 +12,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/alcimerio/ai-config-selector/internal/category"
+	"github.com/alcimerio/ai-config-selector/internal/skills"
 )
 
 // Outcome is the terminal result selected by a Profile Builder session.
@@ -27,11 +28,28 @@ type Model struct {
 	name           string
 	draft          category.Draft
 	editor         categoryEditor
+	loadCatalog    func(context.Context) ([]skills.SkillBundle, error)
+	loadState      loadState
+	loadError      error
 	screen         screen
 	overviewCursor int
 	width          int
 	height         int
 	outcome        Outcome
+}
+
+type loadState int
+
+const (
+	unloaded loadState = iota
+	loading
+	loaded
+	loadFailed
+)
+
+type catalogLoadedMsg struct {
+	catalog []skills.SkillBundle
+	err     error
 }
 
 type screen int
@@ -63,8 +81,13 @@ var controls = struct {
 }
 
 // NewModel constructs the root model around one category child model.
-func NewModel(name string, draft category.Draft, editor categoryEditor) Model {
-	return Model{name: name, draft: draft, editor: editor, screen: overviewScreen}
+func NewModel(name string, draft category.Draft, editor categoryEditor, loadCatalog ...func(context.Context) ([]skills.SkillBundle, error)) Model {
+	model := Model{name: name, draft: draft, editor: editor, screen: overviewScreen, loadState: loaded}
+	if len(loadCatalog) != 0 {
+		model.loadCatalog = loadCatalog[0]
+		model.loadState = unloaded
+	}
+	return model
 }
 
 // Init starts no nested programs or background work in this initial slice.
@@ -73,6 +96,17 @@ func (m Model) Init() tea.Cmd { return nil }
 // Update applies terminal and user events to the root builder state.
 func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	switch message := message.(type) {
+	case catalogLoadedMsg:
+		if message.err != nil {
+			m.loadState = loadFailed
+			m.loadError = message.err
+			return m, nil
+		}
+		if editor, ok := m.editor.(skillsEditor); ok {
+			m.editor = editor.WithCatalog(message.catalog)
+		}
+		m.loadState, m.loadError, m.screen = loaded, nil, skillsScreen
+		return m, nil
 	case tea.WindowSizeMsg:
 		m.width = message.Width
 		m.height = message.Height
@@ -115,7 +149,13 @@ func (m Model) updateOverview(press tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		default:
 			if categories[m.overviewCursor].ID == m.editor.ID() {
-				m.screen = skillsScreen
+				if m.loadState == unloaded || m.loadState == loadFailed {
+					m.loadState = loading
+					return m, m.discoveryCommand()
+				}
+				if m.loadState == loaded {
+					m.screen = skillsScreen
+				}
 			}
 		}
 	case key.Matches(press, controls.cancel):
@@ -139,6 +179,13 @@ func (m Model) updateEditor(press tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	m.editor = editor
 	m.draft = editor.Draft()
 	return m, command
+}
+
+func (m Model) discoveryCommand() tea.Cmd {
+	return func() tea.Msg {
+		catalog, err := m.loadCatalog(context.Background())
+		return catalogLoadedMsg{catalog: catalog, err: err}
+	}
 }
 
 func (m Model) updateConfirmation(press tea.KeyPressMsg) (tea.Model, tea.Cmd) {
@@ -203,6 +250,12 @@ func (m Model) View() tea.View {
 		content.WriteString(m.editor.View().Content)
 	case confirmScreen:
 		content.WriteString("Create an empty Profile?\n\nThis Profile will not select any Skills.\n\nY/Enter create  N/Esc return")
+	}
+	if m.screen == overviewScreen && m.loadState == loading {
+		content.WriteString("\nLoading Skills...\n")
+	}
+	if m.screen == overviewScreen && m.loadState == loadFailed {
+		content.WriteString("\nSkills failed to load. Space/Enter retry  Esc back\n")
 	}
 	view := tea.NewView(content.String())
 	view.AltScreen = true

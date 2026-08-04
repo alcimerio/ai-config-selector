@@ -17,12 +17,9 @@ import (
 // BuildProfile runs the first complete Profile Builder using this adapter's
 // typed Skills category. The root model is the only Bubble Tea program.
 func (a *Adapter) BuildProfile(ctx context.Context, name string, draft category.Draft, input io.Reader, output io.Writer) (builder.Outcome, error) {
-	bundles, err := a.DiscoverGlobalSkillCatalog(ctx)
-	if err != nil {
-		return builder.Outcome{}, fmt.Errorf("discover Devin global Skill Catalog: %w", err)
-	}
-	editor := builder.NewSkillsEditor(draft, a.skillsCategory, bundles)
-	return builder.Run(ctx, builder.NewModel(name, draft, editor), input, output)
+	editor := builder.NewSkillsEditor(draft, a.skillsCategory)
+	load := func(_ context.Context) ([]skills.SkillBundle, error) { return a.DiscoverGlobalSkillCatalog(ctx) }
+	return builder.Run(ctx, builder.NewModel(name, draft, editor, load), input, output)
 }
 
 // EditProfileDraft presents the current line-oriented Skills editor. The
