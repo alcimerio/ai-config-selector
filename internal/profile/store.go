@@ -1,6 +1,7 @@
 package profile
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -26,6 +27,15 @@ func NewStore(acsHome string, codec Codec) *Store {
 }
 
 func (store *Store) Create(profile Profile) (string, error) {
+	return store.CreateContext(context.Background(), profile)
+}
+
+// CreateContext atomically publishes a Profile unless cancellation is observed
+// before the publish step begins.
+func (store *Store) CreateContext(ctx context.Context, profile Profile) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	if err := ValidateName(profile.Name); err != nil {
 		return "", err
 	}
@@ -63,6 +73,9 @@ func (store *Store) Create(profile Profile) (string, error) {
 	}
 	if err := temporary.Close(); err != nil {
 		return "", fmt.Errorf("close Profile: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
 	}
 
 	path := store.profilePath(profile.Name)

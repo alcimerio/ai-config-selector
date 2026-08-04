@@ -242,6 +242,63 @@ func TestRegistryBuildsProfileFromTypedDraftAndIncludesEmptyCategories(t *testin
 	}
 }
 
+func TestDraftCloneIsImmutableAndEqualityTracksSelections(t *testing.T) {
+	binding, err := category.Bind(category.Definition[[]string, string, textContribution]{
+		ID:            "notes",
+		SchemaVersion: 1,
+		Empty:         func() []string { return []string{} },
+		Resolve:       func(context.Context, []string) (string, error) { return "", nil },
+		Contribute:    func(string) (textContribution, error) { return textContribution{}, nil },
+		Count:         func(selection []string) int { return len(selection) },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry, err := category.NewRegistry("devin", binding.Registration())
+	if err != nil {
+		t.Fatal(err)
+	}
+	draft := registry.NewDraft()
+	if err := category.SetSelection(&draft, binding, []string{"first"}); err != nil {
+		t.Fatal(err)
+	}
+
+	snapshot, err := draft.Clone()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !draft.Equal(snapshot) {
+		t.Fatal("cloned Draft is not equal to its source")
+	}
+	selection, err := category.Selection(draft, binding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	selection[0] = "mutated"
+	if draft.Equal(snapshot) {
+		t.Fatal("snapshot changed through a selection alias")
+	}
+	want, err := category.Selection(snapshot, binding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(want, []string{"first"}) {
+		t.Fatalf("snapshot selection = %#v, want immutable original", want)
+	}
+	if snapshot.Equal(newRegistryDraftForTest(t, binding)) {
+		t.Fatal("Drafts from distinct Registries compared equal")
+	}
+}
+
+func newRegistryDraftForTest(t *testing.T, binding category.Binding[[]string, string, textContribution]) category.Draft {
+	t.Helper()
+	registry, err := category.NewRegistry("devin", binding.Registration())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return registry.NewDraft()
+}
+
 type numberedSelection struct {
 	Value int `json:"value"`
 }

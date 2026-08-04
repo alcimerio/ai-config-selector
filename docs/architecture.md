@@ -275,9 +275,10 @@ repository. ACS reports them but does not filter, copy, or manage them.
 **Status:** Partially implemented. New Profiles use the version-2 category
 envelope, the ordered Category Registry coordinates the full Profile lifecycle,
 and ACS normalizes version-1 Profiles in memory. Profile creation now opens a
-Bubble Tea builder with a category overview, basic Skills selection, empty
-Profile confirmation, and TTY validation. Search, lazy discovery, recoverable
-saving and cancellation, and presentation hardening remain to be completed.
+Bubble Tea builder with a category overview, searchable Skills selection, lazy
+discovery, empty and failed-discovery confirmation, recoverable saving,
+changed-draft cancellation, and TTY validation. Presentation hardening remains
+to be completed.
 
 The interactive builder will keep `acs devin create-profile --name <name>` as
 its public command. It will validate the name, reject an existing Profile name,
@@ -447,9 +448,9 @@ search and navigation responsiveness.
 - ACS rejects platforms other than macOS.
 - ACS ships only the Devin Adapter.
 - The Devin Registry currently contains only the Skills category.
-- Profile creation uses the initial Bubble Tea builder. Search, lazy category
-  discovery, recoverable saving and cancellation, and terminal hardening are
-  not implemented yet.
+- Profile creation uses the Bubble Tea builder with search, lazy category
+  discovery, recoverable saving, and changed-draft cancellation. Terminal
+  presentation hardening is not implemented yet.
 - Profiles cannot be edited, deleted, imported, or exported through the CLI.
 - ACS does not filter repository-local Skills.
 - ACS does not provide whole-process filesystem or network containment.

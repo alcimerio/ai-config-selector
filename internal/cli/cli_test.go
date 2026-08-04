@@ -1054,6 +1054,29 @@ func TestCreateProfileUsesTheInteractiveBuilderAndPersistsItsDraft(t *testing.T)
 	}
 }
 
+func TestCreateProfileCancellationPrintsSummaryAndReturnsSignalExitCodeWithoutSaving(t *testing.T) {
+	fixture := newStaticCategoryFixture(t, staticCatalog{})
+	profileBuilder := &staticBuilder{outcome: builder.Outcome{Draft: fixture.registry.NewDraft(), Cancelled: true}}
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	profiles := profile.NewStore(t.TempDir(), fixture.registry)
+	application := cli.App{
+		Categories: fixture.registry, Builder: profileBuilder, Profiles: profiles,
+		Input: strings.NewReader(""), Output: &stdout, ErrorOutput: &stderr,
+		Interactive: func(io.Reader, io.Writer) bool { return true },
+	}
+
+	if exitCode := application.Run(context.Background(), []string{"devin", "create-profile", "--name", "cancelled"}); exitCode != 130 {
+		t.Fatalf("exit code = %d, want 130; stderr = %s", exitCode, stderr.String())
+	}
+	if stdout.String() != "Profile creation cancelled.\n" {
+		t.Fatalf("cancellation summary = %q", stdout.String())
+	}
+	if _, err := profiles.Load("cancelled"); !os.IsNotExist(err) {
+		t.Fatalf("cancelled Profile was written: %v", err)
+	}
+}
+
 func TestCreateProfileRejectsNonInteractiveStreamsBeforeBuilderStarts(t *testing.T) {
 	fixture := newStaticCategoryFixture(t, staticCatalog{})
 	builder := &staticBuilder{}
@@ -1091,9 +1114,16 @@ type staticBuilder struct {
 	err     error
 }
 
-func (stub *staticBuilder) BuildProfile(_ context.Context, name string, _ category.Draft, _ io.Reader, _ io.Writer) (builder.Outcome, error) {
+func (stub *staticBuilder) BuildProfile(ctx context.Context, name string, _ category.Draft, save builder.SaveFunc, _ io.Reader, _ io.Writer) (builder.Outcome, error) {
 	stub.called = true
 	stub.name = name
+	if stub.err == nil && stub.outcome.Create {
+		path, err := save(ctx, stub.outcome.Draft)
+		if err != nil {
+			return builder.Outcome{}, err
+		}
+		stub.outcome.Path = path
+	}
 	return stub.outcome, stub.err
 }
 
