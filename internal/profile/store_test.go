@@ -1,6 +1,7 @@
 package profile_test
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -12,6 +13,20 @@ import (
 	"github.com/alcimerio/ai-config-selector/internal/profile"
 	"github.com/alcimerio/ai-config-selector/internal/skills"
 )
+
+func TestStoreDoesNotWriteWhenCreateContextIsCancelled(t *testing.T) {
+	acsHome := t.TempDir()
+	store := newDevinStore(t, acsHome)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if _, err := store.CreateContext(ctx, devin.NewSkillsProfile("cancelled", nil)); !errors.Is(err, context.Canceled) {
+		t.Fatalf("CreateContext error = %v, want context.Canceled", err)
+	}
+	if _, err := os.Stat(filepath.Join(acsHome, "profiles", "cancelled.json")); !os.IsNotExist(err) {
+		t.Fatalf("cancelled CreateContext wrote a Profile: %v", err)
+	}
+}
 
 func TestStoreCreatesAtomicHumanReadableUserOnlyProfileWithoutOverwrite(t *testing.T) {
 	acsHome := t.TempDir()

@@ -21,11 +21,12 @@ type ProfileDraftEditor interface {
 
 // ProfileBuilder owns the terminal UI and returns its post-terminal outcome.
 type ProfileBuilder interface {
-	BuildProfile(context.Context, string, category.Draft, io.Reader, io.Writer) (builder.Outcome, error)
+	BuildProfile(context.Context, string, category.Draft, builder.SaveFunc, io.Reader, io.Writer) (builder.Outcome, error)
 }
 
 type ProfileStore interface {
 	Create(profile.Profile) (string, error)
+	CreateContext(context.Context, profile.Profile) (string, error)
 	Load(string) (profile.Profile, error)
 }
 
@@ -93,17 +94,34 @@ func (app App) createProfile(ctx context.Context, name string) int {
 		if app.Interactive == nil || !app.Interactive(app.Input, app.Output) {
 			return app.fail("create Profile requires interactive stdin and stdout")
 		}
-		outcome, err := app.Builder.BuildProfile(ctx, name, draft, app.Input, app.Output)
+		save := func(saveContext context.Context, snapshot category.Draft) (string, error) {
+			created, err := app.Categories.NewProfile(name, snapshot)
+			if err != nil {
+				return "", fmt.Errorf("build Profile %q: %w", name, err)
+			}
+			path, err := app.Profiles.CreateContext(saveContext, created)
+			if err != nil {
+				return "", fmt.Errorf("create Profile %q: %w", created.Name, err)
+			}
+			return path, nil
+		}
+		outcome, err := app.Builder.BuildProfile(ctx, name, draft, save, app.Input, app.Output)
 		if err != nil {
 			return app.fail("edit Profile %q: %v", name, err)
 		}
 		if outcome.Cancelled {
-			return 0
+			fmt.Fprintln(app.Output, "Profile creation cancelled.")
+			return 130
 		}
 		if !outcome.Create {
 			return app.fail("edit Profile %q: Profile Builder ended without an outcome", name)
 		}
 		draft = outcome.Draft
+		fmt.Fprintf(app.Output, "\nCreated Profile %q at %s\n", name, safeTerminalText(outcome.Path))
+		for _, summary := range draft.Summaries() {
+			fmt.Fprintf(app.Output, "  %s: %d selected\n", safeTerminalText(summary.ID), summary.Count)
+		}
+		return 0
 	} else {
 		fmt.Fprintf(app.Output, "Create Profile %q\n\n", name)
 		edited, err := app.DraftEditor.EditProfileDraft(ctx, draft, app.Input, app.Output)

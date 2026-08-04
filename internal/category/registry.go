@@ -197,6 +197,33 @@ type Summary struct {
 	Count int
 }
 
+// Clone returns an independent snapshot of every typed category selection.
+// Registrations own the encoding boundary, so cloning remains category-neutral.
+func (draft Draft) Clone() (Draft, error) {
+	if draft.registry == nil {
+		return Draft{}, errors.New("clone category Draft: uninitialized Draft")
+	}
+	clone := Draft{registry: draft.registry, selections: make(map[string]any, len(draft.selections))}
+	for _, registration := range draft.registry.ordered {
+		payload, err := registration.encode(draft.selections[registration.id])
+		if err != nil {
+			return Draft{}, fmt.Errorf("clone category %q selection: %w", registration.id, err)
+		}
+		selection, err := registration.decode(payload)
+		if err != nil {
+			return Draft{}, fmt.Errorf("clone category %q selection: %w", registration.id, err)
+		}
+		clone.selections[registration.id] = selection
+	}
+	return clone, nil
+}
+
+// Equal reports whether two Drafts belong to the same Registry and contain
+// equal typed selections.
+func (draft Draft) Equal(other Draft) bool {
+	return draft.registry != nil && draft.registry == other.registry && reflect.DeepEqual(draft.selections, other.selections)
+}
+
 // NewDraft creates a draft containing every category's empty selection.
 func (registry *Registry) NewDraft() Draft {
 	draft := Draft{registry: registry, selections: make(map[string]any, len(registry.ordered))}
