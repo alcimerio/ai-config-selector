@@ -46,6 +46,7 @@ type categoryEditor interface {
 	tea.Model
 	ID() string
 	Draft() category.Draft
+	ListFocused() bool
 }
 
 var controls = struct {
@@ -125,7 +126,7 @@ func (m Model) updateOverview(press tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) updateEditor(press tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	if key.Matches(press, controls.back) {
+	if m.editor.ListFocused() && key.Matches(press, controls.back) {
 		m.draft = m.editor.Draft()
 		m.screen = overviewScreen
 		return m, nil
