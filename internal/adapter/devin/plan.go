@@ -6,30 +6,42 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/alcimerio/ai-config-selector/internal/category"
 	"github.com/alcimerio/ai-config-selector/internal/launch"
 	"github.com/alcimerio/ai-config-selector/internal/skills"
 )
 
 // PlanLaunch describes the selected global Skill Bundles and repository-local
 // Skill Bundles Devin may inherit without creating a Session.
-func (a *Adapter) PlanLaunch(ctx context.Context, workingDirectory string, selected []skills.SkillBundle) (launch.Plan, error) {
-	plan := launch.Plan{
-		SelectedGlobalSkillBundles: make([]launch.SelectedGlobalSkillBundle, 0, len(selected)),
+func (a *Adapter) PlanLaunch(ctx context.Context, workingDirectory string, resolved category.ResolvedProfile) (launch.Plan, error) {
+	return resolved.Plan(ctx, workingDirectory)
+}
+
+func (a *Adapter) planSkills(ctx context.Context, workingDirectory string, selected []skills.SkillBundle, plan *launch.Plan) error {
+	selectedSection := launch.PlanSection{
+		Title: "Selected global Skill Bundles managed by ACS:",
+		Items: make([]launch.PlanItem, 0, len(selected)),
 	}
 	for _, bundle := range selected {
 		if err := ctx.Err(); err != nil {
-			return launch.Plan{}, err
+			return err
 		}
 		_, sessionPath, err := bundlePlacement(filepath.Join("<session>", "home"), bundle.Reference)
 		if err != nil {
-			return launch.Plan{}, fmt.Errorf("plan Devin launch: %w", err)
+			return fmt.Errorf("plan Devin launch: %w", err)
 		}
-		plan.SelectedGlobalSkillBundles = append(plan.SelectedGlobalSkillBundles, launch.SelectedGlobalSkillBundle{
-			Bundle:      bundle,
-			SessionPath: sessionPath,
+		selectedSection.Items = append(selectedSection.Items, launch.PlanItem{
+			Label: fmt.Sprintf("%s [%s]", bundle.DisplayName, bundle.Reference.Source),
+			Details: []launch.PlanDetail{
+				{Label: "source", Value: bundle.BundlePath},
+				{Label: "Session", Value: sessionPath},
+			},
 		})
 	}
 
+	projectSection := launch.PlanSection{
+		Title: "Project-local Skill Bundles inherited by Devin (not managed by ACS):",
+	}
 	for _, relativeRoot := range projectSourceDirectories {
 		root := filepath.Join(workingDirectory, relativeRoot)
 		entries, err := os.ReadDir(root)
@@ -37,11 +49,11 @@ func (a *Adapter) PlanLaunch(ctx context.Context, workingDirectory string, selec
 			continue
 		}
 		if err != nil {
-			return launch.Plan{}, fmt.Errorf("inspect Devin project-local skill source %q: %w", relativeRoot, err)
+			return fmt.Errorf("inspect Devin project-local skill source %q: %w", relativeRoot, err)
 		}
 		for _, entry := range entries {
 			if err := ctx.Err(); err != nil {
-				return launch.Plan{}, err
+				return err
 			}
 			bundlePath := filepath.Join(root, entry.Name())
 			bundleInfo, err := os.Stat(bundlePath)
@@ -52,11 +64,11 @@ func (a *Adapter) PlanLaunch(ctx context.Context, workingDirectory string, selec
 			if err != nil || !manifest.Mode().IsRegular() {
 				continue
 			}
-			plan.ProjectLocalSkillBundles = append(plan.ProjectLocalSkillBundles, launch.ProjectLocalSkillBundle{
-				DisplayName: entry.Name(),
-				BundlePath:  bundlePath,
+			projectSection.Items = append(projectSection.Items, launch.PlanItem{
+				Label: entry.Name() + " " + bundlePath,
 			})
 		}
 	}
-	return plan, nil
+	plan.Sections = append(plan.Sections, selectedSection, projectSection)
+	return nil
 }

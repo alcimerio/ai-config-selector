@@ -2,26 +2,48 @@
 package launch
 
 import (
+	"context"
 	"io"
-
-	"github.com/alcimerio/ai-config-selector/internal/skills"
 )
 
-// Plan describes what ACS would materialize and what Devin may inherit from
-// the current project without creating a Session.
+// Contribution is one resolved Profile Component Category's ordered input to
+// dry-run planning, Session materialization, and launch verification.
+type Contribution interface {
+	Plan(context.Context, string, *Plan) error
+	Materialize(sessionHome string) error
+	Verify(context.Context, VerificationContext) error
+}
+
+// VerificationContext is the target process environment visible to category
+// verification after Session materialization.
+type VerificationContext struct {
+	SessionHome      string
+	WorkingDirectory string
+	Environment      []string
+}
+
+// Plan describes what ACS would materialize and what the target CLI may
+// inherit from the current project without creating a Session.
 type Plan struct {
-	SelectedGlobalSkillBundles []SelectedGlobalSkillBundle
-	ProjectLocalSkillBundles   []ProjectLocalSkillBundle
+	Sections []PlanSection
 }
 
-type SelectedGlobalSkillBundle struct {
-	Bundle      skills.SkillBundle
-	SessionPath string
+// PlanSection is one category's declarative dry-run output group.
+type PlanSection struct {
+	Title string
+	Items []PlanItem
 }
 
-type ProjectLocalSkillBundle struct {
-	DisplayName string
-	BundlePath  string
+// PlanItem is one planned item with optional labeled details.
+type PlanItem struct {
+	Label   string
+	Details []PlanDetail
+}
+
+// PlanDetail is one labeled value rendered under a planned item.
+type PlanDetail struct {
+	Label string
+	Value string
 }
 
 // Terminal is the invoking terminal connection inherited by a launched CLI.

@@ -37,10 +37,11 @@ func main() {
 	}
 
 	application := cli.App{
-		Catalog:           adapter,
+		Categories:        adapter.Categories(),
+		DraftEditor:       adapter,
 		Planner:           adapter,
 		Launcher:          adapter,
-		Profiles:          profile.NewStore(filepath.Join(existingHome, ".acs")),
+		Profiles:          profile.NewStore(filepath.Join(existingHome, ".acs"), adapter.Categories()),
 		SessionsDirectory: filepath.Join(existingHome, ".acs", "sessions"),
 		WorkingDirectory:  workingDirectory,
 		Input:             os.Stdin,

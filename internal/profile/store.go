@@ -12,17 +12,24 @@ var ErrProfileExists = errors.New("Profile already exists")
 
 type Store struct {
 	profilesDir string
+	codec       Codec
 }
 
-func NewStore(acsHome string) *Store {
-	return &Store{profilesDir: filepath.Join(acsHome, "profiles")}
+// Codec owns Profile envelope migration and category normalization.
+type Codec interface {
+	Normalize(Profile) (Profile, error)
+	Decode([]byte) (Profile, error)
+}
+
+func NewStore(acsHome string, codec Codec) *Store {
+	return &Store{profilesDir: filepath.Join(acsHome, "profiles"), codec: codec}
 }
 
 func (store *Store) Create(profile Profile) (string, error) {
 	if err := ValidateName(profile.Name); err != nil {
 		return "", err
 	}
-	normalized, err := normalizeCurrentProfile(profile)
+	normalized, err := store.codec.Normalize(profile)
 	if err != nil {
 		return "", err
 	}
@@ -80,45 +87,11 @@ func (store *Store) Load(name string) (Profile, error) {
 	if err != nil {
 		return Profile{}, err
 	}
-	loaded, err := decodeProfile(contents)
+	loaded, err := store.codec.Decode(contents)
 	if err != nil {
 		return Profile{}, fmt.Errorf("decode Profile %q: %w", name, err)
 	}
 	return loaded, nil
-}
-
-func decodeProfile(contents []byte) (Profile, error) {
-	var envelope struct {
-		Version int `json:"version"`
-	}
-	if err := json.Unmarshal(contents, &envelope); err != nil {
-		return Profile{}, err
-	}
-	switch envelope.Version {
-	case 1:
-		var legacy struct {
-			Version         int             `json:"version"`
-			Name            string          `json:"name"`
-			Target          string          `json:"target"`
-			SkillReferences json.RawMessage `json:"skillReferences"`
-		}
-		if err := json.Unmarshal(contents, &legacy); err != nil {
-			return Profile{}, err
-		}
-		references, err := decodeSkillReferences(legacy.SkillReferences)
-		if err != nil {
-			return Profile{}, fmt.Errorf("decode version-1 skillReferences: %w", err)
-		}
-		return NewSkillsProfile(legacy.Name, legacy.Target, references), nil
-	case CurrentVersion:
-		var loaded Profile
-		if err := json.Unmarshal(contents, &loaded); err != nil {
-			return Profile{}, err
-		}
-		return normalizeCurrentProfile(loaded)
-	default:
-		return Profile{}, fmt.Errorf("unsupported schema version %d", envelope.Version)
-	}
 }
 
 func (store *Store) profilePath(name string) string {

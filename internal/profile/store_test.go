@@ -8,14 +8,15 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/alcimerio/ai-config-selector/internal/adapter/devin"
 	"github.com/alcimerio/ai-config-selector/internal/profile"
 	"github.com/alcimerio/ai-config-selector/internal/skills"
 )
 
 func TestStoreCreatesAtomicHumanReadableUserOnlyProfileWithoutOverwrite(t *testing.T) {
 	acsHome := t.TempDir()
-	store := profile.NewStore(acsHome)
-	original := profile.NewSkillsProfile("backend-review", "devin", []skills.SkillReference{
+	store := newDevinStore(t, acsHome)
+	original := devin.NewSkillsProfile("backend-review", []skills.SkillReference{
 		{Source: "shared-agents", RelativePath: "security"},
 		{Source: "devin-config", RelativePath: "review"},
 	})
@@ -64,7 +65,7 @@ func TestStoreCreatesAtomicHumanReadableUserOnlyProfileWithoutOverwrite(t *testi
 		t.Errorf("Profile directory permissions = %o, want 700", directoryInfo.Mode().Perm())
 	}
 
-	replacement := profile.NewSkillsProfile("backend-review", "devin", nil)
+	replacement := devin.NewSkillsProfile("backend-review", nil)
 	if _, err := store.Create(replacement); !errors.Is(err, profile.ErrProfileExists) {
 		t.Fatalf("duplicate create error = %v, want ErrProfileExists", err)
 	}
@@ -72,7 +73,7 @@ func TestStoreCreatesAtomicHumanReadableUserOnlyProfileWithoutOverwrite(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	references, err := profile.SkillReferences(afterDuplicate)
+	references, err := devin.SkillReferences(afterDuplicate)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,7 +99,7 @@ func TestStoreRejectsInvalidNameOnLoad(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(acsHome, "escape.json"), []byte(`{"version":1,"name":"escape","target":"devin","skillReferences":[]}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	store := profile.NewStore(acsHome)
+	store := newDevinStore(t, acsHome)
 
 	if _, err := store.Load("../escape"); !errors.Is(err, profile.ErrInvalidProfileName) {
 		t.Fatalf("invalid load error = %v, want ErrInvalidProfileName", err)
@@ -117,14 +118,14 @@ func TestStoreLoadsVersionOneProfileAsVersionTwoWithoutRewritingIt(t *testing.T)
 		t.Fatal(err)
 	}
 
-	loaded, err := profile.NewStore(acsHome).Load("legacy")
+	loaded, err := newDevinStore(t, acsHome).Load("legacy")
 	if err != nil {
 		t.Fatalf("load version-1 Profile: %v", err)
 	}
 	if loaded.Version != profile.CurrentVersion {
 		t.Fatalf("normalized Profile version = %d, want %d", loaded.Version, profile.CurrentVersion)
 	}
-	references, err := profile.SkillReferences(loaded)
+	references, err := devin.SkillReferences(loaded)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -158,15 +159,15 @@ func TestStoreDefaultsAProfileWithoutSkillsToAnEmptySelection(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	loaded, err := profile.NewStore(acsHome).Load("before-skills")
+	loaded, err := newDevinStore(t, acsHome).Load("before-skills")
 	if err != nil {
 		t.Fatalf("load Profile without Skills category: %v", err)
 	}
-	payload, exists := loaded.Categories[profile.SkillsCategoryID]
+	payload, exists := loaded.Categories["skills"]
 	if !exists {
 		t.Fatal("normalized Profile does not contain the empty Skills category")
 	}
-	if payload.SchemaVersion != profile.SkillsSchemaVersion || string(payload.Selection) != "[]" {
+	if payload.SchemaVersion != 1 || string(payload.Selection) != "[]" {
 		t.Fatalf("empty Skills payload = %#v, want schema version 1 and []", payload)
 	}
 }
@@ -185,12 +186,12 @@ func TestStoreRejectsInvalidVersionTwoSavedIntent(t *testing.T) {
 		{
 			name:          "unsupported-category-schema",
 			contents:      `{"version":2,"name":"unsupported-category-schema","target":"devin","categories":{"skills":{"schemaVersion":2,"selection":[]}}}`,
-			wantErrorText: "Skills category uses unsupported schema version 2",
+			wantErrorText: "skills category uses unsupported schema version 2",
 		},
 		{
 			name:          "malformed-selection-shape",
 			contents:      `{"version":2,"name":"malformed-selection-shape","target":"devin","categories":{"skills":{"schemaVersion":1,"selection":{}}}}`,
-			wantErrorText: "decode Skills category selection",
+			wantErrorText: "decode skills category selection",
 		},
 		{
 			name:          "malformed-reference",
@@ -247,8 +248,17 @@ func assertProfileLoadError(t *testing.T, name, contents, wantErrorText string) 
 		t.Fatal(err)
 	}
 
-	_, err := profile.NewStore(acsHome).Load(name)
+	_, err := newDevinStore(t, acsHome).Load(name)
 	if err == nil || !strings.Contains(err.Error(), wantErrorText) {
 		t.Fatalf("load error = %v, want text %q", err, wantErrorText)
 	}
+}
+
+func newDevinStore(t *testing.T, acsHome string) *profile.Store {
+	t.Helper()
+	adapter, err := devin.New(devin.Config{BinaryPath: "devin", ExistingHomeDir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return profile.NewStore(acsHome, adapter.Categories())
 }
