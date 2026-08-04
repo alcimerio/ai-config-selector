@@ -195,6 +195,9 @@ func TestSkillsEditorRanksNameMatchesAndRetainsHiddenSelections(t *testing.T) {
 		editor = updated.(skillsEditor)
 	}
 	view := editor.View().Content
+	if !strings.Contains(view, "Backspace delete") {
+		t.Fatal("search footer omits an active key")
+	}
 	if strings.Index(view, "post-archive") > strings.Index(view, "review") {
 		t.Fatalf("display-name match did not rank first:\n%s", view)
 	}
