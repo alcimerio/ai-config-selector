@@ -34,6 +34,12 @@ The current Profile schema does not represent MCP servers, hooks, instructions,
 agents, or arbitrary target settings. The Devin Adapter leaves
 repository-local Skills under Devin's control.
 
+The public `acs version` command reports `acs vMAJOR.MINOR.PATCH` when Go build
+metadata identifies a canonical tagged module release. The executable reads
+that metadata with `runtime/debug.ReadBuildInfo` during application assembly;
+it does not use linker flags or a maintained version constant. Local builds,
+pseudo-versions, and missing or unusable metadata report `acs devel`.
+
 ## Core concepts
 
 **Profile**: A named, machine-local selection for one target CLI. A Profile
