@@ -15,6 +15,7 @@ import (
 type Editor interface {
 	tea.Model
 	Draft() category.Draft
+	WithDraft(category.Draft) Editor
 	ListFocused() bool
 }
 

@@ -29,7 +29,11 @@ func (editor registryEditor) Init() tea.Cmd                       { return nil }
 func (editor registryEditor) Update(tea.Msg) (tea.Model, tea.Cmd) { return editor, nil }
 func (editor registryEditor) View() tea.View                      { return tea.NewView("Registry") }
 func (editor registryEditor) Draft() category.Draft               { return editor.draft }
-func (registryEditor) ListFocused() bool                          { return true }
+func (editor registryEditor) WithDraft(draft category.Draft) Editor {
+	editor.draft = draft
+	return editor
+}
+func (registryEditor) ListFocused() bool { return true }
 
 func TestEditorRegistryRejectsInvalidAssemblyBeforeTheBuilderRuns(t *testing.T) {
 	binding := mustRegistryBinding(t, "notes")

@@ -82,8 +82,12 @@ type skillsEditor struct {
 
 func (m skillsEditor) ID() string            { return m.id }
 func (m skillsEditor) Draft() category.Draft { return m.draft }
-func (m skillsEditor) Init() tea.Cmd         { return nil }
-func (m skillsEditor) ListFocused() bool     { return !m.searchFocus }
+func (m skillsEditor) WithDraft(draft category.Draft) Editor {
+	m.draft = draft
+	return m
+}
+func (m skillsEditor) Init() tea.Cmd     { return nil }
+func (m skillsEditor) ListFocused() bool { return !m.searchFocus }
 
 func (m skillsEditor) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	press, ok := message.(tea.KeyPressMsg)

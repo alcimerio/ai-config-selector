@@ -238,6 +238,7 @@ func (m Model) updateOverview(press tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		default:
 			m.activeCategory = m.overviewCursor
 			slot := &m.editors[m.activeCategory]
+			slot.editor = slot.editor.WithDraft(m.draft)
 			if slot.loadState == unloaded || slot.loadState == loadFailed {
 				slot.loadState, m.screen = loading, loadingScreen
 				return m, m.discoveryCommand(m.activeCategory)
@@ -264,6 +265,11 @@ func (m Model) updateEditor(press tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	slot.editor, m.draft = editor, editor.Draft()
+	for index := range m.editors {
+		if index != m.activeCategory {
+			m.editors[index].editor = m.editors[index].editor.WithDraft(m.draft)
+		}
+	}
 	return m, command
 }
 
