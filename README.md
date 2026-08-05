@@ -36,13 +36,9 @@ A tagged installation prints:
 acs v0.1.0
 ```
 
-Your Go binary directory must be on `PATH`. To upgrade later, replace `v0.1.0`
-with the explicit version you intend to install, for example:
-
-```bash
-go install github.com/alcimerio/ai-config-selector/cmd/acs@v0.2.0
-acs version
-```
+Your Go binary directory must be on `PATH`. To upgrade later, rerun the install
+command after replacing `v0.1.0` with the exact published tag from the GitHub
+Releases page, then run `acs version` to verify the installed version.
 
 ACS does not update itself or install an unspecified latest version.
 
