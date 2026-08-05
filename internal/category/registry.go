@@ -61,6 +61,16 @@ type Registration struct {
 	token         *struct{ marker byte }
 }
 
+// ID returns the stable category ID represented by this opaque registration.
+func (registration Registration) ID() string { return registration.id }
+
+// SameBinding reports whether two registrations came from the same typed
+// category binding. It lets application assembly validate adjacent registries
+// without exposing either category values or terminal-library types.
+func (registration Registration) SameBinding(other Registration) bool {
+	return registration.token != nil && registration.token == other.token
+}
+
 // Bind validates a category definition and creates its typed handle.
 func Bind[S, R any, C launch.Contribution](definition Definition[S, R, C]) (Binding[S, R, C], error) {
 	if !categoryIDPattern.MatchString(definition.ID) {
@@ -135,6 +145,23 @@ type Registry struct {
 	ordered []*Registration
 	byID    map[string]*Registration
 	legacy  map[int]func([]byte) (profile.Profile, error)
+}
+
+// Registrations returns the fixed category registrations in Registry order.
+func (registry *Registry) Registrations() []Registration {
+	if registry == nil {
+		return nil
+	}
+	registrations := make([]Registration, len(registry.ordered))
+	for index, registration := range registry.ordered {
+		registrations[index] = *registration
+	}
+	return registrations
+}
+
+// Owns reports whether the Draft was created by this Registry.
+func (registry *Registry) Owns(draft Draft) bool {
+	return registry != nil && draft.registry == registry
 }
 
 // LegacyDecoder migrates one older envelope version into the current Profile

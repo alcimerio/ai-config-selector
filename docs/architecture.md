@@ -424,10 +424,13 @@ Each production category owns its target-specific lifecycle:
 5. contribute declarative dry-run, materialization, and verification steps to
    the launch plan.
 
-The TUI keeps a separate visual editor Registry. This isolates Bubble Tea
-types from Profile, category, and launch interfaces while allowing each
-category to use a different editor. Application assembly rejects duplicate
-category IDs, invalid schema versions, and missing or mismatched editors.
+The TUI keeps a separate visual editor Registry. Each visual registration is
+bound to the opaque typed registration for the same stable category ID and
+owns that category's editor factory and concrete discovery-result adapter.
+This isolates Bubble Tea types from Profile, category, and launch interfaces
+while allowing each category to use a different editor. Adapter assembly
+orders editors by the domain Registry and rejects missing, duplicate,
+mismatched, or type-incompatible editors before command execution.
 
 ### TUI runtime and verification
 
@@ -437,9 +440,9 @@ ACS owns the set of selected Skill identities instead of treating list
 indexes or fuzzy ranks as identity.
 
 One root Bubble Tea model owns the alternate screen, terminal dimensions,
-overview, Profile Draft, modal state, category load state, saving state, and
-exit outcome. Category editors are child models. ACS does not start nested
-Bubble Tea programs.
+overview, Profile Draft, modal state, independent per-category editor and load
+state, saving state, and exit outcome. Category editors are retained child
+models. ACS does not start nested Bubble Tea programs.
 
 Most tests drive pure model and Registry transitions. A smaller runtime suite
 injects input, output, and fixed window dimensions. A macOS PTY subprocess

@@ -199,7 +199,7 @@ func TestProfileBuilderPTYHelper(t *testing.T) {
 		Reference:   skills.SkillReference{Source: "devin-config", RelativePath: "review"},
 		DisplayName: "review", BundlePath: "/global/review",
 	}}
-	model := NewModel("pty", draft, NewSkillsEditor(draft, binding, catalog)).WithSaver(func(_ context.Context, snapshot category.Draft) (string, error) {
+	model := newLoadedSkillsModel(t, "pty", draft, registry, binding, catalog).WithSaver(func(_ context.Context, snapshot category.Draft) (string, error) {
 		if scenario == "panic" {
 			panic("intentional PTY save panic")
 		}

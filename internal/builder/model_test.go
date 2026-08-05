@@ -53,11 +53,11 @@ func TestModelCreatesProfileFromSelectedSkills(t *testing.T) {
 	sameNamed := bundle
 	sameNamed.Reference = skills.SkillReference{Source: "shared-agents", RelativePath: "review"}
 	sameNamed.BundlePath = "/shared/review"
-	model := NewModel("reviews", draft, NewSkillsEditor(draft, binding, []skills.SkillBundle{bundle, sameNamed}))
+	model := newLoadedSkillsModel(t, "reviews", draft, registry, binding, []skills.SkillBundle{bundle, sameNamed})
 	model = update(t, model, tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 	model = update(t, model, tea.KeyPressMsg(tea.Key{Code: '/', Text: "/"}))
 	model = update(t, model, tea.KeyPressMsg(tea.Key{Code: tea.KeyEsc}))
-	if model.screen != skillsScreen {
+	if model.screen != categoryScreen {
 		t.Fatal("Escape while search has focus returned to overview")
 	}
 	model = update(t, model, tea.KeyPressMsg(tea.Key{Code: tea.KeySpace}))
@@ -96,7 +96,7 @@ func TestModelRequiresConfirmationBeforeCreatingEmptyProfile(t *testing.T) {
 	}
 
 	draft := registry.NewDraft()
-	model := NewModel("empty", draft, NewSkillsEditor(draft, binding, nil))
+	model := newLoadedSkillsModel(t, "empty", draft, registry, binding, nil)
 	model = update(t, model, tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
 	model = update(t, model, tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 	if model.Outcome().Create {
@@ -126,7 +126,7 @@ func TestModelRetainsTerminalDimensionsAcrossInput(t *testing.T) {
 	}
 
 	draft := registry.NewDraft()
-	model := NewModel("dimensions", draft, NewSkillsEditor(draft, binding, nil))
+	model := newLoadedSkillsModel(t, "dimensions", draft, registry, binding, nil)
 	model = update(t, model, tea.WindowSizeMsg{Width: 120, Height: 40})
 	model = update(t, model, tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
 	if model.width != 120 || model.height != 40 {
@@ -141,7 +141,7 @@ func TestModelSmallTerminalRetainsStateAndResizeRestoresActiveScreen(t *testing.
 		Reference:   skills.SkillReference{Source: "devin-config", RelativePath: "review"},
 		DisplayName: "review", BundlePath: "/global/review",
 	}}
-	model := NewModel("sizes", draft, NewSkillsEditor(draft, binding, catalog))
+	model := newLoadedSkillsModel(t, "sizes", draft, registry, binding, catalog)
 	model = update(t, model, tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 	model = update(t, model, tea.KeyPressMsg(tea.Key{Code: tea.KeySpace}))
 	model = update(t, model, tea.WindowSizeMsg{Width: MinimumWidth - 1, Height: MinimumHeight - 1})
@@ -150,7 +150,7 @@ func TestModelSmallTerminalRetainsStateAndResizeRestoresActiveScreen(t *testing.
 	}
 	model = update(t, model, tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
 	model = update(t, model, tea.WindowSizeMsg{Width: MinimumWidth, Height: MinimumHeight})
-	if model.screen != skillsScreen || !strings.Contains(model.View().Content, "Skills                         1 selected") {
+	if model.screen != categoryScreen || !strings.Contains(model.View().Content, "Skills                         1 selected") {
 		t.Fatalf("resize did not restore Skills state:\n%s", model.View().Content)
 	}
 	model = update(t, model, tea.KeyPressMsg(tea.Key{Code: '/', Text: "/"}))
@@ -173,10 +173,10 @@ func TestModelContextualPresentationUsesTextAndSymbolsWithoutColor(t *testing.T)
 	t.Setenv("NO_COLOR", "1")
 	binding, registry := newBuilderFixture(t)
 	draft := registry.NewDraft()
-	model := NewModel("presentation", draft, NewSkillsEditor(draft, binding, []skills.SkillBundle{{
+	model := newLoadedSkillsModel(t, "presentation", draft, registry, binding, []skills.SkillBundle{{
 		Reference:   skills.SkillReference{Source: "devin-config", RelativePath: "review"},
 		DisplayName: "review", BundlePath: "/global/review",
-	}}))
+	}})
 
 	cases := []struct {
 		name   string
@@ -213,13 +213,13 @@ func TestMinimumWidthConstrainsMaximumNamesCatalogTextAndErrors(t *testing.T) {
 	binding, registry := newBuilderFixture(t)
 	draft := registry.NewDraft()
 	long := strings.Repeat("界", 80)
-	model := NewModel(strings.Repeat("n", 64), draft, NewSkillsEditor(draft, binding, []skills.SkillBundle{{
+	model := newLoadedSkillsModel(t, strings.Repeat("n", 64), draft, registry, binding, []skills.SkillBundle{{
 		Reference:   skills.SkillReference{Source: skills.Source(long), RelativePath: long},
 		DisplayName: long, BundlePath: "/" + long,
-	}}))
+	}})
 	model = update(t, model, tea.WindowSizeMsg{Width: MinimumWidth, Height: MinimumHeight})
 	model.saveError = errors.New(long)
-	for _, currentScreen := range []screen{overviewScreen, skillsScreen, saveFailureScreen} {
+	for _, currentScreen := range []screen{overviewScreen, categoryScreen, saveFailureScreen} {
 		model.screen = currentScreen
 		view := model.View().Content
 		lines := strings.Split(view, "\n")
@@ -237,7 +237,7 @@ func TestMinimumWidthConstrainsMaximumNamesCatalogTextAndErrors(t *testing.T) {
 func TestSmallTerminalShowsOnlyControlsValidForTheHiddenState(t *testing.T) {
 	binding, registry := newBuilderFixture(t)
 	draft := registry.NewDraft()
-	model := NewModel("small-modal", draft, NewSkillsEditor(draft, binding, nil))
+	model := newLoadedSkillsModel(t, "small-modal", draft, registry, binding, nil)
 	model = update(t, model, tea.WindowSizeMsg{Width: MinimumWidth - 1, Height: MinimumHeight - 1})
 	model.screen = discardScreen
 	if view := model.View().Content; strings.Contains(view, "Ctrl+C") || !strings.Contains(view, "Resize the terminal to continue") {
@@ -260,7 +260,7 @@ func TestInjectedRuntimeOwnsOneAlternateScreenAndReturnsNormalizedOutput(t *test
 		_ = writer.Close()
 	}()
 	program := tea.NewProgram(
-		NewModel("runtime", draft, NewSkillsEditor(draft, binding, nil)),
+		newLoadedSkillsModel(t, "runtime", draft, registry, binding, nil),
 		tea.WithInput(input), tea.WithOutput(&output),
 		tea.WithWindowSize(80, 24),
 		tea.WithEnvironment([]string{"TERM=xterm-256color", "NO_COLOR=1"}),
@@ -322,7 +322,25 @@ func TestModelOverviewListsEveryRegistryCategoryInOrder(t *testing.T) {
 	}
 
 	draft := registry.NewDraft()
-	view := NewModel("all-categories", draft, NewSkillsEditor(draft, skillsBinding, nil)).View().Content
+	skillsRegistration, err := RegisterSkillsEditor(skillsBinding, func(context.Context) ([]skills.SkillBundle, error) { return nil, nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	notesRegistration := mustEditorRegistration(t, EditorDefinition[registryDiscovery]{
+		ID: "notes", Category: notesBinding.Registration(),
+		New:      func(draft category.Draft) Editor { return registryEditor{draft: draft} },
+		Discover: func(context.Context) (registryDiscovery, error) { return registryDiscovery{}, nil },
+		Loaded:   func(editor Editor, _ registryDiscovery) (Editor, error) { return editor, nil },
+	})
+	editors, err := NewEditorRegistry(registry, skillsRegistration, notesRegistration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	model, err := NewModel("all-categories", draft, editors)
+	if err != nil {
+		t.Fatal(err)
+	}
+	view := model.View().Content
 	if !strings.Contains(view, "Skills                         0 selected\n  Notes                         0 selected") {
 		t.Fatalf("overview does not preserve Registry category order:\n%s", view)
 	}
@@ -337,7 +355,7 @@ func TestModelRunsOneImmutableSaveAndQuitsOnlyAfterSuccess(t *testing.T) {
 	}
 	var saved category.Draft
 	calls := 0
-	model := NewModel("reviews", draft, NewSkillsEditor(draft, binding, nil)).WithSaver(func(_ context.Context, snapshot category.Draft) (string, error) {
+	model := newLoadedSkillsModel(t, "reviews", draft, registry, binding, nil).WithSaver(func(_ context.Context, snapshot category.Draft) (string, error) {
 		calls++
 		saved = snapshot
 		return "/profiles/reviews.json", nil
@@ -377,7 +395,7 @@ func TestModelPreservesDraftAndRetriesAfterSanitizedSaveFailure(t *testing.T) {
 	want := []skills.SkillReference{{Source: "devin-config", RelativePath: "review"}}
 	calls := 0
 	var snapshots []category.Draft
-	model := NewModel("reviews", draft, NewSkillsEditor(draft, binding, nil)).WithSaver(func(_ context.Context, snapshot category.Draft) (string, error) {
+	model := newLoadedSkillsModel(t, "reviews", draft, registry, binding, nil).WithSaver(func(_ context.Context, snapshot category.Draft) (string, error) {
 		calls++
 		snapshots = append(snapshots, snapshot)
 		if calls == 1 {
@@ -388,7 +406,7 @@ func TestModelPreservesDraftAndRetriesAfterSanitizedSaveFailure(t *testing.T) {
 	if err := category.SetSelection(&model.draft, binding, want); err != nil {
 		t.Fatal(err)
 	}
-	model.editor = NewSkillsEditor(model.draft, binding, nil)
+	model.editors[0].editor = NewSkillsEditor(model.draft, binding, nil)
 	model.overviewCursor = len(model.categories())
 	model, command := updateCommand(t, model, tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 	model, _ = updateCommand(t, model, command())
@@ -435,7 +453,7 @@ func TestModelPreservesDraftAndRetriesAfterSanitizedSaveFailure(t *testing.T) {
 func TestModelCtrlCCancelsAnUncommittedSaveBeforeDiscard(t *testing.T) {
 	binding, registry := newBuilderFixture(t)
 	draft := registry.NewDraft()
-	model := NewModel("cancel-save", draft, NewSkillsEditor(draft, binding, nil)).WithSaver(func(ctx context.Context, _ category.Draft) (string, error) {
+	model := newLoadedSkillsModel(t, "cancel-save", draft, registry, binding, nil).WithSaver(func(ctx context.Context, _ category.Draft) (string, error) {
 		<-ctx.Done()
 		return "", ctx.Err()
 	})
@@ -471,18 +489,18 @@ func TestModelCtrlCCancelsAnUncommittedSaveBeforeDiscard(t *testing.T) {
 func TestModelCancellationConfirmsOnlyChangedDraftsAndPreservesDeclinedChanges(t *testing.T) {
 	binding, registry := newBuilderFixture(t)
 	empty := registry.NewDraft()
-	unchanged := NewModel("unchanged", empty, NewSkillsEditor(empty, binding, nil))
+	unchanged := newLoadedSkillsModel(t, "unchanged", empty, registry, binding, nil)
 	unchanged, quit := updateCommand(t, unchanged, tea.KeyPressMsg(tea.Key{Code: tea.KeyEsc}))
 	if quit == nil || !unchanged.Outcome().Cancelled {
 		t.Fatal("unchanged overview Escape did not cancel immediately")
 	}
 
-	changed := NewModel("changed", empty, NewSkillsEditor(empty, binding, nil))
+	changed := newLoadedSkillsModel(t, "changed", empty, registry, binding, nil)
 	selection := []skills.SkillReference{{Source: "devin-config", RelativePath: "review"}}
 	if err := category.SetSelection(&changed.draft, binding, selection); err != nil {
 		t.Fatal(err)
 	}
-	changed.editor = NewSkillsEditor(changed.draft, binding, nil)
+	changed.editors[0].editor = NewSkillsEditor(changed.draft, binding, nil)
 	changed, quit = updateCommand(t, changed, tea.KeyPressMsg(tea.Key{Code: tea.KeyEsc}))
 	if quit != nil || changed.screen != discardScreen {
 		t.Fatal("changed draft cancelled without discard confirmation")
@@ -505,7 +523,7 @@ func TestModelCancellationConfirmsOnlyChangedDraftsAndPreservesDeclinedChanges(t
 	}
 
 	cancelRowDraft := registry.NewDraft()
-	fromCancelRow := NewModel("cancel-row", cancelRowDraft, NewSkillsEditor(cancelRowDraft, binding, nil))
+	fromCancelRow := newLoadedSkillsModel(t, "cancel-row", cancelRowDraft, registry, binding, nil)
 	if err := category.SetSelection(&fromCancelRow.draft, binding, selection); err != nil {
 		t.Fatal(err)
 	}
@@ -520,7 +538,7 @@ func TestModelLazyDiscoveryDeduplicatesAndFailureBackReturnsToOverview(t *testin
 	binding, registry := newBuilderFixture(t)
 	draft := registry.NewDraft()
 	calls := 0
-	model := NewModel("lazy", draft, NewSkillsEditor(draft, binding), func(context.Context) ([]skills.SkillBundle, error) {
+	model := newLazySkillsModel(t, "lazy", draft, registry, binding, func(context.Context) ([]skills.SkillBundle, error) {
 		calls++
 		return nil, errors.New("offline")
 	})
@@ -562,6 +580,31 @@ func newBuilderFixture(t *testing.T) (category.Binding[[]skills.SkillReference, 
 		t.Fatal(err)
 	}
 	return binding, registry
+}
+
+func newLazySkillsModel(t *testing.T, name string, draft category.Draft, categories *category.Registry, binding category.Binding[[]skills.SkillReference, []skills.SkillBundle, testContribution], discover func(context.Context) ([]skills.SkillBundle, error)) Model {
+	t.Helper()
+	registration, err := RegisterSkillsEditor(binding, discover)
+	if err != nil {
+		t.Fatal(err)
+	}
+	editors, err := NewEditorRegistry(categories, registration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	model, err := NewModel(name, draft, editors)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return model
+}
+
+func newLoadedSkillsModel(t *testing.T, name string, draft category.Draft, categories *category.Registry, binding category.Binding[[]skills.SkillReference, []skills.SkillBundle, testContribution], catalog []skills.SkillBundle) Model {
+	t.Helper()
+	model := newLazySkillsModel(t, name, draft, categories, binding, func(context.Context) ([]skills.SkillBundle, error) { return catalog, nil })
+	model.editors[0].editor = NewSkillsEditor(draft, binding, catalog)
+	model.editors[0].loadState = loaded
+	return model
 }
 
 func TestSkillsEditorRanksNameMatchesAndRetainsHiddenSelections(t *testing.T) {

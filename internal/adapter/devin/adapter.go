@@ -17,6 +17,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/alcimerio/ai-config-selector/internal/builder"
 	"github.com/alcimerio/ai-config-selector/internal/category"
 	"github.com/alcimerio/ai-config-selector/internal/skills"
 )
@@ -72,6 +73,7 @@ type Adapter struct {
 	binaryPath      string
 	existingHomeDir string
 	categories      *category.Registry
+	editors         *builder.EditorRegistry
 	skillsCategory  category.Binding[[]skills.SkillReference, []skills.SkillBundle, skillsContribution]
 }
 
@@ -107,6 +109,11 @@ func New(config Config) (*Adapter, error) {
 	}
 	adapter.categories = registry
 	adapter.skillsCategory = binding
+	editors, err := newEditorRegistry(adapter)
+	if err != nil {
+		return nil, fmt.Errorf("create Devin Adapter visual editors: %w", err)
+	}
+	adapter.editors = editors
 	return adapter, nil
 }
 
