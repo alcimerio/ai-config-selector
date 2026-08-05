@@ -288,20 +288,29 @@ func TestUnrelatedCategoryCompletesBuilderStoreResolutionAndContributionLifecycl
 }
 
 func TestMultipleCategoriesRecoverDiscoveryIndependently(t *testing.T) {
-	for _, target := range []int{0, 1} {
-		t.Run([]string{"skills", "switches"}[target], func(t *testing.T) {
-			calls := [2]int{}
+	type discoveryCalls struct{ skills, switches int }
+	for _, target := range []struct {
+		name       string
+		index      int
+		otherIndex int
+		attempts   func(discoveryCalls) int
+	}{
+		{name: "skills", index: 0, otherIndex: 1, attempts: func(calls discoveryCalls) int { return calls.skills }},
+		{name: "switches", index: 1, otherIndex: 0, attempts: func(calls discoveryCalls) int { return calls.switches }},
+	} {
+		t.Run(target.name, func(t *testing.T) {
+			calls := discoveryCalls{}
 			fixture := newMultiCategoryFixture(t,
 				func(context.Context) ([]skills.SkillBundle, error) {
-					calls[0]++
-					if calls[0] < 3 {
+					calls.skills++
+					if calls.skills < 3 {
 						return nil, errors.New("skills unavailable")
 					}
 					return []skills.SkillBundle{}, nil
 				},
 				func(context.Context) (switchDiscovery, error) {
-					calls[1]++
-					if calls[1] < 3 {
+					calls.switches++
+					if calls.switches < 3 {
 						return switchDiscovery{}, errors.New("switches unavailable")
 					}
 					return switchDiscovery{}, nil
@@ -311,11 +320,11 @@ func TestMultipleCategoriesRecoverDiscoveryIndependently(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if target == 1 {
+			if target.index == 1 {
 				model = update(t, model, tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
 			}
 			model, command := updateCommand(t, model, tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
-			if command == nil || model.editors[target].loadState != loading || model.editors[1-target].loadState != unloaded {
+			if command == nil || model.editors[target.index].loadState != loading || model.editors[target.otherIndex].loadState != unloaded {
 				t.Fatal("category did not start independently")
 			}
 			model, _ = updateCommand(t, model, command())
@@ -327,7 +336,7 @@ func TestMultipleCategoriesRecoverDiscoveryIndependently(t *testing.T) {
 			model, _ = updateCommand(t, model, command())
 			model, command = updateCommand(t, model, tea.KeyPressMsg(tea.Key{Code: 'r', Text: "r"}))
 			model, _ = updateCommand(t, model, command())
-			if model.screen != categoryScreen || model.editors[target].loadState != loaded || model.editors[1-target].loadState != unloaded || calls[target] != 3 {
+			if model.screen != categoryScreen || model.editors[target.index].loadState != loaded || model.editors[target.otherIndex].loadState != unloaded || target.attempts(calls) != 3 {
 				t.Fatalf("independent retry state = screen %v, calls %#v, slots %#v", model.screen, calls, model.editors)
 			}
 		})
@@ -396,17 +405,19 @@ func TestChangedMultiCategoryDraftCancellationRetainsBothEditors(t *testing.T) {
 			return switchDiscovery{Options: []switchOption{{Code: 10, Label: "alpha"}}}, nil
 		},
 	)
-	draft := fixture.categories.NewDraft()
-	if err := category.SetSelection(&draft, fixture.skillsBinding, []skills.SkillReference{{Source: "devin-config", RelativePath: "remember"}}); err != nil {
-		t.Fatal(err)
-	}
 	model, err := NewModel("cancel", fixture.categories.NewDraft(), fixture.editors)
 	if err != nil {
 		t.Fatal(err)
 	}
-	model.draft = draft
-	model.editors[0].editor = model.editors[0].editor.WithDraft(draft)
-	model.editors[1].editor = model.editors[1].editor.WithDraft(draft)
+	model, command := updateCommand(t, model, tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	model, _ = updateCommand(t, model, command())
+	model = update(t, model, tea.KeyPressMsg(tea.Key{Code: tea.KeyLeft}))
+	model = update(t, model, tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
+	model, command = updateCommand(t, model, tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	model, _ = updateCommand(t, model, command())
+	model = update(t, model, tea.KeyPressMsg(tea.Key{Code: 'q', Text: "q"}))
+	model = update(t, model, tea.KeyPressMsg(tea.Key{Code: tea.KeySpace}))
+	model = update(t, model, tea.KeyPressMsg(tea.Key{Code: tea.KeyLeft}))
 	model, _ = updateCommand(t, model, tea.KeyPressMsg(tea.Key{Code: tea.KeyEsc}))
 	if model.screen != discardScreen {
 		t.Fatal("changed multi-category Draft skipped discard confirmation")
@@ -420,8 +431,8 @@ func TestChangedMultiCategoryDraftCancellationRetainsBothEditors(t *testing.T) {
 	if quit == nil || !model.Outcome().Cancelled {
 		t.Fatal("confirmed multi-category cancellation did not quit")
 	}
-	selected, err := category.Selection(model.Outcome().Draft, fixture.skillsBinding)
-	if err != nil || !reflect.DeepEqual(selected, []skills.SkillReference{{Source: "devin-config", RelativePath: "remember"}}) {
+	selected, err := category.Selection(model.Outcome().Draft, fixture.switchBinding)
+	if err != nil || !reflect.DeepEqual(selected, switchSelection{Codes: []int{10}}) {
 		t.Fatalf("cancelled Draft lost retained selection: %#v, %v", selected, err)
 	}
 }
