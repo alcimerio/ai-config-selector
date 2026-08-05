@@ -1,6 +1,7 @@
 package builder
 
 import (
+	"context"
 	"sort"
 	"strconv"
 	"strings"
@@ -15,6 +16,22 @@ import (
 )
 
 const skillsViewportRows = 8
+
+// RegisterSkillsEditor binds the Skills visual editor and its concrete
+// discovery result to the typed Skills category binding.
+func RegisterSkillsEditor[C launch.Contribution](binding category.Binding[[]skills.SkillReference, []skills.SkillBundle, C], discover func(context.Context) ([]skills.SkillBundle, error)) (EditorRegistration, error) {
+	return RegisterEditor(EditorDefinition[[]skills.SkillBundle, skillsEditor]{
+		ID:       binding.ID(),
+		Category: binding.Registration(),
+		New: func(draft category.Draft) skillsEditor {
+			return NewSkillsEditor(draft, binding)
+		},
+		Discover: discover,
+		Loaded: func(editor skillsEditor, catalog []skills.SkillBundle) (skillsEditor, error) {
+			return editor.WithCatalog(catalog), nil
+		},
+	})
+}
 
 // NewSkillsEditor constructs the Skills child model. It never starts a
 // Bubble Tea program; the root model remains the runtime owner.
@@ -60,8 +77,12 @@ type skillsEditor struct {
 
 func (m skillsEditor) ID() string            { return m.id }
 func (m skillsEditor) Draft() category.Draft { return m.draft }
-func (m skillsEditor) Init() tea.Cmd         { return nil }
-func (m skillsEditor) ListFocused() bool     { return !m.searchFocus }
+func (m skillsEditor) WithDraft(draft category.Draft) Editor {
+	m.draft = draft
+	return m
+}
+func (m skillsEditor) Init() tea.Cmd     { return nil }
+func (m skillsEditor) ListFocused() bool { return !m.searchFocus }
 
 func (m skillsEditor) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	press, ok := message.(tea.KeyPressMsg)

@@ -14,7 +14,6 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/alcimerio/ai-config-selector/internal/category"
-	"github.com/alcimerio/ai-config-selector/internal/skills"
 )
 
 // MinimumWidth and MinimumHeight define the smallest supported builder layout.
@@ -41,13 +40,11 @@ type Model struct {
 	draft          category.Draft
 	initialDraft   category.Draft
 	initialValid   bool
-	editor         categoryEditor
-	loadCatalog    func(context.Context) ([]skills.SkillBundle, error)
+	editors        []editorSlot
+	activeCategory int
 	context        context.Context
 	save           SaveFunc
 	saveCancel     context.CancelFunc
-	loadState      loadState
-	loadError      error
 	confirmFailed  bool
 	screen         screen
 	returnScreen   screen
@@ -68,9 +65,10 @@ const (
 	loadFailed
 )
 
-type catalogLoadedMsg struct {
-	catalog []skills.SkillBundle
-	err     error
+type discoveryCompletedMsg struct {
+	categoryID string
+	discovered any
+	err        error
 }
 
 type saveCompletedMsg struct {
@@ -83,7 +81,7 @@ type screen int
 
 const (
 	overviewScreen screen = iota
-	skillsScreen
+	categoryScreen
 	confirmScreen
 	loadingScreen
 	loadFailureScreen
@@ -92,13 +90,6 @@ const (
 	saveFailureScreen
 	discardScreen
 )
-
-type categoryEditor interface {
-	tea.Model
-	ID() string
-	Draft() category.Draft
-	ListFocused() bool
-}
 
 var controls = struct {
 	up, down, open, back, toggle, cancel, accept, decline, retry key.Binding
@@ -114,19 +105,18 @@ var controls = struct {
 	retry:   key.NewBinding(key.WithKeys("r", "enter", "space"), key.WithHelp("R/Enter", "retry")),
 }
 
-// NewModel constructs the root model around one category child model.
-func NewModel(name string, draft category.Draft, editor categoryEditor, loadCatalog ...func(context.Context) ([]skills.SkillBundle, error)) Model {
+// NewModel constructs the root model around a validated visual editor Registry.
+func NewModel(name string, draft category.Draft, registry *EditorRegistry) (Model, error) {
+	editors, registryErr := registry.newSlots(draft)
+	if registryErr != nil {
+		return Model{}, registryErr
+	}
 	initial, err := draft.Clone()
 	initialValid := err == nil
 	if err != nil {
 		initial = draft
 	}
-	model := Model{name: name, draft: draft, initialDraft: initial, initialValid: initialValid, editor: editor, screen: overviewScreen, loadState: loaded, context: context.Background()}
-	if len(loadCatalog) != 0 {
-		model.loadCatalog = loadCatalog[0]
-		model.loadState = unloaded
-	}
-	return model
+	return Model{name: name, draft: draft, initialDraft: initial, initialValid: initialValid, editors: editors, screen: overviewScreen, context: context.Background()}, nil
 }
 
 // WithSaver installs the persistence boundary run by the root model.
@@ -146,18 +136,30 @@ func (m Model) Init() tea.Cmd { return nil }
 // Update applies terminal and user events to the root builder state.
 func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	switch message := message.(type) {
-	case catalogLoadedMsg:
-		if m.screen != loadingScreen {
+	case discoveryCompletedMsg:
+		index := m.editorIndex(message.categoryID)
+		if index < 0 || m.editors[index].loadState != loading {
 			return m, nil
 		}
 		if message.err != nil {
-			m.loadState, m.loadError, m.screen = loadFailed, message.err, loadFailureScreen
+			m.editors[index].loadState, m.editors[index].loadError = loadFailed, message.err
+			if index == m.activeCategory {
+				m.screen = loadFailureScreen
+			}
 			return m, nil
 		}
-		if editor, ok := m.editor.(skillsEditor); ok {
-			m.editor = editor.WithCatalog(message.catalog)
+		editor, err := m.editors[index].registration.loaded(m.editors[index].editor, message.discovered)
+		if err != nil {
+			m.editors[index].loadState, m.editors[index].loadError = loadFailed, err
+			if index == m.activeCategory {
+				m.screen = loadFailureScreen
+			}
+			return m, nil
 		}
-		m.loadState, m.loadError, m.screen = loaded, nil, skillsScreen
+		m.editors[index].editor, m.editors[index].loadState, m.editors[index].loadError = editor, loaded, nil
+		if index == m.activeCategory {
+			m.screen = categoryScreen
+		}
 		return m, nil
 	case saveCompletedMsg:
 		if m.screen != savingScreen && m.screen != cancellingSaveScreen {
@@ -193,7 +195,7 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		switch m.screen {
 		case overviewScreen:
 			return m.updateOverview(message)
-		case skillsScreen:
+		case categoryScreen:
 			return m.updateEditor(message)
 		case confirmScreen:
 			return m.updateConfirmation(message)
@@ -222,7 +224,7 @@ func (m Model) updateOverview(press tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(press, controls.open):
 		switch m.overviewCursor {
 		case len(categories):
-			if m.loadState == loadFailed {
+			if len(m.failedCategoryNames()) != 0 {
 				m.confirmFailed, m.screen = true, confirmScreen
 				return m, nil
 			}
@@ -234,14 +236,15 @@ func (m Model) updateOverview(press tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		case len(categories) + 1:
 			return m.beginCancellation()
 		default:
-			if categories[m.overviewCursor].ID == m.editor.ID() {
-				if m.loadState == unloaded || m.loadState == loadFailed {
-					m.loadState, m.screen = loading, loadingScreen
-					return m, m.discoveryCommand()
-				}
-				if m.loadState == loaded {
-					m.screen = skillsScreen
-				}
+			m.activeCategory = m.overviewCursor
+			slot := &m.editors[m.activeCategory]
+			slot.editor = slot.editor.WithDraft(m.draft)
+			if slot.loadState == unloaded || slot.loadState == loadFailed {
+				slot.loadState, m.screen = loading, loadingScreen
+				return m, m.discoveryCommand(m.activeCategory)
+			}
+			if slot.loadState == loaded {
+				m.screen = categoryScreen
 			}
 		}
 	case key.Matches(press, controls.cancel):
@@ -251,31 +254,37 @@ func (m Model) updateOverview(press tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) updateEditor(press tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	if m.editor.ListFocused() && key.Matches(press, controls.back) {
-		m.draft, m.screen = m.editor.Draft(), overviewScreen
+	slot := &m.editors[m.activeCategory]
+	if slot.editor.ListFocused() && key.Matches(press, controls.back) {
+		m.draft, m.screen = slot.editor.Draft(), overviewScreen
 		return m, nil
 	}
-	updated, command := m.editor.Update(press)
-	editor, ok := updated.(categoryEditor)
+	updated, command := slot.editor.Update(press)
+	editor, ok := updated.(Editor)
 	if !ok {
 		return m, nil
 	}
-	m.editor, m.draft = editor, editor.Draft()
+	slot.editor, m.draft = editor, editor.Draft()
+	for index := range m.editors {
+		if index != m.activeCategory {
+			m.editors[index].editor = m.editors[index].editor.WithDraft(m.draft)
+		}
+	}
 	return m, command
 }
 
-func (m Model) discoveryCommand() tea.Cmd {
-	loader, ctx := m.loadCatalog, m.context
+func (m Model) discoveryCommand(index int) tea.Cmd {
+	registration, ctx := m.editors[index].registration, m.context
 	return func() tea.Msg {
-		catalog, err := loader(ctx)
-		return catalogLoadedMsg{catalog: catalog, err: err}
+		discovered, err := registration.discover(ctx)
+		return discoveryCompletedMsg{categoryID: registration.id, discovered: discovered, err: err}
 	}
 }
 
 func (m Model) updateLoadFailure(press tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if key.Matches(press, controls.retry) {
-		m.loadState, m.screen = loading, loadingScreen
-		return m, m.discoveryCommand()
+		m.editors[m.activeCategory].loadState, m.screen = loading, loadingScreen
+		return m, m.discoveryCommand(m.activeCategory)
 	}
 	if key.Matches(press, controls.back) {
 		m.screen = overviewScreen
@@ -288,6 +297,7 @@ func (m Model) updateConfirmation(press tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if m.confirmFailed {
 			m.confirmFailed = false
 			if m.selectedCount() == 0 {
+				m.screen = confirmScreen
 				return m, nil
 			}
 		}
@@ -427,18 +437,18 @@ func (m Model) View() tea.View {
 			content.WriteString(marker + row + "\n")
 		}
 		content.WriteString("\nUp/Down navigate  Space/Enter/Right open\nEsc cancel  Ctrl+C cancel")
-	case skillsScreen:
-		content.WriteString(m.editor.View().Content)
+	case categoryScreen:
+		content.WriteString(m.editors[m.activeCategory].editor.View().Content)
 	case confirmScreen:
 		if m.confirmFailed {
-			content.WriteString("Confirm: Skills failed to load. Create Profile anyway?\n\nY/Enter create  N/Esc/Left return\nCtrl+C cancel")
+			content.WriteString("Confirm: These categories failed to load: " + strings.Join(m.failedCategoryNames(), ", ") + ". Create Profile anyway?\n\nY/Enter create  N/Esc/Left return\nCtrl+C cancel")
 		} else {
-			content.WriteString("Confirm: Create an empty Profile?\n\nThis Profile will not select any Skills.\n\nY/Enter create  N/Esc/Left return\nCtrl+C cancel")
+			content.WriteString("Confirm: Create an empty Profile?\n\nThis Profile will not select any capabilities.\n\nY/Enter create  N/Esc/Left return\nCtrl+C cancel")
 		}
 	case loadingScreen:
-		content.WriteString("Loading Skills...\n\nCtrl+C cancel")
+		content.WriteString("Loading " + categoryName(m.editors[m.activeCategory].registration.id) + "...\n\nCtrl+C cancel")
 	case loadFailureScreen:
-		content.WriteString("Error: Skills failed to load.\n\nR/Enter/Space retry  Left/Esc back\nCtrl+C cancel")
+		content.WriteString("Error: " + categoryName(m.editors[m.activeCategory].registration.id) + " failed to load.\n\nR/Enter/Space retry  Left/Esc back\nCtrl+C cancel")
 	case savingScreen:
 		content.WriteString("Saving Profile...\n\nCtrl+C cancel save")
 	case cancellingSaveScreen:
@@ -482,3 +492,22 @@ func categoryName(id string) string {
 }
 
 func (m Model) categories() []category.Summary { return m.draft.Summaries() }
+
+func (m Model) editorIndex(id string) int {
+	for index := range m.editors {
+		if m.editors[index].registration.id == id {
+			return index
+		}
+	}
+	return -1
+}
+
+func (m Model) failedCategoryNames() []string {
+	failed := make([]string, 0)
+	for _, slot := range m.editors {
+		if slot.loadState == loadFailed {
+			failed = append(failed, categoryName(slot.registration.id))
+		}
+	}
+	return failed
+}
