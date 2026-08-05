@@ -326,11 +326,11 @@ func TestModelOverviewListsEveryRegistryCategoryInOrder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	notesRegistration := mustEditorRegistration(t, EditorDefinition[registryDiscovery]{
+	notesRegistration := mustEditorRegistration(t, EditorDefinition[registryDiscovery, registryEditor]{
 		ID: "notes", Category: notesBinding.Registration(),
-		New:      func(draft category.Draft) Editor { return registryEditor{draft: draft} },
+		New:      func(draft category.Draft) registryEditor { return registryEditor{draft: draft} },
 		Discover: func(context.Context) (registryDiscovery, error) { return registryDiscovery{}, nil },
-		Loaded:   func(editor Editor, _ registryDiscovery) (Editor, error) { return editor, nil },
+		Loaded:   func(editor registryEditor, _ registryDiscovery) (registryEditor, error) { return editor, nil },
 	})
 	editors, err := NewEditorRegistry(registry, skillsRegistration, notesRegistration)
 	if err != nil {
@@ -343,6 +343,74 @@ func TestModelOverviewListsEveryRegistryCategoryInOrder(t *testing.T) {
 	view := model.View().Content
 	if !strings.Contains(view, "Skills                         0 selected\n  Notes                         0 selected") {
 		t.Fatalf("overview does not preserve Registry category order:\n%s", view)
+	}
+}
+
+func TestModelEditingAnotherCategoryDoesNotOverwriteEarlierSelections(t *testing.T) {
+	skillsBinding, err := category.Bind(category.Definition[[]skills.SkillReference, []skills.SkillBundle, testContribution]{
+		ID: "skills", SchemaVersion: 1, Empty: func() []skills.SkillReference { return []skills.SkillReference{} },
+		Resolve:    func(context.Context, []skills.SkillReference) ([]skills.SkillBundle, error) { return nil, nil },
+		Contribute: func([]skills.SkillBundle) (testContribution, error) { return testContribution{}, nil },
+		Count:      func(selection []skills.SkillReference) int { return len(selection) },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	notesBinding := mustRegistryBinding(t, "notes")
+	categories, err := category.NewRegistry("devin", skillsBinding.Registration(), notesBinding.Registration())
+	if err != nil {
+		t.Fatal(err)
+	}
+	skillsRegistration, err := RegisterSkillsEditor(skillsBinding, func(context.Context) ([]skills.SkillBundle, error) { return nil, nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	notesRegistration := mustEditorRegistration(t, EditorDefinition[registryDiscovery, registryEditor]{
+		ID: "notes", Category: notesBinding.Registration(),
+		New: func(draft category.Draft) registryEditor {
+			return registryEditor{draft: draft, update: func(updated category.Draft) category.Draft {
+				if err := category.SetSelection(&updated, notesBinding, registrySelection("remembered")); err != nil {
+					t.Fatal(err)
+				}
+				return updated
+			}}
+		},
+		Discover: func(context.Context) (registryDiscovery, error) { return registryDiscovery{}, nil },
+		Loaded:   func(editor registryEditor, _ registryDiscovery) (registryEditor, error) { return editor, nil },
+	})
+	editors, err := NewEditorRegistry(categories, skillsRegistration, notesRegistration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	draft := categories.NewDraft()
+	model, err := NewModel("retained", draft, editors)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bundle := skills.SkillBundle{Reference: skills.SkillReference{Source: "devin-config", RelativePath: "review"}, DisplayName: "review", BundlePath: "/review"}
+	model.editors[0].editor = NewSkillsEditor(draft, skillsBinding, []skills.SkillBundle{bundle})
+	model.editors[0].loadState = loaded
+	model.editors[1].loadState = loaded
+
+	for _, press := range []tea.KeyPressMsg{
+		tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}),
+		tea.KeyPressMsg(tea.Key{Code: tea.KeySpace}),
+		tea.KeyPressMsg(tea.Key{Code: tea.KeyLeft}),
+		tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}),
+		tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}),
+		tea.KeyPressMsg(tea.Key{Code: 'x', Text: "x"}),
+		tea.KeyPressMsg(tea.Key{Code: tea.KeyLeft}),
+	} {
+		model = update(t, model, press)
+	}
+
+	selectedSkills, err := category.Selection(model.draft, skillsBinding)
+	if err != nil || !reflect.DeepEqual(selectedSkills, []skills.SkillReference{bundle.Reference}) {
+		t.Fatalf("Skills selection after Notes edit = %#v, %v", selectedSkills, err)
+	}
+	selectedNotes, err := category.Selection(model.draft, notesBinding)
+	if err != nil || selectedNotes != registrySelection("remembered") {
+		t.Fatalf("Notes selection = %q, %v", selectedNotes, err)
 	}
 }
 

@@ -21,12 +21,12 @@ type Editor interface {
 
 // EditorDefinition binds one visual editor and its discovery result to the
 // same opaque category registration used by the domain Registry.
-type EditorDefinition[D any] struct {
+type EditorDefinition[D any, E Editor] struct {
 	ID       string
 	Category category.Registration
-	New      func(category.Draft) Editor
+	New      func(category.Draft) E
 	Discover func(context.Context) (D, error)
-	Loaded   func(Editor, D) (Editor, error)
+	Loaded   func(E, D) (E, error)
 }
 
 // EditorRegistration is one type-erased visual editor registration.
@@ -40,7 +40,7 @@ type EditorRegistration struct {
 
 // RegisterEditor validates and erases one category editor while retaining its
 // concrete discovery-result type inside the registration.
-func RegisterEditor[D any](definition EditorDefinition[D]) (EditorRegistration, error) {
+func RegisterEditor[D any, E Editor](definition EditorDefinition[D, E]) (EditorRegistration, error) {
 	if definition.ID == "" {
 		return EditorRegistration{}, errors.New("visual editor category ID is required")
 	}
@@ -51,14 +51,19 @@ func RegisterEditor[D any](definition EditorDefinition[D]) (EditorRegistration, 
 		return EditorRegistration{}, fmt.Errorf("visual editor registration %q is incomplete", definition.ID)
 	}
 	return EditorRegistration{
-		id: definition.ID, category: definition.Category, new: definition.New,
+		id: definition.ID, category: definition.Category,
+		new:      func(draft category.Draft) Editor { return definition.New(draft) },
 		discover: func(ctx context.Context) (any, error) { return definition.Discover(ctx) },
 		loaded: func(editor Editor, discovered any) (Editor, error) {
+			concreteEditor, ok := editor.(E)
+			if !ok {
+				return nil, fmt.Errorf("category %q editor model type mismatch", definition.ID)
+			}
 			value, ok := discovered.(D)
 			if !ok {
 				return nil, fmt.Errorf("category %q discovery result type mismatch", definition.ID)
 			}
-			return definition.Loaded(editor, value)
+			return definition.Loaded(concreteEditor, value)
 		},
 	}, nil
 }

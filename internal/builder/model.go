@@ -65,7 +65,7 @@ const (
 	loadFailed
 )
 
-type catalogLoadedMsg struct {
+type discoveryCompletedMsg struct {
 	categoryID string
 	discovered any
 	err        error
@@ -136,7 +136,7 @@ func (m Model) Init() tea.Cmd { return nil }
 // Update applies terminal and user events to the root builder state.
 func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	switch message := message.(type) {
-	case catalogLoadedMsg:
+	case discoveryCompletedMsg:
 		index := m.editorIndex(message.categoryID)
 		if index < 0 || m.editors[index].loadState != loading {
 			return m, nil
@@ -277,7 +277,7 @@ func (m Model) discoveryCommand(index int) tea.Cmd {
 	registration, ctx := m.editors[index].registration, m.context
 	return func() tea.Msg {
 		discovered, err := registration.discover(ctx)
-		return catalogLoadedMsg{categoryID: registration.id, discovered: discovered, err: err}
+		return discoveryCompletedMsg{categoryID: registration.id, discovered: discovered, err: err}
 	}
 }
 

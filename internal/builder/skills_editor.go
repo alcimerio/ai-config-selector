@@ -2,7 +2,6 @@ package builder
 
 import (
 	"context"
-	"fmt"
 	"sort"
 	"strconv"
 	"strings"
@@ -21,19 +20,15 @@ const skillsViewportRows = 8
 // RegisterSkillsEditor binds the Skills visual editor and its concrete
 // discovery result to the typed Skills category binding.
 func RegisterSkillsEditor[C launch.Contribution](binding category.Binding[[]skills.SkillReference, []skills.SkillBundle, C], discover func(context.Context) ([]skills.SkillBundle, error)) (EditorRegistration, error) {
-	return RegisterEditor(EditorDefinition[[]skills.SkillBundle]{
+	return RegisterEditor(EditorDefinition[[]skills.SkillBundle, skillsEditor]{
 		ID:       binding.ID(),
 		Category: binding.Registration(),
-		New: func(draft category.Draft) Editor {
+		New: func(draft category.Draft) skillsEditor {
 			return NewSkillsEditor(draft, binding)
 		},
 		Discover: discover,
-		Loaded: func(editor Editor, catalog []skills.SkillBundle) (Editor, error) {
-			skillsModel, ok := editor.(skillsEditor)
-			if !ok {
-				return nil, fmt.Errorf("Skills editor has incompatible model type %T", editor)
-			}
-			return skillsModel.WithCatalog(catalog), nil
+		Loaded: func(editor skillsEditor, catalog []skills.SkillBundle) (skillsEditor, error) {
+			return editor.WithCatalog(catalog), nil
 		},
 	})
 }

@@ -23,12 +23,20 @@ func (registryContribution) Verify(context.Context, launch.VerificationContext) 
 	return nil
 }
 
-type registryEditor struct{ draft category.Draft }
+type registryEditor struct {
+	draft  category.Draft
+	update func(category.Draft) category.Draft
+}
 
-func (editor registryEditor) Init() tea.Cmd                       { return nil }
-func (editor registryEditor) Update(tea.Msg) (tea.Model, tea.Cmd) { return editor, nil }
-func (editor registryEditor) View() tea.View                      { return tea.NewView("Registry") }
-func (editor registryEditor) Draft() category.Draft               { return editor.draft }
+func (editor registryEditor) Init() tea.Cmd { return nil }
+func (editor registryEditor) Update(tea.Msg) (tea.Model, tea.Cmd) {
+	if editor.update != nil {
+		editor.draft = editor.update(editor.draft)
+	}
+	return editor, nil
+}
+func (editor registryEditor) View() tea.View        { return tea.NewView("Registry") }
+func (editor registryEditor) Draft() category.Draft { return editor.draft }
 func (editor registryEditor) WithDraft(draft category.Draft) Editor {
 	editor.draft = draft
 	return editor
@@ -41,12 +49,12 @@ func TestEditorRegistryRejectsInvalidAssemblyBeforeTheBuilderRuns(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	valid := mustEditorRegistration(t, EditorDefinition[registryDiscovery]{
+	valid := mustEditorRegistration(t, EditorDefinition[registryDiscovery, registryEditor]{
 		ID:       "notes",
 		Category: binding.Registration(),
-		New:      func(draft category.Draft) Editor { return registryEditor{draft: draft} },
+		New:      func(draft category.Draft) registryEditor { return registryEditor{draft: draft} },
 		Discover: func(context.Context) (registryDiscovery, error) { return registryDiscovery{}, nil },
-		Loaded:   func(editor Editor, _ registryDiscovery) (Editor, error) { return editor, nil },
+		Loaded:   func(editor registryEditor, _ registryDiscovery) (registryEditor, error) { return editor, nil },
 	})
 
 	for name, registrations := range map[string][]EditorRegistration{
@@ -61,21 +69,21 @@ func TestEditorRegistryRejectsInvalidAssemblyBeforeTheBuilderRuns(t *testing.T) 
 	}
 
 	otherBinding := mustRegistryBinding(t, "notes")
-	incompatible := mustEditorRegistration(t, EditorDefinition[registryDiscovery]{
+	incompatible := mustEditorRegistration(t, EditorDefinition[registryDiscovery, registryEditor]{
 		ID: "notes", Category: otherBinding.Registration(),
-		New:      func(draft category.Draft) Editor { return registryEditor{draft: draft} },
+		New:      func(draft category.Draft) registryEditor { return registryEditor{draft: draft} },
 		Discover: func(context.Context) (registryDiscovery, error) { return registryDiscovery{}, nil },
-		Loaded:   func(editor Editor, _ registryDiscovery) (Editor, error) { return editor, nil },
+		Loaded:   func(editor registryEditor, _ registryDiscovery) (registryEditor, error) { return editor, nil },
 	})
 	if _, err := NewEditorRegistry(categories, incompatible); err == nil || !strings.Contains(err.Error(), "type-incompatible") {
 		t.Fatalf("incompatible assembly error = %v", err)
 	}
 
-	if _, err := RegisterEditor(EditorDefinition[registryDiscovery]{
+	if _, err := RegisterEditor(EditorDefinition[registryDiscovery, registryEditor]{
 		ID: "other", Category: binding.Registration(),
-		New:      func(draft category.Draft) Editor { return registryEditor{draft: draft} },
+		New:      func(draft category.Draft) registryEditor { return registryEditor{draft: draft} },
 		Discover: func(context.Context) (registryDiscovery, error) { return registryDiscovery{}, nil },
-		Loaded:   func(editor Editor, _ registryDiscovery) (Editor, error) { return editor, nil },
+		Loaded:   func(editor registryEditor, _ registryDiscovery) (registryEditor, error) { return editor, nil },
 	}); err == nil || !strings.Contains(err.Error(), "mismatched") {
 		t.Fatalf("mismatched registration error = %v", err)
 	}
@@ -101,7 +109,7 @@ func mustRegistryBinding(t *testing.T, id string) category.Binding[registrySelec
 	return binding
 }
 
-func mustEditorRegistration[D any](t *testing.T, definition EditorDefinition[D]) EditorRegistration {
+func mustEditorRegistration[D any, E Editor](t *testing.T, definition EditorDefinition[D, E]) EditorRegistration {
 	t.Helper()
 	registration, err := RegisterEditor(definition)
 	if err != nil {
