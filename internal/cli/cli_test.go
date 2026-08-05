@@ -27,6 +27,34 @@ import (
 	"github.com/alcimerio/ai-config-selector/internal/skills"
 )
 
+func TestVersionPrintsTheInjectedBuildVersion(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	application := cli.App{Version: "v0.1.0", Output: &stdout, ErrorOutput: &stderr}
+
+	if exitCode := application.Run(context.Background(), []string{"version"}); exitCode != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", exitCode, stderr.String())
+	}
+	if stdout.String() != "acs v0.1.0\n" {
+		t.Fatalf("version output = %q", stdout.String())
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("version stderr = %q", stderr.String())
+	}
+}
+
+func TestUsageIncludesTheVersionCommand(t *testing.T) {
+	var stderr bytes.Buffer
+	application := cli.App{Output: &bytes.Buffer{}, ErrorOutput: &stderr}
+
+	if exitCode := application.Run(context.Background(), nil); exitCode == 0 {
+		t.Fatal("empty command unexpectedly succeeded")
+	}
+	if !strings.Contains(stderr.String(), "acs version") {
+		t.Fatalf("usage omits version command: %q", stderr.String())
+	}
+}
+
 func TestDryRunReportsResolvedGlobalAndInheritedProjectSkillBundlesWithoutCreatingSession(t *testing.T) {
 	existingHome := t.TempDir()
 	acsHome := filepath.Join(existingHome, ".acs")
