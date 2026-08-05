@@ -1054,6 +1054,82 @@ func TestCreateProfileUsesTheInteractiveBuilderAndPersistsItsDraft(t *testing.T)
 	}
 }
 
+func TestCreateProfilePersistsSummarizesAndCancelsWithMultipleCategories(t *testing.T) {
+	fixture := newStaticCategoryFixture(t, staticCatalog{})
+	notes, err := category.Bind(category.Definition[string, string, noteContribution]{
+		ID: "notes", SchemaVersion: 1, Empty: func() string { return "" },
+		Resolve:    func(_ context.Context, selection string) (string, error) { return strings.ToUpper(selection), nil },
+		Contribute: func(resolved string) (noteContribution, error) { return noteContribution{value: resolved}, nil },
+		Count: func(selection string) int {
+			if selection == "" {
+				return 0
+			}
+			return 1
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry, err := category.NewRegistry("devin", fixture.binding.Registration(), notes.Registration())
+	if err != nil {
+		t.Fatal(err)
+	}
+	draft := registry.NewDraft()
+	if err := category.SetSelection(&draft, fixture.binding, []skills.SkillReference{{Source: "devin-config", RelativePath: "review"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := category.SetSelection(&draft, notes, "category neutral"); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("create", func(t *testing.T) {
+		profileBuilder := &staticBuilder{outcome: builder.Outcome{Draft: draft, Create: true}}
+		var stdout bytes.Buffer
+		var stderr bytes.Buffer
+		profiles := profile.NewStore(t.TempDir(), registry)
+		application := cli.App{
+			Categories: registry, Builder: profileBuilder, Profiles: profiles,
+			Input: strings.NewReader(""), Output: &stdout, ErrorOutput: &stderr,
+			Interactive: func(io.Reader, io.Writer) bool { return true },
+		}
+		if exitCode := application.Run(context.Background(), []string{"devin", "create-profile", "--name", "multi"}); exitCode != 0 {
+			t.Fatalf("exit code = %d, stderr = %s", exitCode, stderr.String())
+		}
+		for _, summary := range []string{"skills: 1 selected", "notes: 1 selected"} {
+			if !strings.Contains(stdout.String(), summary) {
+				t.Errorf("success output omits %q:\n%s", summary, stdout.String())
+			}
+		}
+		saved, err := profiles.Load("multi")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(saved.Categories) != 2 {
+			t.Fatalf("saved categories = %#v", saved.Categories)
+		}
+	})
+
+	t.Run("cancel", func(t *testing.T) {
+		profileBuilder := &staticBuilder{outcome: builder.Outcome{Draft: draft, Cancelled: true}}
+		var stdout bytes.Buffer
+		profiles := profile.NewStore(t.TempDir(), registry)
+		application := cli.App{
+			Categories: registry, Builder: profileBuilder, Profiles: profiles,
+			Input: strings.NewReader(""), Output: &stdout, ErrorOutput: &bytes.Buffer{},
+			Interactive: func(io.Reader, io.Writer) bool { return true },
+		}
+		if exitCode := application.Run(context.Background(), []string{"devin", "create-profile", "--name", "cancel-multi"}); exitCode != 130 {
+			t.Fatalf("exit code = %d, want 130", exitCode)
+		}
+		if stdout.String() != "Profile creation cancelled.\n" {
+			t.Fatalf("cancellation output = %q", stdout.String())
+		}
+		if _, err := profiles.Load("cancel-multi"); !os.IsNotExist(err) {
+			t.Fatalf("cancelled multi-category Profile was written: %v", err)
+		}
+	})
+}
+
 func TestCreateProfileCancellationPrintsSummaryAndReturnsSignalExitCodeWithoutSaving(t *testing.T) {
 	fixture := newStaticCategoryFixture(t, staticCatalog{})
 	profileBuilder := &staticBuilder{outcome: builder.Outcome{Draft: fixture.registry.NewDraft(), Cancelled: true}}
