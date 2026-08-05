@@ -39,6 +39,7 @@ type ProfileLauncher interface {
 }
 
 type App struct {
+	Version           string
 	Categories        *category.Registry
 	Builder           ProfileBuilder
 	DraftEditor       ProfileDraftEditor
@@ -67,6 +68,14 @@ func StandardStreamsInteractive(input io.Reader, output io.Writer) bool {
 }
 
 func (app App) Run(ctx context.Context, args []string) int {
+	if len(args) == 1 && args[0] == "version" {
+		version := app.Version
+		if version == "" {
+			version = "devel"
+		}
+		fmt.Fprintf(app.Output, "acs %s\n", safeTerminalText(version))
+		return 0
+	}
 	if len(args) == 4 && args[0] == "devin" && args[1] == "create-profile" && args[2] == "--name" && args[3] != "" {
 		return app.createProfile(ctx, args[3])
 	}
@@ -76,7 +85,7 @@ func (app App) Run(ctx context.Context, args []string) int {
 	if len(args) == 3 && args[0] == "devin" && args[1] == "--profile" && args[2] != "" {
 		return app.launchProfile(ctx, args[2])
 	}
-	return app.fail("usage: acs devin create-profile --name <name> | acs devin --profile <name> [--dry-run]")
+	return app.fail("usage: acs devin create-profile --name <name> | acs devin --profile <name> [--dry-run] | acs version")
 }
 
 func (app App) createProfile(ctx context.Context, name string) int {
