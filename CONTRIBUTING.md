@@ -25,6 +25,20 @@ ACS can create files under `~/.acs` and launch an installed target CLI. Use
 temporary homes, fake target binaries, or test fixtures while developing. Do
 not point tests at a user's real global Skill directories or credentials.
 
+### Opt-in real-Devin integration test
+
+The normal test suite does not invoke a real Devin installation. Maintainers
+can run the adapter contract against the installed CLI explicitly:
+
+```bash
+go test -tags=integration ./internal/adapter/devin
+```
+
+This opt-in test requires macOS, an installed Devin CLI, and an authenticated
+Devin account. It reads the existing authenticated state. Run it only when the
+machine owner has agreed to that access. The release checklist includes this
+test; `go test ./...` and the Ubuntu workflow exclude it.
+
 ## Development guidelines
 
 - Preserve the configuration-isolation boundaries and invariants documented
@@ -45,6 +59,60 @@ go vet ./...
 go test ./...
 git diff --check
 ```
+
+## Release validation
+
+Before tagging a release, start from the verified `origin/main` commit on a
+supported macOS 26 Apple Silicon machine with Devin installed and authenticated.
+Confirm the worktree and commit, then build ACS into a clean temporary `GOBIN`:
+
+```bash
+git fetch origin
+git switch main
+git pull --ff-only origin main
+git status --short --branch
+
+smoke_gobin="$(mktemp -d)"
+GOBIN="$smoke_gobin" go install ./cmd/acs
+"$smoke_gobin/acs" version
+```
+
+The local build must print `acs devel`. Create a uniquely named Profile through
+the complete builder, inspect it, and launch Devin:
+
+```bash
+smoke_profile="release-smoke-$(date +%Y%m%d%H%M%S)"
+"$smoke_gobin/acs" devin create-profile --name "$smoke_profile"
+"$smoke_gobin/acs" devin --profile "$smoke_profile" --dry-run
+"$smoke_gobin/acs" devin --profile "$smoke_profile"
+```
+
+Select at least one discovered Skill during creation. Confirm that the dry run
+names the selected global Skills and that the interactive launch starts with a
+usable authenticated Devin session. Exit Devin normally, verify that ACS left
+no Session for the completed launch under `~/.acs/sessions/`, and remove only
+the uniquely named smoke-test Profile after recording the result:
+
+```bash
+rm "$HOME/.acs/profiles/$smoke_profile.json"
+rm "$smoke_gobin/acs"
+rmdir "$smoke_gobin"
+```
+
+Run the opt-in real-Devin integration test and all normal repository gates on
+the same verified commit. After publishing the immutable tag, repeat the
+installation from the module proxy in another clean temporary `GOBIN`:
+
+```bash
+tagged_gobin="$(mktemp -d)"
+GOBIN="$tagged_gobin" go install github.com/alcimerio/ai-config-selector/cmd/acs@v0.1.0
+"$tagged_gobin/acs" version
+rm "$tagged_gobin/acs"
+rmdir "$tagged_gobin"
+```
+
+The tagged installation must print `acs v0.1.0`. Do not move or reuse a
+published tag; publish a new version to correct a release defect.
 
 ## Pull requests
 
