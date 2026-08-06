@@ -110,7 +110,12 @@ fi
 
 workspace=""
 placement_temporary=""
+published_destination=0
+installation_complete=0
 cleanup() {
+  if [ "$published_destination" -eq 1 ] && [ "$installation_complete" -eq 0 ]; then
+    rm -f acs
+  fi
   if [ -n "$placement_temporary" ]; then
     rm -f "$placement_temporary"
   fi
@@ -205,12 +210,27 @@ if [ -e "$destination" ] || [ -L "$destination" ]; then
   fail "installation destination already exists"
 fi
 
-placement_temporary="$(mktemp "$bin_directory/.acs.install.XXXXXX")" || fail "installation temporary file could not be created"
+cd "$bin_directory" || fail "installation directory could not be opened"
+placement_directory="$(pwd -P)" || fail "installation directory could not be resolved"
+[ "$placement_directory" = "$bin_directory" ] || fail "installation directory resolved through an unsafe path"
+if [ -e acs ] || [ -L acs ]; then
+  fail "installation destination already exists"
+fi
+
+placement_temporary="$(mktemp ".acs.install.XXXXXX")" || fail "installation temporary file could not be created"
 cp "$extraction_directory/acs" "$placement_temporary" || fail "installation copy failed"
 chmod 0755 "$placement_temporary" || fail "installation permission update failed"
-ln "$placement_temporary" "$destination" || fail "installation destination changed during installation"
+ln "$placement_temporary" acs || fail "installation destination changed during installation"
+published_destination=1
 rm -f "$placement_temporary"
 placement_temporary=""
+
+check_directory_path "$bin_directory"
+if ! selected_directory="$(cd "$bin_directory" && pwd -P)"; then
+  fail "installation directory changed during installation"
+fi
+[ "$selected_directory" = "$placement_directory" ] || fail "installation directory changed during installation"
+installation_complete=1
 
 printf 'Installed acs %s to %s\n' "$release_version" "$destination"
 case ":${PATH:-}:" in

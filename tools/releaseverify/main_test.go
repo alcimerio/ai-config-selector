@@ -21,6 +21,18 @@ func TestReleaseCandidateAcceptsExactlyFourSupportedArchives(t *testing.T) {
 	if err != nil {
 		t.Fatalf("release candidate rejected: %v\n%s", err, output)
 	}
+	host := runtime.GOOS + "/" + runtime.GOARCH
+	for _, target := range []string{"darwin/arm64", "darwin/amd64", "linux/amd64", "linux/arm64"} {
+		var want string
+		if target == host {
+			want = "Verified packaged executable for " + target + "."
+		} else {
+			want = "Skipped packaged executable verification for " + target + ": validation host is " + host + "."
+		}
+		if !strings.Contains(string(output), want) {
+			t.Fatalf("verification report omits %q: %q", want, output)
+		}
+	}
 }
 
 func TestReleaseCandidateRejectsInvalidArtifactSets(t *testing.T) {
@@ -121,6 +133,17 @@ func TestReleaseCandidateRejectsInvalidArtifactSets(t *testing.T) {
 				t.Fatalf("invalid release candidate accepted:\n%s", output)
 			}
 		})
+	}
+}
+
+func TestReleaseVerifierEscapesControlCharactersInPathErrors(t *testing.T) {
+	dist := filepath.Join(t.TempDir(), "missing\x1b[31m")
+	output, err := verifyCandidate(dist, "v0.2.0")
+	if err == nil {
+		t.Fatal("missing candidate directory was accepted")
+	}
+	if strings.ContainsRune(string(output), '\x1b') {
+		t.Fatalf("diagnostic contains a raw terminal control character: %q", output)
 	}
 }
 

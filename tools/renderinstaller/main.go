@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -27,13 +28,13 @@ func main() {
 		os.Exit(2)
 	}
 	if err := render(*templatePath, *outputPath, *version); err != nil {
-		fmt.Fprintf(os.Stderr, "render installer: %v\n", err)
+		fmt.Fprintf(os.Stderr, "render installer: %s\n", strconv.QuoteToASCII(err.Error()))
 		os.Exit(1)
 	}
 }
 
 func render(templatePath, outputPath, version string) error {
-	if !canonicalReleaseVersion.MatchString(version) || version == "v0.0.0" {
+	if !canonicalReleaseVersion.MatchString(version) {
 		return fmt.Errorf("version must be a canonical immutable Release tag")
 	}
 	template, err := os.ReadFile(templatePath)

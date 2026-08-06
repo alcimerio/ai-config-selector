@@ -36,10 +36,6 @@ for component in "$@"; do
 	esac
 done
 
-if [ "$archive_version" = "0.0.0" ]; then
-	canonical_version_error
-fi
-
 if ! git diff --quiet || ! git diff --cached --quiet || [ -n "$(git ls-files --others --exclude-standard)" ]; then
 	printf '%s\n' "release candidate source must be a clean Git worktree" >&2
 	exit 1

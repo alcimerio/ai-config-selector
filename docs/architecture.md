@@ -40,22 +40,6 @@ Builder supplies the canonical tag. Version selection stays in application
 assembly and has no maintained version constant. Local, dirty, pseudo-version,
 and missing or unusable metadata report `acs devel`.
 
-The Release Builder boundary uses pinned GoReleaser OSS configuration. It
-disables CGO and builds only darwin/arm64, darwin/amd64, linux/amd64, and
-linux/arm64. Each candidate archive contains `acs`, `README.md`, and `LICENSE`
-at its top level. A separate release-verification command treats archive names,
-entries, modes, and `SHA256SUMS` as untrusted input and verifies every locally
-runnable packaged executable through `acs version`.
-
-Candidate packaging renders one portable `install.sh` with the same canonical
-tag and stages it beside the archives and `SHA256SUMS`; the checksum manifest
-continues to cover only the four archives. The installer recognizes only the
-four Release targets, downloads the matching versioned archive and manifest
-over HTTPS, verifies SHA-256 before extraction, and validates the extracted
-executable before installation. It rejects unsafe or conflicting destinations
-and exposes a new executable with a same-directory hard link only after all
-validation succeeds. It never invokes sudo or edits shell configuration.
-
 ## Core concepts
 
 **Profile**: A named, machine-local selection for one target CLI. A Profile

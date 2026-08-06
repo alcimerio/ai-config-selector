@@ -15,6 +15,7 @@ import (
 	"regexp"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -35,7 +36,7 @@ func main() {
 		os.Exit(2)
 	}
 	if err := verify(*dist, *version); err != nil {
-		fmt.Fprintf(os.Stderr, "release candidate is invalid: %v\n", err)
+		fmt.Fprintf(os.Stderr, "release candidate is invalid: %s\n", strconv.QuoteToASCII(err.Error()))
 		os.Exit(1)
 	}
 }
@@ -226,6 +227,9 @@ func verifyArchive(path, goos, goarch, version string) error {
 		if err := verifyExecutable(executable, version); err != nil {
 			return err
 		}
+		fmt.Printf("Verified packaged executable for %s/%s.\n", goos, goarch)
+	} else {
+		fmt.Printf("Skipped packaged executable verification for %s/%s: validation host is %s/%s.\n", goos, goarch, runtime.GOOS, runtime.GOARCH)
 	}
 	return nil
 }

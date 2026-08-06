@@ -403,6 +403,58 @@ func TestInstallerRejectsNonWritableDestination(t *testing.T) {
 	fixture.assertNoTemporaryOutput()
 }
 
+func TestInstallerDoesNotFollowDestinationReplacedDuringPlacement(t *testing.T) {
+	fixture := newInstallerFixture(t, "Darwin", "arm64")
+	destination := filepath.Join(realTemporaryDirectory(t), "bin")
+	outside := filepath.Join(realTemporaryDirectory(t), "outside")
+	if err := os.Mkdir(destination, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(outside, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	realMktemp, err := exec.LookPath("mktemp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	realMV, err := exec.LookPath("mv")
+	if err != nil {
+		t.Fatal(err)
+	}
+	realLN, err := exec.LookPath("ln")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture.replaceTool(t, "mktemp", fmt.Sprintf(`#!/bin/sh
+case "$1" in
+  .acs.install.*)
+    %q "$FAKE_BIN_DIRECTORY" "$FAKE_BIN_DIRECTORY.moved"
+    %q -s "$FAKE_OUTSIDE_DIRECTORY" "$FAKE_BIN_DIRECTORY"
+    ;;
+esac
+exec %q "$@"
+`, realMV, realLN, realMktemp))
+	fixture.extraEnvironment = append(fixture.extraEnvironment,
+		"FAKE_BIN_DIRECTORY="+destination,
+		"FAKE_OUTSIDE_DIRECTORY="+outside,
+	)
+
+	output, err := fixture.run("--bin-dir", destination)
+	if err == nil {
+		t.Fatalf("destination replacement was accepted:\n%s", output)
+	}
+	for _, directory := range []string{outside, destination + ".moved"} {
+		entries, readErr := os.ReadDir(directory)
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		if len(entries) != 0 {
+			t.Fatalf("destination race wrote outside the selected directory: %s contains %v", directory, entries)
+		}
+	}
+	fixture.assertNoTemporaryOutput()
+}
+
 type installerFixture struct {
 	t                *testing.T
 	installer        string
