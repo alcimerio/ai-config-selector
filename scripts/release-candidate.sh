@@ -31,7 +31,7 @@ if [ "$#" -ne 3 ]; then
 fi
 for component in "$@"; do
 	case "$component" in
-		0 | [1-9][0-9]*) ;;
+		0 | [1-9] | [1-9][0-9]*) ;;
 		*) canonical_version_error ;;
 	esac
 done
