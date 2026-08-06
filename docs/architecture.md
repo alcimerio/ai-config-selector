@@ -20,9 +20,9 @@ capability types and CLI Adapters.
 
 ## Implemented scope
 
-The current implementation supports:
+The current source-built implementation supports:
 
-- macOS;
+- macOS and Linux;
 - one CLI Adapter, for Devin;
 - user-global Skills discovered from Devin and shared-agent locations;
 - named Profiles stored on the local machine;
@@ -451,14 +451,14 @@ state, saving state, and exit outcome. Category editors are retained child
 models. ACS does not start nested Bubble Tea programs.
 
 Most tests drive pure model and Registry transitions. A smaller runtime suite
-injects input, output, and fixed window dimensions. A macOS PTY subprocess
-suite covers resize, `Ctrl+C`, alternate-screen exit, panic and error cleanup,
-and restored canonical terminal mode. A synthetic catalog of 10,000 Skills
-guards fuzzy search and navigation responsiveness.
+injects input, output, and fixed window dimensions. A Darwin and Linux PTY
+subprocess suite covers resize, `Ctrl+C`, alternate-screen exit, panic and error
+cleanup, and restored canonical terminal mode. A synthetic catalog of 10,000
+Skills guards fuzzy search and navigation responsiveness.
 
 ## Current limitations
 
-- ACS rejects platforms other than macOS.
+- ACS rejects platforms other than macOS and Linux.
 - ACS ships only the Devin Adapter.
 - The Devin Registry currently contains only the Skills category.
 - Profile creation uses the hardened Bubble Tea builder with search, lazy

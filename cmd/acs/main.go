@@ -73,8 +73,8 @@ func buildVersion(readBuildInfo func() (*debug.BuildInfo, bool)) string {
 }
 
 func requireSupportedPlatform(goos string) error {
-	if goos != "darwin" {
-		return fmt.Errorf("ACS supports macOS only; current platform is %s", goos)
+	if goos != "darwin" && goos != "linux" {
+		return fmt.Errorf("ACS supports macOS and Linux only; current platform is %s", goos)
 	}
 	return nil
 }

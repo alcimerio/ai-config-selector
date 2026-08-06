@@ -1,3 +1,5 @@
+//go:build darwin || linux
+
 package builder
 
 import (
@@ -24,6 +26,12 @@ import (
 const ptyHelperEnvironment = "ACS_PROFILE_BUILDER_PTY_HELPER"
 
 func TestProfileBuilderPTYRestoresTerminal(t *testing.T) {
+	panicMarkers := []string{"RUNTIME ERROR", "program experienced a panic"}
+	panicAfter := []string{"RUNTIME ERROR"}
+	if platformPanicMarker != "" {
+		panicMarkers = append(panicMarkers, platformPanicMarker)
+		panicAfter = append(panicAfter, platformPanicMarker)
+	}
 	tests := []struct {
 		name     string
 		scenario string
@@ -34,7 +42,7 @@ func TestProfileBuilderPTYRestoresTerminal(t *testing.T) {
 		{name: "normal completion", scenario: "complete", want: []string{"OUTCOME create", `Created Profile`}, after: []string{"OUTCOME create", "Created Profile"}},
 		{name: "Ctrl+C confirmation", scenario: "ctrl-c", want: []string{"Confirm: Discard changes?", "OUTCOME cancelled"}, after: []string{"OUTCOME cancelled"}},
 		{name: "resize propagation", scenario: "resize", initial: &pty.Winsize{Cols: 50, Rows: 10}, want: []string{"Terminal too small", `Create Profile "pty"`, "OUTCOME cancelled"}, after: []string{"OUTCOME cancelled"}},
-		{name: "recovered panic", scenario: "panic", want: []string{"Caught panic:", "RUNTIME ERROR", "program experienced a panic"}, after: []string{"Caught panic:", "RUNTIME ERROR"}},
+		{name: "recovered panic", scenario: "panic", want: panicMarkers, after: panicAfter},
 		{name: "runtime error", scenario: "runtime-error", want: []string{"RUNTIME ERROR"}, after: []string{"RUNTIME ERROR"}},
 	}
 	for _, test := range tests {
@@ -76,7 +84,7 @@ func runPTYScenario(t *testing.T, scenario string, initial *pty.Winsize) (string
 	if err := pty.Setsize(master, initial); err != nil {
 		t.Fatal(err)
 	}
-	before, err := unix.IoctlGetTermios(int(master.Fd()), unix.TIOCGETA)
+	before, err := readTerminalAttributes(int(master.Fd()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -128,13 +136,13 @@ func runPTYScenario(t *testing.T, scenario string, initial *pty.Winsize) (string
 	select {
 	case err := <-wait:
 		if err != nil {
-			t.Fatalf("PTY helper failed: %v", err)
+			t.Fatalf("PTY helper failed: %v\n%q", err, capture.String())
 		}
 	case <-time.After(8 * time.Second):
 		_ = command.Process.Kill()
 		t.Fatal("PTY helper timed out")
 	}
-	after, err := unix.IoctlGetTermios(int(master.Fd()), unix.TIOCGETA)
+	after, err := readTerminalAttributes(int(master.Fd()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -147,6 +155,10 @@ func runPTYScenario(t *testing.T, scenario string, initial *pty.Winsize) (string
 		t.Fatal("PTY output reader did not finish")
 	}
 	return capture.String(), before, after
+}
+
+func readTerminalAttributes(fileDescriptor int) (*unix.Termios, error) {
+	return unix.IoctlGetTermios(fileDescriptor, terminalAttributesRequest)
 }
 
 type ptyCapture struct {

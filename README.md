@@ -141,7 +141,8 @@ and unknown categories.
 
 ## Known limitations
 
-- macOS 26 on Apple Silicon is the only supported platform.
+- The published v0.1.0 release supports only macOS 26 on Apple Silicon;
+  current source builds also run on Linux.
 - Devin is the only production CLI Adapter.
 - Skills is the only production Profile Component Category.
 - Profiles cannot be listed, edited, deleted, imported, or exported through
