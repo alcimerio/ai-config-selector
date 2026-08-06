@@ -130,7 +130,7 @@ func runPTYScenario(t *testing.T, scenario string, initial *pty.Winsize) (string
 	select {
 	case err := <-wait:
 		if err != nil {
-			t.Fatalf("PTY helper failed: %v", err)
+			t.Fatalf("PTY helper failed: %v\n%s", err, capture.String())
 		}
 	case <-time.After(8 * time.Second):
 		_ = command.Process.Kill()
@@ -149,6 +149,10 @@ func runPTYScenario(t *testing.T, scenario string, initial *pty.Winsize) (string
 		t.Fatal("PTY output reader did not finish")
 	}
 	return capture.String(), before, after
+}
+
+func readTerminalAttributes(fileDescriptor int) (*unix.Termios, error) {
+	return unix.IoctlGetTermios(fileDescriptor, terminalAttributesRequest)
 }
 
 type ptyCapture struct {
