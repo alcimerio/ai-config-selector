@@ -42,15 +42,28 @@ func TestBuildVersionFallsBackForDevelopmentAndUnavailableMetadata(t *testing.T)
 	}
 }
 
-func TestRequireSupportedPlatformRejectsNonDarwin(t *testing.T) {
-	if err := requireSupportedPlatform("darwin"); err != nil {
-		t.Fatalf("darwin rejected: %v", err)
+func TestRequireSupportedPlatformAcceptsDarwinAndLinux(t *testing.T) {
+	for _, goos := range []string{"darwin", "linux"} {
+		t.Run(goos, func(t *testing.T) {
+			if err := requireSupportedPlatform(goos); err != nil {
+				t.Fatalf("%s rejected: %v", goos, err)
+			}
+		})
 	}
-	err := requireSupportedPlatform("linux")
-	if err == nil {
-		t.Fatal("unsupported platform was accepted")
-	}
-	if !strings.Contains(err.Error(), "macOS") || !strings.Contains(err.Error(), "linux") {
-		t.Fatalf("unsupported-platform error is unclear: %v", err)
+}
+
+func TestRequireSupportedPlatformRejectsEveryOtherOperatingSystemFamily(t *testing.T) {
+	for _, goos := range []string{"aix", "android", "dragonfly", "freebsd", "illumos", "ios", "js", "netbsd", "openbsd", "plan9", "solaris", "wasip1", "windows"} {
+		t.Run(goos, func(t *testing.T) {
+			err := requireSupportedPlatform(goos)
+			if err == nil {
+				t.Fatal("unsupported platform was accepted")
+			}
+			for _, want := range []string{"macOS", "Linux", goos} {
+				if !strings.Contains(err.Error(), want) {
+					t.Fatalf("unsupported-platform error omits %q: %v", want, err)
+				}
+			}
+		})
 	}
 }

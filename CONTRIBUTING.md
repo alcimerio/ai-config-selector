@@ -4,7 +4,7 @@ Thanks for contributing to AI Config Selector (ACS).
 
 ## Before you start
 
-ACS currently supports macOS and the Devin CLI. Read
+ACS currently supports macOS, Linux, and the Devin CLI. Read
 [`docs/architecture.md`](docs/architecture.md) before changing Profile,
 Session, discovery, isolation, or launch behavior.
 
@@ -34,10 +34,10 @@ can run the adapter contract against the installed CLI explicitly:
 go test -tags=integration ./internal/adapter/devin
 ```
 
-This opt-in test requires macOS, an installed Devin CLI, and an authenticated
-Devin account. It reads the existing authenticated state. Run it only when the
-machine owner has agreed to that access. The release checklist includes this
-test; `go test ./...` and the Ubuntu workflow exclude it.
+This opt-in test requires macOS or Linux, an installed Devin CLI, and an
+authenticated Devin account. It reads the existing authenticated state. Run it
+only when the machine owner has agreed to that access. The release checklist
+includes this test; `go test ./...` and the Ubuntu workflow exclude it.
 
 ## Development guidelines
 
