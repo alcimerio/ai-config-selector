@@ -451,10 +451,10 @@ state, saving state, and exit outcome. Category editors are retained child
 models. ACS does not start nested Bubble Tea programs.
 
 Most tests drive pure model and Registry transitions. A smaller runtime suite
-injects input, output, and fixed window dimensions. A macOS PTY subprocess
-suite covers resize, `Ctrl+C`, alternate-screen exit, panic and error cleanup,
-and restored canonical terminal mode. A synthetic catalog of 10,000 Skills
-guards fuzzy search and navigation responsiveness.
+injects input, output, and fixed window dimensions. A Darwin and Linux PTY
+subprocess suite covers resize, `Ctrl+C`, alternate-screen exit, panic and error
+cleanup, and restored canonical terminal mode. A synthetic catalog of 10,000
+Skills guards fuzzy search and navigation responsiveness.
 
 ## Current limitations
 
