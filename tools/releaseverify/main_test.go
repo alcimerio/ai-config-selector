@@ -147,6 +147,18 @@ func TestReleaseVerifierEscapesControlCharactersInPathErrors(t *testing.T) {
 	}
 }
 
+func TestReleaseVerifierEscapesControlCharactersInFlagErrors(t *testing.T) {
+	command := exec.Command("go", "run", ".", "--bad\x1b[31m")
+	command.Dir = "."
+	output, err := command.CombinedOutput()
+	if err == nil {
+		t.Fatal("unknown flag was accepted")
+	}
+	if strings.ContainsRune(string(output), '\x1b') {
+		t.Fatalf("flag diagnostic contains a raw terminal control character: %q", output)
+	}
+}
+
 func writeCandidate(t *testing.T, version string) string {
 	t.Helper()
 	dist := t.TempDir()

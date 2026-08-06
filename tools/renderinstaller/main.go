@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"flag"
 	"fmt"
 	"os"
@@ -16,11 +17,13 @@ var canonicalReleaseVersion = regexp.MustCompile(`^v(0|[1-9][0-9]*)\.(0|[1-9][0-
 
 func main() {
 	flags := flag.NewFlagSet("renderinstaller", flag.ContinueOnError)
-	flags.SetOutput(os.Stderr)
+	var flagOutput bytes.Buffer
+	flags.SetOutput(&flagOutput)
 	templatePath := flags.String("template", "", "installer template path")
 	outputPath := flags.String("output", "", "rendered installer path")
 	version := flags.String("version", "", "canonical release tag")
 	if err := flags.Parse(os.Args[1:]); err != nil {
+		fmt.Fprintf(os.Stderr, "invalid arguments: %s\n", strconv.QuoteToASCII(flagOutput.String()))
 		os.Exit(2)
 	}
 	if *templatePath == "" || *outputPath == "" || *version == "" || flags.NArg() != 0 {

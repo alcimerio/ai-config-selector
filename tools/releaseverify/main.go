@@ -3,6 +3,7 @@ package main
 import (
 	"archive/tar"
 	"bufio"
+	"bytes"
 	"compress/gzip"
 	"context"
 	"crypto/sha256"
@@ -25,10 +26,12 @@ var checksumLinePattern = regexp.MustCompile(`^([0-9a-f]{64})  ([A-Za-z0-9._-]+)
 
 func main() {
 	flags := flag.NewFlagSet("releaseverify", flag.ContinueOnError)
-	flags.SetOutput(os.Stderr)
+	var flagOutput bytes.Buffer
+	flags.SetOutput(&flagOutput)
 	dist := flags.String("dist", "", "directory containing the release candidate")
 	version := flags.String("version", "", "canonical release tag")
 	if err := flags.Parse(os.Args[1:]); err != nil {
+		fmt.Fprintf(os.Stderr, "invalid arguments: %s\n", strconv.QuoteToASCII(flagOutput.String()))
 		os.Exit(2)
 	}
 	if *dist == "" || *version == "" || flags.NArg() != 0 {
