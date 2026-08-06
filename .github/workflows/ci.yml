@@ -56,3 +56,6 @@ jobs:
 
       - name: Build
         run: go build -o /tmp/acs ./cmd/acs
+
+      - name: Build and verify Release candidate
+        run: scripts/release-candidate.sh v0.2.0
