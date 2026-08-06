@@ -130,7 +130,7 @@ func runPTYScenario(t *testing.T, scenario string, initial *pty.Winsize) (string
 	select {
 	case err := <-wait:
 		if err != nil {
-			t.Fatalf("PTY helper failed: %v\n%s", err, capture.String())
+			t.Fatalf("PTY helper failed: %v\n%q", err, capture.String())
 		}
 	case <-time.After(8 * time.Second):
 		_ = command.Process.Kill()
