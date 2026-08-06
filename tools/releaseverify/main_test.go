@@ -97,6 +97,20 @@ func TestReleaseCandidateRejectsInvalidArtifactSets(t *testing.T) {
 				{name: "LICENSE", mode: 0o644, body: []byte("fixture")},
 			})
 		}},
+		{name: "non-executable installer", mutate: func(t *testing.T, dist string) {
+			if err := os.Chmod(filepath.Join(dist, "install.sh"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{name: "unrendered installer", mutate: func(t *testing.T, dist string) {
+			mustWriteFile(t, filepath.Join(dist, "install.sh"), []byte("#!/bin/sh\nreadonly release_version=\"__ACS_RELEASE_VERSION__\"\n"))
+		}},
+		{name: "installer pinned to another version", mutate: func(t *testing.T, dist string) {
+			mustWriteFile(t, filepath.Join(dist, "install.sh"), []byte("#!/bin/sh\nreadonly release_version=\"v9.9.9\"\n"))
+		}},
+		{name: "installer selects latest", mutate: func(t *testing.T, dist string) {
+			mustWriteFile(t, filepath.Join(dist, "install.sh"), []byte("#!/bin/sh\nreadonly release_version=\"v0.2.0\"\nurl=https://example.test/releases/latest/install.sh\n"))
+		}},
 	}
 
 	for _, test := range tests {
@@ -131,6 +145,11 @@ func writeCandidate(t *testing.T, version string) string {
 		writeArchive(t, filepath.Join(dist, name), binary)
 	}
 	writeChecksums(t, dist, archiveVersion)
+	installer := "#!/bin/sh\nreadonly release_version=\"v0.2.0\"\n"
+	mustWriteFile(t, filepath.Join(dist, "install.sh"), []byte(installer))
+	if err := os.Chmod(filepath.Join(dist, "install.sh"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	return dist
 }
 

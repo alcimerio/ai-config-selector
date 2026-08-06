@@ -1,0 +1,222 @@
+#!/bin/sh
+
+set -eu
+set -f
+LC_ALL=C
+export LC_ALL
+
+readonly release_version="__ACS_RELEASE_VERSION__"
+readonly archive_version="${release_version#v}"
+readonly release_url="https://github.com/alcimerio/ai-config-selector/releases/download/${release_version}"
+
+fail() {
+  printf 'acs installer: %s\n' "$1" >&2
+  exit 1
+}
+
+bin_directory=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --bin-dir)
+      [ "$#" -ge 2 ] || fail "--bin-dir requires a value"
+      [ -n "$2" ] || fail "--bin-dir requires a value"
+      bin_directory="$2"
+      shift 2
+      ;;
+    *) fail "unknown argument" ;;
+  esac
+done
+
+if [ -z "$bin_directory" ]; then
+  [ -n "${HOME:-}" ] || fail "HOME is required for the default installation directory"
+  bin_directory="$HOME/.local/bin"
+fi
+
+command -v uname >/dev/null 2>&1 || fail "required tool is unavailable: uname"
+case "$(uname -s)" in
+  Darwin) target_os="darwin" ;;
+  Linux) target_os="linux" ;;
+  *) fail "unsupported operating system; ACS supports Darwin and Linux only" ;;
+esac
+case "$(uname -m)" in
+  x86_64 | amd64) target_arch="amd64" ;;
+  arm64 | aarch64) target_arch="arm64" ;;
+  *) fail "unsupported architecture; ACS supports amd64 and arm64 only" ;;
+esac
+
+case "$bin_directory" in
+  "" | / | /*/ | *[!\ -~]* | *:* | *"'"* | *//* | */./* | */../* | */. | */..)
+    fail "installation directory is malformed"
+    ;;
+  /*) ;;
+  *) fail "installation directory must be an absolute path" ;;
+esac
+
+check_directory_path() {
+  checked_path=""
+  path_tail="${1#/}"
+  old_ifs="$IFS"
+  IFS=/
+  set -- $path_tail
+  IFS="$old_ifs"
+  for component in "$@"; do
+    checked_path="$checked_path/$component"
+    if [ -L "$checked_path" ]; then
+      fail "installation directory contains a symbolic link"
+    fi
+    if [ -e "$checked_path" ] && [ ! -d "$checked_path" ]; then
+      fail "installation directory path contains a non-directory entry"
+    fi
+    if [ -d "$checked_path" ] && [ ! -x "$checked_path" ]; then
+      fail "installation directory is not searchable"
+    fi
+  done
+}
+
+check_directory_path "$bin_directory"
+if [ -d "$bin_directory" ]; then
+  [ -w "$bin_directory" ] && [ -x "$bin_directory" ] || fail "installation directory is not writable"
+else
+  writable_parent="$bin_directory"
+  while [ ! -d "$writable_parent" ]; do
+    writable_parent="${writable_parent%/*}"
+    [ -n "$writable_parent" ] || writable_parent="/"
+  done
+  [ -w "$writable_parent" ] && [ -x "$writable_parent" ] || fail "installation directory cannot be created"
+fi
+
+destination="$bin_directory/acs"
+if [ -e "$destination" ] || [ -L "$destination" ]; then
+  fail "installation destination already exists"
+fi
+
+for prerequisite in awk chmod cp ln mkdir mktemp rm tar; do
+  command -v "$prerequisite" >/dev/null 2>&1 || fail "required tool is unavailable: $prerequisite"
+done
+if command -v curl >/dev/null 2>&1; then
+  download_tool="curl"
+elif command -v wget >/dev/null 2>&1; then
+  download_tool="wget"
+else
+  fail "required download tool is unavailable: curl or wget"
+fi
+if command -v sha256sum >/dev/null 2>&1; then
+  checksum_tool="sha256sum"
+elif command -v shasum >/dev/null 2>&1; then
+  checksum_tool="shasum"
+else
+  fail "required SHA-256 tool is unavailable: sha256sum or shasum"
+fi
+
+workspace=""
+placement_temporary=""
+cleanup() {
+  if [ -n "$placement_temporary" ]; then
+    rm -f "$placement_temporary"
+  fi
+  if [ -n "$workspace" ]; then
+    rm -rf "$workspace"
+  fi
+}
+trap cleanup EXIT HUP INT TERM
+
+workspace="$(mktemp -d "${TMPDIR:-/tmp}/acs-install.XXXXXX")" || fail "could not create temporary workspace"
+chmod 0700 "$workspace" || fail "could not secure temporary workspace"
+archive_name="acs_${archive_version}_${target_os}_${target_arch}.tar.gz"
+archive_path="$workspace/$archive_name"
+manifest_path="$workspace/SHA256SUMS"
+
+download() {
+  download_destination="$1"
+  download_source="$2"
+  if [ "$download_tool" = "curl" ]; then
+    curl --fail --location --proto '=https' --tlsv1.2 --output "$download_destination" "$download_source"
+  else
+    wget --https-only --secure-protocol=TLSv1_2 --output-document="$download_destination" "$download_source"
+  fi
+}
+
+download "$archive_path" "$release_url/$archive_name" || fail "archive download failed"
+download "$manifest_path" "$release_url/SHA256SUMS" || fail "checksum manifest download failed"
+
+if ! expected_checksum="$(awk -v selected="$archive_name" -v version="$archive_version" '
+function expected(name) {
+  return name == "acs_" version "_darwin_arm64.tar.gz" ||
+    name == "acs_" version "_darwin_amd64.tar.gz" ||
+    name == "acs_" version "_linux_amd64.tar.gz" ||
+    name == "acs_" version "_linux_arm64.tar.gz"
+}
+{
+  if (NF != 2 || length($1) != 64 || $1 ~ /[^0-9a-fA-F]/ || !expected($2) || seen[$2]++) invalid = 1
+  checksums[$2] = $1
+  count++
+}
+END {
+  if (invalid || count != 4 || !(selected in checksums)) exit 1
+  print checksums[selected]
+}
+' "$manifest_path")"; then
+  fail "checksum manifest is malformed"
+fi
+
+if [ "$checksum_tool" = "sha256sum" ]; then
+  checksum_output="$(sha256sum "$archive_path")" || fail "archive checksum could not be computed"
+else
+  checksum_output="$(shasum -a 256 "$archive_path")" || fail "archive checksum could not be computed"
+fi
+set -- $checksum_output
+[ "$#" -ge 1 ] || fail "archive checksum could not be computed"
+actual_checksum="$1"
+[ "$actual_checksum" = "$expected_checksum" ] || fail "archive checksum mismatch"
+
+archive_entries="$workspace/archive-entries"
+tar -tzf "$archive_path" >"$archive_entries" || fail "archive structure could not be read"
+if ! awk '
+  $0 == "acs" || $0 == "README.md" || $0 == "LICENSE" {
+    if (seen[$0]++) invalid = 1
+    count++
+    next
+  }
+  { invalid = 1 }
+  END { if (invalid || count != 3 || !seen["acs"] || !seen["README.md"] || !seen["LICENSE"]) exit 1 }
+' "$archive_entries"; then
+  fail "archive structure is unsafe"
+fi
+
+extraction_directory="$workspace/extracted"
+mkdir "$extraction_directory" || fail "archive workspace could not be created"
+tar -xzf "$archive_path" -C "$extraction_directory" || fail "archive extraction failed"
+for entry in acs README.md LICENSE; do
+  [ -f "$extraction_directory/$entry" ] && [ ! -L "$extraction_directory/$entry" ] || fail "archive contains an unsafe entry"
+done
+[ -x "$extraction_directory/acs" ] || fail "archive executable is not executable"
+
+version_error="$workspace/version-error"
+if ! installed_version="$("$extraction_directory/acs" version 2>"$version_error")"; then
+  fail "archive executable validation failed"
+fi
+[ ! -s "$version_error" ] || fail "archive executable validation failed"
+[ "$installed_version" = "acs $release_version" ] || fail "archive executable reported an unexpected version"
+
+mkdir -p "$bin_directory" || fail "installation directory could not be created"
+check_directory_path "$bin_directory"
+[ -w "$bin_directory" ] && [ -x "$bin_directory" ] || fail "installation directory is not writable"
+if [ -e "$destination" ] || [ -L "$destination" ]; then
+  fail "installation destination already exists"
+fi
+
+placement_temporary="$(mktemp "$bin_directory/.acs.install.XXXXXX")" || fail "installation temporary file could not be created"
+cp "$extraction_directory/acs" "$placement_temporary" || fail "installation copy failed"
+chmod 0755 "$placement_temporary" || fail "installation permission update failed"
+ln "$placement_temporary" "$destination" || fail "installation destination changed during installation"
+rm -f "$placement_temporary"
+placement_temporary=""
+
+printf 'Installed acs %s to %s\n' "$release_version" "$destination"
+case ":${PATH:-}:" in
+  *":$bin_directory:"*) ;;
+  *)
+    printf 'Add ACS to PATH for this shell with:\n'
+    printf 'export PATH='"'"'%s'"'"':"$PATH"\n' "$bin_directory"
+    ;;
+esac

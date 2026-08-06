@@ -81,6 +81,20 @@ create a tag or GitHub Release. Use the intended canonical tag for the
 candidate; the command does not accept development, prerelease, build-metadata,
 or dirty source input.
 
+The candidate set also contains one executable `install.sh` rendered with the
+same immutable tag. Installer acceptance uses fake host and download tools plus
+local archives; it never contacts a GitHub Release or writes to a real user
+installation. Run it with the normal test suite, or focus it with:
+
+```bash
+go test ./scripts -run Installer
+```
+
+The supported installer interface accepts only an optional `--bin-dir` and has
+no version override. Tests cover exact Release URLs, all supported targets,
+checksum and archive rejection, destination safety, executable validation,
+atomic placement, PATH guidance, and cleanup.
+
 Before tagging a release, start from the verified `origin/main` commit on a
 supported macOS 26 Apple Silicon machine with Devin installed and authenticated.
 Confirm the worktree and commit, then build ACS into a clean temporary `GOBIN`:

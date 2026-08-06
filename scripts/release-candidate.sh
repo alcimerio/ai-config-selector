@@ -60,4 +60,9 @@ do
   cp "dist/$artifact" "$candidate_directory/$artifact"
 done
 
+go run ./tools/renderinstaller \
+  --template scripts/install.sh.tmpl \
+  --output "$candidate_directory/install.sh" \
+  --version "$release_tag"
+sh -n "$candidate_directory/install.sh"
 go run ./tools/releaseverify --dist "$candidate_directory" --version "$release_tag"

@@ -47,6 +47,15 @@ at its top level. A separate release-verification command treats archive names,
 entries, modes, and `SHA256SUMS` as untrusted input and verifies every locally
 runnable packaged executable through `acs version`.
 
+Candidate packaging renders one portable `install.sh` with the same canonical
+tag and stages it beside the archives and `SHA256SUMS`; the checksum manifest
+continues to cover only the four archives. The installer recognizes only the
+four Release targets, downloads the matching versioned archive and manifest
+over HTTPS, verifies SHA-256 before extraction, and validates the extracted
+executable before installation. It rejects unsafe or conflicting destinations
+and exposes a new executable with a same-directory hard link only after all
+validation succeeds. It never invokes sudo or edits shell configuration.
+
 ## Core concepts
 
 **Profile**: A named, machine-local selection for one target CLI. A Profile

@@ -51,7 +51,7 @@ func verify(dist, version string) error {
 		fmt.Sprintf("acs_%s_linux_amd64.tar.gz", archiveVersion),
 		fmt.Sprintf("acs_%s_linux_arm64.tar.gz", archiveVersion),
 	}
-	expectedFiles := append(append([]string(nil), expectedArchives...), "SHA256SUMS")
+	expectedFiles := append(append([]string(nil), expectedArchives...), "SHA256SUMS", "install.sh")
 	sort.Strings(expectedFiles)
 
 	entries, err := os.ReadDir(dist)
@@ -72,6 +72,9 @@ func verify(dist, version string) error {
 	sort.Strings(actualFiles)
 	if strings.Join(actualFiles, "\n") != strings.Join(expectedFiles, "\n") {
 		return fmt.Errorf("artifact names are %q, want %q", actualFiles, expectedFiles)
+	}
+	if err := verifyInstaller(filepath.Join(dist, "install.sh"), version); err != nil {
+		return err
 	}
 
 	checksums, err := readChecksums(filepath.Join(dist, "SHA256SUMS"), expectedArchives)
@@ -95,6 +98,35 @@ func verify(dist, version string) error {
 		if err := verifyArchive(path, parts[2], parts[3], version); err != nil {
 			return fmt.Errorf("archive %q: %w", archive, err)
 		}
+	}
+	return nil
+}
+
+func verifyInstaller(path, version string) error {
+	info, err := os.Stat(path)
+	if err != nil {
+		return fmt.Errorf("inspect install.sh: %w", err)
+	}
+	if info.Mode()&0o111 == 0 {
+		return fmt.Errorf("install.sh is not executable")
+	}
+	if info.Size() <= 0 || info.Size() > 1<<20 {
+		return fmt.Errorf("install.sh has an invalid size")
+	}
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("read install.sh: %w", err)
+	}
+	text := string(contents)
+	if !strings.HasPrefix(text, "#!/bin/sh\n") {
+		return fmt.Errorf("install.sh does not use the portable Unix shell")
+	}
+	wantVersion := fmt.Sprintf("readonly release_version=\"%s\"", version)
+	if strings.Count(text, wantVersion) != 1 || strings.Contains(text, "__ACS_RELEASE_VERSION__") {
+		return fmt.Errorf("install.sh is not pinned to %s", version)
+	}
+	if strings.Contains(text, "/latest/") || strings.Contains(text, "releases/latest") {
+		return fmt.Errorf("install.sh contains a mutable Release URL")
 	}
 	return nil
 }
