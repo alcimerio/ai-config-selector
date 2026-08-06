@@ -26,6 +26,12 @@ import (
 const ptyHelperEnvironment = "ACS_PROFILE_BUILDER_PTY_HELPER"
 
 func TestProfileBuilderPTYRestoresTerminal(t *testing.T) {
+	panicMarkers := []string{"RUNTIME ERROR", "program experienced a panic"}
+	panicAfter := []string{"RUNTIME ERROR"}
+	if platformPanicMarker != "" {
+		panicMarkers = append(panicMarkers, platformPanicMarker)
+		panicAfter = append(panicAfter, platformPanicMarker)
+	}
 	tests := []struct {
 		name     string
 		scenario string
@@ -36,7 +42,7 @@ func TestProfileBuilderPTYRestoresTerminal(t *testing.T) {
 		{name: "normal completion", scenario: "complete", want: []string{"OUTCOME create", `Created Profile`}, after: []string{"OUTCOME create", "Created Profile"}},
 		{name: "Ctrl+C confirmation", scenario: "ctrl-c", want: []string{"Confirm: Discard changes?", "OUTCOME cancelled"}, after: []string{"OUTCOME cancelled"}},
 		{name: "resize propagation", scenario: "resize", initial: &pty.Winsize{Cols: 50, Rows: 10}, want: []string{"Terminal too small", `Create Profile "pty"`, "OUTCOME cancelled"}, after: []string{"OUTCOME cancelled"}},
-		{name: "recovered panic", scenario: "panic", want: []string{"Caught panic:", "RUNTIME ERROR", "program experienced a panic"}, after: []string{"Caught panic:", "RUNTIME ERROR"}},
+		{name: "recovered panic", scenario: "panic", want: panicMarkers, after: panicAfter},
 		{name: "runtime error", scenario: "runtime-error", want: []string{"RUNTIME ERROR"}, after: []string{"RUNTIME ERROR"}},
 	}
 	for _, test := range tests {

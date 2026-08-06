@@ -4,4 +4,7 @@ package builder
 
 import "golang.org/x/sys/unix"
 
-const terminalAttributesRequest = unix.TIOCGETA
+const (
+	terminalAttributesRequest = unix.TIOCGETA
+	platformPanicMarker       = "Caught panic:"
+)
