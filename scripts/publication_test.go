@@ -79,6 +79,17 @@ func TestPublisherRejectsUnsafeTagIdentityAndAuthorizationBeforeMutation(t *test
 	}
 }
 
+func TestPublisherRejectsAnUnexpectedTagCreatorBeforeMutation(t *testing.T) {
+	candidate := publicationCandidate(t)
+	notes := publicationNotes(t)
+	tools, log := fakeReadOnlyGH(t, "true", "true", "")
+	output, err := publicationCommandForActor(t, candidate, notes, tools, log, "100").CombinedOutput()
+	if err == nil || !strings.Contains(string(output), "tag creator is not authorized") {
+		t.Fatalf("tag-creator rejection = %v, output=%q", err, output)
+	}
+	assertNoPublicationMutation(t, log)
+}
+
 func TestPublisherCreatesOrResumesDraftBeforeOneFinalPublish(t *testing.T) {
 	for _, test := range []struct {
 		name        string
@@ -121,6 +132,10 @@ func TestPublisherCreatesOrResumesDraftBeforeOneFinalPublish(t *testing.T) {
 }
 
 func publicationCommand(t *testing.T, candidate, notes, tools, log string) *exec.Cmd {
+	return publicationCommandForActor(t, candidate, notes, tools, log, "99")
+}
+
+func publicationCommandForActor(t *testing.T, candidate, notes, tools, log, actorID string) *exec.Cmd {
 	t.Helper()
 	repository, err := filepath.Abs("..")
 	if err != nil {
@@ -130,7 +145,7 @@ func publicationCommand(t *testing.T, candidate, notes, tools, log string) *exec
 	command.Dir = repository
 	command.Env = append(os.Environ(),
 		"PATH="+tools+string(os.PathListSeparator)+os.Getenv("PATH"),
-		"GITHUB_REPOSITORY=owner/repository", "GH_TOKEN=publish-token", "ACS_RELEASE_POLICY_TOKEN=policy-token", "ACS_RELEASE_TAG_RULESET_ID=7", "ACS_RELEASE_TAG_CREATION_RULESET_ID=8", "ACS_RELEASE_TAG_CREATOR_ID=99", "ACS_RELEASE_ACTOR_ID=99", "FAKE_GH_LOG="+log,
+		"GITHUB_REPOSITORY=owner/repository", "GH_TOKEN=publish-token", "ACS_RELEASE_POLICY_TOKEN=policy-token", "ACS_RELEASE_TAG_RULESET_ID=7", "ACS_RELEASE_TAG_CREATION_RULESET_ID=8", "ACS_RELEASE_TAG_CREATOR_ID=99", "ACS_RELEASE_ACTOR_ID="+actorID, "FAKE_GH_LOG="+log,
 	)
 	return command
 }
@@ -142,7 +157,7 @@ func fakeReadOnlyGH(t *testing.T, immutable, protected, release string) (string,
 func fakeReadOnlyGHWithPolicy(t *testing.T, immutable, protected, creationProtected, tagObject, targetSource, mainStatus, release string) (string, string) {
 	t.Helper()
 	directory := t.TempDir()
-	log := filepath.Join(directory, "calls")
+	log := writeFixture(t, directory, "calls", "")
 	releasePath := writeFixture(t, directory, "release.json", release)
 	script := fakePolicyCases(immutable, protected, creationProtected, tagObject, targetSource, mainStatus) + `
   "repos/owner/repository/releases/tags/v0.2.0") cat "` + releasePath + `" ;;
@@ -156,7 +171,7 @@ esac
 func fakeTransitionGH(t *testing.T, candidate, initial string, initialAssets, requiredUploads int) (string, string) {
 	t.Helper()
 	directory := t.TempDir()
-	log := filepath.Join(directory, "calls")
+	log := writeFixture(t, directory, "calls", "")
 	state := writeFixture(t, directory, "state", initial+"\n")
 	count := writeFixture(t, directory, "count", "0\n")
 	zero := writeFixture(t, directory, "zero.json", publicationReleaseJSON(t, candidate, 0, true, false))

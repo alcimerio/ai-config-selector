@@ -285,12 +285,9 @@ One Linux job builds the complete six-file Release Artifact Set. Four native
 jobs download that one workflow artifact and validate the supplied bytes; none
 rebuilds them. After every native job passes, provenance attestation covers the
 four archives and checksum manifest. Attestation alone receives
-`id-token: write` and `attestations: write`. Publication uses a short-lived,
-repository-only GitHub App token limited to Administration(read), needed to
-verify immutable Release configuration, and Contents(write), needed to stage
-and publish the Release. The App key is available only through a protected
-`release` environment with required review. The policy token and publication
-token come from separate repository-only Apps: the first has
+`id-token: write` and `attestations: write`. The policy token and publication
+token are short-lived and come from separate repository-only Apps behind a
+protected `release` environment: the first has
 Administration(write), required for GitHub to return ruleset bypass actors,
 and the second has only Contents(write). No token can both alter policy and
 publish a Release. The default workflow token remains read-only.
