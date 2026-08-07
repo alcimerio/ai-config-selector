@@ -31,13 +31,16 @@ The normal test suite does not invoke a real Devin installation. Maintainers
 can run the adapter contract against the installed CLI explicitly:
 
 ```bash
-go test -tags=integration ./internal/adapter/devin
+ACS_REAL_DEVIN_INTEGRATION=I_ACKNOWLEDGE_LOCAL_CREDENTIAL_ACCESS \
+  go test -tags=integration ./internal/adapter/devin
 ```
 
 This opt-in test requires macOS or Linux, an installed Devin CLI, and an
-authenticated Devin account. It reads the existing authenticated state. Run it
-only when the machine owner has agreed to that access. The release checklist
-includes this test; `go test ./...` and the Ubuntu workflow exclude it.
+authenticated Devin account. It reads the existing authenticated state. The
+build tag alone is insufficient; the exact environment value records an
+explicit local acknowledgement. Run it only when the machine owner has agreed
+to that access. `go test ./...` and all pull-request and `main` workflows remain
+credential-free.
 
 ## Development guidelines
 
@@ -127,45 +130,15 @@ behavior, PATH guidance, and cleanup. Cross-compilation and emulation are not
 native evidence. If any required runner is unavailable or any native job
 fails, the candidate is not promoted.
 
-Before tagging a release, start from the verified `origin/main` commit on a
-supported macOS 26 Apple Silicon machine with Devin installed and authenticated.
-Confirm the worktree and commit, then build ACS into a clean temporary `GOBIN`:
+Before tagging a release, follow the
+[authenticated release-candidate smoke procedure](docs/authenticated-release-smoke.md)
+on macOS 26 arm64 and a disposable Ubuntu 24.04 amd64 host. It installs the
+exact candidate archives, exercises the visual Profile and interactive Devin
+boundaries, verifies Session isolation and cleanup, and produces strict,
+candidate-matched sanitized evidence for later release review. A missing host,
+authorization, or passing evidence remains a blocking release gate.
 
-```bash
-git fetch origin
-git switch main
-git pull --ff-only origin main
-git status --short --branch
-
-smoke_gobin="$(mktemp -d)"
-GOBIN="$smoke_gobin" go install ./cmd/acs
-"$smoke_gobin/acs" version
-```
-
-The local build must print `acs devel`. Create a uniquely named Profile through
-the complete builder, inspect it, and launch Devin:
-
-```bash
-smoke_profile="release-smoke-$(date +%Y%m%d%H%M%S)"
-"$smoke_gobin/acs" devin create-profile --name "$smoke_profile"
-"$smoke_gobin/acs" devin --profile "$smoke_profile" --dry-run
-"$smoke_gobin/acs" devin --profile "$smoke_profile"
-```
-
-Select at least one discovered Skill during creation. Confirm that the dry run
-names the selected global Skills and that the interactive launch starts with a
-usable authenticated Devin session. Exit Devin normally, verify that ACS left
-no Session for the completed launch under `~/.acs/sessions/`, and remove only
-the uniquely named smoke-test Profile after recording the result:
-
-```bash
-rm "$HOME/.acs/profiles/$smoke_profile.json"
-rm "$smoke_gobin/acs"
-rmdir "$smoke_gobin"
-```
-
-Run the opt-in real-Devin integration test and all normal repository gates on
-the same verified commit. After publishing the immutable tag, repeat the
+After publishing the immutable tag, repeat the
 installation from the module proxy in another clean temporary `GOBIN`:
 
 ```bash

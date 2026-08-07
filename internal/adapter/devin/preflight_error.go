@@ -25,8 +25,6 @@ const (
 // output, environment values, credential contents, or account details.
 type PreflightError struct {
 	Capability Capability
-	Expected   []string
-	Observed   []string
 	reason     preflightFailureReason
 }
 
@@ -41,7 +39,7 @@ func (e *PreflightError) Error() string {
 	case reasonSkillInspectionOutputInvalid:
 		return "Devin Adapter Preflight failed: Devin returned an incompatible global Skill Catalog response; update Devin or ACS before retrying"
 	case reasonCatalogMismatch:
-		return fmt.Sprintf("Devin Adapter Preflight failed: skill isolation could not be verified (expected global Skill Catalog %v; observed %v); the installed Devin CLI is incompatible with ACS isolation", e.Expected, e.Observed)
+		return "Devin Adapter Preflight failed: skill isolation could not be verified because the global Skill Catalog did not match; the installed Devin CLI is incompatible with ACS isolation"
 	case reasonAuthenticationCommandFailed:
 		return "Devin Adapter Preflight failed: the authentication probe failed; run `devin auth status` outside ACS and resolve the reported CLI error"
 	case reasonAuthenticationUnavailable:

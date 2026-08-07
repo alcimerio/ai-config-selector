@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "candidate": {
+    "version": "REPLACE_WITH_CANONICAL_VERSION",
+    "source_commit": "REPLACE_WITH_40_CHARACTER_COMMIT",
+    "archive": "REPLACE_WITH_TARGET_ARCHIVE_NAME",
+    "archive_sha256": "REPLACE_WITH_TARGET_ARCHIVE_SHA256",
+    "artifact_set_sha256": "REPLACE_WITH_SHA256SUMS_FILE_SHA256",
+    "version_output": "REPLACE_WITH_EXACT_ACS_VERSION_OUTPUT"
+  },
+  "target": {
+    "platform": "REPLACE_WITH_macos-26_OR_ubuntu-24.04",
+    "os": "REPLACE_WITH_darwin_OR_linux",
+    "arch": "REPLACE_WITH_arm64_OR_amd64"
+  },
+  "started_at": "REPLACE_WITH_RFC3339_UTC_TIME",
+  "completed_at": "REPLACE_WITH_RFC3339_UTC_TIME",
+  "selected_catalog": [
+    {
+      "source": "REPLACE_WITH_devin-config_OR_shared-agents",
+      "relative_path": "REPLACE_WITH_SANITIZED_RELATIVE_SKILL_PATH"
+    }
+  ],
+  "checks": {
+    "candidate_identity": false,
+    "visual_profile_builder": false,
+    "terminal_restored": false,
+    "profile_created": false,
+    "dry_run": false,
+    "exact_catalog": false,
+    "authenticated_launch": false,
+    "normal_child_exit": false,
+    "session_created": false,
+    "session_isolated": false,
+    "session_cleaned": false
+  },
+  "cleanup": {
+    "temporary_profile_removed": false,
+    "session_credentials_removed": false,
+    "candidate_binary_removed": false,
+    "logs_removed": false,
+    "disposable_host_destroyed": false
+  },
+  "result": "incomplete"
+}

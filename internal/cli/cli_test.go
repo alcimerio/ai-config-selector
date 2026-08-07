@@ -517,7 +517,7 @@ func TestLaunchPreflightFailureReportsSanitizedCatalogAndCleansUpSession(t *test
 	t.Setenv("FAKE_DEVIN_LAUNCH_MARKER", launchMarker)
 	script := `#!/bin/sh
 if [ "$1" = "skills" ]; then
-  printf '[{"name":"unselected","provider":"Devin","base_dir":"%s"}]\n' "$HOME/.config/devin/skills/unselected"
+  printf '[{"name":"token=SUPER_SECRET_STDOUT","provider":"Devin","base_dir":"%s"}]\n' "$HOME/.config/devin/skills/SUPER_SECRET_PATH"
   printf 'token=SUPER_SECRET\n' >&2
   exit 0
 fi
@@ -535,13 +535,15 @@ exit 0
 	if exitCode := application.Run(context.Background(), []string{"devin", "--profile", "reviews"}); exitCode == 0 {
 		t.Fatal("launch succeeded after Adapter Preflight catalog mismatch")
 	}
-	for _, identity := range []string{"expected global Skill Catalog [devin-config:review]", "observed [devin-config:unselected]"} {
-		if !strings.Contains(stderr.String(), identity) {
-			t.Errorf("preflight diagnostic does not contain %q: %s", identity, stderr.String())
+	for _, detail := range []string{"skill isolation", "global Skill Catalog did not match", "incompatible"} {
+		if !strings.Contains(stderr.String(), detail) {
+			t.Errorf("preflight diagnostic does not contain %q: %s", detail, stderr.String())
 		}
 	}
-	if strings.Contains(stderr.String(), "SUPER_SECRET") {
-		t.Fatalf("preflight diagnostic leaked subprocess output: %s", stderr.String())
+	for _, sensitive := range []string{"SUPER_SECRET", "devin-config:review"} {
+		if strings.Contains(stderr.String(), sensitive) {
+			t.Fatalf("preflight diagnostic leaked catalog data: %s", stderr.String())
+		}
 	}
 	if _, err := os.Stat(launchMarker); !os.IsNotExist(err) {
 		t.Fatalf("Devin started after failed preflight: %v", err)

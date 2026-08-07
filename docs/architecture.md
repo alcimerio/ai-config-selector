@@ -253,6 +253,25 @@ mismatches, and unavailable authentication abort the launch. Preflight errors
 expose capability-level diagnostics without returning subprocess output,
 credentials, environment values, or account details.
 
+### Authenticated release evidence
+
+Authenticated release validation remains outside ordinary automation. A human
+runs the public Adapter contract and an installed candidate on macOS 26 arm64
+and disposable Ubuntu 24.04 amd64 reference hosts. The resulting evidence is a
+strict structured record, not a terminal transcript. It binds the source
+commit, canonical version, target archive digest, complete archive-manifest
+digest, native target, exact selected global Skill References, fixed smoke
+checklist, timestamps, and cleanup outcome.
+
+The evidence validator accepts only the two authenticated reference targets,
+canonical identities, bounded timestamps, allowlisted Skill sources, safe
+relative Skill paths, complete passing checks, and target-specific cleanup. A
+release consumer supplies the expected candidate identity and review window;
+missing, stale, mismatched, malformed, incomplete, or extra evidence fails
+closed. Diagnostics identify the failed evidence field without echoing
+untrusted evidence values. Credentials, host paths, logs, account details, and
+subprocess output are outside the evidence boundary.
+
 ## Isolation boundaries
 
 The synthetic home isolates Devin's normal configuration discovery from the
