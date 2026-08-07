@@ -214,11 +214,9 @@ func (a *Adapter) verifySkillIsolation(ctx context.Context, session *Session) er
 	if failure != 0 {
 		return &PreflightError{Capability: CapabilitySkillIsolation, reason: failure}
 	}
-	if len(observed.unmanaged) != 0 || !equalSkillReferences(session.expectedCatalog, observed.managed) {
+	if observed.unmanaged || !equalSkillReferences(session.expectedCatalog, observed.managed) {
 		return &PreflightError{
 			Capability: CapabilitySkillIsolation,
-			Expected:   diagnosticIdentities(session.expectedCatalog, nil),
-			Observed:   diagnosticIdentities(observed.managed, observed.unmanaged),
 			reason:     reasonCatalogMismatch,
 		}
 	}
@@ -234,7 +232,7 @@ type observedSkill struct {
 
 type catalogObservation struct {
 	managed   []SkillReference
-	unmanaged []string
+	unmanaged bool
 }
 
 func (a *Adapter) observeGlobalCatalog(ctx context.Context, session *Session) (catalogObservation, preflightFailureReason) {
@@ -271,10 +269,9 @@ func (a *Adapter) observeGlobalCatalog(ctx context.Context, session *Session) (c
 
 		// Any non-built-in skill outside the two known project roots is a new
 		// global source that ACS cannot safely claim to isolate.
-		observed.unmanaged = append(observed.unmanaged, escapedDiagnosticIdentity("unmanaged:"+skill.Name))
+		observed.unmanaged = true
 	}
 	sortSkillReferences(observed.managed)
-	sort.Strings(observed.unmanaged)
 	return observed, 0
 }
 
@@ -361,16 +358,6 @@ func sortSkillReferences(references []SkillReference) {
 		}
 		return references[left].RelativePath < references[right].RelativePath
 	})
-}
-
-func diagnosticIdentities(references []SkillReference, extra []string) []string {
-	identities := make([]string, 0, len(references)+len(extra))
-	for _, reference := range references {
-		identities = append(identities, diagnosticIdentity(reference))
-	}
-	identities = append(identities, extra...)
-	sort.Strings(identities)
-	return identities
 }
 
 func commandFailureReason(ctx context.Context, err error, commandFailed preflightFailureReason) preflightFailureReason {

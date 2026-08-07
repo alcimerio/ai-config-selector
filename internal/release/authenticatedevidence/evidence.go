@@ -3,6 +3,7 @@
 package authenticatedevidence
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +12,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 const (
@@ -23,7 +26,6 @@ var (
 	canonicalVersionPattern = regexp.MustCompile(`^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$`)
 	hexCommitPattern        = regexp.MustCompile(`^[0-9a-f]{40}$`)
 	hexDigestPattern        = regexp.MustCompile(`^[0-9a-f]{64}$`)
-	catalogComponentPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
 )
 
 // Expectations binds evidence to the exact candidate and reference target
@@ -100,8 +102,17 @@ func Validate(input io.Reader, expected Expectations) error {
 		return err
 	}
 
-	limited := &io.LimitedReader{R: input, N: maximumEvidenceSize + 1}
-	decoder := json.NewDecoder(limited)
+	contents, err := io.ReadAll(io.LimitReader(input, maximumEvidenceSize+1))
+	if err != nil || len(contents) > maximumEvidenceSize {
+		return errors.New("authenticated evidence contains trailing or oversized content")
+	}
+	if !utf8.Valid(contents) {
+		return errors.New("authenticated evidence contains an unsupported field or malformed value")
+	}
+	if err := rejectDuplicateFields(contents); err != nil {
+		return err
+	}
+	decoder := json.NewDecoder(bytes.NewReader(contents))
 	decoder.DisallowUnknownFields()
 	var record evidence
 	if err := decoder.Decode(&record); err != nil {
@@ -109,9 +120,6 @@ func Validate(input io.Reader, expected Expectations) error {
 	}
 	if err := ensureJSONEnds(decoder); err != nil {
 		return err
-	}
-	if limited.N == 0 {
-		return errors.New("authenticated evidence contains trailing or oversized content")
 	}
 	if err := validateIdentity(record, expected); err != nil {
 		return err
@@ -130,6 +138,61 @@ func Validate(input io.Reader, expected Expectations) error {
 	}
 	if record.Result != "passed" {
 		return errors.New("authenticated evidence result is not passed")
+	}
+	return nil
+}
+
+func rejectDuplicateFields(contents []byte) error {
+	decoder := json.NewDecoder(bytes.NewReader(contents))
+	if err := inspectJSONValue(decoder); err != nil {
+		return err
+	}
+	if _, err := decoder.Token(); err != io.EOF {
+		return errors.New("authenticated evidence contains trailing or oversized content")
+	}
+	return nil
+}
+
+func inspectJSONValue(decoder *json.Decoder) error {
+	token, err := decoder.Token()
+	if err != nil {
+		return errors.New("authenticated evidence contains an unsupported field or malformed value")
+	}
+	delimiter, compound := token.(json.Delim)
+	if !compound {
+		return nil
+	}
+	switch delimiter {
+	case '{':
+		seen := make(map[string]bool)
+		for decoder.More() {
+			keyToken, err := decoder.Token()
+			if err != nil {
+				return errors.New("authenticated evidence contains an unsupported field or malformed value")
+			}
+			key, ok := keyToken.(string)
+			if !ok {
+				return errors.New("authenticated evidence contains an unsupported field or malformed value")
+			}
+			if seen[key] {
+				return errors.New("authenticated evidence contains a duplicate field")
+			}
+			seen[key] = true
+			if err := inspectJSONValue(decoder); err != nil {
+				return err
+			}
+		}
+	case '[':
+		for decoder.More() {
+			if err := inspectJSONValue(decoder); err != nil {
+				return err
+			}
+		}
+	default:
+		return errors.New("authenticated evidence contains an unsupported field or malformed value")
+	}
+	if _, err := decoder.Token(); err != nil {
+		return errors.New("authenticated evidence contains an unsupported field or malformed value")
 	}
 	return nil
 }
@@ -257,8 +320,13 @@ func safeRelativeCatalogPath(path string) bool {
 	}
 	components := strings.Split(path, "/")
 	for _, component := range components {
-		if component == "." || component == ".." || !catalogComponentPattern.MatchString(component) {
+		if component == "" || component == "." || component == ".." {
 			return false
+		}
+		for _, character := range component {
+			if character == unicode.ReplacementChar || unicode.IsControl(character) {
+				return false
+			}
 		}
 	}
 	return true

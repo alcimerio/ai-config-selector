@@ -65,6 +65,17 @@ func TestValidateAcceptsCompleteCandidateMatchedDarwinEvidence(t *testing.T) {
 	}
 }
 
+func TestValidatePreservesUnicodeSkillReferenceIdentity(t *testing.T) {
+	evidence := strings.Replace(validDarwinEvidence, `"relative_path": "review"`, `"relative_path": "révision"`, 1)
+	err := authenticatedevidence.Validate(strings.NewReader(evidence), authenticatedevidence.Expectations{
+		Version: "v0.2.0", SourceCommit: "0123456789abcdef0123456789abcdef01234567", Target: "darwin/arm64",
+		ArchiveSHA256: strings.Repeat("a", 64), ArtifactSetSHA256: strings.Repeat("b", 64),
+	})
+	if err != nil {
+		t.Fatalf("Unicode Skill Reference evidence rejected: %v", err)
+	}
+}
+
 func TestValidateRejectsEvidenceThatCannotBlockPublication(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -121,8 +132,13 @@ func TestValidateRejectsEvidenceThatCannotBlockPublication(t *testing.T) {
 		},
 		{
 			name:     "unknown field",
-			evidence: strings.Replace(validDarwinEvidence, `"result": "passed"`, `"credential": "secret",\n  "result": "passed"`, 1),
+			evidence: strings.Replace(validDarwinEvidence, `"result": "passed"`, `"credential": "secret", "result": "passed"`, 1),
 			want:     "unsupported field",
+		},
+		{
+			name:     "duplicate field",
+			evidence: strings.Replace(validDarwinEvidence, `"result": "passed"`, `"result": "failed", "result": "passed"`, 1),
+			want:     "duplicate field",
 		},
 	}
 

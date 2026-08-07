@@ -93,6 +93,40 @@ find "$HOME/.acs/sessions" -mindepth 1 -maxdepth 1 -print 2>/dev/null | sort >"$
 "$candidate_binary" devin create-profile --name "$smoke_profile"
 "$candidate_binary" devin --profile "$smoke_profile" --dry-run
 "$candidate_binary" devin --profile "$smoke_profile"
+```
+
+Leave Devin running after the final command. In a second authorized terminal,
+identify the single new live Session without recording its path in evidence:
+
+```sh
+session_during="$(mktemp)"
+session_delta="$(mktemp)"
+find "$HOME/.acs/sessions" -mindepth 1 -maxdepth 1 -print 2>/dev/null | sort >"$session_during"
+comm -13 "$session_baseline" "$session_during" >"$session_delta"
+test "$(wc -l <"$session_delta" | tr -d ' ')" = 1
+smoke_session="$(sed -n '1p' "$session_delta")"
+test -f "$smoke_session/.active.lock"
+test -f "$smoke_session/home/.local/share/devin/credentials.toml"
+test ! -e "$smoke_session/home/.config/devin/config.json"
+test ! -e "$smoke_session/home/.config/devin/mcp_config.json"
+test ! -e "$smoke_session/home/.config/devin/hooks"
+```
+
+Compare the Profile's selected `source` and `relativePath` pairs with the
+directories under the Session's two managed roots. Those roots must contain
+exactly the selected Bundles and no unselected global Bundle:
+
+```text
+<smoke_session>/home/.config/devin/skills
+<smoke_session>/home/.agents/skills
+```
+
+Do not copy either path into evidence. Return to the launch terminal and exit
+Devin normally. Then, in the second terminal, verify that the exact leased
+Session disappeared and that the pre-existing Session set is unchanged:
+
+```sh
+test ! -e "$smoke_session"
 find "$HOME/.acs/sessions" -mindepth 1 -maxdepth 1 -print 2>/dev/null | sort >"$session_after"
 cmp -s "$session_baseline" "$session_after"
 ```
@@ -127,7 +161,7 @@ test -f "$profile_file"
 rm "$profile_file"
 test ! -e "$profile_file"
 cmp -s "$session_baseline" "$session_after"
-rm "$session_baseline" "$session_after"
+rm "$session_baseline" "$session_during" "$session_delta" "$session_after"
 rm "$candidate_binary"
 rmdir "$install_root/bin"
 rmdir "$install_root"

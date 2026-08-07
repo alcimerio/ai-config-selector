@@ -58,9 +58,9 @@ func TestDiscoverGlobalSkillCatalogKeepsSourceIdentityForDuplicateNames(t *testi
 
 func TestPreflightReportsSanitizedCatalogMismatch(t *testing.T) {
 	fixture := newFakeDevinFixture(t, []fakeObservedSkill{{
-		Name:     "unselected",
+		Name:     "token=SUPER_SECRET_STDOUT",
 		Provider: "Devin",
-		BaseDir:  filepath.Join(plannedSessionHome(t), ".config", "devin", "skills", "unselected"),
+		BaseDir:  filepath.Join(plannedSessionHome(t), ".config", "devin", "skills", "SUPER_SECRET_PATH"),
 	}}, "Logged in (via Devin).", 0)
 	fixture.skillsStderr = "credential=SUPER_SECRET_CATALOG_OUTPUT"
 
@@ -78,13 +78,15 @@ func TestPreflightReportsSanitizedCatalogMismatch(t *testing.T) {
 		t.Errorf("failed capability = %q, want %q", preflightError.Capability, devin.CapabilitySkillIsolation)
 	}
 	diagnostic := err.Error()
-	for _, required := range []string{"devin-config:acs-selected-fixture", "devin-config:unselected", "incompatible"} {
+	for _, required := range []string{"skill isolation", "incompatible"} {
 		if !strings.Contains(diagnostic, required) {
 			t.Errorf("diagnostic %q does not contain actionable detail %q", diagnostic, required)
 		}
 	}
-	if strings.Contains(diagnostic, "SUPER_SECRET") {
-		t.Errorf("diagnostic leaked subprocess output: %q", diagnostic)
+	for _, sensitive := range []string{"SUPER_SECRET_CATALOG_OUTPUT", "SUPER_SECRET_STDOUT", "SUPER_SECRET_PATH", "acs-selected-fixture"} {
+		if strings.Contains(diagnostic, sensitive) {
+			t.Errorf("diagnostic leaked catalog data: %q", diagnostic)
+		}
 	}
 }
 
@@ -102,7 +104,7 @@ func TestPreflightSanitizesManagedSkillIdentities(t *testing.T) {
 	}
 }
 
-func TestPreflightKeepsSanitizedManagedIdentitiesDistinct(t *testing.T) {
+func TestPreflightDoesNotExposeManagedCatalogIdentities(t *testing.T) {
 	fixture := newFakeDevinFixture(t, []fakeObservedSkill{{
 		Name:     "café",
 		Provider: "Devin",
@@ -116,8 +118,10 @@ func TestPreflightKeepsSanitizedManagedIdentitiesDistinct(t *testing.T) {
 		t.Fatal("Preflight succeeded with different managed Skill References")
 	}
 	diagnostic := err.Error()
-	if !strings.Contains(diagnostic, `devin-config:caf\u00e9`) {
-		t.Fatalf("diagnostic did not preserve the distinct escaped identity: %q", diagnostic)
+	for _, identity := range []string{"caf", "café", `caf\u00e9`} {
+		if strings.Contains(diagnostic, identity) {
+			t.Fatalf("diagnostic exposed a managed catalog identity: %q", diagnostic)
+		}
 	}
 }
 
@@ -251,26 +255,51 @@ func TestPrepareSessionCopiesOnlySelectedBundlesAndCredentialAllowlist(t *testin
 }
 
 func TestPrepareSessionSanitizesCredentialPathFailures(t *testing.T) {
-	existingHome := filepath.Join(t.TempDir(), "PRIVATE_TOKEN_PATH")
-	credentialPath := filepath.Join(existingHome, ".local", "share", "devin", "credentials.toml")
-	if err := os.MkdirAll(filepath.Dir(credentialPath), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Symlink(filepath.Join(existingHome, "PRIVATE_TOKEN_TARGET"), credentialPath); err != nil {
-		t.Fatal(err)
-	}
+	sensitiveComponent := "PRIVATE_TOKEN_PATH" + strings.Repeat("x", 300)
+	existingHome := filepath.Join(t.TempDir(), sensitiveComponent)
 	adapter, err := devin.New(devin.Config{BinaryPath: "devin", ExistingHomeDir: existingHome})
 	if err != nil {
 		t.Fatal(err)
 	}
 	_, err = adapter.PrepareSession(t.TempDir(), t.TempDir(), nil)
 	if err == nil {
-		t.Fatal("PrepareSession accepted an unsafe credential source")
+		t.Fatal("PrepareSession accepted an unreadable credential source")
 	}
-	for _, sensitive := range []string{"PRIVATE_TOKEN_PATH", "PRIVATE_TOKEN_TARGET", credentialPath} {
+	for _, sensitive := range []string{"PRIVATE_TOKEN_PATH", sensitiveComponent, existingHome} {
 		if strings.Contains(err.Error(), sensitive) {
 			t.Fatalf("credential failure exposed a sensitive path: %q", err)
 		}
+	}
+}
+
+func TestPrepareSessionPreservesRegularSymlinkBackedCredentials(t *testing.T) {
+	root := t.TempDir()
+	existingHome := filepath.Join(root, "existing-home")
+	credentialPath := filepath.Join(existingHome, ".local", "share", "devin", "credentials.toml")
+	if err := os.MkdirAll(filepath.Dir(credentialPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	credentialTarget := filepath.Join(root, "credential-target")
+	if err := os.WriteFile(credentialTarget, []byte("fixture-symlink-credential"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(credentialTarget, credentialPath); err != nil {
+		t.Fatal(err)
+	}
+	adapter, err := devin.New(devin.Config{BinaryPath: "devin", ExistingHomeDir: existingHome})
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := adapter.PrepareSession(t.TempDir(), t.TempDir(), nil)
+	if err != nil {
+		t.Fatalf("PrepareSession rejected a regular symlink-backed credential: %v", err)
+	}
+	copied, err := os.ReadFile(filepath.Join(session.HomeDir, ".local", "share", "devin", "credentials.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(copied) != "fixture-symlink-credential" {
+		t.Fatal("PrepareSession copied unexpected credential bytes")
 	}
 }
 

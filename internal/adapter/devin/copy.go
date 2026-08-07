@@ -57,7 +57,7 @@ func copyBundle(source, destination string) error {
 }
 
 func copyCredentialIfPresent(source, destination string) error {
-	info, err := os.Lstat(source)
+	info, err := os.Stat(source)
 	if os.IsNotExist(err) {
 		return nil
 	}
