@@ -14,13 +14,16 @@ import (
 )
 
 func TestRealDevinPreflightPreservesExactGlobalCatalogAndExistingLogin(t *testing.T) {
+	if os.Getenv("ACS_REAL_DEVIN_INTEGRATION") != "I_ACKNOWLEDGE_LOCAL_CREDENTIAL_ACCESS" {
+		t.Skip("real-Devin integration requires explicit local authorization")
+	}
 	binary, err := exec.LookPath("devin")
 	if err != nil {
-		t.Fatalf("real-Devin contract requires an installed devin CLI: %v", err)
+		t.Fatal("real-Devin contract requires an installed devin CLI")
 	}
 	existingHome, err := os.UserHomeDir()
 	if err != nil {
-		t.Fatalf("resolve existing home: %v", err)
+		t.Fatal("real-Devin contract could not resolve the existing home")
 	}
 
 	adapter, err := devin.New(devin.Config{
@@ -28,7 +31,7 @@ func TestRealDevinPreflightPreservesExactGlobalCatalogAndExistingLogin(t *testin
 		ExistingHomeDir: existingHome,
 	})
 	if err != nil {
-		t.Fatalf("create adapter: %v", err)
+		t.Fatal("real-Devin contract could not create the Adapter")
 	}
 
 	session, err := adapter.PrepareSession(t.TempDir(), t.TempDir(), []devin.SkillBundle{
@@ -48,7 +51,7 @@ func TestRealDevinPreflightPreservesExactGlobalCatalogAndExistingLogin(t *testin
 		},
 	})
 	if err != nil {
-		t.Fatalf("prepare Session: %v", err)
+		t.Fatal("real-Devin contract could not prepare the synthetic Session")
 	}
 
 	assertPreparationCopiedOnlyAllowlistedState(t, session.HomeDir)

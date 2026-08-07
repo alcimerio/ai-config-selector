@@ -1,6 +1,7 @@
 package devin
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -56,17 +57,20 @@ func copyBundle(source, destination string) error {
 }
 
 func copyCredentialIfPresent(source, destination string) error {
-	info, err := os.Stat(source)
+	info, err := os.Lstat(source)
 	if os.IsNotExist(err) {
 		return nil
 	}
 	if err != nil {
-		return err
+		return errors.New("allowlisted credentials could not be inspected safely")
 	}
 	if !info.Mode().IsRegular() {
 		return fmt.Errorf("allowlisted credentials path is not a regular file")
 	}
-	return copyFile(source, destination, 0o600)
+	if err := copyFile(source, destination, 0o600); err != nil {
+		return errors.New("allowlisted credentials could not be copied safely")
+	}
+	return nil
 }
 
 func copyFile(source, destination string, mode os.FileMode) error {

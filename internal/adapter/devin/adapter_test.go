@@ -250,6 +250,30 @@ func TestPrepareSessionCopiesOnlySelectedBundlesAndCredentialAllowlist(t *testin
 	}
 }
 
+func TestPrepareSessionSanitizesCredentialPathFailures(t *testing.T) {
+	existingHome := filepath.Join(t.TempDir(), "PRIVATE_TOKEN_PATH")
+	credentialPath := filepath.Join(existingHome, ".local", "share", "devin", "credentials.toml")
+	if err := os.MkdirAll(filepath.Dir(credentialPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(existingHome, "PRIVATE_TOKEN_TARGET"), credentialPath); err != nil {
+		t.Fatal(err)
+	}
+	adapter, err := devin.New(devin.Config{BinaryPath: "devin", ExistingHomeDir: existingHome})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = adapter.PrepareSession(t.TempDir(), t.TempDir(), nil)
+	if err == nil {
+		t.Fatal("PrepareSession accepted an unsafe credential source")
+	}
+	for _, sensitive := range []string{"PRIVATE_TOKEN_PATH", "PRIVATE_TOKEN_TARGET", credentialPath} {
+		if strings.Contains(err.Error(), sensitive) {
+			t.Fatalf("credential failure exposed a sensitive path: %q", err)
+		}
+	}
+}
+
 func TestSourceRulesSeparateGlobalAndProjectLocalSkills(t *testing.T) {
 	wantGlobal := []devin.SourceRule{
 		{Source: devin.GlobalSourceDevinConfig, RelativeDirectory: filepath.Join(".config", "devin", "skills")},
