@@ -272,6 +272,40 @@ closed. Diagnostics identify the failed evidence field without echoing
 untrusted evidence values. Credentials, host paths, logs, account details, and
 subprocess output are outside the evidence boundary.
 
+### Immutable release publication
+
+An annotated canonical SemVer tag is the release authorization boundary. The
+tag points to the exact source commit and its annotation contains the complete
+sanitized evidence-set envelope. Version-controlled release notes are a
+separate required input. The workflow rejects lightweight or moved tags,
+source mismatches, dirty source, incomplete evidence, and evidence completed
+outside the interval from the source commit to the tag creation time.
+
+One Linux job builds the complete six-file Release Artifact Set. Four native
+jobs download that one workflow artifact and validate the supplied bytes; none
+rebuilds them. After every native job passes, provenance attestation covers the
+four archives and checksum manifest. Attestation alone receives
+`id-token: write` and `attestations: write`. The policy token and publication
+token are short-lived and come from separate repository-only Apps behind a
+protected `release` environment: the first has
+Administration(write), required for GitHub to return ruleset bypass actors,
+and the second has only Contents(write). No token can both alter policy and
+publish a Release. The default workflow token remains read-only.
+
+Publication is a forward-only state machine: create a draft, resume a
+compatible partial draft by uploading only missing exact assets, publish a
+complete draft once, or accept an already immutable exact match. Conflicting
+metadata, source, asset names, sizes, digests, prerelease state, or mutable
+public state stops publication. The workflow also fails closed unless the
+repository immutable Releases setting is enabled, one active non-bypassable tag
+ruleset restricts updates and deletions for `refs/tags/v*`, and a separate
+active ruleset restricts tag creation to one explicitly identified release
+maintainer who must also be the tag-triggering actor. It
+verifies the live annotated tag object, peeled source commit, and containment
+in protected `main` before draft creation and again before publication. It
+never deletes or replaces a tag, Release, or asset, so correction requires a
+new patch version.
+
 ## Isolation boundaries
 
 The synthetic home isolates Devin's normal configuration discovery from the

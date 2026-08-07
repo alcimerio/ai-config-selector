@@ -138,6 +138,49 @@ boundaries, verifies Session isolation and cleanup, and produces strict,
 candidate-matched sanitized evidence for later release review. A missing host,
 authorization, or passing evidence remains a blocking release gate.
 
+The release tag is an annotated canonical SemVer tag. Its complete annotation
+is the strict evidence-set JSON envelope containing exactly one macOS 26 arm64
+record and one Ubuntu 24.04 amd64 record. Both records must name the tagged
+commit and the exact archive and `SHA256SUMS` bytes rebuilt by the tag workflow.
+The source tree must also contain nonempty release notes at
+`docs/releases/<tag>.md`. Do not create the tag until those inputs are final.
+
+Before the tag is pushed, enable the repository's immutable Releases setting
+and create two active tag rulesets covering exactly `refs/tags/v*`. The first
+must restrict updates and deletions with no bypass actors. The second must
+restrict creation and allow only the designated release maintainers to bypass
+that creation rule. Record their numeric IDs in the
+`ACS_RELEASE_TAG_RULESET_ID` and `ACS_RELEASE_TAG_CREATION_RULESET_ID`
+repository variables. The creation ruleset must have exactly one `User` bypass
+actor in `always` mode; record that user's numeric ID as
+`ACS_RELEASE_TAG_CREATOR_ID`. The tag-triggering actor must match that ID.
+
+Configure a protected `release` environment with required reviewers and no
+self-review. Install two repository-only GitHub Apps so no credential can both
+change policy and publish a Release. The policy App needs
+Administration(write), because GitHub omits ruleset bypass actors from weaker
+tokens; store its client ID as `ACS_RELEASE_POLICY_APP_CLIENT_ID` and its key as
+the `ACS_RELEASE_POLICY_APP_PRIVATE_KEY` environment secret. The publication
+App needs only Contents(write); store its client ID as
+`ACS_RELEASE_PUBLISH_APP_CLIENT_ID` and its key as the
+`ACS_RELEASE_PUBLISH_APP_PRIVATE_KEY` environment secret. The workflow uses
+short-lived installation tokens only after environment approval and does not
+accept a personal access token. The tagged commit must be contained in the
+current protected `main` history.
+
+The tag workflow builds once, transfers those bytes through all four
+native jobs, attests the four archives and checksum manifest, and only then
+creates or resumes a draft Release. It uploads only missing assets whose names
+are in the exact Release Artifact Set and rejects conflicting assets or
+metadata. A complete draft is made public with one final transition. A rerun
+of the unchanged tag resumes a compatible draft or accepts the already
+immutable, byte-identical Release; it never deletes, replaces, or rebuilds an
+asset during publication.
+
+If any gate fails, no public Release is created. Correct source, evidence,
+notes, workflow configuration, tags, or artifact bytes with a new patch
+version. Never move a published tag or replace a published asset.
+
 After publishing the immutable tag, repeat the
 installation from the module proxy in another clean temporary `GOBIN`:
 
