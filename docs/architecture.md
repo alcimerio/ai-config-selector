@@ -284,17 +284,22 @@ outside the interval from the source commit to the tag creation time.
 One Linux job builds the complete six-file Release Artifact Set. Four native
 jobs download that one workflow artifact and validate the supplied bytes; none
 rebuilds them. After every native job passes, provenance attestation covers the
-four archives and checksum manifest. Only the final publication job receives
-`contents: write`; attestation uses separate `id-token: write` and
-`attestations: write` permissions.
+four archives and checksum manifest. Attestation alone receives
+`id-token: write` and `attestations: write`. Publication uses a short-lived,
+repository-only GitHub App token limited to Administration(read), needed to
+verify immutable Release configuration, and Contents(write), needed to stage
+and publish the Release. The default workflow token remains read-only.
 
 Publication is a forward-only state machine: create a draft, resume a
 compatible partial draft by uploading only missing exact assets, publish a
 complete draft once, or accept an already immutable exact match. Conflicting
 metadata, source, asset names, sizes, digests, prerelease state, or mutable
 public state stops publication. The workflow also fails closed unless the
-repository immutable Releases setting is enabled. It never deletes or
-replaces a tag, Release, or asset, so correction requires a new patch version.
+repository immutable Releases setting is enabled and an active,
+non-bypassable tag ruleset restricts updates and deletions for `refs/tags/v*`.
+It verifies the live annotated tag object and peeled source commit before
+draft creation and again before publication. It never deletes or replaces a
+tag, Release, or asset, so correction requires a new patch version.
 
 ## Isolation boundaries
 

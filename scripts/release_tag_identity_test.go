@@ -38,8 +38,14 @@ func TestReleaseTagIdentityRequiresAnnotatedTagNotesAndCleanExactSource(t *testi
 		t.Fatalf("annotated release tag rejected: %v; output=%q", err, output)
 	}
 	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
-	if len(lines) != 3 || len(lines[0]) != 40 {
+	if len(lines) != 4 || len(lines[0]) != 40 || len(lines[1]) != 40 {
 		t.Fatalf("release identity output = %q", output)
+	}
+	command = exec.Command("sh", script, "v1.2.3x", filepath.Join(t.TempDir(), "malformed.json"))
+	command.Dir = repository
+	output, err = command.CombinedOutput()
+	if err == nil || !strings.Contains(string(output), "not a canonical SemVer") {
+		t.Fatalf("malformed tag rejection = %v, output=%q", err, output)
 	}
 	contents, err := os.ReadFile(evidence)
 	if err != nil {

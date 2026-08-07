@@ -3,16 +3,18 @@
 set -euo pipefail
 IFS=$'\n\t'
 
-if [[ $# -ne 4 ]]; then
-  echo "usage: scripts/publish-release.sh <vMAJOR.MINOR.PATCH> <source-commit> <candidate-directory> <release-notes>" >&2
+if [[ $# -ne 5 ]]; then
+  echo "usage: scripts/publish-release.sh <vMAJOR.MINOR.PATCH> <source-commit> <tag-object> <candidate-directory> <release-notes>" >&2
   exit 2
 fi
 
 release_tag="$1"
 source_commit="$2"
-candidate_directory="$3"
-release_notes="$4"
+expected_tag_object="$3"
+candidate_directory="$4"
+release_notes="$5"
 repository="${GITHUB_REPOSITORY:-}"
+tag_ruleset_id="${ACS_RELEASE_TAG_RULESET_ID:-}"
 stage="arguments"
 tag_identity="unvalidated"
 source_identity="unvalidated"
@@ -26,10 +28,15 @@ fail() {
 tag_identity="$release_tag"
 [[ "$source_commit" =~ ^[0-9a-f]{40}$ ]] || fail "source commit is invalid"
 source_identity="$source_commit"
+[[ "$expected_tag_object" =~ ^[0-9a-f]{40}$ ]] || fail "annotated tag object is invalid"
 [[ "$repository" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || fail "repository identity is invalid"
+[[ "$tag_ruleset_id" =~ ^[1-9][0-9]*$ ]] || fail "release tag ruleset identity is invalid"
 [[ -n "${GH_TOKEN:-}" ]] || fail "GitHub token is unavailable"
 [[ -d "$candidate_directory" && ! -L "$candidate_directory" ]] || fail "candidate directory is unavailable or unsafe"
 [[ -f "$release_notes" && ! -L "$release_notes" && -s "$release_notes" ]] || fail "release notes are unavailable or unsafe"
+
+stage="candidate"
+go run ./tools/releaseverify --dist "$candidate_directory" --version "$release_tag" >/dev/null || fail "candidate artifact set is invalid"
 
 workspace="$(mktemp -d "${RUNNER_TEMP:-/tmp}/acs-release.XXXXXX")" || fail "temporary workspace could not be created"
 cleanup() { rm -rf "$workspace"; }
@@ -45,6 +52,31 @@ require_immutable_releases() {
   [[ "$immutable_setting" == "true" ]] || fail "immutable Releases are not enabled"
 }
 require_immutable_releases
+
+require_release_policy() {
+  local protected
+  if ! protected="$(gh api "repos/$repository/rulesets/$tag_ruleset_id" --jq '(.target == "tag") and (.enforcement == "active") and ((.bypass_actors | length) == 0) and (.conditions.ref_name.include == ["refs/tags/v*"]) and ((.conditions.ref_name.exclude | length) == 0) and (any(.rules[]; .type == "update")) and (any(.rules[]; .type == "deletion"))' 2>/dev/null)"; then
+    fail "release tag protection could not be verified"
+  fi
+  [[ "$protected" == "true" ]] || fail "release tag update and deletion protection is incomplete"
+}
+
+require_remote_tag_identity() {
+  local ref_identity target_identity ref_type ref_sha target_type target_sha
+  if ! ref_identity="$(gh api "repos/$repository/git/ref/tags/$release_tag" --jq '.object.type + "\t" + .object.sha' 2>/dev/null)"; then
+    fail "remote release tag could not be read"
+  fi
+  read -r ref_type ref_sha <<<"$ref_identity"
+  [[ "$ref_type" == "tag" && "$ref_sha" == "$expected_tag_object" ]] || fail "remote annotated tag object does not match"
+  if ! target_identity="$(gh api "repos/$repository/git/tags/$ref_sha" --jq '.object.type + "\t" + .object.sha' 2>/dev/null)"; then
+    fail "remote annotated tag target could not be read"
+  fi
+  read -r target_type target_sha <<<"$target_identity"
+  [[ "$target_type" == "commit" && "$target_sha" == "$source_commit" ]] || fail "remote tag source commit does not match"
+}
+
+require_release_policy
+require_remote_tag_identity
 
 fetch_release() {
   gh api "repos/$repository/releases/tags/$release_tag" >"$release_json" 2>/dev/null
@@ -95,6 +127,8 @@ fi
 
 if [[ "$state" == "create-draft" ]]; then
   stage="create-draft"
+  require_release_policy
+  require_remote_tag_identity
   if ! gh api --method POST "repos/$repository/releases" \
     -f tag_name="$release_tag" -f target_commitish="$source_commit" -f name="ACS $release_tag" \
     -F draft=true -F prerelease=false -F generate_release_notes=false -F body="@$release_notes" \
@@ -122,6 +156,8 @@ fi
 [[ "$state" == "publish-draft" && "$publish" == "true" ]] || fail "draft is not complete enough to publish"
 stage="publish"
 require_immutable_releases
+require_release_policy
+require_remote_tag_identity
 if ! gh api --method PATCH "repos/$repository/releases/$release_id" -F draft=false >"$release_json" 2>/dev/null; then
   fail "complete draft could not be published"
 fi

@@ -25,6 +25,9 @@ case "$release_tag" in
   v[0-9]*.[0-9]*.[0-9]*) ;;
   *) fail "tag is not a canonical SemVer release" ;;
 esac
+case "$archive_version" in
+  *[!0-9.]*) fail "tag is not a canonical SemVer release" ;;
+esac
 old_ifs="$IFS"
 IFS=.
 set -- $archive_version
@@ -43,6 +46,7 @@ stage="repository"
 tag_ref="refs/tags/$release_tag"
 [ "$(git cat-file -t "$tag_ref" 2>/dev/null || true)" = "tag" ] || fail "release tag is not annotated"
 source_commit="$(git rev-parse "$tag_ref^{}" 2>/dev/null)" || fail "tagged source commit is unavailable"
+tag_object="$(git rev-parse "$tag_ref" 2>/dev/null)" || fail "annotated tag object is unavailable"
 case "$source_commit" in
   [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) ;;
   *) fail "tagged source commit is invalid" ;;
@@ -62,4 +66,4 @@ earliest_completion="$(git show -s --format=%cI "$source_commit")" || fail "sour
 latest_completion="$(git for-each-ref --format='%(taggerdate:iso-strict)' "$tag_ref")" || fail "tag timestamp is unavailable"
 [ -n "$earliest_completion" ] && [ -n "$latest_completion" ] || fail "release review window is unavailable"
 
-printf '%s\n%s\n%s\n' "$source_commit" "$earliest_completion" "$latest_completion"
+printf '%s\n%s\n%s\n%s\n' "$source_commit" "$tag_object" "$earliest_completion" "$latest_completion"

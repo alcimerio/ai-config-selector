@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"strconv"
 
@@ -23,15 +24,15 @@ func main() {
 		fmt.Fprintln(os.Stderr, "invalid release-publication arguments")
 		os.Exit(2)
 	}
-	var remote *os.File
+	var remote io.Reader
 	if *releaseJSON != "" {
-		var err error
-		remote, err = os.Open(*releaseJSON)
+		input, err := os.Open(*releaseJSON)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "GitHub Release response could not be opened")
 			os.Exit(1)
 		}
-		defer remote.Close()
+		defer input.Close()
+		remote = input
 	}
 	notes, err := os.ReadFile(*releaseNotes)
 	if err != nil {

@@ -19,6 +19,7 @@ jobs:
     timeout-minutes: 20
     outputs:
       source-commit: ${{ steps.identity.outputs.source_commit }}
+      tag-object: ${{ steps.identity.outputs.tag_object }}
 
     steps:
       - name: Check out the tagged source
@@ -38,13 +39,14 @@ jobs:
         shell: bash
         run: |
           mapfile -t identity < <(scripts/release-tag-identity.sh "$GITHUB_REF_NAME" "$RUNNER_TEMP/authenticated-evidence.json")
-          if [[ "${#identity[@]}" -ne 3 ]]; then
+          if [[ "${#identity[@]}" -ne 4 ]]; then
             echo "Release tag identity output is incomplete."
             exit 1
           fi
           echo "source_commit=${identity[0]}" >>"$GITHUB_OUTPUT"
-          echo "earliest_completion=${identity[1]}" >>"$GITHUB_OUTPUT"
-          echo "latest_completion=${identity[2]}" >>"$GITHUB_OUTPUT"
+          echo "tag_object=${identity[1]}" >>"$GITHUB_OUTPUT"
+          echo "earliest_completion=${identity[2]}" >>"$GITHUB_OUTPUT"
+          echo "latest_completion=${identity[3]}" >>"$GITHUB_OUTPUT"
 
       - name: Build the candidate exactly once
         run: scripts/release-candidate.sh "$GITHUB_REF_NAME"
@@ -181,6 +183,16 @@ jobs:
           name: release-candidate-${{ github.run_id }}-${{ github.run_attempt }}
           path: dist/release-candidate
 
+      - name: Restore installer mode normalized by artifact transport
+        shell: bash
+        run: |
+          installer=dist/release-candidate/install.sh
+          if [[ ! -f "$installer" || -L "$installer" ]]; then
+            echo "Release candidate install.sh is missing or unsafe."
+            exit 1
+          fi
+          chmod 0755 "$installer"
+
       - name: Verify candidate identity before attestation
         run: go run ./tools/releaseverify --dist dist/release-candidate --version "$GITHUB_REF_NAME"
 
@@ -199,8 +211,6 @@ jobs:
       - attest
     runs-on: ubuntu-24.04
     timeout-minutes: 15
-    permissions:
-      contents: write
 
     steps:
       - name: Check out release source
@@ -220,15 +230,36 @@ jobs:
           name: release-candidate-${{ github.run_id }}-${{ github.run_attempt }}
           path: dist/release-candidate
 
+      - name: Restore installer mode normalized by artifact transport
+        shell: bash
+        run: |
+          installer=dist/release-candidate/install.sh
+          if [[ ! -f "$installer" || -L "$installer" ]]; then
+            echo "Release candidate install.sh is missing or unsafe."
+            exit 1
+          fi
+          chmod 0755 "$installer"
+
       - name: Verify candidate identity before publication
         run: go run ./tools/releaseverify --dist dist/release-candidate --version "$GITHUB_REF_NAME"
 
+      - name: Create the least-privilege release token
+        id: release-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.ACS_RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.ACS_RELEASE_APP_PRIVATE_KEY }}
+          permission-administration: read
+          permission-contents: write
+
       - name: Stage exact assets and publish once
         env:
-          GH_TOKEN: ${{ github.token }}
+          ACS_RELEASE_TAG_RULESET_ID: ${{ vars.ACS_RELEASE_TAG_RULESET_ID }}
+          GH_TOKEN: ${{ steps.release-token.outputs.token }}
         run: |
           scripts/publish-release.sh \
             "$GITHUB_REF_NAME" \
             "${{ needs.candidate.outputs.source-commit }}" \
+            "${{ needs.candidate.outputs.tag-object }}" \
             dist/release-candidate \
             "docs/releases/$GITHUB_REF_NAME.md"

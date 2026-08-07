@@ -145,8 +145,17 @@ commit and the exact archive and `SHA256SUMS` bytes rebuilt by the tag workflow.
 The source tree must also contain nonempty release notes at
 `docs/releases/<tag>.md`. Do not create the tag until those inputs are final.
 
-The repository's immutable Releases setting must be enabled before the tag is
-pushed. The tag workflow builds once, transfers those bytes through all four
+Before the tag is pushed, enable the repository's immutable Releases setting
+and create an active tag ruleset covering exactly `refs/tags/v*`, with no
+bypass actors, that restricts updates and deletions. Record its numeric ID in
+the `ACS_RELEASE_TAG_RULESET_ID` repository variable. Install a repository-only
+GitHub App with Administration(read) and Contents(write), store its client ID
+as `ACS_RELEASE_APP_CLIENT_ID`, and store its private key as the
+`ACS_RELEASE_APP_PRIVATE_KEY` Actions secret. The workflow requests only those
+two permissions on its short-lived installation token; it does not accept a
+personal access token.
+
+The tag workflow builds once, transfers those bytes through all four
 native jobs, attests the four archives and checksum manifest, and only then
 creates or resumes a draft Release. It uploads only missing assets whose names
 are in the exact Release Artifact Set and rejects conflicting assets or
