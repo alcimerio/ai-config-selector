@@ -76,7 +76,11 @@ go mod tidy
 git diff --exit-code -- go.mod go.sum
 go mod verify
 go test ./...
-go test -race ./... -skip '^TestProfileBuilderPTYRestoresTerminal/runtime_error$'
+if [ "$(go env GOOS)" = linux ]; then
+  go test -race ./... -skip '^TestProfileBuilderPTYRestoresTerminal/(runtime_error|recovered_panic)$'
+else
+  go test -race ./...
+fi
 go build ./cmd/acs
 for script in scripts/goreleaser.sh scripts/release-candidate.sh \
   scripts/release-tag-identity.sh scripts/validate-promoted-artifact.sh \
@@ -86,10 +90,11 @@ go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
 ```
 
 The race-test skip is only for the documented third-party Linux cancelreader
-shutdown race; macOS runs `go test -race ./...` without that exception. Also
-cross-build and cross-test-compile all four Supported Release Targets and
-reconcile the final worktree. Native jobs, not cross-compilation, provide promoted-artifact
-acceptance evidence.
+shutdown race in the abrupt `runtime_error` and `recovered_panic` PTY cases.
+The normal suite still exercises both cases, and macOS runs `go test -race
+./...` without that exception. Also cross-build and cross-test-compile all four
+Supported Release Targets and reconcile the final worktree. Native jobs, not
+cross-compilation, provide promoted-artifact acceptance evidence.
 
 ## Release validation
 
