@@ -15,6 +15,7 @@ candidate_directory="$4"
 release_notes="$5"
 repository="${GITHUB_REPOSITORY:-}"
 tag_ruleset_id="${ACS_RELEASE_TAG_RULESET_ID:-}"
+tag_creation_ruleset_id="${ACS_RELEASE_TAG_CREATION_RULESET_ID:-}"
 stage="arguments"
 tag_identity="unvalidated"
 source_identity="unvalidated"
@@ -31,6 +32,7 @@ source_identity="$source_commit"
 [[ "$expected_tag_object" =~ ^[0-9a-f]{40}$ ]] || fail "annotated tag object is invalid"
 [[ "$repository" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || fail "repository identity is invalid"
 [[ "$tag_ruleset_id" =~ ^[1-9][0-9]*$ ]] || fail "release tag ruleset identity is invalid"
+[[ "$tag_creation_ruleset_id" =~ ^[1-9][0-9]*$ ]] || fail "release tag creation ruleset identity is invalid"
 [[ -n "${GH_TOKEN:-}" ]] || fail "GitHub token is unavailable"
 [[ -d "$candidate_directory" && ! -L "$candidate_directory" ]] || fail "candidate directory is unavailable or unsafe"
 [[ -f "$release_notes" && ! -L "$release_notes" && -s "$release_notes" ]] || fail "release notes are unavailable or unsafe"
@@ -54,15 +56,19 @@ require_immutable_releases() {
 require_immutable_releases
 
 require_release_policy() {
-  local protected
-  if ! protected="$(gh api "repos/$repository/rulesets/$tag_ruleset_id" --jq '(.target == "tag") and (.enforcement == "active") and ((.bypass_actors | length) == 0) and (.conditions.ref_name.include == ["refs/tags/v*"]) and ((.conditions.ref_name.exclude | length) == 0) and (any(.rules[]; .type == "update")) and (any(.rules[]; .type == "deletion"))' 2>/dev/null)"; then
+  local protected creation_protected
+  if ! protected="$(gh api "repos/$repository/rulesets/$tag_ruleset_id" --jq '(type == "object") and has("bypass_actors") and (.bypass_actors | type == "array") and ((.bypass_actors | length) == 0) and has("conditions") and (.conditions | type == "object") and (.conditions.ref_name.include | type == "array") and (.conditions.ref_name.exclude | type == "array") and (.conditions.ref_name.include == ["refs/tags/v*"]) and ((.conditions.ref_name.exclude | length) == 0) and has("rules") and (.rules | type == "array") and (.target == "tag") and (.enforcement == "active") and (any(.rules[]; .type == "update")) and (any(.rules[]; .type == "deletion"))' 2>/dev/null)"; then
     fail "release tag protection could not be verified"
   fi
   [[ "$protected" == "true" ]] || fail "release tag update and deletion protection is incomplete"
+  if ! creation_protected="$(gh api "repos/$repository/rulesets/$tag_creation_ruleset_id" --jq '(type == "object") and has("bypass_actors") and (.bypass_actors | type == "array") and ((.bypass_actors | length) > 0) and has("conditions") and (.conditions | type == "object") and (.conditions.ref_name.include | type == "array") and (.conditions.ref_name.exclude | type == "array") and (.conditions.ref_name.include == ["refs/tags/v*"]) and ((.conditions.ref_name.exclude | length) == 0) and has("rules") and (.rules | type == "array") and (.target == "tag") and (.enforcement == "active") and (any(.rules[]; .type == "creation"))' 2>/dev/null)"; then
+    fail "release tag creation authorization could not be verified"
+  fi
+  [[ "$creation_protected" == "true" ]] || fail "release tag creation authorization is incomplete"
 }
 
 require_remote_tag_identity() {
-  local ref_identity target_identity ref_type ref_sha target_type target_sha
+  local ref_identity target_identity comparison ref_type ref_sha target_type target_sha
   if ! ref_identity="$(gh api "repos/$repository/git/ref/tags/$release_tag" --jq '.object.type + "\t" + .object.sha' 2>/dev/null)"; then
     fail "remote release tag could not be read"
   fi
@@ -73,6 +79,10 @@ require_remote_tag_identity() {
   fi
   read -r target_type target_sha <<<"$target_identity"
   [[ "$target_type" == "commit" && "$target_sha" == "$source_commit" ]] || fail "remote tag source commit does not match"
+  if ! comparison="$(gh api "repos/$repository/compare/$source_commit...main" --jq '.status' 2>/dev/null)"; then
+    fail "protected main ancestry could not be verified"
+  fi
+  [[ "$comparison" == "ahead" || "$comparison" == "identical" ]] || fail "tagged source is not contained in protected main"
 }
 
 require_release_policy

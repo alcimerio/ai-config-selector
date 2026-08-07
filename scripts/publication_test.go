@@ -18,7 +18,7 @@ const (
 func TestPublisherFailsBeforeMutationWhenImmutableReleasesAreDisabled(t *testing.T) {
 	candidate := publicationCandidate(t)
 	notes := publicationNotes(t)
-	tools, log := fakeReadOnlyGH(t, "false", "")
+	tools, log := fakeReadOnlyGH(t, "false", "true", "")
 	output, err := publicationCommand(t, candidate, notes, tools, log).CombinedOutput()
 	if err == nil || !strings.Contains(string(output), "immutable Releases are not enabled") {
 		t.Fatalf("immutable-setting rejection = %v, output=%q", err, output)
@@ -30,7 +30,7 @@ func TestPublisherLeavesAnExactImmutableReleaseUnchanged(t *testing.T) {
 	candidate := publicationCandidate(t)
 	notes := publicationNotes(t)
 	release := publicationReleaseJSON(t, candidate, 6, false, true)
-	tools, log := fakeReadOnlyGH(t, "true", release)
+	tools, log := fakeReadOnlyGH(t, "true", "true", release)
 	output, err := publicationCommand(t, candidate, notes, tools, log).CombinedOutput()
 	if err != nil {
 		t.Fatalf("exact immutable retry failed: %v; output=%q", err, output)
@@ -39,6 +39,44 @@ func TestPublisherLeavesAnExactImmutableReleaseUnchanged(t *testing.T) {
 		t.Fatalf("retry output = %q", output)
 	}
 	assertNoPublicationMutation(t, log)
+}
+
+func TestPublisherRejectsIncompleteTagProtectionBeforeMutation(t *testing.T) {
+	candidate := publicationCandidate(t)
+	notes := publicationNotes(t)
+	tools, log := fakeReadOnlyGH(t, "true", "false", "")
+	output, err := publicationCommand(t, candidate, notes, tools, log).CombinedOutput()
+	if err == nil || !strings.Contains(string(output), "tag update and deletion protection is incomplete") {
+		t.Fatalf("tag-policy rejection = %v, output=%q", err, output)
+	}
+	assertNoPublicationMutation(t, log)
+}
+
+func TestPublisherRejectsUnsafeTagIdentityAndAuthorizationBeforeMutation(t *testing.T) {
+	candidate := publicationCandidate(t)
+	notes := publicationNotes(t)
+	for _, test := range []struct {
+		name              string
+		creationProtected string
+		tagObject         string
+		targetSource      string
+		mainStatus        string
+		want              string
+	}{
+		{name: "creation rule missing fields or bypass", creationProtected: "false", tagObject: publicationTagObject, targetSource: publicationSource, mainStatus: "ahead", want: "creation authorization is incomplete"},
+		{name: "remote tag moved", creationProtected: "true", tagObject: strings.Repeat("f", 40), targetSource: publicationSource, mainStatus: "ahead", want: "tag object does not match"},
+		{name: "remote tag target changed", creationProtected: "true", tagObject: publicationTagObject, targetSource: strings.Repeat("e", 40), mainStatus: "ahead", want: "source commit does not match"},
+		{name: "source outside protected main", creationProtected: "true", tagObject: publicationTagObject, targetSource: publicationSource, mainStatus: "diverged", want: "not contained in protected main"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			tools, log := fakeReadOnlyGHWithPolicy(t, "true", "true", test.creationProtected, test.tagObject, test.targetSource, test.mainStatus, "")
+			output, err := publicationCommand(t, candidate, notes, tools, log).CombinedOutput()
+			if err == nil || !strings.Contains(string(output), test.want) {
+				t.Fatalf("unsafe tag rejection = %v, output=%q", err, output)
+			}
+			assertNoPublicationMutation(t, log)
+		})
+	}
 }
 
 func TestPublisherCreatesOrResumesDraftBeforeOneFinalPublish(t *testing.T) {
@@ -92,17 +130,21 @@ func publicationCommand(t *testing.T, candidate, notes, tools, log string) *exec
 	command.Dir = repository
 	command.Env = append(os.Environ(),
 		"PATH="+tools+string(os.PathListSeparator)+os.Getenv("PATH"),
-		"GITHUB_REPOSITORY=owner/repository", "GH_TOKEN=test-token", "ACS_RELEASE_TAG_RULESET_ID=7", "FAKE_GH_LOG="+log,
+		"GITHUB_REPOSITORY=owner/repository", "GH_TOKEN=test-token", "ACS_RELEASE_TAG_RULESET_ID=7", "ACS_RELEASE_TAG_CREATION_RULESET_ID=8", "FAKE_GH_LOG="+log,
 	)
 	return command
 }
 
-func fakeReadOnlyGH(t *testing.T, immutable, release string) (string, string) {
+func fakeReadOnlyGH(t *testing.T, immutable, protected, release string) (string, string) {
+	return fakeReadOnlyGHWithPolicy(t, immutable, protected, "true", publicationTagObject, publicationSource, "ahead", release)
+}
+
+func fakeReadOnlyGHWithPolicy(t *testing.T, immutable, protected, creationProtected, tagObject, targetSource, mainStatus, release string) (string, string) {
 	t.Helper()
 	directory := t.TempDir()
 	log := filepath.Join(directory, "calls")
 	releasePath := writeFixture(t, directory, "release.json", release)
-	script := fakePolicyCases(immutable) + `
+	script := fakePolicyCases(immutable, protected, creationProtected, tagObject, targetSource, mainStatus) + `
   "repos/owner/repository/releases/tags/v0.2.0") cat "` + releasePath + `" ;;
   *) exit 64 ;;
 esac
@@ -121,7 +163,7 @@ func fakeTransitionGH(t *testing.T, candidate, initial string, initialAssets, re
 	partial := writeFixture(t, directory, "partial.json", publicationReleaseJSON(t, candidate, initialAssets, true, false))
 	complete := writeFixture(t, directory, "complete.json", publicationReleaseJSON(t, candidate, 6, true, false))
 	published := writeFixture(t, directory, "published.json", publicationReleaseJSON(t, candidate, 6, false, true))
-	script := fakePolicyCases("true") + `
+	script := fakePolicyCases("true", "true", "true", publicationTagObject, publicationSource, "ahead") + `
   "--paginate") exit 0 ;;
   "repos/owner/repository/releases/tags/v0.2.0")
     current=$(tr -d '\n' <"` + state + `")
@@ -158,14 +200,16 @@ case "$2" in`, 1)
 	return directory, log
 }
 
-func fakePolicyCases(immutable string) string {
+func fakePolicyCases(immutable, protected, creationProtected, tagObject, targetSource, mainStatus string) string {
 	return `#!/bin/sh
 printf '%s\n' "$*" >>"$FAKE_GH_LOG"
 case "$2" in
   "repos/owner/repository/immutable-releases") printf '%s\n' "` + immutable + `" ;;
-  "repos/owner/repository/rulesets/7") printf '%s\n' true ;;
-  "repos/owner/repository/git/ref/tags/v0.2.0") printf 'tag\t%s\n' "` + publicationTagObject + `" ;;
-  "repos/owner/repository/git/tags/` + publicationTagObject + `") printf 'commit\t%s\n' "` + publicationSource + `" ;;
+  "repos/owner/repository/rulesets/7") printf '%s\n' "` + protected + `" ;;
+  "repos/owner/repository/rulesets/8") printf '%s\n' "` + creationProtected + `" ;;
+  "repos/owner/repository/git/ref/tags/v0.2.0") printf 'tag\t%s\n' "` + tagObject + `" ;;
+  "repos/owner/repository/git/tags/` + publicationTagObject + `") printf 'commit\t%s\n' "` + targetSource + `" ;;
+  "repos/owner/repository/compare/` + publicationSource + `...main") printf '%s\n' "` + mainStatus + `" ;;
 `
 }
 

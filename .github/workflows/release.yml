@@ -211,6 +211,7 @@ jobs:
       - attest
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    environment: release
 
     steps:
       - name: Check out release source
@@ -255,6 +256,7 @@ jobs:
       - name: Stage exact assets and publish once
         env:
           ACS_RELEASE_TAG_RULESET_ID: ${{ vars.ACS_RELEASE_TAG_RULESET_ID }}
+          ACS_RELEASE_TAG_CREATION_RULESET_ID: ${{ vars.ACS_RELEASE_TAG_CREATION_RULESET_ID }}
           GH_TOKEN: ${{ steps.release-token.outputs.token }}
         run: |
           scripts/publish-release.sh \

@@ -146,14 +146,21 @@ The source tree must also contain nonempty release notes at
 `docs/releases/<tag>.md`. Do not create the tag until those inputs are final.
 
 Before the tag is pushed, enable the repository's immutable Releases setting
-and create an active tag ruleset covering exactly `refs/tags/v*`, with no
-bypass actors, that restricts updates and deletions. Record its numeric ID in
-the `ACS_RELEASE_TAG_RULESET_ID` repository variable. Install a repository-only
-GitHub App with Administration(read) and Contents(write), store its client ID
-as `ACS_RELEASE_APP_CLIENT_ID`, and store its private key as the
-`ACS_RELEASE_APP_PRIVATE_KEY` Actions secret. The workflow requests only those
-two permissions on its short-lived installation token; it does not accept a
-personal access token.
+and create two active tag rulesets covering exactly `refs/tags/v*`. The first
+must restrict updates and deletions with no bypass actors. The second must
+restrict creation and allow only the designated release maintainers to bypass
+that creation rule. Record their numeric IDs in the
+`ACS_RELEASE_TAG_RULESET_ID` and `ACS_RELEASE_TAG_CREATION_RULESET_ID`
+repository variables.
+
+Configure a protected `release` environment with required reviewers and no
+self-review. Install a repository-only GitHub App with Administration(read)
+and Contents(write), store its client ID as `ACS_RELEASE_APP_CLIENT_ID`, and
+store its private key as the environment secret
+`ACS_RELEASE_APP_PRIVATE_KEY`. The workflow requests only those two permissions
+on its short-lived installation token after environment approval; it does not
+accept a personal access token. The tagged commit must be contained in the
+current protected `main` history.
 
 The tag workflow builds once, transfers those bytes through all four
 native jobs, attests the four archives and checksum manifest, and only then
