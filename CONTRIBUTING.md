@@ -4,7 +4,11 @@ Thanks for contributing to AI Config Selector (ACS).
 
 ## Before you start
 
-ACS currently supports macOS, Linux, and the Devin CLI. Read
+The v0.2.0 release contract defines macOS 26 and Ubuntu 24.04 LTS as the
+Supported Platforms. Its Supported Release Targets are `darwin/arm64`,
+`darwin/amd64`, `linux/amd64`, and `linux/arm64`. Other Linux distributions,
+Windows, WSL, and other target pairs are outside that contract. ACS supports
+the Devin CLI on both Supported Platforms. Read
 [`docs/architecture.md`](docs/architecture.md) before changing Profile,
 Session, discovery, isolation, or launch behavior.
 
@@ -62,6 +66,30 @@ go vet ./...
 go test ./...
 git diff --check
 ```
+
+Release-related pull requests also run the complete locally applicable gate:
+
+```bash
+test -z "$(gofmt -l .)"
+go vet ./...
+go mod tidy
+git diff --exit-code -- go.mod go.sum
+go mod verify
+go test ./...
+go test -race ./... -skip '^TestProfileBuilderPTYRestoresTerminal/runtime_error$'
+go build ./cmd/acs
+for script in scripts/goreleaser.sh scripts/release-candidate.sh \
+  scripts/release-tag-identity.sh scripts/validate-promoted-artifact.sh \
+  scripts/install.sh.tmpl; do sh -n "$script"; done
+bash -n scripts/publish-release.sh
+go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+```
+
+The race-test skip is only for the documented third-party Linux cancelreader
+shutdown race; macOS runs `go test -race ./...` without that exception. Also
+cross-build and cross-test-compile all four Supported Release Targets and
+reconcile the final worktree. Native jobs, not cross-compilation, provide promoted-artifact
+acceptance evidence.
 
 ## Release validation
 
@@ -144,6 +172,10 @@ record and one Ubuntu 24.04 amd64 record. Both records must name the tagged
 commit and the exact archive and `SHA256SUMS` bytes rebuilt by the tag workflow.
 The source tree must also contain nonempty release notes at
 `docs/releases/<tag>.md`. Do not create the tag until those inputs are final.
+For v0.2.0, maintain the evidence record in
+[`docs/releases/v0.2.0-checklist.md`](docs/releases/v0.2.0-checklist.md). Every
+unavailable or failed gate remains explicitly `INCOMPLETE`; never infer success
+from a blank field or cross-build.
 
 Before the tag is pushed, enable the repository's immutable Releases setting
 and create two active tag rulesets covering exactly `refs/tags/v*`. The first
@@ -181,18 +213,29 @@ If any gate fails, no public Release is created. Correct source, evidence,
 notes, workflow configuration, tags, or artifact bytes with a new patch
 version. Never move a published tag or replace a published asset.
 
-After publishing the immutable tag, repeat the
-installation from the module proxy in another clean temporary `GOBIN`:
+After publishing the immutable tag, repeat the public Supported Install Path on
+clean macOS 26 arm64 and Ubuntu 24.04 amd64 reference hosts. Download and
+inspect `install.sh`, exercise both its default and custom destinations, and
+require exact `acs v0.2.0` output. Independently verify the public archive with
+`SHA256SUMS` and GitHub provenance, then repeat the Profile dry run,
+authenticated Devin launch, normal exit, Session isolation, and cleanup. The
+README contains the public commands; the checklist records only sanitized
+results and public identifiers.
+
+The source installation below is a compatibility check, not the Supported
+Install Path. Run it in another clean temporary `GOBIN` only when the module
+proxy is part of the release audit:
 
 ```bash
 tagged_gobin="$(mktemp -d)"
-GOBIN="$tagged_gobin" go install github.com/alcimerio/ai-config-selector/cmd/acs@v0.1.0
+GOBIN="$tagged_gobin" go install github.com/alcimerio/ai-config-selector/cmd/acs@v0.2.0
 "$tagged_gobin/acs" version
 rm "$tagged_gobin/acs"
 rmdir "$tagged_gobin"
 ```
 
-The tagged installation must print `acs v0.1.0`. Do not move or reuse a
+The tagged installation must print `acs v0.2.0`. A local checkout without
+qualifying release metadata prints `acs devel`. Do not move or reuse a
 published tag; publish a new version to correct a release defect.
 
 ## Pull requests
@@ -207,6 +250,12 @@ Each pull request should:
   presentation changes;
 - identify macOS behavior that was tested and any relevant behavior that was
   not tested.
+
+For release documentation, reviewers must also reconcile README, contributor,
+architecture, version-controlled release-note, and checklist terminology;
+execute safe local equivalents of documented commands against controlled
+assets; and perform independent cumulative Standards and Spec reviews against
+the fixed base. Record unavailable human and production gates truthfully.
 
 Keep the pull request title in Conventional Commit form. When squash-merging,
 set the resulting commit subject to `<pull request title> (#<pull request
