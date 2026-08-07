@@ -47,10 +47,10 @@ curl --fail --location --proto '=https' --tlsv1.2 \
   --output install.sh "$release_url/install.sh"
 less install.sh
 sh ./install.sh
-acs version
+"$HOME/.local/bin/acs" version
 ```
 
-The last command must print exactly:
+For the default destination, the last command must print exactly:
 
 ```text
 acs v0.2.0

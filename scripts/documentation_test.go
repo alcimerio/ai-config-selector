@@ -62,3 +62,15 @@ func TestV020ReleaseNotesMatchTagWorkflowPath(t *testing.T) {
 		t.Fatal("release workflow no longer consumes version-controlled tag notes")
 	}
 }
+
+func TestV020DefaultInstallVerificationDoesNotAssumePATH(t *testing.T) {
+	for _, document := range []string{"README.md", "docs/releases/v0.2.0.md"} {
+		contents, err := os.ReadFile(filepath.Join("..", document))
+		if err != nil {
+			t.Fatalf("read %s: %v", document, err)
+		}
+		if !strings.Contains(string(contents), `"$HOME/.local/bin/acs" version`) {
+			t.Errorf("%s does not verify the default installed binary by exact path", document)
+		}
+	}
+}
