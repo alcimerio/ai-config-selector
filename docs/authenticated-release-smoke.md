@@ -87,9 +87,10 @@ Create a unique Profile and exercise the installed candidate:
 
 ```sh
 smoke_profile="release-smoke-$(date -u +%Y%m%d%H%M%S)"
-session_baseline="$(mktemp)"
-session_after="$(mktemp)"
-find "$HOME/.acs/sessions" -mindepth 1 -maxdepth 1 -print 2>/dev/null | sort >"$session_baseline"
+smoke_control="$(mktemp -d)"
+chmod 0700 "$smoke_control"
+find "$HOME/.acs/sessions" -mindepth 1 -maxdepth 1 -print 2>/dev/null | sort >"$smoke_control/session-baseline"
+printf 'Use this private control directory in the second terminal: %s\n' "$smoke_control"
 "$candidate_binary" devin create-profile --name "$smoke_profile"
 "$candidate_binary" devin --profile "$smoke_profile" --dry-run
 "$candidate_binary" devin --profile "$smoke_profile"
@@ -99,12 +100,12 @@ Leave Devin running after the final command. In a second authorized terminal,
 identify the single new live Session without recording its path in evidence:
 
 ```sh
-session_during="$(mktemp)"
-session_delta="$(mktemp)"
-find "$HOME/.acs/sessions" -mindepth 1 -maxdepth 1 -print 2>/dev/null | sort >"$session_during"
-comm -13 "$session_baseline" "$session_during" >"$session_delta"
-test "$(wc -l <"$session_delta" | tr -d ' ')" = 1
-smoke_session="$(sed -n '1p' "$session_delta")"
+smoke_control="REPLACE_WITH_THE_PRIVATE_CONTROL_DIRECTORY_FROM_TERMINAL_ONE"
+test -d "$smoke_control"
+find "$HOME/.acs/sessions" -mindepth 1 -maxdepth 1 -print 2>/dev/null | sort >"$smoke_control/session-during"
+comm -13 "$smoke_control/session-baseline" "$smoke_control/session-during" >"$smoke_control/session-delta"
+test "$(wc -l <"$smoke_control/session-delta" | tr -d ' ')" = 1
+smoke_session="$(sed -n '1p' "$smoke_control/session-delta")"
 test -f "$smoke_session/.active.lock"
 test -f "$smoke_session/home/.local/share/devin/credentials.toml"
 test ! -e "$smoke_session/home/.config/devin/config.json"
@@ -127,8 +128,11 @@ Session disappeared and that the pre-existing Session set is unchanged:
 
 ```sh
 test ! -e "$smoke_session"
-find "$HOME/.acs/sessions" -mindepth 1 -maxdepth 1 -print 2>/dev/null | sort >"$session_after"
-cmp -s "$session_baseline" "$session_after"
+find "$HOME/.acs/sessions" -mindepth 1 -maxdepth 1 -print 2>/dev/null | sort >"$smoke_control/session-after"
+cmp -s "$smoke_control/session-baseline" "$smoke_control/session-after"
+rm "$smoke_control/session-baseline" "$smoke_control/session-during" \
+  "$smoke_control/session-delta" "$smoke_control/session-after"
+rmdir "$smoke_control"
 ```
 
 Record only boolean outcomes for this checklist:
@@ -153,15 +157,14 @@ blocking human gate and cannot be represented as passing evidence.
 
 ## Cleanup and validate evidence
 
-Remove only the unique Profile and temporary candidate:
+After terminal two removes the private control directory, return to terminal
+one. Remove only the unique Profile and temporary candidate:
 
 ```sh
 profile_file="$HOME/.acs/profiles/$smoke_profile.json"
 test -f "$profile_file"
 rm "$profile_file"
 test ! -e "$profile_file"
-cmp -s "$session_baseline" "$session_after"
-rm "$session_baseline" "$session_during" "$session_delta" "$session_after"
 rm "$candidate_binary"
 rmdir "$install_root/bin"
 rmdir "$install_root"
