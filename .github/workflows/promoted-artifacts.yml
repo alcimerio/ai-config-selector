@@ -1,0 +1,133 @@
+name: Promoted artifact validation
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: promoted-artifacts-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  ACS_CANDIDATE_VERSION: v0.2.0
+
+jobs:
+  candidate:
+    name: Build candidate artifact set
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build and verify candidate artifact set
+        run: scripts/release-candidate.sh "$ACS_CANDIDATE_VERSION"
+
+      - name: Upload immutable candidate artifact set
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: acs-candidate-${{ github.sha }}
+          path: dist/release-candidate
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+
+  native:
+    name: Native ${{ matrix.target }}
+    needs: candidate
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: darwin/arm64
+            runner: macos-26
+            os: darwin
+            arch: arm64
+          - target: darwin/amd64
+            runner: macos-26-intel
+            os: darwin
+            arch: amd64
+          - target: linux/amd64
+            runner: ubuntu-24.04
+            os: linux
+            arch: amd64
+          - target: linux/arm64
+            runner: ubuntu-24.04-arm
+            os: linux
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out validation source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Download immutable candidate artifact set
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: acs-candidate-${{ github.sha }}
+          path: dist/release-candidate
+
+      - name: Restore installer mode normalized by artifact transport
+        shell: bash
+        run: |
+          installer=dist/release-candidate/install.sh
+          if [[ ! -f "$installer" || -L "$installer" ]]; then
+            echo "Promoted candidate install.sh is missing or unsafe."
+            exit 1
+          fi
+          chmod 0755 "$installer"
+
+      - name: Verify host and install supplied candidate
+        shell: bash
+        run: |
+          install_root="${RUNNER_TEMP}/acs-promoted-${{ matrix.os }}-${{ matrix.arch }}"
+          mkdir -p "$install_root"
+          scripts/validate-promoted-artifact.sh \
+            "$ACS_CANDIDATE_VERSION" \
+            "${{ matrix.os }}" \
+            "${{ matrix.arch }}" \
+            dist/release-candidate \
+            "$install_root/bin"
+
+      - name: Run native application, Adapter, installer, and PTY regressions
+        run: go test ./...
+
+      - name: Run supported native race tests
+        shell: bash
+        run: |
+          if [[ "${{ matrix.os }}" == "linux" ]]; then
+            # cancelreader's Linux shutdown races with its reader only when the
+            # runtime-error PTY subprocess is race-instrumented. The preceding
+            # native regression step still exercises that restoration case.
+            go test -race ./... -skip '^TestProfileBuilderPTYRestoresTerminal/runtime_error$'
+          else
+            go test -race ./...
+          fi
+
+      - name: Exercise installed candidate as a black box
+        env:
+          ACS_PROMOTED_BINARY: ${{ runner.temp }}/acs-promoted-${{ matrix.os }}-${{ matrix.arch }}/bin/acs
+        run: ACS_PROMOTED_VERSION="$ACS_CANDIDATE_VERSION" go test ./acceptance -count=1

@@ -95,6 +95,38 @@ no version override. Tests cover exact Release URLs, all supported targets,
 checksum and archive rejection, destination safety, executable validation,
 atomic placement, PATH guidance, and cleanup.
 
+Pull requests and `main` also build one complete candidate set and transfer
+those exact workflow-artifact bytes to four native jobs: darwin/arm64,
+darwin/amd64, linux/amd64, and linux/arm64. Each job rejects a host whose
+operating system or architecture does not match its required target, runs the
+normal credential-free application, Adapter, installer, race, and PTY suites,
+then installs and exercises the candidate executable as a black box. The
+acceptance harness uses only a synthetic home, a fake Devin executable, and
+temporary install and Session directories. It does not read real Devin
+credentials or modify a maintainer installation.
+
+After building a clean candidate locally, run the validator on a matching
+native host with a fresh absolute install directory:
+
+```bash
+install_root="$(mktemp -d)"
+install_root="$(cd "$install_root" && pwd -P)"
+scripts/validate-promoted-artifact.sh \
+  v0.2.0 "$(go env GOOS)" "$(go env GOARCH)" \
+  dist/release-candidate "$install_root/bin"
+ACS_PROMOTED_BINARY="$install_root/bin/acs" \
+  ACS_PROMOTED_VERSION=v0.2.0 \
+  go test ./acceptance -count=1
+```
+
+The native target validator preserves the installer's exact pinned GitHub
+Release URLs while serving the supplied bytes through a controlled local
+download tool. It verifies the complete candidate set, selected archive,
+checksum, structure, executable mode, version, custom and default destination
+behavior, PATH guidance, and cleanup. Cross-compilation and emulation are not
+native evidence. If any required runner is unavailable or any native job
+fails, the candidate is not promoted.
+
 Before tagging a release, start from the verified `origin/main` commit on a
 supported macOS 26 Apple Silicon machine with Devin installed and authenticated.
 Confirm the worktree and commit, then build ACS into a clean temporary `GOBIN`:
