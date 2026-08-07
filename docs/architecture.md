@@ -45,6 +45,15 @@ runtime mode. It builds and verifies distribution archives and renders and
 tests the pinned installer without changing Profile, Adapter, Session, or CLI
 runtime contracts.
 
+The distribution model uses two exact terms. A **Supported Platform** is an
+operating-system family and version: macOS 26 or Ubuntu 24.04 LTS for v0.2.0. A
+**Supported Release Target** is a supported operating-system and architecture
+pair: `darwin/arm64`, `darwin/amd64`, `linux/amd64`, or `linux/arm64`. The
+downloadable binary for one of those targets is a Supported Release binary only
+after the complete release checklist and immutable publication gates pass.
+Source-built binaries are development inputs, not substitutes for native
+promoted-artifact evidence; a local build reports `acs devel`.
+
 ## Core concepts
 
 **Profile**: A named, machine-local selection for one target CLI. A Profile
@@ -76,6 +85,14 @@ Profile.
 `~/.acs/sessions/session-*`. It contains a synthetic home, selected Skill
 Bundles, and the target state needed for the child process. The current Devin
 Adapter adds an allowlisted Devin credential.
+
+**Supported Install Path**: Download the release-specific `install.sh`, inspect
+the file, then execute that local copy. It defaults to `~/.local/bin`, accepts
+only `--bin-dir` for a custom user-writable absolute destination, verifies the
+selected archive with the release's `SHA256SUMS`, validates exact version and
+archive structure, and publishes the executable atomically. It never pipes
+network content directly into a shell, uses `sudo`, edits shell startup files,
+or supplies package-manager, automatic-update, or uninstaller behavior.
 
 ## Module boundaries
 
@@ -305,6 +322,19 @@ verifies the live annotated tag object, peeled source commit, and containment
 in protected `main` before draft creation and again before publication. It
 never deletes or replaces a tag, Release, or asset, so correction requires a
 new patch version.
+
+The six-file Release Artifact Set is the four target archives, `SHA256SUMS`,
+and the release-specific `install.sh`. The build-provenance step covers the
+four archives and checksum manifest; the downloaded installer is instead
+reviewed before execution. SHA-256 verification, build provenance, and the
+immutable Release attestation are complementary evidence. None provides source
+safety, malware absence, Apple Developer ID identity, notarization, Apple
+malware review, or Gatekeeper trust.
+
+v0.2.0 macOS binaries are unsigned and unnotarized. Gatekeeper behavior can
+vary with quarantine provenance, prior user decisions, host policy, and device
+management. The supported flow never disables Gatekeeper or removes quarantine;
+any permitted trust decision remains explicit and user-controlled.
 
 ## Isolation boundaries
 

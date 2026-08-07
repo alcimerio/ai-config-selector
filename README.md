@@ -5,42 +5,112 @@ Choose a Profile when you launch a supported CLI to control which capabilities
 it receives without changing its real global installation.
 
 ACS separates shared Profile behavior from target-specific CLI adapters. The
-`v0.1.0` release supports one adapter, Devin, and one Profile Component
-Category, Skills.
+`v0.2.0` preserves one adapter, Devin, and one Profile Component Category,
+Skills, while adding downloadable binaries for the supported macOS and Ubuntu
+targets. Until the v0.2.0 release checklist is complete and the immutable
+Release is public, v0.1.0 remains the latest supported release.
 
 ## Supported scope
 
-ACS `v0.1.0` supports:
+The v0.2.0 support contract defines these Supported Platforms:
 
-- macOS 26 on Apple Silicon;
+- macOS 26;
+- Ubuntu 24.04 LTS;
+
+and these Supported Release Targets:
+
+- `darwin/arm64`;
+- `darwin/amd64`;
+- `linux/amd64`;
+- `linux/arm64`.
+
+On every Supported Platform, ACS supports:
+
 - the Devin CLI, installed and authenticated;
 - user-global Skills discovered from Devin and shared-agent locations;
 - interactive Profile creation, persistence, dry-run inspection, and launch;
 - configuration isolation through an ephemeral Session.
 
-Go 1.25 or later is required to install ACS from source. The Profile Builder
-requires confirmation before it creates an empty Profile.
+The Profile Builder requires confirmation before it creates an empty Profile.
+Windows, WSL, other Linux distributions, and other operating-system or
+architecture pairs are not supported by v0.2.0.
 
 ## Install
 
-Install the supported release with an explicit module version:
+After the v0.2.0 GitHub Release is public, use its release-specific installer.
+Download the installer as a file, inspect it, and only then run the local copy:
 
-```bash
-go install github.com/alcimerio/ai-config-selector/cmd/acs@v0.1.0
+```sh
+release_version=v0.2.0
+release_url="https://github.com/alcimerio/ai-config-selector/releases/download/$release_version"
+curl --fail --location --proto '=https' --tlsv1.2 \
+  --output install.sh "$release_url/install.sh"
+less install.sh
+sh ./install.sh
 acs version
 ```
 
-A tagged installation prints:
+The last command must print exactly:
 
 ```text
-acs v0.1.0
+acs v0.2.0
 ```
 
-Your Go binary directory must be on `PATH`. To upgrade later, rerun the install
-command after replacing `v0.1.0` with the exact published tag from the GitHub
-Releases page, then run `acs version` to verify the installed version.
+The installer selects only a Supported Release Target, downloads that target's
+release-pinned archive and `SHA256SUMS`, verifies SHA-256 before extraction,
+validates the archive and its exact version, and places `acs` atomically. It
+defaults to `~/.local/bin`. To choose a different existing or creatable
+user-writable absolute directory, run `sh ./install.sh --bin-dir /absolute/path`.
+It refuses to replace an existing `acs` file.
 
-ACS does not update itself or install an unspecified latest version.
+If the selected directory is not on `PATH`, the installer prints an `export
+PATH=...` command for the current shell. Review and run that command yourself;
+the installer does not edit shell startup files. It does not use `sudo`.
+For the default destination, the equivalent current-shell command is:
+
+```sh
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+The Supported Install Path does not pipe network content into a shell. ACS has
+no supported package-manager installation, automatic update, self-update, or
+uninstaller. To upgrade, repeat this flow with the exact newer release tag. To
+remove ACS, the user is responsible for removing the installed binary and any
+data they intentionally no longer need.
+
+### Verify a downloaded archive independently
+
+Set `archive` to the file for your Supported Release Target, then download it
+and the manifest from the same release-specific URL. On macOS:
+
+```sh
+archive=acs_0.2.0_darwin_arm64.tar.gz
+curl --fail --location --proto '=https' --tlsv1.2 --output "$archive" "$release_url/$archive"
+curl --fail --location --proto '=https' --tlsv1.2 --output SHA256SUMS "$release_url/SHA256SUMS"
+awk -v selected="$archive" '$2 == selected { print }' SHA256SUMS | shasum -a 256 --check -
+```
+
+On Ubuntu, use the same commands with the matching `linux` archive and replace
+the final command with:
+
+```sh
+awk -v selected="$archive" '$2 == selected { print }' SHA256SUMS | sha256sum --check -
+```
+
+After installing the GitHub CLI, verify GitHub build provenance for an archive
+or the checksum manifest with:
+
+```sh
+gh attestation verify "$archive" --repo alcimerio/ai-config-selector
+gh attestation verify SHA256SUMS --repo alcimerio/ai-config-selector
+```
+
+The tag workflow attests the four archives and `SHA256SUMS`; it does not attest
+`install.sh`. A successful attestation identifies the GitHub repository and
+workflow that produced bytes. It does not prove that the source is safe, that
+an archive is free of malware, or that Apple signed or notarized a macOS
+binary. SHA-256 proves only that the archive matches the independently obtained
+manifest.
 
 ### Build a development binary
 
@@ -53,8 +123,11 @@ go build -o ./bin/acs ./cmd/acs
 ./bin/acs version
 ```
 
-A local checkout does not carry release module metadata, so the final command
-prints `acs devel` instead of a release version. The examples below use `acs`;
+A local checkout does not carry qualifying release metadata, so the final
+command prints `acs devel` instead of a release version. It is a source-built
+development binary, not a Supported Release binary, even when built on a
+Supported Platform. Source installation requires Go 1.25 or later and is
+separate from the Supported Install Path. The examples below use `acs`;
 substitute `./bin/acs` when running a local build.
 
 ## Current adapter: Devin
@@ -139,10 +212,20 @@ version-2 envelope without bumping the envelope version. Each category owns
 and evolves its independent `schemaVersion`. ACS rejects unsupported schemas
 and unknown categories.
 
+v0.2.0 preserves the v0.1.0 Profile envelopes, category schemas, public
+commands, accepted messages, file permissions, and atomic Profile persistence.
+It also preserves Profile Builder behavior, Devin Adapter discovery and
+preflight behavior, launch and signal handling, ACS Home at `~/.acs`, and
+isolated per-launch Session creation and cleanup. Existing v0.1.0 Profiles do
+not require migration.
+
 ## Known limitations
 
-- The published v0.1.0 release supports only macOS 26 on Apple Silicon;
-  current source builds also run on Linux.
+- v0.2.0 macOS binaries are unsigned and unnotarized. Gatekeeper may block or
+  warn about them because they do not carry an Apple Developer ID signature or
+  notarization ticket. Checksums and GitHub attestations do not change that
+  trust decision or represent Apple malware review. Do not weaken host security
+  to treat those mechanisms as Gatekeeper approval.
 - Devin is the only production CLI Adapter.
 - Skills is the only production Profile Component Category.
 - Profiles cannot be listed, edited, deleted, imported, or exported through
@@ -152,6 +235,7 @@ and unknown categories.
   It does not restrict network access or known absolute host paths.
 - ACS does not manage MCP servers, hooks, instructions, agents, or arbitrary
   target settings.
+- ACS has no package-manager distribution, automatic updates, or uninstaller.
 
 Read [the architecture document](docs/architecture.md) for the domain model,
 module boundaries, lifecycle, schema, and security properties.
