@@ -35,10 +35,15 @@ agents, or arbitrary target settings. The Devin Adapter leaves
 repository-local Skills under Devin's control.
 
 The public `acs version` command reports `acs vMAJOR.MINOR.PATCH` when Go build
-metadata identifies a canonical tagged module release. The executable reads
-that metadata with `runtime/debug.ReadBuildInfo` during application assembly;
-it does not use linker flags or a maintained version constant. Local builds,
-pseudo-versions, and missing or unusable metadata report `acs devel`.
+metadata identifies a canonical tagged module release or the pinned Release
+Builder supplies the canonical tag. Version selection stays in application
+assembly and has no maintained version constant. Local, dirty, pseudo-version,
+and missing or unusable metadata report `acs devel`.
+
+Release-candidate tooling is a repository validation boundary, not an ACS
+runtime mode. It builds and verifies distribution archives and renders and
+tests the pinned installer without changing Profile, Adapter, Session, or CLI
+runtime contracts.
 
 ## Core concepts
 

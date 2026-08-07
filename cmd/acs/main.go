@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"runtime"
 	"runtime/debug"
+	"strings"
 
 	"github.com/alcimerio/ai-config-selector/internal/adapter/devin"
 	"github.com/alcimerio/ai-config-selector/internal/cli"
@@ -15,6 +16,7 @@ import (
 )
 
 var releaseVersionPattern = regexp.MustCompile(`^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:\+incompatible)?$`)
+var releaseVersion string
 
 func main() {
 	if err := requireSupportedPlatform(runtime.GOOS); err != nil {
@@ -41,7 +43,7 @@ func main() {
 	}
 
 	application := cli.App{
-		Version:           buildVersion(debug.ReadBuildInfo),
+		Version:           buildVersion(releaseVersion, debug.ReadBuildInfo),
 		Categories:        adapter.Categories(),
 		Builder:           adapter,
 		Planner:           adapter,
@@ -57,13 +59,24 @@ func main() {
 	os.Exit(application.Run(context.Background(), os.Args[1:]))
 }
 
-func buildVersion(readBuildInfo func() (*debug.BuildInfo, bool)) string {
+func buildVersion(builderVersion string, readBuildInfo func() (*debug.BuildInfo, bool)) string {
 	if readBuildInfo == nil {
 		return "devel"
 	}
 	info, ok := readBuildInfo()
 	if !ok || info == nil {
 		return "devel"
+	}
+	for _, setting := range info.Settings {
+		if setting.Key == "vcs.modified" && setting.Value == "true" {
+			return "devel"
+		}
+	}
+	if builderVersion != "" {
+		if !releaseVersionPattern.MatchString(builderVersion) || strings.HasSuffix(builderVersion, "+incompatible") {
+			return "devel"
+		}
+		return builderVersion
 	}
 	version := info.Main.Version
 	if !releaseVersionPattern.MatchString(version) {

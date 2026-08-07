@@ -62,6 +62,39 @@ git diff --check
 
 ## Release validation
 
+Release packaging uses GoReleaser OSS v2.17.1. The repository wrapper downloads
+that exact version, verifies the official binary checksum for the validation
+host, and rejects unsupported validation hosts. From a clean Git worktree,
+check the configuration, build all four snapshot archives, and inspect the
+candidate artifact set with:
+
+```bash
+scripts/goreleaser.sh check
+scripts/release-candidate.sh v0.2.0
+```
+
+The candidate command disables CGO, builds only the supported Darwin and Linux
+amd64 and arm64 targets, stages the four archives and `SHA256SUMS` under
+`dist/release-candidate/`, and validates their names, checksums, top-level
+contents, executable mode, and locally runnable packaged version. It does not
+create a tag or GitHub Release. Use the intended canonical tag for the
+candidate; the command does not accept development, prerelease, build-metadata,
+or dirty source input.
+
+The candidate set also contains one executable `install.sh` rendered with the
+same immutable tag. Installer acceptance uses fake host and download tools plus
+local archives; it never contacts a GitHub Release or writes to a real user
+installation. Run it with the normal test suite, or focus it with:
+
+```bash
+go test ./scripts -run Installer
+```
+
+The supported installer interface accepts only an optional `--bin-dir` and has
+no version override. Tests cover exact Release URLs, all supported targets,
+checksum and archive rejection, destination safety, executable validation,
+atomic placement, PATH guidance, and cleanup.
+
 Before tagging a release, start from the verified `origin/main` commit on a
 supported macOS 26 Apple Silicon machine with Devin installed and authenticated.
 Confirm the worktree and commit, then build ACS into a clean temporary `GOBIN`:
