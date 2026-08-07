@@ -130,7 +130,7 @@ func publicationCommand(t *testing.T, candidate, notes, tools, log string) *exec
 	command.Dir = repository
 	command.Env = append(os.Environ(),
 		"PATH="+tools+string(os.PathListSeparator)+os.Getenv("PATH"),
-		"GITHUB_REPOSITORY=owner/repository", "GH_TOKEN=test-token", "ACS_RELEASE_TAG_RULESET_ID=7", "ACS_RELEASE_TAG_CREATION_RULESET_ID=8", "FAKE_GH_LOG="+log,
+		"GITHUB_REPOSITORY=owner/repository", "GH_TOKEN=publish-token", "ACS_RELEASE_POLICY_TOKEN=policy-token", "ACS_RELEASE_TAG_RULESET_ID=7", "ACS_RELEASE_TAG_CREATION_RULESET_ID=8", "ACS_RELEASE_TAG_CREATOR_ID=99", "ACS_RELEASE_ACTOR_ID=99", "FAKE_GH_LOG="+log,
 	)
 	return command
 }

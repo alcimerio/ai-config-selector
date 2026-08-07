@@ -244,19 +244,30 @@ jobs:
       - name: Verify candidate identity before publication
         run: go run ./tools/releaseverify --dist dist/release-candidate --version "$GITHUB_REF_NAME"
 
-      - name: Create the least-privilege release token
+      - name: Create the isolated policy-verification token
+        id: policy-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.ACS_RELEASE_POLICY_APP_CLIENT_ID }}
+          private-key: ${{ secrets.ACS_RELEASE_POLICY_APP_PRIVATE_KEY }}
+          # GitHub omits ruleset bypass actors without Administration(write).
+          permission-administration: write
+
+      - name: Create the isolated Release-publication token
         id: release-token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
-          client-id: ${{ vars.ACS_RELEASE_APP_CLIENT_ID }}
-          private-key: ${{ secrets.ACS_RELEASE_APP_PRIVATE_KEY }}
-          permission-administration: read
+          client-id: ${{ vars.ACS_RELEASE_PUBLISH_APP_CLIENT_ID }}
+          private-key: ${{ secrets.ACS_RELEASE_PUBLISH_APP_PRIVATE_KEY }}
           permission-contents: write
 
       - name: Stage exact assets and publish once
         env:
           ACS_RELEASE_TAG_RULESET_ID: ${{ vars.ACS_RELEASE_TAG_RULESET_ID }}
           ACS_RELEASE_TAG_CREATION_RULESET_ID: ${{ vars.ACS_RELEASE_TAG_CREATION_RULESET_ID }}
+          ACS_RELEASE_TAG_CREATOR_ID: ${{ vars.ACS_RELEASE_TAG_CREATOR_ID }}
+          ACS_RELEASE_ACTOR_ID: ${{ github.actor_id }}
+          ACS_RELEASE_POLICY_TOKEN: ${{ steps.policy-token.outputs.token }}
           GH_TOKEN: ${{ steps.release-token.outputs.token }}
         run: |
           scripts/publish-release.sh \

@@ -151,14 +151,20 @@ must restrict updates and deletions with no bypass actors. The second must
 restrict creation and allow only the designated release maintainers to bypass
 that creation rule. Record their numeric IDs in the
 `ACS_RELEASE_TAG_RULESET_ID` and `ACS_RELEASE_TAG_CREATION_RULESET_ID`
-repository variables.
+repository variables. The creation ruleset must have exactly one `User` bypass
+actor in `always` mode; record that user's numeric ID as
+`ACS_RELEASE_TAG_CREATOR_ID`. The tag-triggering actor must match that ID.
 
 Configure a protected `release` environment with required reviewers and no
-self-review. Install a repository-only GitHub App with Administration(read)
-and Contents(write), store its client ID as `ACS_RELEASE_APP_CLIENT_ID`, and
-store its private key as the environment secret
-`ACS_RELEASE_APP_PRIVATE_KEY`. The workflow requests only those two permissions
-on its short-lived installation token after environment approval; it does not
+self-review. Install two repository-only GitHub Apps so no credential can both
+change policy and publish a Release. The policy App needs
+Administration(write), because GitHub omits ruleset bypass actors from weaker
+tokens; store its client ID as `ACS_RELEASE_POLICY_APP_CLIENT_ID` and its key as
+the `ACS_RELEASE_POLICY_APP_PRIVATE_KEY` environment secret. The publication
+App needs only Contents(write); store its client ID as
+`ACS_RELEASE_PUBLISH_APP_CLIENT_ID` and its key as the
+`ACS_RELEASE_PUBLISH_APP_PRIVATE_KEY` environment secret. The workflow uses
+short-lived installation tokens only after environment approval and does not
 accept a personal access token. The tagged commit must be contained in the
 current protected `main` history.
 

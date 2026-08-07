@@ -16,6 +16,9 @@ release_notes="$5"
 repository="${GITHUB_REPOSITORY:-}"
 tag_ruleset_id="${ACS_RELEASE_TAG_RULESET_ID:-}"
 tag_creation_ruleset_id="${ACS_RELEASE_TAG_CREATION_RULESET_ID:-}"
+tag_creator_id="${ACS_RELEASE_TAG_CREATOR_ID:-}"
+event_actor_id="${ACS_RELEASE_ACTOR_ID:-}"
+policy_token="${ACS_RELEASE_POLICY_TOKEN:-}"
 stage="arguments"
 tag_identity="unvalidated"
 source_identity="unvalidated"
@@ -33,7 +36,9 @@ source_identity="$source_commit"
 [[ "$repository" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || fail "repository identity is invalid"
 [[ "$tag_ruleset_id" =~ ^[1-9][0-9]*$ ]] || fail "release tag ruleset identity is invalid"
 [[ "$tag_creation_ruleset_id" =~ ^[1-9][0-9]*$ ]] || fail "release tag creation ruleset identity is invalid"
+[[ "$tag_creator_id" =~ ^[1-9][0-9]*$ && "$event_actor_id" == "$tag_creator_id" ]] || fail "release tag creator is not authorized"
 [[ -n "${GH_TOKEN:-}" ]] || fail "GitHub token is unavailable"
+[[ -n "$policy_token" ]] || fail "release policy token is unavailable"
 [[ -d "$candidate_directory" && ! -L "$candidate_directory" ]] || fail "candidate directory is unavailable or unsafe"
 [[ -f "$release_notes" && ! -L "$release_notes" && -s "$release_notes" ]] || fail "release notes are unavailable or unsafe"
 
@@ -48,7 +53,7 @@ plan_file="$workspace/plan"
 
 stage="immutable-setting"
 require_immutable_releases() {
-  if ! immutable_setting="$(gh api "repos/$repository/immutable-releases" --jq '.enabled' 2>/dev/null)"; then
+  if ! immutable_setting="$(GH_TOKEN="$policy_token" gh api "repos/$repository/immutable-releases" --jq '.enabled' 2>/dev/null)"; then
     fail "immutable Releases setting could not be verified"
   fi
   [[ "$immutable_setting" == "true" ]] || fail "immutable Releases are not enabled"
@@ -57,11 +62,11 @@ require_immutable_releases
 
 require_release_policy() {
   local protected creation_protected
-  if ! protected="$(gh api "repos/$repository/rulesets/$tag_ruleset_id" --jq '(type == "object") and has("bypass_actors") and (.bypass_actors | type == "array") and ((.bypass_actors | length) == 0) and has("conditions") and (.conditions | type == "object") and (.conditions.ref_name.include | type == "array") and (.conditions.ref_name.exclude | type == "array") and (.conditions.ref_name.include == ["refs/tags/v*"]) and ((.conditions.ref_name.exclude | length) == 0) and has("rules") and (.rules | type == "array") and (.target == "tag") and (.enforcement == "active") and (any(.rules[]; .type == "update")) and (any(.rules[]; .type == "deletion"))' 2>/dev/null)"; then
+  if ! protected="$(GH_TOKEN="$policy_token" gh api "repos/$repository/rulesets/$tag_ruleset_id" --jq '(type == "object") and has("bypass_actors") and (.bypass_actors | type == "array") and ((.bypass_actors | length) == 0) and has("conditions") and (.conditions | type == "object") and (.conditions.ref_name.include | type == "array") and (.conditions.ref_name.exclude | type == "array") and (.conditions.ref_name.include == ["refs/tags/v*"]) and ((.conditions.ref_name.exclude | length) == 0) and has("rules") and (.rules | type == "array") and (.target == "tag") and (.enforcement == "active") and (any(.rules[]; .type == "update")) and (any(.rules[]; .type == "deletion"))' 2>/dev/null)"; then
     fail "release tag protection could not be verified"
   fi
   [[ "$protected" == "true" ]] || fail "release tag update and deletion protection is incomplete"
-  if ! creation_protected="$(gh api "repos/$repository/rulesets/$tag_creation_ruleset_id" --jq '(type == "object") and has("bypass_actors") and (.bypass_actors | type == "array") and ((.bypass_actors | length) > 0) and has("conditions") and (.conditions | type == "object") and (.conditions.ref_name.include | type == "array") and (.conditions.ref_name.exclude | type == "array") and (.conditions.ref_name.include == ["refs/tags/v*"]) and ((.conditions.ref_name.exclude | length) == 0) and has("rules") and (.rules | type == "array") and (.target == "tag") and (.enforcement == "active") and (any(.rules[]; .type == "creation"))' 2>/dev/null)"; then
+  if ! creation_protected="$(GH_TOKEN="$policy_token" gh api "repos/$repository/rulesets/$tag_creation_ruleset_id" --jq '(type == "object") and has("bypass_actors") and (.bypass_actors | type == "array") and ((.bypass_actors | length) == 1) and (.bypass_actors[0].actor_type == "User") and (.bypass_actors[0].actor_id == '"$tag_creator_id"') and (.bypass_actors[0].bypass_mode == "always") and has("conditions") and (.conditions | type == "object") and (.conditions.ref_name.include | type == "array") and (.conditions.ref_name.exclude | type == "array") and (.conditions.ref_name.include == ["refs/tags/v*"]) and ((.conditions.ref_name.exclude | length) == 0) and has("rules") and (.rules | type == "array") and (.target == "tag") and (.enforcement == "active") and (any(.rules[]; .type == "creation"))' 2>/dev/null)"; then
     fail "release tag creation authorization could not be verified"
   fi
   [[ "$creation_protected" == "true" ]] || fail "release tag creation authorization is incomplete"
