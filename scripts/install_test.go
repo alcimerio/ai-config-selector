@@ -496,7 +496,7 @@ func newInstallerFixture(t *testing.T, hostOS, hostArch string) *installerFixtur
 		t.Fatal(err)
 	}
 
-	for _, tool := range []string{"awk", "chmod", "cp", "ln", "mkdir", "mktemp", "rm", "tar"} {
+	for _, tool := range []string{"awk", "chmod", "cp", "gzip", "ln", "mkdir", "mktemp", "rm", "tar"} {
 		fixture.linkTool(tool)
 	}
 	checksumTool := "sha256sum"
