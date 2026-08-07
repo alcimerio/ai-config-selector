@@ -90,6 +90,16 @@ jobs:
           name: acs-candidate-${{ github.sha }}
           path: dist/release-candidate
 
+      - name: Restore installer mode normalized by artifact transport
+        shell: bash
+        run: |
+          installer=dist/release-candidate/install.sh
+          if [[ ! -f "$installer" || -L "$installer" ]]; then
+            echo "Promoted candidate install.sh is missing or unsafe."
+            exit 1
+          fi
+          chmod 0755 "$installer"
+
       - name: Verify host and install supplied candidate
         shell: bash
         run: |

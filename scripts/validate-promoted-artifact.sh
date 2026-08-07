@@ -15,18 +15,19 @@ target_os="$2"
 target_arch="$3"
 candidate_directory="$4"
 install_directory="$5"
-candidate_identity="candidate=$candidate_version"
-stage="host-identity"
+candidate_identity="candidate=unvalidated"
+target_identity="unvalidated"
+stage="arguments"
 
 fail() {
-  printf 'promoted artifact validation failed: target=%s/%s %s stage=%s: %s\n' \
-    "$target_os" "$target_arch" "$candidate_identity" "$stage" "$1" >&2
+  printf 'promoted artifact validation failed: target=%s %s stage=%s: %s\n' \
+    "$target_identity" "$candidate_identity" "$stage" "$1" >&2
   exit 1
 }
 
 passed() {
-  printf 'promoted artifact validation: target=%s/%s %s stage=%s status=passed\n' \
-    "$target_os" "$target_arch" "$candidate_identity" "$stage"
+  printf 'promoted artifact validation: target=%s %s stage=%s status=passed\n' \
+    "$target_identity" "$candidate_identity" "$stage"
 }
 
 archive_version="${candidate_version#v}"
@@ -52,6 +53,10 @@ case "$target_os/$target_arch" in
   darwin/arm64 | darwin/amd64 | linux/amd64 | linux/arm64) ;;
   *) fail "unsupported validation target" ;;
 esac
+
+candidate_identity="candidate=$candidate_version"
+target_identity="$target_os/$target_arch"
+stage="host-identity"
 
 command -v uname >/dev/null 2>&1 || fail "required host identity tool is unavailable: uname"
 case "$(uname -s)" in

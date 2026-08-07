@@ -32,6 +32,25 @@ func TestPromotedArtifactValidationRejectsANonNativeTargetBeforeCandidateInspect
 	}
 }
 
+func TestPromotedArtifactValidationEscapesUntrustedArguments(t *testing.T) {
+	command := exec.Command(
+		"sh", "validate-promoted-artifact.sh", "v0.2.0\x1b[31m", runtime.GOOS, runtime.GOARCH,
+		t.TempDir(), filepath.Join(t.TempDir(), "bin"),
+	)
+	output, err := command.CombinedOutput()
+	if err == nil {
+		t.Fatal("promoted artifact validation accepted a version with terminal controls")
+	}
+	trimmed := strings.TrimSuffix(string(output), "\n")
+	if strings.ContainsAny(trimmed, "\r\n\x1b") {
+		t.Fatalf("diagnostic contains raw terminal controls: %q", output)
+	}
+	want := "target=unvalidated candidate=unvalidated stage=arguments"
+	if !strings.Contains(trimmed, want) {
+		t.Fatalf("diagnostic = %q, want %q", output, want)
+	}
+}
+
 func TestPromotedArtifactValidationInstallsTheExactCandidateOnTheNativeHost(t *testing.T) {
 	candidateDirectory := realTemporaryDirectory(t)
 	writePromotedCandidate(t, candidateDirectory)
@@ -43,7 +62,7 @@ func TestPromotedArtifactValidationInstallsTheExactCandidateOnTheNativeHost(t *t
 	)
 	output, err := command.CombinedOutput()
 	if err != nil {
-		t.Fatalf("promoted artifact validation failed: %v\n%s", err, output)
+		t.Fatalf("promoted artifact validation failed: %v; output=%q", err, output)
 	}
 	for _, marker := range []string{
 		"stage=candidate-identity status=passed",
@@ -52,13 +71,13 @@ func TestPromotedArtifactValidationInstallsTheExactCandidateOnTheNativeHost(t *t
 		"stage=complete status=passed",
 	} {
 		if !strings.Contains(string(output), marker) {
-			t.Errorf("validation output omits %q: %s", marker, output)
+			t.Errorf("validation output omits %q: %q", marker, output)
 		}
 	}
 	installed := filepath.Join(installDirectory, "acs")
 	versionOutput, err := exec.Command(installed, "version").CombinedOutput()
 	if err != nil {
-		t.Fatalf("installed candidate failed: %v\n%s", err, versionOutput)
+		t.Fatalf("installed candidate failed: %v; output=%q", err, versionOutput)
 	}
 	if string(versionOutput) != "acs v0.2.0\n" {
 		t.Fatalf("installed candidate version = %q", versionOutput)

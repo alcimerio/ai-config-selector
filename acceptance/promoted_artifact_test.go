@@ -26,7 +26,7 @@ func TestPromotedArtifactReportsItsVersionAndCreatesAnEmptyProfileThroughAPTY(t 
 	version.Env = promotedEnvironment(home, os.Getenv("PATH"))
 	versionOutput, err := version.CombinedOutput()
 	if err != nil {
-		t.Fatalf("installed acs version failed: %v\n%s", err, versionOutput)
+		t.Fatalf("installed acs version failed: %v; output=%q", err, versionOutput)
 	}
 	if got, want := string(versionOutput), "acs "+promotedVersion(t)+"\n"; got != want {
 		t.Fatalf("installed acs version output = %q, want %q", got, want)
@@ -52,7 +52,7 @@ func TestPromotedArtifactReportsItsVersionAndCreatesAnEmptyProfileThroughAPTY(t 
 	}
 	for _, fragment := range []string{`"version": 2`, `"name": "promoted-empty"`, `"target": "devin"`, `"skills"`, `"selection": []`} {
 		if !bytes.Contains(contents, []byte(fragment)) {
-			t.Errorf("created Profile omits %s: %s", fragment, contents)
+			t.Errorf("created Profile omits %s: %q", fragment, contents)
 		}
 	}
 	assertPermissions(t, profilePath, 0o600)
@@ -103,16 +103,7 @@ func TestPromotedArtifactRestoresThePTYForOrdinaryAndChangedDraftCancellation(t 
 
 func TestPromotedArtifactDryRunAndFakeDevinLaunchPreserveTheRuntimeBoundary(t *testing.T) {
 	binary := promotedBinary(t)
-	home := realTemporaryDirectory(t)
-	writeSkillBundle(t, home, "review")
-	writeVersionOneProfile(t, home, "reviews")
-	credential := filepath.Join(home, ".local", "share", "devin", "credentials.toml")
-	if err := os.MkdirAll(filepath.Dir(credential), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(credential, []byte("fixture-credential\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	home, basePath := prepareRuntimeHome(t)
 
 	fixtureRoot := realTemporaryDirectory(t)
 	toolsDirectory := filepath.Join(fixtureRoot, "tools")
@@ -142,7 +133,7 @@ printf 'fake stdout:%s\n' "$line"
 printf 'fake stderr:%s\n' "$line" >&2
 exit 23
 `)
-	path := toolsDirectory + string(os.PathListSeparator) + os.Getenv("PATH")
+	path := toolsDirectory + string(os.PathListSeparator) + basePath
 	environment := append(promotedEnvironment(home, path), "FAKE_DEVIN_EVENTS="+eventsPath)
 
 	dryRun := exec.Command(binary, "devin", "--profile", "reviews", "--dry-run")
@@ -150,11 +141,11 @@ exit 23
 	dryRun.Dir = fixtureRoot
 	dryOutput, err := dryRun.CombinedOutput()
 	if err != nil {
-		t.Fatalf("promoted dry run failed: %v\n%s", err, dryOutput)
+		t.Fatalf("promoted dry run failed: %v; output=%q", err, dryOutput)
 	}
 	for _, want := range []string{"Dry run for Profile \"reviews\"", "review [devin-config]", "No Session was created and Devin was not started."} {
 		if !strings.Contains(string(dryOutput), want) {
-			t.Errorf("dry-run output omits %q: %s", want, dryOutput)
+			t.Errorf("dry-run output omits %q: %q", want, dryOutput)
 		}
 	}
 	if _, err := os.Stat(eventsPath); !os.IsNotExist(err) {
@@ -173,7 +164,7 @@ exit 23
 	err = launch.Run()
 	exitError, ok := err.(*exec.ExitError)
 	if !ok || exitError.ExitCode() != 23 {
-		t.Fatalf("promoted launch error = %v, want child exit 23; stderr=%s", err, stderr.String())
+		t.Fatalf("promoted launch error = %v, want child exit 23; stderr=%q", err, stderr.String())
 	}
 	if got, want := stdout.String(), "fake stdout:attached input\n"; got != want {
 		t.Errorf("attached stdout = %q, want %q", got, want)
@@ -205,20 +196,20 @@ exit 23
 		failed.Dir = fixtureRoot
 		output, err := failed.CombinedOutput()
 		if err == nil {
-			t.Fatalf("promoted launch accepted failed authentication: %s", output)
+			t.Fatalf("promoted launch accepted failed authentication: %q", output)
 		}
 		if !strings.Contains(string(output), "authentication probe failed") {
-			t.Errorf("authentication failure is unclear: %s", output)
+			t.Errorf("authentication failure is unclear: %q", output)
 		}
 		if strings.Contains(string(output), "DO_NOT_LEAK") {
-			t.Fatalf("authentication failure leaked subprocess output: %s", output)
+			t.Fatalf("authentication failure leaked subprocess output: %q", output)
 		}
 		events, readErr := os.ReadFile(eventsPath)
 		if readErr != nil {
 			t.Fatal(readErr)
 		}
 		if strings.Contains(string(events), "launch:") {
-			t.Fatalf("fake Devin launched after failed authentication: %s", events)
+			t.Fatalf("fake Devin launched after failed authentication: %q", events)
 		}
 		assertNoSessions(t, home)
 	})
@@ -227,7 +218,7 @@ exit 23
 func TestPromotedArtifactForwardsSignalsAndPreservesConcurrentSessionLeases(t *testing.T) {
 	binary := promotedBinary(t)
 
-	t.Run("signal and resize forwarding", func(t *testing.T) {
+	t.Run("signal forwarding", func(t *testing.T) {
 		for _, test := range []struct {
 			name       string
 			mode       string
@@ -236,7 +227,6 @@ func TestPromotedArtifactForwardsSignalsAndPreservesConcurrentSessionLeases(t *t
 			wantRecord string
 		}{
 			{name: "termination", mode: "signal", signal: syscall.SIGTERM, wantExit: 42, wantRecord: "SIGTERM\n"},
-			{name: "terminal resize", mode: "resize", signal: syscall.SIGWINCH, wantExit: 0, wantRecord: "SIGWINCH\n"},
 		} {
 			t.Run(test.name, func(t *testing.T) {
 				home, path := prepareRuntimeHome(t)
@@ -277,13 +267,14 @@ exit 64
 				if err := command.Start(); err != nil {
 					t.Fatal(err)
 				}
+				t.Cleanup(func() { _ = command.Process.Kill() })
 				waitForFile(t, readyPath)
 				if err := command.Process.Signal(test.signal); err != nil {
 					t.Fatal(err)
 				}
 				exitCode := waitExitCode(t, command, 8*time.Second, &output)
 				if exitCode != test.wantExit {
-					t.Fatalf("signaled promoted artifact exit = %d, want %d: %s", exitCode, test.wantExit, output.String())
+					t.Fatalf("signaled promoted artifact exit = %d, want %d: %q", exitCode, test.wantExit, output.String())
 				}
 				record, err := os.ReadFile(recordPath)
 				if err != nil {
@@ -295,6 +286,82 @@ exit 64
 				assertNoSessions(t, home)
 			})
 		}
+	})
+
+	t.Run("PTY terminal resize", func(t *testing.T) {
+		home, path := prepareRuntimeHome(t)
+		fixtureRoot := realTemporaryDirectory(t)
+		toolsDirectory := filepath.Join(fixtureRoot, "tools")
+		if err := os.Mkdir(toolsDirectory, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		readyPath := filepath.Join(fixtureRoot, "ready")
+		recordPath := filepath.Join(fixtureRoot, "resize")
+		writeFakeDevin(t, filepath.Join(toolsDirectory, "devin"), successfulFakeDevin(`
+trap 'stty size > "$FAKE_DEVIN_RESIZE"' WINCH
+touch "$FAKE_DEVIN_READY"
+while [ ! -e "$FAKE_DEVIN_RESIZE" ]; do sleep 0.05; done
+exit 0
+`))
+		environment := append(
+			promotedEnvironment(home, toolsDirectory+string(os.PathListSeparator)+path),
+			"FAKE_DEVIN_READY="+readyPath,
+			"FAKE_DEVIN_RESIZE="+recordPath,
+		)
+
+		master, terminal, err := pty.Open()
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer master.Close()
+		defer terminal.Close()
+		if err := pty.Setsize(master, &pty.Winsize{Cols: 80, Rows: 24}); err != nil {
+			t.Fatal(err)
+		}
+		command := exec.Command(binary, "devin", "--profile", "reviews")
+		command.Env = environment
+		command.Dir = fixtureRoot
+		command.Stdin, command.Stdout, command.Stderr = terminal, terminal, terminal
+		command.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true, Ctty: 0}
+		if err := command.Start(); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = command.Process.Kill() })
+
+		capture := &safeCapture{}
+		outputDone := make(chan struct{})
+		go capturePTY(master, capture, outputDone)
+		waitForFile(t, readyPath)
+		if err := pty.Setsize(master, &pty.Winsize{Cols: 120, Rows: 40}); err != nil {
+			t.Fatal(err)
+		}
+		wait := make(chan error, 1)
+		go func() { wait <- command.Wait() }()
+		select {
+		case err := <-wait:
+			if err != nil {
+				t.Fatalf("resized promoted artifact failed: %v; output=%q", err, capture.String())
+			}
+		case <-time.After(8 * time.Second):
+			_ = command.Process.Kill()
+			t.Fatalf("resized promoted artifact timed out: %q", capture.String())
+		}
+		if err := terminal.Close(); err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case <-outputDone:
+		case <-time.After(2 * time.Second):
+			t.Fatal("resized promoted artifact output reader did not finish")
+		}
+		resize, err := os.ReadFile(recordPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, want := strings.TrimSpace(string(resize)), "40 120"; got != want {
+			t.Errorf("fake Devin terminal size = %q, want %q", got, want)
+		}
+		assertNoSessions(t, home)
 	})
 
 	t.Run("concurrent lease isolation and abandoned cleanup", func(t *testing.T) {
@@ -351,7 +418,7 @@ exit 0
 			t.Fatal(err)
 		}
 		if exitCode := waitExitCode(t, second, 8*time.Second, secondOutput); exitCode != 0 {
-			t.Fatalf("second concurrent launch exited %d: %s", exitCode, secondOutput.String())
+			t.Fatalf("second concurrent launch exited %d: %q", exitCode, secondOutput.String())
 		}
 		if _, err := os.Stat(firstHome); err != nil {
 			t.Fatalf("second launch removed the active first Session: %v", err)
@@ -363,7 +430,7 @@ exit 0
 			t.Fatal(err)
 		}
 		if exitCode := waitExitCode(t, first, 8*time.Second, firstOutput); exitCode != 0 {
-			t.Fatalf("first concurrent launch exited %d: %s", exitCode, firstOutput.String())
+			t.Fatalf("first concurrent launch exited %d: %q", exitCode, firstOutput.String())
 		}
 		assertNoSessions(t, home)
 	})
@@ -427,7 +494,7 @@ func waitExitCode(t *testing.T, command *exec.Cmd, timeout time.Duration, output
 		t.Fatalf("wait for promoted artifact: %v", err)
 	case <-time.After(timeout):
 		_ = command.Process.Kill()
-		t.Fatalf("promoted artifact timed out: %s", output.String())
+		t.Fatalf("promoted artifact timed out: %q", output.String())
 	}
 	return -1
 }
@@ -524,22 +591,11 @@ func runPromotedPTY(t *testing.T, binary, home, profileName string, interact fun
 	if err := command.Start(); err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = command.Process.Kill() })
 
 	capture := &safeCapture{}
 	outputDone := make(chan struct{})
-	go func() {
-		defer close(outputDone)
-		buffer := make([]byte, 4096)
-		for {
-			count, readErr := master.Read(buffer)
-			if count > 0 {
-				capture.Write(buffer[:count])
-			}
-			if readErr != nil {
-				return
-			}
-		}
-	}()
+	go capturePTY(master, capture, outputDone)
 
 	interact(t, master, capture)
 	wait := make(chan error, 1)
@@ -568,6 +624,20 @@ func runPromotedPTY(t *testing.T, binary, home, profileName string, interact fun
 		exitCode = exitError.ExitCode()
 	}
 	return ptyResult{exitCode: exitCode, output: capture.String()}
+}
+
+func capturePTY(master io.Reader, capture *safeCapture, done chan<- struct{}) {
+	defer close(done)
+	buffer := make([]byte, 4096)
+	for {
+		count, readErr := master.Read(buffer)
+		if count > 0 {
+			capture.Write(buffer[:count])
+		}
+		if readErr != nil {
+			return
+		}
+	}
 }
 
 func asExitError(err error, target **exec.ExitError) bool {
