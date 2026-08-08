@@ -63,6 +63,48 @@ func TestV020ReleaseNotesMatchTagWorkflowPath(t *testing.T) {
 	}
 }
 
+func TestV020ReleaseUsesSoloMaintainerAuthorizationBoundary(t *testing.T) {
+	workflow, err := os.ReadFile(filepath.Join("..", ".github", "workflows", "release.yml"))
+	if err != nil {
+		t.Fatalf("read release workflow: %v", err)
+	}
+	text := string(workflow)
+	for _, required := range []string{
+		"environment: release",
+		"permission-administration: write",
+		"GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}",
+		"ACS_RELEASE_ACTOR_ID: ${{ github.actor_id }}",
+		"Verify the authorized human actor before credentials",
+	} {
+		if !strings.Contains(text, required) {
+			t.Errorf("release workflow is missing solo-maintainer boundary %q", required)
+		}
+	}
+	for _, obsolete := range []string{
+		"ACS_RELEASE_PUBLISH_APP_CLIENT_ID",
+		"ACS_RELEASE_PUBLISH_APP_PRIVATE_KEY",
+		"id: release-token",
+	} {
+		if strings.Contains(text, obsolete) {
+			t.Errorf("release workflow still requires obsolete publication App configuration %q", obsolete)
+		}
+	}
+
+	contributors, err := os.ReadFile(filepath.Join("..", "CONTRIBUTING.md"))
+	if err != nil {
+		t.Fatalf("read CONTRIBUTING.md: %v", err)
+	}
+	for _, required := range []string{
+		"scripts/prepare-release-tag.sh v0.2.0 /absolute/private/evidence-set.json",
+		"git push origin refs/tags/v0.2.0",
+		"with no\nrequired reviewers",
+	} {
+		if !strings.Contains(string(contributors), required) {
+			t.Errorf("CONTRIBUTING.md is missing solo-maintainer release guidance %q", required)
+		}
+	}
+}
+
 func TestV020DefaultInstallVerificationDoesNotAssumePATH(t *testing.T) {
 	for _, document := range []string{"README.md", "docs/releases/v0.2.0.md"} {
 		contents, err := os.ReadFile(filepath.Join("..", document))

@@ -302,12 +302,14 @@ One Linux job builds the complete six-file Release Artifact Set. Four native
 jobs download that one workflow artifact and validate the supplied bytes; none
 rebuilds them. After every native job passes, provenance attestation covers the
 four archives and checksum manifest. Attestation alone receives
-`id-token: write` and `attestations: write`. The policy token and publication
-token are short-lived and come from separate repository-only Apps behind a
-protected `release` environment: the first has
-Administration(write), required for GitHub to return ruleset bypass actors,
-and the second has only Contents(write). No token can both alter policy and
-publish a Release. The default workflow token remains read-only.
+`id-token: write` and `attestations: write`. A repository-only policy App is
+scoped through the `release` environment and receives Administration(write),
+which is required for GitHub to return ruleset bypass actors. The publication
+job separately receives a job-scoped `GITHUB_TOKEN` with Contents(write); all
+other workflow jobs remain read-only. No token can both inspect or alter policy
+and publish a Release. The environment has no required reviewers: the sole
+maintainer's exact annotated tag push is the human release authorization, and
+the environment only scopes the policy credential.
 
 Publication is a forward-only state machine: create a draft, resume a
 compatible partial draft by uploading only missing exact assets, publish a
@@ -317,8 +319,11 @@ public state stops publication. The workflow also fails closed unless the
 repository immutable Releases setting is enabled, one active non-bypassable tag
 ruleset restricts updates and deletions for `refs/tags/v*`, and a separate
 active ruleset restricts tag creation to one explicitly identified release
-maintainer who must also be the tag-triggering actor. It
-verifies the live annotated tag object, peeled source commit, and containment
+maintainer who must also be the tag-triggering actor. A local preparation
+command requires clean fetched `main`, validates the candidate and authenticated
+evidence, creates the annotated tag without pushing it, and reports the exact
+tag object for approval. The workflow verifies the live annotated tag object,
+peeled source commit, and containment
 in protected `main` before draft creation and again before publication. It
 never deletes or replaces a tag, Release, or asset, so correction requires a
 new patch version.
