@@ -56,9 +56,10 @@ jobs:
 
       - name: Race test
         # The Linux cancelreader used by Bubble Tea races with its own shutdown
-        # only when the runtime-error PTY subprocess is race-instrumented. The
-        # normal Test step still runs that native terminal-restoration case.
-        run: go test -race ./... -skip '^TestProfileBuilderPTYRestoresTerminal/runtime_error$'
+        # when an abrupt runtime-error or recovered-panic PTY subprocess is
+        # race-instrumented. The normal Test step still runs both native
+        # terminal-restoration cases.
+        run: go test -race ./... -skip '^TestProfileBuilderPTYRestoresTerminal/(runtime_error|recovered_panic)$'
 
       - name: Build
         run: go build -o /tmp/acs ./cmd/acs

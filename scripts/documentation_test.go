@@ -74,3 +74,48 @@ func TestV020DefaultInstallVerificationDoesNotAssumePATH(t *testing.T) {
 		}
 	}
 }
+
+func TestLinuxWorkflowsUseTheCompleteDocumentedCancelreaderException(t *testing.T) {
+	want := `go test -race ./... -skip '^TestProfileBuilderPTYRestoresTerminal/(runtime_error|recovered_panic)$'`
+	ci, err := os.ReadFile(filepath.Join("..", ".github", "workflows", "ci.yml"))
+	if err != nil {
+		t.Fatalf("read ci.yml: %v", err)
+	}
+	if !strings.Contains(string(ci), want) {
+		t.Error("ci.yml does not use the complete Linux cancelreader exception")
+	}
+
+	for _, workflow := range []string{"promoted-artifacts.yml", "release.yml"} {
+		contents, err := os.ReadFile(filepath.Join("..", ".github", "workflows", workflow))
+		if err != nil {
+			t.Fatalf("read %s: %v", workflow, err)
+		}
+		text := string(contents)
+		for _, required := range []string{
+			`if [[ "${{ matrix.os }}" == "linux" ]]; then`,
+			want,
+			"else\n            go test -race ./...\n          fi",
+		} {
+			if !strings.Contains(text, required) {
+				t.Errorf("%s is missing the platform-specific race gate %q", workflow, required)
+			}
+		}
+	}
+}
+
+func TestContributorRaceGateKeepsTheExceptionLinuxOnly(t *testing.T) {
+	contents, err := os.ReadFile(filepath.Join("..", "CONTRIBUTING.md"))
+	if err != nil {
+		t.Fatalf("read CONTRIBUTING.md: %v", err)
+	}
+	text := string(contents)
+	for _, want := range []string{
+		`if [ "$(go env GOOS)" = linux ]; then`,
+		`go test -race ./... -skip '^TestProfileBuilderPTYRestoresTerminal/(runtime_error|recovered_panic)$'`,
+		"else\n  go test -race ./...\nfi",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("CONTRIBUTING.md is missing the platform-specific race gate %q", want)
+		}
+	}
+}
