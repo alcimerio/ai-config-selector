@@ -83,8 +83,10 @@ else
 fi
 go build ./cmd/acs
 for script in scripts/goreleaser.sh scripts/release-candidate.sh \
-  scripts/release-tag-identity.sh scripts/validate-promoted-artifact.sh \
-  scripts/install.sh.tmpl; do sh -n "$script"; done
+  scripts/prepare-release-tag.sh scripts/release-tag-identity.sh \
+  scripts/validate-promoted-artifact.sh scripts/install.sh.tmpl; do
+  sh -n "$script"
+done
 bash -n scripts/publish-release.sh
 go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
 ```
@@ -182,6 +184,29 @@ For v0.2.0, maintain the evidence record in
 unavailable or failed gate remains explicitly `INCOMPLETE`; never infer success
 from a blank field or cross-build.
 
+Keep the completed evidence-set file outside the repository. From a clean,
+freshly fetched `main` whose `HEAD` exactly matches `origin/main`, prepare the
+local tag with:
+
+```bash
+git fetch origin main
+scripts/prepare-release-tag.sh v0.2.0 /absolute/private/evidence-set.json
+```
+
+The command rebuilds and validates the complete candidate, binds the private
+evidence set to those bytes, creates the annotated tag locally, re-reads its
+identity, and prints the tag-object SHA and peeled source commit. It never
+pushes. Inspect those exact identities and obtain the release approval before
+pushing only the printed tag ref. For v0.2.0, that command is:
+
+```bash
+git push origin refs/tags/v0.2.0
+```
+
+Do not push a branch, another tag, or a rewritten tag as part of that approval.
+The human tag push is the release authorization boundary; GitHub Actions owns
+the mechanical draft, asset, and publication transitions.
+
 Before the tag is pushed, enable the repository's immutable Releases setting
 and create two active tag rulesets covering exactly `refs/tags/v*`. The first
 must restrict updates and deletions with no bypass actors. The second must
@@ -192,18 +217,22 @@ repository variables. The creation ruleset must have exactly one `User` bypass
 actor in `always` mode; record that user's numeric ID as
 `ACS_RELEASE_TAG_CREATOR_ID`. The tag-triggering actor must match that ID.
 
-Configure a protected `release` environment with required reviewers and no
-self-review. Install two repository-only GitHub Apps so no credential can both
-change policy and publish a Release. The policy App needs
+Configure a `release` environment restricted to `v*` tag refs, with no
+required reviewers. For a sole maintainer, a self-review prohibition would make
+publication impossible and a self-approval click would not add an independent
+reviewer. The environment scopes the policy credential; it is not a second
+human authorization gate.
+
+Install one repository-only policy GitHub App. It needs
 Administration(write), because GitHub omits ruleset bypass actors from weaker
 tokens; store its client ID as `ACS_RELEASE_POLICY_APP_CLIENT_ID` and its key as
 the `ACS_RELEASE_POLICY_APP_PRIVATE_KEY` environment secret. The publication
-App needs only Contents(write); store its client ID as
-`ACS_RELEASE_PUBLISH_APP_CLIENT_ID` and its key as the
-`ACS_RELEASE_PUBLISH_APP_PRIVATE_KEY` environment secret. The workflow uses
-short-lived installation tokens only after environment approval and does not
-accept a personal access token. The tagged commit must be contained in the
-current protected `main` history.
+job uses its own job-scoped `GITHUB_TOKEN` with Contents(write), while the rest
+of the workflow remains read-only. The policy App token cannot publish a
+Release, the workflow token cannot inspect the creation-rule bypass actor, and
+no personal access token is accepted. The tagged commit must be contained in
+the current protected `main` history, and the tag-triggering actor must be the
+single User authorized by the creation ruleset.
 
 The tag workflow builds once, transfers those bytes through all four
 native jobs, attests the four archives and checksum manifest, and only then

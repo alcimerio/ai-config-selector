@@ -215,6 +215,8 @@ jobs:
       - attest
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    permissions:
+      contents: write
     environment: release
 
     steps:
@@ -248,6 +250,17 @@ jobs:
       - name: Verify candidate identity before publication
         run: go run ./tools/releaseverify --dist dist/release-candidate --version "$GITHUB_REF_NAME"
 
+      - name: Verify the authorized human actor before credentials
+        shell: bash
+        env:
+          AUTHORIZED_ACTOR_ID: ${{ vars.ACS_RELEASE_TAG_CREATOR_ID }}
+          EVENT_ACTOR_ID: ${{ github.actor_id }}
+        run: |
+          if [[ ! "$AUTHORIZED_ACTOR_ID" =~ ^[1-9][0-9]*$ || "$EVENT_ACTOR_ID" != "$AUTHORIZED_ACTOR_ID" ]]; then
+            echo "The tag-triggering actor is not the authorized release maintainer."
+            exit 1
+          fi
+
       - name: Create the isolated policy-verification token
         id: policy-token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
@@ -257,14 +270,6 @@ jobs:
           # GitHub omits ruleset bypass actors without Administration(write).
           permission-administration: write
 
-      - name: Create the isolated Release-publication token
-        id: release-token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
-        with:
-          client-id: ${{ vars.ACS_RELEASE_PUBLISH_APP_CLIENT_ID }}
-          private-key: ${{ secrets.ACS_RELEASE_PUBLISH_APP_PRIVATE_KEY }}
-          permission-contents: write
-
       - name: Stage exact assets and publish once
         env:
           ACS_RELEASE_TAG_RULESET_ID: ${{ vars.ACS_RELEASE_TAG_RULESET_ID }}
@@ -272,7 +277,7 @@ jobs:
           ACS_RELEASE_TAG_CREATOR_ID: ${{ vars.ACS_RELEASE_TAG_CREATOR_ID }}
           ACS_RELEASE_ACTOR_ID: ${{ github.actor_id }}
           ACS_RELEASE_POLICY_TOKEN: ${{ steps.policy-token.outputs.token }}
-          GH_TOKEN: ${{ steps.release-token.outputs.token }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           scripts/publish-release.sh \
             "$GITHUB_REF_NAME" \
