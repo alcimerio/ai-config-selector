@@ -95,12 +95,34 @@ func TestV020ReleaseUsesSoloMaintainerAuthorizationBoundary(t *testing.T) {
 		t.Fatalf("read CONTRIBUTING.md: %v", err)
 	}
 	for _, required := range []string{
-		"scripts/prepare-release-tag.sh v0.2.0 /absolute/private/evidence-set.json",
+		"scripts/prepare-release-tag.sh v0.2.0",
 		"git push origin refs/tags/v0.2.0",
 		"with no\nrequired reviewers",
 	} {
 		if !strings.Contains(string(contributors), required) {
 			t.Errorf("CONTRIBUTING.md is missing solo-maintainer release guidance %q", required)
+		}
+	}
+	for _, document := range []string{
+		"CONTRIBUTING.md",
+		"docs/architecture.md",
+		"docs/authenticated-release-smoke.md",
+		"docs/releases/v0.2.0-checklist.md",
+		".github/workflows/release.yml",
+	} {
+		contents, err := os.ReadFile(filepath.Join("..", document))
+		if err != nil {
+			t.Fatalf("read %s: %v", document, err)
+		}
+		for _, obsolete := range []string{
+			"authenticated-evidence.template.json",
+			"tools/authenticatedevidence",
+			"tools/releasegate",
+			"evidence-set.json",
+		} {
+			if strings.Contains(string(contents), obsolete) {
+				t.Errorf("%s still requires obsolete release evidence %q", document, obsolete)
+			}
 		}
 	}
 }

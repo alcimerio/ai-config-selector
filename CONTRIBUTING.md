@@ -162,42 +162,35 @@ Release URLs while serving the supplied bytes through a controlled local
 download tool. It verifies the complete candidate set, selected archive,
 checksum, structure, executable mode, version, custom and default destination
 behavior, PATH guidance, and cleanup. Cross-compilation and emulation are not
-native evidence. If any required runner is unavailable or any native job
+native validation. If any required runner is unavailable or any native job
 fails, the candidate is not promoted.
 
-Before tagging a release, follow the
+These four native jobs are the required runtime release gate. They install and
+exercise the same candidate bytes that the workflow later attests and
+publishes. A failing or unavailable native job blocks the release.
+
+An authenticated smoke with real Devin is optional and risk-triggered. Run the
 [authenticated release-candidate smoke procedure](docs/authenticated-release-smoke.md)
-on macOS 26 arm64 and a disposable Ubuntu 24.04 amd64 host. It installs the
-exact candidate archives, exercises the visual Profile and interactive Devin
-boundaries, verifies Session isolation and cleanup, and produces strict,
-candidate-matched sanitized evidence for later release review. A missing host,
-authorization, or passing evidence remains a blocking release gate.
+on the maintainer's macOS 26 arm64 host before the first release, or when a
+change touches authentication, the Devin Adapter, Profile selection, Session
+isolation, or interactive lifecycle behavior. It is a maintainer confidence
+check, does not use CI credentials, and is not attached to the tag or workflow.
 
-The release tag is an annotated canonical SemVer tag. Its complete annotation
-is the strict evidence-set JSON envelope containing exactly one macOS 26 arm64
-record and one Ubuntu 24.04 amd64 record. Both records must name the tagged
-commit and the exact archive and `SHA256SUMS` bytes rebuilt by the tag workflow.
-The source tree must also contain nonempty release notes at
-`docs/releases/<tag>.md`. Do not create the tag until those inputs are final.
-For v0.2.0, maintain the evidence record in
-[`docs/releases/v0.2.0-checklist.md`](docs/releases/v0.2.0-checklist.md). Every
-unavailable or failed gate remains explicitly `INCOMPLETE`; never infer success
-from a blank field or cross-build.
-
-Keep the completed evidence-set file outside the repository. From a clean,
-freshly fetched `main` whose `HEAD` exactly matches `origin/main`, prepare the
-local tag with:
+The release tag is an annotated canonical SemVer tag. The tag points to the
+exact source commit and carries a short human-readable annotation. The source
+tree must also contain nonempty release notes at `docs/releases/<tag>.md`. From
+a clean, freshly fetched `main` whose `HEAD` exactly matches `origin/main`,
+prepare the local tag with:
 
 ```bash
 git fetch origin main
-scripts/prepare-release-tag.sh v0.2.0 /absolute/private/evidence-set.json
+scripts/prepare-release-tag.sh v0.2.0
 ```
 
-The command rebuilds and validates the complete candidate, binds the private
-evidence set to those bytes, creates the annotated tag locally, re-reads its
-identity, and prints the tag-object SHA and peeled source commit. It never
-pushes. Inspect those exact identities and obtain the release approval before
-pushing only the printed tag ref. For v0.2.0, that command is:
+The command rebuilds and validates the complete candidate, creates the
+human-readable annotated tag locally, re-reads its identity, and prints the
+tag-object SHA and peeled source commit. It never pushes. Inspect those exact
+identities before pushing only the printed tag ref. For v0.2.0, that command is:
 
 ```bash
 git push origin refs/tags/v0.2.0
@@ -243,8 +236,8 @@ of the unchanged tag resumes a compatible draft or accepts the already
 immutable, byte-identical Release; it never deletes, replaces, or rebuilds an
 asset during publication.
 
-If any gate fails, no public Release is created. Correct source, evidence,
-notes, workflow configuration, tags, or artifact bytes with a new patch
+If any gate fails, no public Release is created. Correct source, notes,
+workflow configuration, tags, or artifact bytes with a new patch
 version. Never move a published tag or replace a published asset.
 
 After publishing the immutable tag, repeat the public Supported Install Path on

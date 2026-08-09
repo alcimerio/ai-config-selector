@@ -5,13 +5,12 @@ set -f
 LC_ALL=C
 export LC_ALL
 
-if [ "$#" -ne 2 ]; then
-  printf '%s\n' "usage: scripts/release-tag-identity.sh <vMAJOR.MINOR.PATCH> <evidence-output>" >&2
+if [ "$#" -ne 1 ]; then
+  printf '%s\n' "usage: scripts/release-tag-identity.sh <vMAJOR.MINOR.PATCH>" >&2
   exit 2
 fi
 
 release_tag="$1"
-evidence_output="$2"
 archive_version="${release_tag#v}"
 tag_identity="unvalidated"
 
@@ -57,13 +56,8 @@ stage="release-notes"
 release_notes="docs/releases/$release_tag.md"
 [ -f "$release_notes" ] && [ ! -L "$release_notes" ] && [ -s "$release_notes" ] || fail "version-controlled release notes are missing"
 
-stage="evidence"
-umask 077
-git for-each-ref --format='%(contents)' "$tag_ref" >"$evidence_output" || fail "annotated evidence could not be extracted"
-[ -s "$evidence_output" ] || fail "annotated evidence is missing"
+stage="annotation"
+annotation="$(git for-each-ref --format='%(contents)' "$tag_ref")" || fail "annotated tag message is unavailable"
+[ -n "$annotation" ] || fail "annotated tag message is empty"
 
-earliest_completion="$(git show -s --format=%cI "$source_commit")" || fail "source timestamp is unavailable"
-latest_completion="$(git for-each-ref --format='%(taggerdate:iso-strict)' "$tag_ref")" || fail "tag timestamp is unavailable"
-[ -n "$earliest_completion" ] && [ -n "$latest_completion" ] || fail "release review window is unavailable"
-
-printf '%s\n%s\n%s\n%s\n' "$source_commit" "$tag_object" "$earliest_completion" "$latest_completion"
+printf '%s\n%s\n' "$source_commit" "$tag_object"

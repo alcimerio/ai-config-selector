@@ -5,13 +5,12 @@ set -f
 LC_ALL=C
 export LC_ALL
 
-if [ "$#" -ne 2 ]; then
-  printf '%s\n' "usage: scripts/prepare-release-tag.sh <vMAJOR.MINOR.PATCH> <evidence-set.json>" >&2
+if [ "$#" -ne 1 ]; then
+  printf '%s\n' "usage: scripts/prepare-release-tag.sh <vMAJOR.MINOR.PATCH>" >&2
   exit 2
 fi
 
 release_tag="$1"
-evidence_file="$2"
 archive_version="${release_tag#v}"
 stage="arguments"
 tag_identity="unvalidated"
@@ -30,7 +29,7 @@ cleanup() {
     git tag -d "$release_tag" >/dev/null 2>&1 || true
   fi
   if [ -n "$identity_output" ]; then
-    rm -f "$identity_output" "$identity_output.values"
+    rm -f "$identity_output"
   fi
 }
 trap cleanup EXIT
@@ -57,9 +56,6 @@ for component in "$@"; do
   esac
 done
 tag_identity="$release_tag"
-
-[ -f "$evidence_file" ] && [ ! -L "$evidence_file" ] && [ -s "$evidence_file" ] || \
-  fail "authenticated evidence set is unavailable or unsafe"
 
 stage="repository"
 [ -z "$(git status --porcelain --untracked-files=all)" ] || fail "source worktree is not clean"
@@ -88,47 +84,23 @@ release_notes="docs/releases/$release_tag.md"
 stage="candidate"
 scripts/release-candidate.sh "$release_tag" || fail "release candidate validation failed"
 
-stage="evidence"
-earliest_completion="$(git show -s --format=%cI "$source_commit")" || \
-  fail "source timestamp is unavailable"
-latest_completion="$(date -u '+%Y-%m-%dT%H:%M:%SZ')" || fail "review timestamp is unavailable"
-go run ./tools/releasegate \
-  --evidence "$evidence_file" \
-  --candidate dist/release-candidate \
-  --version "$release_tag" \
-  --source-commit "$source_commit" \
-  --earliest-completion "$earliest_completion" \
-  --latest-completion "$latest_completion" >/dev/null || \
-  fail "authenticated evidence does not match the release candidate"
-
 stage="create-tag"
-git tag -a "$release_tag" -F "$evidence_file" "$source_commit" || fail "annotated release tag could not be created"
+git tag -a "$release_tag" -m "Release $release_tag" "$source_commit" || fail "annotated release tag could not be created"
 created_tag=true
 
 identity_output="$(mktemp "${TMPDIR:-/tmp}/acs-release-tag.XXXXXX")" || \
   fail "temporary identity output could not be created"
-scripts/release-tag-identity.sh "$release_tag" "$identity_output.values" >"$identity_output" || \
+scripts/release-tag-identity.sh "$release_tag" >"$identity_output" || \
   fail "created release tag failed identity validation"
 
 prepared_source="$(sed -n '1p' "$identity_output")"
 tag_object="$(sed -n '2p' "$identity_output")"
-[ "$(sed -n '3p' "$identity_output")" = "$earliest_completion" ] || \
-  fail "created tag review window does not preserve the source boundary"
-tag_completion="$(sed -n '4p' "$identity_output")"
+[ -z "$(sed -n '3p' "$identity_output")" ] || fail "created tag identity output is invalid"
 [ "$prepared_source" = "$source_commit" ] || fail "created tag source commit does not match"
 case "$tag_object" in
   [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) ;;
   *) fail "created annotated tag object is invalid" ;;
 esac
-go run ./tools/releasegate \
-  --evidence "$identity_output.values" \
-  --candidate dist/release-candidate \
-  --version "$release_tag" \
-  --source-commit "$source_commit" \
-  --earliest-completion "$earliest_completion" \
-  --latest-completion "$tag_completion" >/dev/null || \
-  fail "created tag annotation does not preserve valid authenticated evidence"
-rm -f "$identity_output.values"
 
 created_tag=false
 stage="complete"

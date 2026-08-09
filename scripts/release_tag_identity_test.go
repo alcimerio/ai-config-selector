@@ -28,35 +28,26 @@ func TestReleaseTagIdentityRequiresAnnotatedTagNotesAndCleanExactSource(t *testi
 	}
 	runGit(t, repository, "add", ".")
 	runGit(t, repository, "commit", "--quiet", "-m", "source")
-	runGit(t, repository, "tag", "-a", "v1.2.3", "-m", `{"schema_version":1}`)
+	runGit(t, repository, "tag", "-a", "v1.2.3", "-m", "Release v1.2.3")
 
-	evidence := filepath.Join(t.TempDir(), "evidence.json")
-	command := exec.Command("sh", script, "v1.2.3", evidence)
+	command := exec.Command("sh", script, "v1.2.3")
 	command.Dir = repository
 	output, err := command.CombinedOutput()
 	if err != nil {
 		t.Fatalf("annotated release tag rejected: %v; output=%q", err, output)
 	}
 	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
-	if len(lines) != 4 || len(lines[0]) != 40 || len(lines[1]) != 40 {
+	if len(lines) != 2 || len(lines[0]) != 40 || len(lines[1]) != 40 {
 		t.Fatalf("release identity output = %q", output)
 	}
-	command = exec.Command("sh", script, "v1.2.3x", filepath.Join(t.TempDir(), "malformed.json"))
+	command = exec.Command("sh", script, "v1.2.3x")
 	command.Dir = repository
 	output, err = command.CombinedOutput()
 	if err == nil || !strings.Contains(string(output), "not a canonical SemVer") {
 		t.Fatalf("malformed tag rejection = %v, output=%q", err, output)
 	}
-	contents, err := os.ReadFile(evidence)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.TrimSpace(string(contents)) != `{"schema_version":1}` {
-		t.Fatalf("tag annotation = %q", contents)
-	}
-
 	runGit(t, repository, "tag", "v1.2.4")
-	command = exec.Command("sh", script, "v1.2.4", filepath.Join(t.TempDir(), "lightweight.json"))
+	command = exec.Command("sh", script, "v1.2.4")
 	command.Dir = repository
 	output, err = command.CombinedOutput()
 	if err == nil || !strings.Contains(string(output), "not annotated") {
