@@ -270,33 +270,23 @@ mismatches, and unavailable authentication abort the launch. Preflight errors
 expose capability-level diagnostics without returning subprocess output,
 credentials, environment values, or account details.
 
-### Authenticated release evidence
+### Optional authenticated smoke
 
-Authenticated release validation remains outside ordinary automation. A human
-runs the public Adapter contract and an installed candidate on macOS 26 arm64
-and disposable Ubuntu 24.04 amd64 reference hosts. The resulting evidence is a
-strict structured record, not a terminal transcript. It binds the source
-commit, canonical version, target archive digest, complete archive-manifest
-digest, native target, exact selected global Skill References, fixed smoke
-checklist, timestamps, and cleanup outcome.
-
-The evidence validator accepts only the two authenticated reference targets,
-canonical identities, bounded timestamps, allowlisted Skill sources, safe
-relative Skill paths, complete passing checks, and target-specific cleanup. A
-release consumer supplies the expected candidate identity and review window;
-missing, stale, mismatched, malformed, incomplete, or extra evidence fails
-closed. Diagnostics identify the failed evidence field without echoing
-untrusted evidence values. Credentials, host paths, logs, account details, and
-subprocess output are outside the evidence boundary.
+The required release gate stays credential-free: one candidate artifact set is
+installed and exercised natively on darwin/arm64, darwin/amd64, linux/amd64,
+and linux/arm64. A real-Devin smoke is an optional maintainer check for changes
+that affect authentication, the Devin Adapter, Profile selection, Session
+isolation, or interactive lifecycle behavior. It runs only on an authorized
+macOS 26 arm64 maintainer host and never places personal credentials in CI or a
+release artifact.
 
 ### Immutable release publication
 
 An annotated canonical SemVer tag is the release authorization boundary. The
-tag points to the exact source commit and its annotation contains the complete
-sanitized evidence-set envelope. Version-controlled release notes are a
-separate required input. The workflow rejects lightweight or moved tags,
-source mismatches, dirty source, incomplete evidence, and evidence completed
-outside the interval from the source commit to the tag creation time.
+tag points to the exact source commit and has a nonempty human-readable
+annotation. Version-controlled release notes are a separate required input.
+The workflow rejects lightweight or moved tags, source mismatches, dirty
+source, and missing release notes.
 
 One Linux job builds the complete six-file Release Artifact Set. Four native
 jobs download that one workflow artifact and validate the supplied bytes; none
@@ -320,13 +310,12 @@ repository immutable Releases setting is enabled, one active non-bypassable tag
 ruleset restricts updates and deletions for `refs/tags/v*`, and a separate
 active ruleset restricts tag creation to one explicitly identified release
 maintainer who must also be the tag-triggering actor. A local preparation
-command requires clean fetched `main`, validates the candidate and authenticated
-evidence, creates the annotated tag without pushing it, and reports the exact
-tag object for approval. The workflow verifies the live annotated tag object,
-peeled source commit, and containment
-in protected `main` before draft creation and again before publication. It
-never deletes or replaces a tag, Release, or asset, so correction requires a
-new patch version.
+command requires clean fetched `main`, validates the candidate, creates the
+annotated tag without pushing it, and reports the exact tag object for approval.
+The workflow verifies the live annotated tag object, peeled source commit, and
+containment in protected `main` before draft creation and again before
+publication. It never deletes or replaces a tag, Release, or asset, so
+correction requires a new patch version.
 
 The six-file Release Artifact Set is the four target archives, `SHA256SUMS`,
 and the release-specific `install.sh`. The build-provenance step covers the

@@ -1,56 +1,26 @@
-# Authenticated Release-Candidate Smoke Test
+# Optional Authenticated Release Smoke Test
 
-This human-owned release gate validates an exact installed ACS candidate on:
+This is a maintainer confidence check, not a release gate. The required release
+contract is the credential-free native CI matrix on macOS 26 and Ubuntu 24.04
+LTS for darwin/arm64, darwin/amd64, linux/amd64, and linux/arm64.
 
-- macOS 26 Apple Silicon (`darwin/arm64`);
-- a disposable Ubuntu 24.04 amd64 host (`linux/amd64`).
+Run this smoke on the maintainer's macOS 26 Apple Silicon host before the first
+release, or when a change affects authentication, the Devin Adapter, Profile
+selection, Session isolation, or interactive lifecycle behavior. Do not repeat
+it for unrelated releases. Do not provision another host solely for this check.
 
-Do not run it without the machine owner's explicit authorization to read the
-existing Devin credential and create a temporary Profile. Never put credential
-contents, credential or home paths, terminal logs, account details, tokens, or
-signed URLs in evidence. Pull-request and `main` automation stays
-credential-free.
+Only run it with the machine owner's explicit authorization. Never place Devin
+credentials in CI, workflow inputs, logs, artifacts, caches, issues, or the
+repository. Do not capture terminal output or account details.
 
-## Candidate inputs
+## Prepare and install the candidate
 
-Use a complete candidate directory produced by the exact source commit under
-review. It contains the four archives, `SHA256SUMS`, and the release-specific
-`install.sh`:
+Build the candidate from the exact clean source under review, then install it
+through the native validator:
 
 ```sh
 candidate_version=v0.2.0
-source_commit="$(git rev-parse HEAD)"
 candidate_directory="$(cd dist/release-candidate && pwd -P)"
-```
-
-Do not rebuild from another checkout. Obtain the target archive digest from its
-entry in `SHA256SUMS`. Compute `artifact_set_sha256` as the SHA-256 of the exact
-`SHA256SUMS` file; this binds the record to the manifest covering all four
-archives. Use `shasum -a 256` on macOS and `sha256sum` on Ubuntu.
-
-Make one private copy of
-[`authenticated-evidence.template.json`](authenticated-evidence.template.json)
-for each target. Do not commit completed evidence.
-
-## Confirm the reference host
-
-Run `uname -s` and `uname -m`. On macOS, `sw_vers -productVersion` must report
-major version 26 and the architecture must be `arm64`. On Ubuntu,
-`/etc/os-release` must identify Ubuntu 24.04 and the architecture must be
-`x86_64` or `amd64`. Cross-builds and emulators are not host evidence.
-
-Provision a disposable Ubuntu host only after the user authorizes its
-infrastructure and cost in that turn. Install Devin through its supported
-channel and authenticate interactively, or transfer the minimum credential
-through an approved secure channel. Never paste a credential into a command,
-log, issue, workflow input, artifact, cache, or repository file.
-
-## Install and identify the candidate
-
-The native validator installs the supplied archive through the supplied
-release-specific installer and verifies the complete set first:
-
-```sh
 install_root="$(mktemp -d)"
 install_root="$(cd "$install_root" && pwd -P)"
 scripts/validate-promoted-artifact.sh \
@@ -60,15 +30,11 @@ candidate_binary="$install_root/bin/acs"
 "$candidate_binary" version
 ```
 
-The last command must print exactly `acs v0.2.0` for this candidate. Record the
-version, 40-character source commit, target archive name, target archive
-digest, artifact-set digest, target identity, exact version output, and UTC
-start time. Record identifiers only, never local paths.
+The version output must match the candidate exactly.
 
-## Adapter and installed-candidate smoke
+## Exercise the authenticated boundary
 
-The real-Devin contract requires both the integration build tag and this exact
-local acknowledgement. Run it only after the account owner authorizes access:
+First run the repository's opt-in real-Devin integration test:
 
 ```sh
 ACS_REAL_DEVIN_INTEGRATION=I_ACKNOWLEDGE_LOCAL_CREDENTIAL_ACCESS \
@@ -77,88 +43,33 @@ ACS_REAL_DEVIN_INTEGRATION=I_ACKNOWLEDGE_LOCAL_CREDENTIAL_ACCESS \
   -count=1
 ```
 
-The test uses the public Adapter seam. It creates a synthetic Session, copies
-only the allowlisted credential and two fixture Skill Bundles, then asks Devin
-to prove the exact global Skill Catalog and usable authentication. Its Session
-is temporary. This contract check does not replace the installed-candidate
-smoke below.
-
-Create a unique Profile and exercise the installed candidate:
+Then use the installed candidate to create a uniquely named temporary Profile
+with at least one global Skill, inspect its dry run, and launch Devin:
 
 ```sh
 smoke_profile="release-smoke-$(date -u +%Y%m%d%H%M%S)"
-smoke_control="$(mktemp -d)"
-chmod 0700 "$smoke_control"
-find "$HOME/.acs/sessions" -mindepth 1 -maxdepth 1 -print 2>/dev/null | sort >"$smoke_control/session-baseline"
-printf 'Use this private control directory in the second terminal: %s\n' "$smoke_control"
 "$candidate_binary" devin create-profile --name "$smoke_profile"
 "$candidate_binary" devin --profile "$smoke_profile" --dry-run
 "$candidate_binary" devin --profile "$smoke_profile"
 ```
 
-Leave Devin running after the final command. In a second authorized terminal,
-identify the single new live Session without recording its path in evidence:
+Confirm these outcomes without recording private paths or subprocess output:
 
-```sh
-smoke_control="REPLACE_WITH_THE_PRIVATE_CONTROL_DIRECTORY_FROM_TERMINAL_ONE"
-test -d "$smoke_control"
-find "$HOME/.acs/sessions" -mindepth 1 -maxdepth 1 -print 2>/dev/null | sort >"$smoke_control/session-during"
-comm -13 "$smoke_control/session-baseline" "$smoke_control/session-during" >"$smoke_control/session-delta"
-test "$(wc -l <"$smoke_control/session-delta" | tr -d ' ')" = 1
-smoke_session="$(sed -n '1p' "$smoke_control/session-delta")"
-test -f "$smoke_session/.active.lock"
-test -f "$smoke_session/home/.local/share/devin/credentials.toml"
-test ! -e "$smoke_session/home/.config/devin/config.json"
-test ! -e "$smoke_session/home/.config/devin/mcp_config.json"
-test ! -e "$smoke_session/home/.config/devin/hooks"
-```
+1. The visual Profile Builder restores the terminal.
+2. The dry run names exactly the selected global Skills and creates no Session.
+3. Devin starts with the existing authenticated account.
+4. Exactly one leased Session exists while Devin runs.
+5. The Session contains only the selected global Skills and the allowlisted
+   credential, not unrelated global Devin configuration.
+6. A normal Devin exit returns success and removes the leased Session and its
+   copied credential.
 
-Compare the Profile's selected `source` and `relativePath` pairs with the
-directories under the Session's two managed roots. Those roots must contain
-exactly the selected Bundles and no unselected global Bundle:
+A failure is useful diagnostic information. Fix or assess it according to the
+change's risk; there is no evidence file to attach to the tag or workflow.
 
-```text
-<smoke_session>/home/.config/devin/skills
-<smoke_session>/home/.agents/skills
-```
+## Cleanup
 
-Do not copy either path into evidence. Return to the launch terminal and exit
-Devin normally. Then, in the second terminal, verify that the exact leased
-Session disappeared and that the pre-existing Session set is unchanged:
-
-```sh
-test ! -e "$smoke_session"
-find "$HOME/.acs/sessions" -mindepth 1 -maxdepth 1 -print 2>/dev/null | sort >"$smoke_control/session-after"
-cmp -s "$smoke_control/session-baseline" "$smoke_control/session-after"
-rm "$smoke_control/session-baseline" "$smoke_control/session-during" \
-  "$smoke_control/session-delta" "$smoke_control/session-after"
-rmdir "$smoke_control"
-```
-
-Record only boolean outcomes for this checklist:
-
-1. The visual Profile Builder entered its alternate screen and the terminal
-   returned to normal input, echo, and display behavior afterward.
-2. The temporary Profile was created with at least one selected global Skill.
-3. The dry run named the exact selected global Skill Catalog and confirmed that
-   it created no Session and started no Devin process.
-4. The Profile JSON's `source` and `relativePath` pairs exactly matched the dry
-   run. Copy only those pairs into `selected_catalog`, sorted by
-   `<source>:<relative_path>`; never record a bundle or host path.
-5. The interactive launch started Devin with usable existing authentication.
-6. While Devin ran, exactly one new leased Session existed. Its synthetic home
-   contained the selected global Skills and allowlisted credential, while
-   unrelated global Devin state was absent.
-7. Devin exited normally and ACS returned a zero exit status.
-8. After exit, the new Session and its copied credential no longer existed.
-
-Do not capture interactive or subprocess output. A failed check remains a
-blocking human gate and cannot be represented as passing evidence.
-
-## Cleanup and validate evidence
-
-After terminal two removes the private control directory, return to terminal
-one. Remove only the unique Profile and temporary candidate:
+Remove only the uniquely named temporary Profile and installed candidate:
 
 ```sh
 profile_file="$HOME/.acs/profiles/$smoke_profile.json"
@@ -170,24 +81,4 @@ rmdir "$install_root/bin"
 rmdir "$install_root"
 ```
 
-Remove any smoke-specific logs. On Ubuntu, remove any copied credential and
-destroy the disposable host; both must finish before its evidence can pass. Do
-not remove or alter the maintainer's original macOS credential.
-
-Set each completed checklist and cleanup field to `true`, set the UTC completion
-time and `result` to `passed`, then validate the private record:
-
-```sh
-go run ./tools/authenticatedevidence \
-  --evidence "$evidence_file" \
-  --version "$candidate_version" \
-  --source-commit "$source_commit" \
-  --target "$(go env GOOS)/$(go env GOARCH)" \
-  --archive-sha256 "$archive_sha256" \
-  --artifact-set-sha256 "$artifact_set_sha256"
-```
-
-The command must report `status=passed`. A later release workflow supplies its
-own expected identity and review window. The validator rejects missing,
-malformed, stale, mismatched, incomplete, or extra evidence without echoing
-evidence values.
+Do not remove or alter the maintainer's original Devin credential.

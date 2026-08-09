@@ -38,28 +38,16 @@ jobs:
         id: identity
         shell: bash
         run: |
-          mapfile -t identity < <(scripts/release-tag-identity.sh "$GITHUB_REF_NAME" "$RUNNER_TEMP/authenticated-evidence.json")
-          if [[ "${#identity[@]}" -ne 4 ]]; then
+          mapfile -t identity < <(scripts/release-tag-identity.sh "$GITHUB_REF_NAME")
+          if [[ "${#identity[@]}" -ne 2 ]]; then
             echo "Release tag identity output is incomplete."
             exit 1
           fi
           echo "source_commit=${identity[0]}" >>"$GITHUB_OUTPUT"
           echo "tag_object=${identity[1]}" >>"$GITHUB_OUTPUT"
-          echo "earliest_completion=${identity[2]}" >>"$GITHUB_OUTPUT"
-          echo "latest_completion=${identity[3]}" >>"$GITHUB_OUTPUT"
 
       - name: Build the candidate exactly once
         run: scripts/release-candidate.sh "$GITHUB_REF_NAME"
-
-      - name: Bind authenticated evidence to the candidate
-        run: |
-          go run ./tools/releasegate \
-            --evidence "$RUNNER_TEMP/authenticated-evidence.json" \
-            --candidate dist/release-candidate \
-            --version "$GITHUB_REF_NAME" \
-            --source-commit "${{ steps.identity.outputs.source_commit }}" \
-            --earliest-completion "${{ steps.identity.outputs.earliest_completion }}" \
-            --latest-completion "${{ steps.identity.outputs.latest_completion }}"
 
       - name: Upload the exact candidate artifact set
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
