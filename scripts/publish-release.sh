@@ -97,15 +97,26 @@ fetch_release() {
   gh api "repos/$repository/releases/tags/$release_tag" >"$release_json" 2>/dev/null
 }
 
+fetch_release_by_id() {
+  local release_id="$1"
+  [[ "$release_id" =~ ^[1-9][0-9]*$ ]] || return 1
+  gh api "repos/$repository/releases/$release_id" >"$release_json" 2>/dev/null
+}
+
 stage="discover"
 release_exists=true
 if ! fetch_release; then
-  # A successful list query distinguishes absence from an API/authentication failure.
+  # The tag endpoint omits draft Releases. A successful list query distinguishes
+  # an absent Release from a draft and from an API/authentication failure.
   if ! existing_id="$(gh api --paginate "repos/$repository/releases" --jq ".[] | select(.tag_name == \"$release_tag\") | .id" 2>/dev/null)"; then
     fail "GitHub Release state could not be read"
   fi
-  [[ -z "$existing_id" ]] || fail "GitHub Release lookup returned conflicting state"
-  release_exists=false
+  if [[ -z "$existing_id" ]]; then
+    release_exists=false
+  else
+    [[ "$existing_id" =~ ^[1-9][0-9]*$ ]] || fail "GitHub Release lookup returned conflicting state"
+    fetch_release_by_id "$existing_id" || fail "GitHub draft Release state could not be read"
+  fi
 fi
 
 plan() {
@@ -163,7 +174,7 @@ if [[ "$state" == "resume-draft" ]]; then
     fi
   done
   stage="verify-draft"
-  fetch_release || fail "staged Release state could not be read"
+  fetch_release_by_id "$release_id" || fail "staged Release state could not be read"
   plan
   read_plan
 fi
@@ -180,7 +191,7 @@ fi
 stage="verify-immutable"
 verified=false
 for attempt in 1 2 3 4 5; do
-  if fetch_release && go run ./tools/releasepublish --candidate "$candidate_directory" --version "$release_tag" --source-commit "$source_commit" --release-notes "$release_notes" --release-json "$release_json" >"$plan_file" 2>/dev/null; then
+  if fetch_release_by_id "$release_id" && go run ./tools/releasepublish --candidate "$candidate_directory" --version "$release_tag" --source-commit "$source_commit" --release-notes "$release_notes" --release-json "$release_json" >"$plan_file" 2>/dev/null; then
     read_plan
     if [[ "$state" == "complete" ]]; then
       verified=true

@@ -100,6 +100,7 @@ func TestPublisherCreatesOrResumesDraftBeforeOneFinalPublish(t *testing.T) {
 	}{
 		{name: "absent Release", initial: "absent", assetCount: 0, wantPOST: 1, wantUploads: 6},
 		{name: "partial draft retry", initial: "partial", assetCount: 2, wantPOST: 0, wantUploads: 4},
+		{name: "complete draft retry", initial: "complete", assetCount: 6, wantPOST: 0, wantUploads: 0},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			candidate := publicationCandidate(t)
@@ -121,6 +122,9 @@ func TestPublisherCreatesOrResumesDraftBeforeOneFinalPublish(t *testing.T) {
 			}
 			if got := strings.Count(calls, "api --method PATCH repos/owner/repository/releases/42 "); got != 1 {
 				t.Errorf("publish transition count = %d, want 1; calls=%q", got, calls)
+			}
+			if test.initial != "absent" && !strings.Contains(calls, "api repos/owner/repository/releases/42") {
+				t.Errorf("draft retry did not fetch the hidden draft by ID: %q", calls)
 			}
 			lastUpload := strings.LastIndex(calls, "release upload ")
 			publish := strings.Index(calls, "api --method PATCH ")
@@ -179,15 +183,27 @@ func fakeTransitionGH(t *testing.T, candidate, initial string, initialAssets, re
 	complete := writeFixture(t, directory, "complete.json", publicationReleaseJSON(t, candidate, 6, true, false))
 	published := writeFixture(t, directory, "published.json", publicationReleaseJSON(t, candidate, 6, false, true))
 	script := fakePolicyCases("true", "true", "true", publicationTagObject, publicationSource, "ahead") + `
-  "--paginate") exit 0 ;;
+  "--paginate")
+    current=$(tr -d '\n' <"` + state + `")
+    case "$current" in
+      partial|complete) printf '%s\n' 42 ;;
+      absent|published) ;;
+      *) exit 67 ;;
+    esac ;;
   "repos/owner/repository/releases/tags/v0.2.0")
     current=$(tr -d '\n' <"` + state + `")
     case "$current" in
-      absent) exit 1 ;;
+      absent|partial|complete) exit 1 ;;
+      published) cat "` + published + `" ;;
+      *) exit 65 ;;
+    esac ;;
+  "repos/owner/repository/releases/42")
+    current=$(tr -d '\n' <"` + state + `")
+    case "$current" in
       partial) cat "` + partial + `" ;;
       complete) cat "` + complete + `" ;;
       published) cat "` + published + `" ;;
-      *) exit 65 ;;
+      *) exit 68 ;;
     esac ;;
   "--method")
     case "$3 $4" in
