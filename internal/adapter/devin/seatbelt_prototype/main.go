@@ -5,6 +5,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,11 +21,13 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/alcimerio/ai-config-selector/internal/adapter/devin"
 	"github.com/creack/pty"
 	"golang.org/x/sys/unix"
 )
 
 const sandboxExecutable = "/usr/bin/sandbox-exec"
+const realDevinAcknowledgement = "I_ACKNOWLEDGE_LOCAL_CREDENTIAL_ACCESS"
 
 type probeReport struct {
 	Checks []check `json:"checks"`
@@ -70,6 +73,18 @@ func main() {
 				os.Exit(2)
 			}
 			_ = os.WriteFile(os.Args[2], []byte("started"), 0o600)
+			return
+		case "--real-devin":
+			if err := runRealDevinSmoke(true); err != nil {
+				fmt.Fprintf(os.Stderr, "seatbelt prototype: %v\n", err)
+				os.Exit(1)
+			}
+			return
+		case "--real-devin-preflight":
+			if err := runRealDevinSmoke(false); err != nil {
+				fmt.Fprintf(os.Stderr, "seatbelt prototype: %v\n", err)
+				os.Exit(1)
+			}
 			return
 		}
 	}
@@ -235,15 +250,20 @@ func executeSandboxed(fx fixture, mode string) (probeReport, string, error) {
 }
 
 func sandboxCommand(fx fixture, policy, mode string, modeArguments ...string) *exec.Cmd {
+	targetArguments := append([]string{mode}, modeArguments...)
+	return sandboxTargetCommand(fx, policy, fx.executable, targetArguments...)
+}
+
+func sandboxTargetCommand(fx fixture, policy, target string, targetArguments ...string) *exec.Cmd {
 	arguments := []string{
 		"-p", policy,
 		"-DWORKSPACE=" + fx.workspace,
 		"-DSESSION=" + fx.session,
 		"-DHOST_HOME=" + fx.hostHome,
 		"-DEXECUTABLE=" + fx.executable,
-		"--", fx.executable, mode,
+		"--", target,
 	}
-	arguments = append(arguments, modeArguments...)
+	arguments = append(arguments, targetArguments...)
 	command := exec.Command(sandboxExecutable, arguments...)
 	command.Dir = fx.workspace
 	command.Env = []string{
@@ -253,6 +273,123 @@ func sandboxCommand(fx fixture, policy, mode string, modeArguments ...string) *e
 		"TMPDIR=" + filepath.Join(fx.session, "tmp"),
 	}
 	return command
+}
+
+func runRealDevinSmoke(interactive bool) error {
+	if runtime.GOOS != "darwin" {
+		return fmt.Errorf("real-Devin smoke requires macOS; current platform is %s", runtime.GOOS)
+	}
+	if os.Getenv("ACS_SEATBELT_PROTOTYPE_REAL_DEVIN") != realDevinAcknowledgement {
+		return errors.New("real-Devin smoke requires explicit local credential authorization")
+	}
+	binary, err := exec.LookPath("devin")
+	if err != nil {
+		return errors.New("real-Devin smoke requires an installed Devin CLI")
+	}
+	binary, err = filepath.EvalSymlinks(binary)
+	if err != nil {
+		return errors.New("real-Devin smoke could not resolve the installed Devin CLI safely")
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return errors.New("real-Devin smoke could not resolve the existing home")
+	}
+	workingDirectory, err := os.Getwd()
+	if err != nil {
+		return errors.New("real-Devin smoke could not resolve the working directory")
+	}
+	root, err := os.MkdirTemp("/private/tmp", "acs-sb-devin-*")
+	if err != nil {
+		return errors.New("real-Devin smoke could not create an ephemeral root")
+	}
+	defer os.RemoveAll(root)
+
+	adapter, err := devin.New(devin.Config{BinaryPath: binary, ExistingHomeDir: home})
+	if err != nil {
+		return errors.New("real-Devin smoke could not configure the Adapter")
+	}
+	session, err := adapter.PrepareSession(root, workingDirectory, nil)
+	if err != nil {
+		return errors.New("real-Devin smoke could not prepare the allowlisted Session")
+	}
+	for _, directory := range []string{
+		filepath.Join(session.HomeDir, ".cache"),
+		filepath.Join(session.HomeDir, ".local", "state"),
+		filepath.Join(session.HomeDir, "tmp"),
+	} {
+		if err := os.MkdirAll(directory, 0o700); err != nil {
+			return errors.New("real-Devin smoke could not complete the ephemeral Session")
+		}
+	}
+
+	preflightContext, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := adapter.Preflight(preflightContext, session); err != nil {
+		return fmt.Errorf("real-Devin Adapter preflight failed: %w", err)
+	}
+
+	fx := fixture{
+		workspace:  session.WorkingDirectory,
+		session:    session.HomeDir,
+		hostHome:   home,
+		executable: binary,
+	}
+	environment := realDevinEnvironment(session.HomeDir)
+	auth := sandboxTargetCommand(fx, seatbeltPolicy(), binary, "auth", "status")
+	auth.Env = environment
+	auth.Stdout = io.Discard
+	auth.Stderr = io.Discard
+	if err := auth.Run(); err != nil {
+		return errors.New("sandboxed Devin authentication preflight failed")
+	}
+	if !interactive {
+		fmt.Println("VERDICT: real Devin preflight passed inside Seatbelt with an ephemeral credential copy")
+		return nil
+	}
+
+	fmt.Println("Synthetic checks passed and sandboxed authentication succeeded.")
+	fmt.Println("Starting Devin inside Seatbelt. Exit Devin normally to complete the smoke.")
+	command := sandboxTargetCommand(fx, seatbeltPolicy(), binary)
+	command.Env = environment
+	command.Stdin = os.Stdin
+	command.Stdout = os.Stdout
+	command.Stderr = os.Stderr
+	if err := command.Run(); err != nil {
+		var exitError *exec.ExitError
+		if errors.As(err, &exitError) {
+			return fmt.Errorf("sandboxed Devin exited with status %d", exitError.ExitCode())
+		}
+		return errors.New("sandboxed Devin could not start")
+	}
+	fmt.Println("VERDICT: authenticated Devin completed a normal sandboxed lifecycle")
+	return nil
+}
+
+func realDevinEnvironment(sessionHome string) []string {
+	values := map[string]string{
+		"HOME":            sessionHome,
+		"PATH":            os.Getenv("PATH"),
+		"TMPDIR":          filepath.Join(sessionHome, "tmp"),
+		"XDG_CACHE_HOME":  filepath.Join(sessionHome, ".cache"),
+		"XDG_CONFIG_HOME": filepath.Join(sessionHome, ".config"),
+		"XDG_DATA_HOME":   filepath.Join(sessionHome, ".local", "share"),
+		"XDG_STATE_HOME":  filepath.Join(sessionHome, ".local", "state"),
+	}
+	for _, name := range []string{"COLORTERM", "LANG", "LC_ALL", "TERM"} {
+		if value := os.Getenv(name); value != "" {
+			values[name] = value
+		}
+	}
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	environment := make([]string, 0, len(keys))
+	for _, key := range keys {
+		environment = append(environment, key+"="+values[key])
+	}
+	return environment
 }
 
 func seatbeltPolicy() string {
