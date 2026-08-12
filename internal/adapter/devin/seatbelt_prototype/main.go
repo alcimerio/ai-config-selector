@@ -28,6 +28,7 @@ import (
 
 const sandboxExecutable = "/usr/bin/sandbox-exec"
 const realDevinAcknowledgement = "I_ACKNOWLEDGE_LOCAL_CREDENTIAL_ACCESS"
+const macOSDNSResolverSocket = "/private/var/run/mDNSResponder"
 
 type probeReport struct {
 	Checks []check `json:"checks"`
@@ -67,6 +68,9 @@ func main() {
 			return
 		case "--pty-resize":
 			reportPTYResize()
+			return
+		case "--pty-raw-mode":
+			reportPTYRawMode()
 			return
 		case "--mark-start":
 			if len(os.Args) != 3 {
@@ -143,6 +147,7 @@ func run() error {
 		exitCheck,
 		verifySignalDelivery(fx),
 		verifyPTYResize(fx),
+		verifyPTYRawMode(fx),
 		verifyFailClosed(fx),
 	)
 	sort.Slice(report.Checks, func(i, j int) bool { return report.Checks[i].Name < report.Checks[j].Name })
@@ -430,10 +435,12 @@ func seatbeltPolicy() string {
   (subpath (param "WORKSPACE"))
   (subpath (param "SESSION")))
 
-; Keep IP networking available while rejecting host Unix sockets.
-(allow network*)
-(deny network-bind (local unix-socket))
-(deny network-outbound (remote unix-socket))
+; Keep IP networking and the macOS DNS resolver available. Default deny keeps
+; every other host Unix socket, including SSH agent and Docker, unavailable.
+(allow network-bind (local ip))
+(allow network-outbound
+  (remote ip)
+  (literal "/private/var/run/mDNSResponder"))
 
 ; Preserve an inherited or newly allocated terminal.
 (allow pseudo-tty)
@@ -442,7 +449,9 @@ func seatbeltPolicy() string {
   (literal "/dev/zero")
   (literal "/dev/random")
   (literal "/dev/urandom"))
-(allow file-read* file-write* file-ioctl (literal "/dev/ptmx"))
+(allow file-read* file-write* file-ioctl
+  (literal "/dev/ptmx")
+  (literal "/dev/tty"))
 (allow file-read* file-write* (regex #"^/dev/ttys[0-9]+"))
 (allow file-ioctl (regex #"^/dev/ttys[0-9]+"))
 
@@ -493,6 +502,7 @@ func runProbe(fx fixture) {
 		deniedWrite("workspace-symlink-write", filepath.Join(fx.workspace, "outside-link", "created.txt")),
 		verifyEnvironment(),
 		verifyTCP(fx.tcpAddress),
+		verifyDNSResolverSocket(),
 		verifyDeniedUnixSocket(fx.unixSocket),
 		verifyDescendant(fx),
 	}}
@@ -563,6 +573,14 @@ func verifyTCP(address string) check {
 		_ = connection.Close()
 	}
 	return operationCheck("tcp-network", "allowed", err == nil, err)
+}
+
+func verifyDNSResolverSocket() check {
+	connection, err := net.DialTimeout("unix", macOSDNSResolverSocket, 500*time.Millisecond)
+	if err == nil {
+		_ = connection.Close()
+	}
+	return operationCheck("macos-dns-resolver-socket", "allowed", err == nil, err)
 }
 
 func verifyDeniedUnixSocket(path string) check {
@@ -775,6 +793,77 @@ func reportPTYResize() {
 		FinalColumns:   int(final.Col),
 		FinalRows:      int(final.Row),
 	})
+}
+
+func verifyPTYRawMode(fx fixture) check {
+	master, terminal, err := pty.Open()
+	if err != nil {
+		return failedCheck("pty-raw-mode", "enabled", "pty-error")
+	}
+	defer master.Close()
+	defer terminal.Close()
+	command := sandboxCommand(fx, seatbeltPolicy(), "--pty-raw-mode")
+	command.Stdin, command.Stdout, command.Stderr = terminal, terminal, terminal
+	command.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true, Ctty: 0}
+	if err := command.Start(); err != nil {
+		return failedCheck("pty-raw-mode", "enabled", "launch-error")
+	}
+	output := make(chan string, 1)
+	go func() {
+		line, _ := bufio.NewReader(master).ReadString('\n')
+		output <- strings.TrimSpace(line)
+	}()
+	select {
+	case line := <-output:
+		waitErr := command.Wait()
+		passed := waitErr == nil && line == "RAW-MODE-OK"
+		observed := "enabled"
+		if !passed {
+			observed = "operation-denied"
+		}
+		return check{Name: "pty-raw-mode", Expected: "enabled", Observed: observed, Passed: passed}
+	case <-time.After(3 * time.Second):
+		_ = command.Process.Kill()
+		_ = command.Wait()
+		return failedCheck("pty-raw-mode", "enabled", "report-timeout")
+	}
+}
+
+func reportPTYRawMode() {
+	terminal, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
+	if err != nil {
+		os.Exit(2)
+	}
+	defer terminal.Close()
+	fd := int(terminal.Fd())
+	original, err := unix.IoctlGetTermios(fd, unix.TIOCGETA)
+	if err != nil {
+		os.Exit(2)
+	}
+	raw := *original
+	raw.Iflag &^= unix.IGNBRK | unix.BRKINT | unix.PARMRK | unix.ISTRIP | unix.INLCR | unix.IGNCR | unix.ICRNL | unix.IXON
+	raw.Oflag &^= unix.OPOST
+	raw.Lflag &^= unix.ECHO | unix.ECHONL | unix.ICANON | unix.ISIG | unix.IEXTEN
+	raw.Cflag &^= unix.CSIZE | unix.PARENB
+	raw.Cflag |= unix.CS8
+	raw.Cc[unix.VMIN] = 1
+	raw.Cc[unix.VTIME] = 0
+	if err := unix.IoctlSetTermios(fd, unix.TIOCSETA, &raw); err != nil {
+		os.Exit(2)
+	}
+	configured, err := unix.IoctlGetTermios(fd, unix.TIOCGETA)
+	if err != nil || configured.Lflag&(unix.ECHO|unix.ICANON) != 0 {
+		_ = unix.IoctlSetTermios(fd, unix.TIOCSETA, original)
+		os.Exit(2)
+	}
+	if err := unix.IoctlSetTermios(fd, unix.TIOCSETA, original); err != nil {
+		os.Exit(2)
+	}
+	restored, err := unix.IoctlGetTermios(fd, unix.TIOCGETA)
+	if err != nil || restored.Lflag != original.Lflag {
+		os.Exit(2)
+	}
+	fmt.Println("RAW-MODE-OK")
 }
 
 func verifyFailClosed(fx fixture) check {
