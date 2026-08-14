@@ -219,7 +219,7 @@ func (sandbox *nativeProcessSandbox) selectedBackend(ctx context.Context) (sandb
 	if err := backend.check(ctx); err != nil {
 		var classified *SandboxError
 		if errors.As(err, &classified) {
-			return nil, err
+			return nil, sandboxError(classified.Category, nil)
 		}
 		return nil, sandboxError(SandboxBackendUnavailable, err)
 	}
@@ -254,7 +254,7 @@ func (sandbox *nativeProcessSandbox) Prepare(ctx context.Context, request Proces
 	if err != nil {
 		var classified *SandboxError
 		if errors.As(err, &classified) {
-			return nil, err
+			return nil, sandboxError(classified.Category, nil)
 		}
 		return nil, sandboxError(SandboxSetupFailed, err)
 	}

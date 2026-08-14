@@ -3,6 +3,7 @@ package launch
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -289,6 +290,94 @@ func TestProcessSandboxSanitizesBackendFailures(t *testing.T) {
 	}
 }
 
+func TestProcessSandboxRebuildsClassifiedBackendFailures(t *testing.T) {
+	secret := filepath.Join(t.TempDir(), "PRIVATE_BACKEND_PATH")
+	tests := []struct {
+		name     string
+		category SandboxErrorCategory
+		message  string
+		wrapped  bool
+		invoke   func(*nativeProcessSandbox) error
+	}{
+		{
+			name:     "direct validation failure",
+			category: SandboxBackendUnavailable,
+			message:  "backend_unavailable: process sandbox unavailable: required system backend is unavailable",
+			invoke: func(sandbox *nativeProcessSandbox) error {
+				return sandbox.Check(context.Background(), SandboxCheck{})
+			},
+		},
+		{
+			name:     "wrapped validation failure",
+			category: SandboxUnsupportedPlatform,
+			message:  "unsupported_platform: process sandbox unavailable: unsupported platform",
+			wrapped:  true,
+			invoke: func(sandbox *nativeProcessSandbox) error {
+				return sandbox.Check(context.Background(), SandboxCheck{})
+			},
+		},
+		{
+			name:     "direct preparation failure",
+			category: SandboxSetupFailed,
+			message:  "setup_failed: process sandbox preparation failed",
+			invoke: func(sandbox *nativeProcessSandbox) error {
+				_, err := sandbox.Prepare(context.Background(), validProcessRequest(t))
+				return err
+			},
+		},
+		{
+			name:     "wrapped preparation failure",
+			category: SandboxInvalidEnvironment,
+			message:  "invalid_environment: process sandbox preparation failed: invalid environment",
+			wrapped:  true,
+			invoke: func(sandbox *nativeProcessSandbox) error {
+				_, err := sandbox.Prepare(context.Background(), validProcessRequest(t))
+				return err
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			classified := &SandboxError{Category: test.category}
+			backendErr := error(classified)
+			if test.wrapped {
+				backendErr = fmt.Errorf("backend output %s ENV=PRIVATE_VALUE policy=(allow default): %w", secret, classified)
+			}
+			backend := &capturingBackend{}
+			if strings.Contains(test.name, "validation") {
+				backend.checkErr = backendErr
+			} else {
+				backend.prepareErr = backendErr
+			}
+			sandbox := newNativeProcessSandbox(
+				func() (Platform, error) { return Platform{OS: "darwin", Architecture: "arm64", Release: "26.1"}, nil },
+				map[string]sandboxBackend{"darwin": backend},
+			)
+
+			err := test.invoke(sandbox)
+			stable, ok := err.(*SandboxError)
+			if !ok {
+				t.Fatalf("error type = %T, want direct *SandboxError: %v", err, err)
+			}
+			if stable == classified {
+				t.Fatal("sandbox returned the backend-supplied SandboxError")
+			}
+			if stable.Category != test.category {
+				t.Fatalf("category = %q, want %q", stable.Category, test.category)
+			}
+			if got := stable.Error(); got != test.message {
+				t.Fatalf("message = %q, want %q", got, test.message)
+			}
+			for _, private := range []string{secret, "PRIVATE_BACKEND_PATH", "PRIVATE_VALUE", "backend output", "policy"} {
+				if strings.Contains(err.Error(), private) {
+					t.Fatalf("classified backend failure leaked %q: %v", private, err)
+				}
+			}
+		})
+	}
+}
+
 func TestPreparedProcessSanitizesStartAndNonExitWaitFailures(t *testing.T) {
 	secret := filepath.Join(t.TempDir(), "PRIVATE_EXECUTABLE")
 	request := validProcessRequest(t)
@@ -371,14 +460,18 @@ func assertSandboxCategory(t *testing.T, err error, want SandboxErrorCategory) {
 }
 
 type capturingBackend struct {
-	checkErr error
-	request  validatedProcessRequest
-	process  Process
+	checkErr   error
+	prepareErr error
+	request    validatedProcessRequest
+	process    Process
 }
 
 func (backend *capturingBackend) check(context.Context) error { return backend.checkErr }
 func (backend *capturingBackend) prepare(_ context.Context, request validatedProcessRequest) (Process, error) {
 	backend.request = request
+	if backend.prepareErr != nil {
+		return nil, backend.prepareErr
+	}
 	if backend.process != nil {
 		return backend.process, nil
 	}

@@ -197,6 +197,27 @@ func TestPromotedArtifactGateDeclaresExpectedSandboxCapability(t *testing.T) {
 	}
 }
 
+func TestReadmeDescribesCurrentFailClosedLaunchAndIntendedSessionLifecycle(t *testing.T) {
+	contents, err := os.ReadFile(filepath.Join("..", "README.md"))
+	if err != nil {
+		t.Fatalf("read README.md: %v", err)
+	}
+	text := strings.Join(strings.Fields(string(contents)), " ")
+	for _, required := range []string{
+		"current sandbox increment is fail-closed",
+		"Seatbelt backend in #57",
+		"Bubblewrap backend in #64",
+		"`backend_unavailable`",
+		"before it leases a Session or starts Devin",
+		"After the native backend for the host lands",
+		"removes the Session after Devin exits or launch fails",
+	} {
+		if !strings.Contains(text, required) {
+			t.Errorf("README.md does not explain the sandbox launch state with %q", required)
+		}
+	}
+}
+
 func TestContributorRaceGateKeepsTheExceptionLinuxOnly(t *testing.T) {
 	contents, err := os.ReadFile(filepath.Join("..", "CONTRIBUTING.md"))
 	if err != nil {
