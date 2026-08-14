@@ -12,6 +12,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -157,6 +159,232 @@ func TestSeatbeltWaitSettlesOutlivingDescendantsBeforeSessionRemoval(t *testing.
 	time.Sleep(750 * time.Millisecond)
 	if _, err := os.Stat(marker); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("descendant wrote after Wait returned and Session was removed: %v", err)
+	}
+}
+
+func TestSeatbeltCancellationReportsProcessGroupFailure(t *testing.T) {
+	process := newSeatbeltLifecycleTestProcess(exec.Command("/bin/sleep", "30"))
+	if err := process.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = syscall.Kill(-process.command.Process.Pid, syscall.SIGKILL)
+		_ = process.command.Wait()
+	})
+	process.killProcessGroup = func(processGroup int, signal syscall.Signal) error {
+		if processGroup != process.command.Process.Pid || signal != syscall.SIGKILL {
+			t.Fatalf("process-group signal = (%d, %v), want (%d, SIGKILL)", processGroup, signal, process.command.Process.Pid)
+		}
+		return syscall.EPERM
+	}
+
+	err := process.cancel()
+	if !errors.Is(err, syscall.EPERM) {
+		t.Fatalf("cancel error = %v, want EPERM", err)
+	}
+}
+
+func TestSeatbeltWaitBoundsUnresolvedCancellationAndRestoresTerminal(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	waitRelease := make(chan struct{})
+	process := &seatbeltProcess{
+		ctx: ctx, processGroup: 42, cleanupDone: make(chan struct{}),
+		waitCommand: func() error {
+			<-waitRelease
+			return nil
+		},
+	}
+	timeout := make(chan time.Time)
+	close(timeout)
+	process.cancellationTimeout = func() <-chan time.Time { return timeout }
+	terminal, err := os.Open("/dev/null")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer terminal.Close()
+	process.terminal = terminal
+	process.foregroundGroup = syscall.Getpgrp()
+	restored := false
+	process.setForegroundProcessGroup = func(*os.File, int) error {
+		restored = true
+		return nil
+	}
+	quarantined := false
+	process.cleanupQuarantine = func(got *seatbeltProcess) {
+		if got != process {
+			t.Fatalf("quarantined process = %p, want %p", got, process)
+		}
+		quarantined = true
+	}
+
+	waitErr := process.Wait()
+	close(waitRelease)
+	if !errors.Is(waitErr, context.Canceled) || !errors.Is(waitErr, context.DeadlineExceeded) {
+		t.Fatalf("Wait error = %v, want canceled bounded wait", waitErr)
+	}
+	if !quarantined {
+		t.Fatal("unresolved canceled leader was not transferred to quarantine")
+	}
+	if !restored {
+		t.Fatal("bounded cancellation did not restore the foreground terminal")
+	}
+	select {
+	case <-process.CleanupDone():
+		t.Fatal("unresolved canceled leader incorrectly reported cleanup completion")
+	default:
+	}
+}
+
+func TestSeatbeltWaitBoundsPersistentPermissionFailureAndRestoresTerminal(t *testing.T) {
+	process := newSeatbeltLifecycleTestProcess(exec.Command("/usr/bin/true"))
+	terminal, err := os.Open("/dev/null")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer terminal.Close()
+	process.terminal = terminal
+	process.foregroundGroup = syscall.Getpgrp()
+	const attempts = 3
+	process.settlementAttempts = attempts
+	var killCalls int
+	process.killProcessGroup = func(int, syscall.Signal) error {
+		killCalls++
+		return syscall.EPERM
+	}
+	process.cleanupRetry = func() {}
+	restored := false
+	process.setForegroundProcessGroup = func(got *os.File, processGroup int) error {
+		if got != terminal || processGroup != syscall.Getpgrp() {
+			t.Fatalf("foreground restoration = (%p, %d), want (%p, %d)", got, processGroup, terminal, syscall.Getpgrp())
+		}
+		restored = true
+		return nil
+	}
+	quarantined := false
+	process.cleanupQuarantine = func(got *seatbeltProcess) {
+		if got != process {
+			t.Fatalf("quarantined process = %p, want %p", got, process)
+		}
+		quarantined = true
+	}
+	if err := process.Start(); err != nil {
+		t.Fatal(err)
+	}
+
+	err = process.Wait()
+	if !errors.Is(err, syscall.EPERM) || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Wait error = %v, want EPERM and bounded-cleanup deadline", err)
+	}
+	if killCalls != attempts {
+		t.Fatalf("process-group kill calls = %d, want %d", killCalls, attempts)
+	}
+	if !quarantined {
+		t.Fatal("Wait did not quarantine the unresolved process group")
+	}
+	if !restored {
+		t.Fatal("Wait did not restore the foreground terminal after cleanup failure")
+	}
+	select {
+	case <-process.CleanupDone():
+		t.Fatal("persistent EPERM incorrectly reported cleanup completion")
+	default:
+	}
+}
+
+func TestSeatbeltQuarantineCompletionPreservesSessionLease(t *testing.T) {
+	session, err := CreateSession(filepath.Join(t.TempDir(), "sessions"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	process := newSeatbeltLifecycleTestProcess(exec.Command("/usr/bin/true"))
+	process.settlementAttempts = 1
+	process.cleanupRetry = func() {}
+	var cleanupAllowed atomic.Bool
+	process.killProcessGroup = func(int, syscall.Signal) error {
+		if cleanupAllowed.Load() {
+			return syscall.ESRCH
+		}
+		return syscall.EPERM
+	}
+	retryEntered := make(chan struct{})
+	retryRelease := make(chan struct{})
+	var retryOnce sync.Once
+	process.quarantineRetry = func() {
+		retryOnce.Do(func() { close(retryEntered) })
+		<-retryRelease
+	}
+	retained, err := RetainSessionUntilProcessDone(process, session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := retained.(ProcessCleanup); !ok {
+		t.Fatal("retained Seatbelt process does not expose ProcessCleanup")
+	}
+	if err := retained.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if err := session.Remove(); err != nil {
+		t.Fatal(err)
+	}
+	waitErr := retained.Wait()
+	if !errors.Is(waitErr, syscall.EPERM) || !errors.Is(waitErr, context.DeadlineExceeded) {
+		t.Fatalf("Wait error = %v, want quarantined EPERM deadline", waitErr)
+	}
+	select {
+	case <-retryEntered:
+	case <-time.After(time.Second):
+		t.Fatal("cleanup quarantine did not begin retrying")
+	}
+	if _, err := os.Stat(session.RootDir); err != nil {
+		t.Fatalf("Session lease released before quarantined cleanup completed: %v", err)
+	}
+
+	cleanupAllowed.Store(true)
+	close(retryRelease)
+	select {
+	case <-retained.(ProcessCleanup).CleanupDone():
+	case <-time.After(time.Second):
+		t.Fatal("eventually successful cleanup did not complete quarantine")
+	}
+	deadline := time.Now().Add(time.Second)
+	for {
+		_, statErr := os.Stat(session.RootDir)
+		if errors.Is(statErr, os.ErrNotExist) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("Session remained after cleanup completion: %v", statErr)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+func TestSeatbeltStartFailureRestoresForegroundTerminal(t *testing.T) {
+	process := newSeatbeltLifecycleTestProcess(exec.Command(filepath.Join(t.TempDir(), "missing")))
+	terminal, err := os.Open("/dev/null")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer terminal.Close()
+	process.terminal = terminal
+	process.foregroundGroup = syscall.Getpgrp()
+	restored := false
+	process.setForegroundProcessGroup = func(*os.File, int) error {
+		restored = true
+		return nil
+	}
+
+	if err := process.Start(); err == nil {
+		t.Fatal("missing executable unexpectedly started")
+	}
+	if !restored {
+		t.Fatal("Start failure did not restore the foreground terminal")
+	}
+	select {
+	case <-process.CleanupDone():
+	default:
+		t.Fatal("Start failure did not complete cleanup")
 	}
 }
 
@@ -436,4 +664,10 @@ func seatbeltTestRequest(t *testing.T) validatedProcessRequest {
 		sessionHome: home, temporaryDirectory: temporary, executable: executable,
 		environment: environment,
 	}
+}
+
+func newSeatbeltLifecycleTestProcess(command *exec.Cmd) *seatbeltProcess {
+	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	process := &seatbeltProcess{command: command, cleanupDone: make(chan struct{})}
+	return process
 }

@@ -19,7 +19,13 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-const seatbeltExecutable = "/usr/bin/sandbox-exec"
+const (
+	seatbeltExecutable           = "/usr/bin/sandbox-exec"
+	seatbeltCancellationTimeout  = 2 * time.Second
+	seatbeltSettlementAttempts   = 100
+	seatbeltSettlementRetryDelay = 10 * time.Millisecond
+	seatbeltQuarantineRetryDelay = 100 * time.Millisecond
+)
 
 type seatbeltPolicyBuilder func(validatedProcessRequest) (string, []string, error)
 
@@ -87,18 +93,13 @@ func (backend *seatbeltBackend) prepare(ctx context.Context, request validatedPr
 		command.SysProcAttr.Foreground = true
 		command.SysProcAttr.Ctty = int(terminal.Fd())
 	}
-	command.Cancel = func() error {
-		if command.Process == nil {
-			return os.ErrProcessDone
-		}
-		err := syscall.Kill(-command.Process.Pid, syscall.SIGKILL)
-		if errors.Is(err, syscall.ESRCH) {
-			return os.ErrProcessDone
-		}
-		return err
+	process := &seatbeltProcess{
+		ctx: ctx, command: command, terminal: terminal, foregroundGroup: foregroundGroup,
+		cleanupDone: make(chan struct{}),
 	}
+	command.Cancel = process.cancel
 	command.WaitDelay = time.Second
-	return &seatbeltProcess{command: command, terminal: terminal, foregroundGroup: foregroundGroup}, nil
+	return process, nil
 }
 
 func (backend *seatbeltBackend) validateGeneratedPolicy(
@@ -123,38 +124,215 @@ func (backend *seatbeltBackend) validateGeneratedPolicy(
 }
 
 type seatbeltProcess struct {
-	command         *exec.Cmd
-	terminal        *os.File
-	foregroundGroup int
+	ctx                       context.Context
+	command                   *exec.Cmd
+	terminal                  *os.File
+	foregroundGroup           int
+	startupIdentityMutex      sync.Mutex
+	identityMutex             sync.Mutex
+	processGroup              int
+	waitCommand               func() error
+	cancellationTimeout       func() <-chan time.Time
+	killProcessGroup          func(int, syscall.Signal) error
+	settlementAttempts        int
+	cleanupRetry              func()
+	quarantineRetry           func()
+	cleanupQuarantine         func(*seatbeltProcess)
+	setForegroundProcessGroup func(*os.File, int) error
+	cleanupDone               chan struct{}
+	cleanupDoneOnce           sync.Once
+	leaderWaitMutex           sync.Mutex
+	leaderWaitDone            <-chan error
 }
 
-func (process *seatbeltProcess) Start() error { return process.command.Start() }
+func (process *seatbeltProcess) Start() error {
+	process.startupIdentityMutex.Lock()
+	err := process.command.Start()
+	if err == nil {
+		// Darwin does not expose pidfds. Retain the process-group identifier
+		// captured while the leader is our live child; the kernel preserves the
+		// group identity while any member remains, which is the strongest stable
+		// tree identity available on this platform.
+		process.identityMutex.Lock()
+		process.processGroup = process.command.Process.Pid
+		process.identityMutex.Unlock()
+	}
+	process.startupIdentityMutex.Unlock()
+	if err == nil {
+		return nil
+	}
+	process.markCleanupDone()
+	return errors.Join(err, process.restoreForegroundTerminal())
+}
 
 func (process *seatbeltProcess) Wait() error {
-	waitErr := process.command.Wait()
-	pid := process.command.Process.Pid
-	settleSeatbeltProcessGroup(pid)
-	if process.terminal != nil {
-		if err := setSeatbeltForegroundProcessGroup(process.terminal, process.foregroundGroup); err != nil {
-			return errors.Join(waitErr, err)
-		}
+	waitDone := make(chan error, 1)
+	waitCommand := process.waitCommand
+	if waitCommand == nil {
+		waitCommand = process.command.Wait
 	}
-	return waitErr
+	go func() { waitDone <- waitCommand() }()
+	waitErr, leaderDone := process.waitForLeader(waitDone)
+	terminalErr := process.restoreForegroundTerminal()
+	if !leaderDone {
+		process.retainLeaderWait(waitDone)
+		process.quarantineCleanup()
+		return errors.Join(waitErr, terminalErr)
+	}
+	cleanupErr := process.settleProcessGroup()
+	if cleanupErr != nil {
+		process.quarantineCleanup()
+		return errors.Join(waitErr, cleanupErr, terminalErr)
+	}
+	process.markCleanupDone()
+	return errors.Join(waitErr, terminalErr)
+}
+
+func (process *seatbeltProcess) waitForLeader(waitDone <-chan error) (error, bool) {
+	var canceled <-chan struct{}
+	if process.ctx != nil {
+		canceled = process.ctx.Done()
+	}
+	select {
+	case err := <-waitDone:
+		return err, true
+	case <-canceled:
+	}
+	timeout := process.cancellationTimeout
+	if timeout == nil {
+		timeout = func() <-chan time.Time { return time.After(seatbeltCancellationTimeout) }
+	}
+	select {
+	case err := <-waitDone:
+		return err, true
+	case <-timeout():
+		return errors.Join(process.ctx.Err(), fmt.Errorf("wait for Seatbelt process cancellation: %w", context.DeadlineExceeded)), false
+	}
 }
 
 func (process *seatbeltProcess) Signal(signal os.Signal) error {
-	if process.command.Process == nil {
+	processGroup := process.stableProcessGroup()
+	if processGroup <= 0 {
 		return os.ErrProcessDone
 	}
 	unixSignal, ok := signal.(syscall.Signal)
 	if !ok {
 		return process.command.Process.Signal(signal)
 	}
-	err := syscall.Kill(-process.command.Process.Pid, unixSignal)
+	err := process.signalProcessGroup(processGroup, unixSignal)
 	if errors.Is(err, syscall.ESRCH) {
 		return os.ErrProcessDone
 	}
 	return err
+}
+
+func (process *seatbeltProcess) CleanupDone() <-chan struct{} {
+	return process.cleanupDone
+}
+
+func (process *seatbeltProcess) cancel() error {
+	// exec.Cmd can call Cancel before Start returns to our caller. Wait until
+	// the process-group identity has either been recorded or definitively
+	// failed, then address only that group.
+	process.startupIdentityMutex.Lock()
+	process.startupIdentityMutex.Unlock()
+	processGroup := process.stableProcessGroup()
+	if processGroup <= 0 {
+		return os.ErrProcessDone
+	}
+	if err := process.signalProcessGroup(processGroup, syscall.SIGKILL); err != nil {
+		if errors.Is(err, syscall.ESRCH) {
+			return os.ErrProcessDone
+		}
+		return fmt.Errorf("stop Seatbelt process group: %w", err)
+	}
+	return nil
+}
+
+func (process *seatbeltProcess) stableProcessGroup() int {
+	process.identityMutex.Lock()
+	defer process.identityMutex.Unlock()
+	return process.processGroup
+}
+
+func (process *seatbeltProcess) signalProcessGroup(processGroup int, signal syscall.Signal) error {
+	kill := process.killProcessGroup
+	if kill == nil {
+		kill = func(group int, signal syscall.Signal) error {
+			return syscall.Kill(-group, signal)
+		}
+	}
+	return kill(processGroup, signal)
+}
+
+func (process *seatbeltProcess) settleProcessGroup() error {
+	attempts := process.settlementAttempts
+	if attempts <= 0 {
+		attempts = seatbeltSettlementAttempts
+	}
+	retry := process.cleanupRetry
+	if retry == nil {
+		retry = func() { time.Sleep(seatbeltSettlementRetryDelay) }
+	}
+	processGroup := process.stableProcessGroup()
+	if processGroup <= 0 {
+		return errors.New("settle Seatbelt process group: stable identity is unavailable")
+	}
+	var lastErr error
+	for attempt := 0; attempt < attempts; attempt++ {
+		err := process.signalProcessGroup(processGroup, syscall.SIGKILL)
+		if errors.Is(err, syscall.ESRCH) {
+			return nil
+		}
+		if err != nil {
+			lastErr = err
+		}
+		if attempt+1 < attempts {
+			retry()
+		}
+	}
+	return fmt.Errorf("settle Seatbelt process group: %w", errors.Join(lastErr, context.DeadlineExceeded))
+}
+
+func (process *seatbeltProcess) restoreForegroundTerminal() error {
+	if process.terminal == nil {
+		return nil
+	}
+	setForeground := process.setForegroundProcessGroup
+	if setForeground == nil {
+		setForeground = setSeatbeltForegroundProcessGroup
+	}
+	return setForeground(process.terminal, process.foregroundGroup)
+}
+
+func (process *seatbeltProcess) markCleanupDone() {
+	if process.cleanupDone == nil {
+		return
+	}
+	process.cleanupDoneOnce.Do(func() { close(process.cleanupDone) })
+}
+
+func (process *seatbeltProcess) quarantineCleanup() {
+	quarantine := process.cleanupQuarantine
+	if quarantine == nil {
+		quarantine = quarantineSeatbeltCleanup
+	}
+	quarantine(process)
+}
+
+func (process *seatbeltProcess) retainLeaderWait(waitDone <-chan error) {
+	process.leaderWaitMutex.Lock()
+	process.leaderWaitDone = waitDone
+	process.leaderWaitMutex.Unlock()
+}
+
+func (process *seatbeltProcess) awaitRetainedLeader() {
+	process.leaderWaitMutex.Lock()
+	waitDone := process.leaderWaitDone
+	process.leaderWaitMutex.Unlock()
+	if waitDone != nil {
+		<-waitDone
+	}
 }
 
 func seatbeltForegroundTerminal(terminal Terminal) (*os.File, int) {
@@ -182,14 +360,36 @@ func setSeatbeltForegroundProcessGroup(terminal *os.File, processGroup int) erro
 	return unix.IoctlSetPointerInt(int(terminal.Fd()), unix.TIOCSPGRP, processGroup)
 }
 
-func settleSeatbeltProcessGroup(processGroup int) {
-	for {
-		err := syscall.Kill(-processGroup, syscall.SIGKILL)
-		if errors.Is(err, syscall.ESRCH) {
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
+var seatbeltCleanupQuarantine = struct {
+	sync.Mutex
+	processes map[*seatbeltProcess]struct{}
+}{processes: make(map[*seatbeltProcess]struct{})}
+
+func quarantineSeatbeltCleanup(process *seatbeltProcess) {
+	seatbeltCleanupQuarantine.Lock()
+	if _, exists := seatbeltCleanupQuarantine.processes[process]; exists {
+		seatbeltCleanupQuarantine.Unlock()
+		return
 	}
+	seatbeltCleanupQuarantine.processes[process] = struct{}{}
+	seatbeltCleanupQuarantine.Unlock()
+	go func() {
+		for {
+			if process.settleProcessGroup() == nil {
+				process.awaitRetainedLeader()
+				process.markCleanupDone()
+				seatbeltCleanupQuarantine.Lock()
+				delete(seatbeltCleanupQuarantine.processes, process)
+				seatbeltCleanupQuarantine.Unlock()
+				return
+			}
+			retry := process.quarantineRetry
+			if retry == nil {
+				retry = func() { time.Sleep(seatbeltQuarantineRetryDelay) }
+			}
+			retry()
+		}
+	}()
 }
 
 func buildSeatbeltPolicy(request validatedProcessRequest) (string, []string, error) {
