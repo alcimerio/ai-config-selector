@@ -200,6 +200,20 @@ func TestPromotedArtifactGateDeclaresExpectedSandboxCapability(t *testing.T) {
 	}
 }
 
+func TestGeneralCIUsesTheCertifiedUbuntuRelease(t *testing.T) {
+	contents, err := os.ReadFile(filepath.Join("..", ".github", "workflows", "ci.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(contents)
+	if strings.Count(text, "runs-on: ubuntu-24.04") != 1 {
+		t.Fatal("general CI must run on exactly one certified Ubuntu 24.04 runner")
+	}
+	if strings.Contains(text, "runs-on: ubuntu-latest") {
+		t.Fatal("general CI must not allow its Ubuntu release to drift")
+	}
+}
+
 func TestWorkflowsRunningNativeTestsProvisionTrustedUbuntuBubblewrap(t *testing.T) {
 	workflows := []struct {
 		name              string
@@ -299,6 +313,9 @@ func TestDocumentationDescribesTargetedAppArmorRemediation(t *testing.T) {
 	for _, required := range []string{
 		"Ubuntu native-test remediation",
 		"`bwrap-userns-restrict` profile for `/usr/bin/bwrap`",
+		"Ubuntu Noble exposes this optional profile through\n`apparmor-profiles`",
+		"not enabled by default",
+		"documented\ncompatibility may lag upstream",
 		"AppArmor project v4.0.3",
 		"a964037f6cf0df1099f14226b037eaedde6237c86e715188e93eb460b30be859",
 		"real `/usr/bin/bwrap` user-namespace\nprobe",
@@ -309,6 +326,9 @@ func TestDocumentationDescribesTargetedAppArmorRemediation(t *testing.T) {
 		if !strings.Contains(string(contributors), required) {
 			t.Errorf("CONTRIBUTING.md is missing AppArmor remediation detail %q", required)
 		}
+	}
+	if strings.Contains(string(contributors), "apparmor-profiles-extra") {
+		t.Fatal("CONTRIBUTING.md names the wrong Ubuntu Noble profile package")
 	}
 
 	readme, err := os.ReadFile(filepath.Join("..", "README.md"))

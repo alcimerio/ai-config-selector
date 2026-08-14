@@ -186,6 +186,39 @@ func TestBubblewrapTrustFailuresStopBeforeTheCapabilityProbe(t *testing.T) {
 	}
 }
 
+func TestBubblewrapCapabilityProbeFailureProvidesAppArmorRemediationWithoutBackendOutput(t *testing.T) {
+	privateOutput := filepath.Join(t.TempDir(), "PRIVATE_CAPABILITY_OUTPUT")
+	resultIndex := 0
+	checker := bubblewrapTrustChecker{
+		architecture:    "amd64",
+		validExecutable: func(string) bool { return true },
+		run: func(_ context.Context, path string, _ ...string) bubblewrapCommandResult {
+			if path == bubblewrapExecutable {
+				return bubblewrapCommandResult{stderr: []byte("AppArmor denied " + privateOutput), err: errors.New("probe failed")}
+			}
+			results := []bubblewrapCommandResult{
+				{output: []byte("bubblewrap: /usr/bin/bwrap\n")},
+				{output: []byte("ii \nbubblewrap\nbubblewrap\namd64\n")},
+				{},
+			}
+			result := results[resultIndex]
+			resultIndex++
+			return result
+		},
+	}
+
+	err := checker.check(context.Background())
+	assertSandboxCategory(t, err, SandboxBackendUnavailable)
+	if got, want := err.Error(), "backend_unavailable: process sandbox unavailable: required system backend is unavailable; review and enable the targeted AppArmor bwrap user-namespace profile for /usr/bin/bwrap"; got != want {
+		t.Fatalf("capability probe error = %q, want %q", got, want)
+	}
+	for _, private := range []string{privateOutput, "AppArmor denied", "probe failed"} {
+		if strings.Contains(err.Error(), private) {
+			t.Fatalf("capability remediation leaked %q: %v", private, err)
+		}
+	}
+}
+
 func TestBubblewrapTrustPassesOnlyAfterPackagedIntegrityVerification(t *testing.T) {
 	var commands []string
 	checker := bubblewrapTrustChecker{

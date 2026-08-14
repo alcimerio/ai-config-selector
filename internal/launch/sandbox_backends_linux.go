@@ -68,7 +68,7 @@ func (checker bubblewrapTrustChecker) check(ctx context.Context) error {
 		"--setenv", "PATH", safeProcessPath, "--chdir", "/tmp", "--", "/usr/bin/true",
 	)
 	if !trustedCommandSucceeded(probe) {
-		return bubblewrapUnavailable()
+		return bubblewrapCapabilityUnavailable()
 	}
 	return nil
 }

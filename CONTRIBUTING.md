@@ -103,9 +103,10 @@ cross-compilation, provide promoted-artifact acceptance evidence.
 Ubuntu 24.04 restricts unprivileged user namespaces through AppArmor, so the
 Ubuntu-native workflows install the targeted AppArmor
 `bwrap-userns-restrict` profile for `/usr/bin/bwrap` before their native test
-commands. Ubuntu's `apparmor-profiles-extra` package does not provide this
-profile, so the workflows download the official AppArmor project v4.0.3
-release file, verify its SHA-256
+commands. Ubuntu Noble exposes this optional profile through
+`apparmor-profiles`, but it is not enabled by default and its documented
+compatibility may lag upstream. The workflows therefore use the pinned
+AppArmor project v4.0.3 profile, verify its SHA-256
 `a964037f6cf0df1099f14226b037eaedde6237c86e715188e93eb460b30be859`, install
 it root-owned at `/etc/apparmor.d/bwrap-userns-restrict`, and load it with
 `apparmor_parser`. They then execute a real `/usr/bin/bwrap` user-namespace
