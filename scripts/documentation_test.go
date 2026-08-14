@@ -183,21 +183,6 @@ func TestPromotedArtifactGateDeclaresExpectedSandboxCapability(t *testing.T) {
 		if !strings.Contains(text, "ACS_PROMOTED_SANDBOX_BACKEND: ${{ matrix.sandbox_backend }}") {
 			t.Errorf("%s does not pass the target sandbox capability to installed-artifact acceptance", workflow)
 		}
-		for _, setup := range []string{
-			`if: matrix.os == 'linux'`,
-			"sudo apt-get update",
-			"sudo apt-get install --yes --no-install-recommends bubblewrap",
-			`/usr/bin/dpkg-query --search /usr/bin/bwrap`,
-			`/usr/bin/dpkg --verify --verify-format=rpm bubblewrap`,
-			`$'ii \nbubblewrap\nbubblewrap\n'"${{ matrix.arch }}"`,
-		} {
-			if got := strings.Count(text, setup); got != 1 {
-				t.Errorf("%s contains Ubuntu Bubblewrap setup %q %d times, want 1", workflow, setup, got)
-			}
-		}
-		if strings.Index(text, "sudo apt-get install --yes --no-install-recommends bubblewrap") > strings.Index(text, "Exercise installed candidate as a black box") {
-			t.Errorf("%s installs Bubblewrap after installed-artifact acceptance", workflow)
-		}
 	}
 
 	acceptance, err := os.ReadFile(filepath.Join("..", "acceptance", "promoted_artifact_test.go"))
@@ -211,6 +196,53 @@ func TestPromotedArtifactGateDeclaresExpectedSandboxCapability(t *testing.T) {
 	} {
 		if !strings.Contains(text, preserved) {
 			t.Errorf("installed-artifact acceptance no longer preserves %s", preserved)
+		}
+	}
+}
+
+func TestWorkflowsRunningNativeTestsProvisionTrustedUbuntuBubblewrap(t *testing.T) {
+	workflows := []struct {
+		name              string
+		platformGuard     string
+		architectureCheck string
+	}{
+		{name: "ci.yml", architectureCheck: `$'ii \nbubblewrap\nbubblewrap\namd64'`},
+		{
+			name:              "promoted-artifacts.yml",
+			platformGuard:     `if: matrix.os == 'linux'`,
+			architectureCheck: `$'ii \nbubblewrap\nbubblewrap\n'"${{ matrix.arch }}"`,
+		},
+		{
+			name:              "release.yml",
+			platformGuard:     `if: matrix.os == 'linux'`,
+			architectureCheck: `$'ii \nbubblewrap\nbubblewrap\n'"${{ matrix.arch }}"`,
+		},
+	}
+
+	for _, workflow := range workflows {
+		contents, err := os.ReadFile(filepath.Join("..", ".github", "workflows", workflow.name))
+		if err != nil {
+			t.Fatalf("read %s: %v", workflow.name, err)
+		}
+		text := string(contents)
+		for _, setup := range []string{
+			"sudo apt-get update",
+			"sudo apt-get install --yes --no-install-recommends bubblewrap",
+			`[[ -f /usr/bin/bwrap && ! -L /usr/bin/bwrap && -x /usr/bin/bwrap ]]`,
+			`stat --format='%u:%a' /usr/bin/bwrap`,
+			`/usr/bin/dpkg-query --search /usr/bin/bwrap`,
+			`/usr/bin/dpkg --verify --verify-format=rpm bubblewrap`,
+			workflow.architectureCheck,
+		} {
+			if got := strings.Count(text, setup); got != 1 {
+				t.Errorf("%s contains Ubuntu Bubblewrap setup %q %d times, want 1", workflow.name, setup, got)
+			}
+		}
+		if workflow.platformGuard != "" && strings.Count(text, workflow.platformGuard) != 1 {
+			t.Errorf("%s does not restrict Ubuntu Bubblewrap setup to its Linux matrix entries", workflow.name)
+		}
+		if strings.Index(text, "sudo apt-get install --yes --no-install-recommends bubblewrap") > strings.Index(text, "go test ./...") {
+			t.Errorf("%s installs Bubblewrap after native tests", workflow.name)
 		}
 	}
 }
