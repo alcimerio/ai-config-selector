@@ -130,6 +130,7 @@ func TestSeatbeltRejectsInvalidGeneratedPolicyBeforeAttachingTargetStreams(t *te
 }
 
 func TestSeatbeltWaitSettlesOutlivingDescendantsBeforeSessionRemoval(t *testing.T) {
+	skipSeatbeltNativeTestBinaryUnderRace(t)
 	request := seatbeltTestRequest(t)
 	root := filepath.Dir(filepath.Dir(request.workspace))
 	secret := filepath.Join(root, "secret")
@@ -160,6 +161,7 @@ func TestSeatbeltWaitSettlesOutlivingDescendantsBeforeSessionRemoval(t *testing.
 }
 
 func TestSeatbeltContainsFilesystemNetworkEnvironmentAndDescendants(t *testing.T) {
+	skipSeatbeltNativeTestBinaryUnderRace(t)
 	request := seatbeltTestRequest(t)
 	root := filepath.Dir(filepath.Dir(request.workspace))
 	hostHome := filepath.Join(root, "home")
@@ -233,6 +235,7 @@ func TestSeatbeltContainsFilesystemNetworkEnvironmentAndDescendants(t *testing.T
 }
 
 func TestSeatbeltPreservesRawTerminalDescriptors(t *testing.T) {
+	skipSeatbeltNativeTestBinaryUnderRace(t)
 	request := seatbeltTestRequest(t)
 	request.arguments = []string{"-test.run=TestSeatbeltHelperProcess", "--", "raw-terminal"}
 	master, terminal, err := pty.Open()

@@ -193,6 +193,12 @@ func TestPromotedArtifactGateDeclaresExpectedSandboxCapability(t *testing.T) {
 		if !strings.Contains(text, "ACS_PROMOTED_SANDBOX_BACKEND: ${{ matrix.sandbox_backend }}") {
 			t.Errorf("%s does not pass the target sandbox capability to installed-artifact acceptance", workflow)
 		}
+		normalSuite := strings.Index(text, "run: go test ./...")
+		raceSuite := strings.Index(text, "go test -race ./...")
+		promotedAcceptance := strings.Index(text, "go test ./acceptance -count=1")
+		if normalSuite < 0 || raceSuite < normalSuite || promotedAcceptance < raceSuite {
+			t.Errorf("%s does not preserve normal native, race, and promoted-artifact acceptance order", workflow)
+		}
 	}
 
 	acceptance, err := os.ReadFile(filepath.Join("..", "acceptance", "promoted_artifact_test.go"))
@@ -243,7 +249,7 @@ func TestReadmeDescribesDarwinSeatbeltAndLinuxFailClosedLifecycle(t *testing.T) 
 	}
 }
 
-func TestContributorRaceGateKeepsTheExceptionLinuxOnly(t *testing.T) {
+func TestContributorRaceGateDocumentsNarrowNativeExceptions(t *testing.T) {
 	contents, err := os.ReadFile(filepath.Join("..", "CONTRIBUTING.md"))
 	if err != nil {
 		t.Fatalf("read CONTRIBUTING.md: %v", err)
@@ -256,6 +262,16 @@ func TestContributorRaceGateKeepsTheExceptionLinuxOnly(t *testing.T) {
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("CONTRIBUTING.md is missing the platform-specific race gate %q", want)
+		}
+	}
+	normalized := strings.Join(strings.Fields(text), " ")
+	for _, want := range []string{
+		"ThreadSanitizer runtime cannot start inside the production Seatbelt policy",
+		"only the three Darwin tests that execute the race-instrumented test binary",
+		"preceding non-race native suite and the installed promoted-artifact acceptance",
+	} {
+		if !strings.Contains(normalized, want) {
+			t.Errorf("CONTRIBUTING.md is missing the macOS race rationale %q", want)
 		}
 	}
 }
