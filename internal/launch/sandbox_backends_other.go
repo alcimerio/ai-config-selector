@@ -1,7 +1,5 @@
-//go:build !darwin
+//go:build !darwin && !linux
 
 package launch
 
-func defaultSandboxBackends() map[string]sandboxBackend {
-	return nil
-}
+func nativeSandboxBackends() map[string]sandboxBackend { return nil }

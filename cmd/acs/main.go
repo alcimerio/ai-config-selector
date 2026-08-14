@@ -19,6 +19,14 @@ var releaseVersionPattern = regexp.MustCompile(`^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]
 var releaseVersion string
 
 func main() {
+	handled, err := launch.RunBubblewrapHelper(os.Args[1:])
+	if handled {
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "acs: sandbox helper failed")
+			os.Exit(1)
+		}
+		return
+	}
 	if err := requireSupportedPlatform(launch.CurrentPlatform); err != nil {
 		fmt.Fprintf(os.Stderr, "acs: %v\n", err)
 		os.Exit(1)

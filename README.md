@@ -30,8 +30,7 @@ On every Supported Platform, ACS supports:
 - user-global Skills discovered from Devin and shared-agent locations;
 - interactive Profile creation, persistence, and dry-run inspection;
 - Seatbelt-contained interactive launches on macOS 26;
-- fail-closed validation of Ubuntu launches until the Bubblewrap backend is
-  available.
+- Bubblewrap-contained interactive launches on Ubuntu 24.04 LTS.
 
 The Profile Builder requires confirmation before it creates an empty Profile.
 Windows, WSL, other Linux distributions, and other operating-system or
@@ -192,15 +191,38 @@ acs devin --profile backend-review
 ```
 
 On macOS 26, this command runs every Devin preflight, interactive process, and
-descendant inside Seatbelt. On Ubuntu 24.04 LTS, ACS reports
-`backend_unavailable` until the Bubblewrap backend in #64 lands. In either
-case, ACS does not offer an unsandboxed launch fallback.
+descendant inside Seatbelt. ACS verifies the root-owned system
+`/usr/bin/sandbox-exec`, builds a default-deny policy from validated runtime
+paths, and applies that policy to the complete process tree.
+
+On Ubuntu 24.04, this command runs every Devin probe and the interactive
+process through `/usr/bin/bwrap`. ACS requires the root-owned, non-writable
+executable recorded as installed by the signed Ubuntu `bubblewrap` package and
+checks that its package architecture matches ACS, its payload still matches
+dpkg's packaged checksums, and unprivileged user namespaces work before leasing
+a Session. This is an offline package-integrity boundary, not protection from a
+compromised administrator: the package database and packaged checksums are
+controlled by root. If a prerequisite is missing or invalid, ACS reports
+`backend_unavailable` with package-remediation guidance before it leases a
+Session or starts Devin. ACS neither bundles Bubblewrap nor downloads it at
+runtime; administrators install it from Ubuntu's configured signed apt
+repositories. If host AppArmor policy blocks unprivileged user namespaces,
+administrators must review and enable an appropriate targeted Bubblewrap
+profile; ACS does not disable the global AppArmor restriction or run without
+containment.
+
+The Bubblewrap namespace exposes the workspace and Session as writable,
+including Session-local temporary storage. Named runtime inputs and the
+minimal operating-system runtime are read-only. The host home and host Unix
+sockets are absent. Devin retains outbound IP networking, but ACS does not
+mount host SSH, Docker, proxy, or agent sockets. There is no unsandboxed
+fallback on either platform.
 
 ### Session lifecycle
 
-On macOS, the command first completes sandbox preflight, then creates an
-ephemeral Session with a synthetic home,
-copies the selected Skill Bundles and existing Devin credential into that
+On every Supported Platform, the command first completes sandbox preflight,
+then creates an ephemeral Session with a synthetic home, copies the selected
+Skill Bundles and existing Devin credential into that
 Session, verifies the selection and authentication state, and starts Devin in
 the current working directory through the native sandbox. ACS removes a leased
 Session after launch setup fails, or only after the sandboxed process tree has
@@ -230,8 +252,8 @@ commands, accepted messages, file permissions, and atomic Profile persistence.
 It also preserves Profile Builder behavior, Devin Adapter discovery and
 preflight behavior, launch and signal handling, ACS Home at `~/.acs`, and the
 intended per-launch Session creation and cleanup contract. That contained
-Session lifecycle is available on macOS; Ubuntu continues to fail before
-leasing a Session until its native backend lands.
+Session lifecycle is available through Seatbelt on macOS and Bubblewrap on
+Ubuntu.
 Existing v0.1.0 Profiles do not require migration.
 
 ## Known limitations
@@ -246,9 +268,10 @@ Existing v0.1.0 Profiles do not require migration.
 - Profiles cannot be listed, edited, deleted, imported, or exported through
   the CLI.
 - ACS does not filter repository-local Skills.
-- Ubuntu interactive launches remain blocked until native Bubblewrap
-  enforcement is available. The synthetic home provides configuration
-  isolation inside the native sandbox; it is not a substitute for enforcement.
+- Interactive launches require a certified native backend. Bubblewrap is
+  active on Ubuntu 24.04 and Seatbelt is active on macOS 26. The synthetic
+  home complements the OS sandbox and is not a substitute for native
+  enforcement.
 - ACS does not manage MCP servers, hooks, instructions, agents, or arbitrary
   target settings.
 - ACS has no package-manager distribution, automatic updates, or uninstaller.

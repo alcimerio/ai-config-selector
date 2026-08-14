@@ -104,6 +104,27 @@ the production policy. Also cross-build and cross-test-compile all four
 Supported Release Targets and reconcile the final worktree. Native jobs, not
 cross-compilation, provide promoted-artifact acceptance evidence.
 
+### Ubuntu native-test remediation
+
+Ubuntu 24.04 restricts unprivileged user namespaces through AppArmor, so the
+Ubuntu-native workflows install the targeted AppArmor
+`bwrap-userns-restrict` profile for `/usr/bin/bwrap` before their native test
+commands. Ubuntu Noble exposes this optional profile through
+`apparmor-profiles`, but it is not enabled by default and its documented
+compatibility may lag upstream. The workflows therefore use the pinned
+AppArmor project v4.0.3 profile, verify its SHA-256
+`a964037f6cf0df1099f14226b037eaedde6237c86e715188e93eb460b30be859`, install
+it root-owned at `/etc/apparmor.d/bwrap-userns-restrict`, and load it with
+`apparmor_parser`. They then execute a real `/usr/bin/bwrap` user-namespace
+probe before running Go tests.
+
+This remediation permits the targeted Bubblewrap profile only. It does not
+set `kernel.apparmor_restrict_unprivileged_userns=0`, disable AppArmor, skip
+native tests, or relax ACS's package-integrity and runtime capability checks.
+Local Ubuntu-native validation needs the same reviewed profile setup; a failed
+probe is an infrastructure failure, not evidence that the production sandbox
+can run without containment.
+
 ## Release validation
 
 Release packaging uses GoReleaser OSS v2.17.1. The repository wrapper downloads
@@ -150,9 +171,11 @@ temporary install and Session directories. It does not read real Devin
 credentials or modify a maintainer installation. Each target declares the
 native sandbox capability expected at that release increment. Darwin targets
 exercise successful Seatbelt launch, signal, terminal-resize, and
-concurrent-lease behavior. Until the Bubblewrap work in #64 lands, Linux
-targets require the installed launch to fail closed with `backend_unavailable`
-before a Session is leased or the fake Devin process starts.
+concurrent-lease behavior. The two Ubuntu targets require the installed launch,
+signal, terminal-resize, and concurrent-lease assertions to succeed through
+the system Bubblewrap backend. Ubuntu-native tests additionally prove
+filesystem, environment, descriptor, networking, descendant, and lifecycle
+containment.
 
 After building a clean candidate locally, run the validator on a matching
 native host with a fresh absolute install directory:
@@ -165,7 +188,7 @@ scripts/validate-promoted-artifact.sh \
   dist/release-candidate "$install_root/bin"
 ACS_PROMOTED_BINARY="$install_root/bin/acs" \
   ACS_PROMOTED_VERSION=v0.2.0 \
-  ACS_PROMOTED_SANDBOX_BACKEND=unavailable \
+  ACS_PROMOTED_SANDBOX_BACKEND=available \
   go test ./acceptance -count=1
 ```
 

@@ -174,17 +174,17 @@ func TestPromotedArtifactGateDeclaresExpectedSandboxCapability(t *testing.T) {
 			t.Fatalf("read %s: %v", workflow, err)
 		}
 		text := string(contents)
-		if got := strings.Count(text, "sandbox_backend: available"); got != 2 {
-			t.Errorf("%s declares available sandbox capability %d times, want 2", workflow, got)
+		if got := strings.Count(text, "sandbox_backend: available"); got != 4 {
+			t.Errorf("%s declares available sandbox capability %d times, want 4", workflow, got)
 		}
-		if got := strings.Count(text, "sandbox_backend: unavailable"); got != 2 {
-			t.Errorf("%s declares unavailable sandbox capability %d times, want 2", workflow, got)
+		if got := strings.Count(text, "sandbox_backend: unavailable"); got != 0 {
+			t.Errorf("%s declares unavailable sandbox capability %d times, want 0", workflow, got)
 		}
 		for _, required := range []string{
 			"target: darwin/arm64\n            runner: macos-26\n            os: darwin\n            arch: arm64\n            sandbox_backend: available",
 			"target: darwin/amd64\n            runner: macos-26-intel\n            os: darwin\n            arch: amd64\n            sandbox_backend: available",
-			"target: linux/amd64\n            runner: ubuntu-24.04\n            os: linux\n            arch: amd64\n            sandbox_backend: unavailable",
-			"target: linux/arm64\n            runner: ubuntu-24.04-arm\n            os: linux\n            arch: arm64\n            sandbox_backend: unavailable",
+			"target: linux/amd64\n            runner: ubuntu-24.04\n            os: linux\n            arch: amd64\n            sandbox_backend: available",
+			"target: linux/arm64\n            runner: ubuntu-24.04-arm\n            os: linux\n            arch: arm64\n            sandbox_backend: available",
 		} {
 			if !strings.Contains(text, required) {
 				t.Errorf("%s is missing the expected native capability row %q", workflow, required)
@@ -216,7 +216,125 @@ func TestPromotedArtifactGateDeclaresExpectedSandboxCapability(t *testing.T) {
 	}
 }
 
-func TestReadmeDescribesDarwinSeatbeltAndLinuxFailClosedLifecycle(t *testing.T) {
+func TestGeneralCIUsesTheCertifiedUbuntuRelease(t *testing.T) {
+	contents, err := os.ReadFile(filepath.Join("..", ".github", "workflows", "ci.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(contents)
+	if strings.Count(text, "runs-on: ubuntu-24.04") != 1 {
+		t.Fatal("general CI must run on exactly one certified Ubuntu 24.04 runner")
+	}
+	if strings.Contains(text, "runs-on: ubuntu-latest") {
+		t.Fatal("general CI must not allow its Ubuntu release to drift")
+	}
+}
+
+func TestWorkflowsRunningNativeTestsProvisionTrustedUbuntuBubblewrap(t *testing.T) {
+	workflows := []struct {
+		name              string
+		platformGuard     string
+		architectureCheck string
+	}{
+		{name: "ci.yml", architectureCheck: `$'ii \nbubblewrap\nbubblewrap\namd64'`},
+		{
+			name:              "promoted-artifacts.yml",
+			platformGuard:     `if: matrix.os == 'linux'`,
+			architectureCheck: `$'ii \nbubblewrap\nbubblewrap\n'"${{ matrix.arch }}"`,
+		},
+		{
+			name:              "release.yml",
+			platformGuard:     `if: matrix.os == 'linux'`,
+			architectureCheck: `$'ii \nbubblewrap\nbubblewrap\n'"${{ matrix.arch }}"`,
+		},
+	}
+
+	for _, workflow := range workflows {
+		contents, err := os.ReadFile(filepath.Join("..", ".github", "workflows", workflow.name))
+		if err != nil {
+			t.Fatalf("read %s: %v", workflow.name, err)
+		}
+		text := string(contents)
+		for _, setup := range []string{
+			"sudo apt-get update",
+			"sudo apt-get install --yes --no-install-recommends apparmor apparmor-utils bubblewrap",
+			"https://gitlab.com/apparmor/apparmor/-/raw/v4.0.3/profiles/apparmor/profiles/extras/bwrap-userns-restrict",
+			"a964037f6cf0df1099f14226b037eaedde6237c86e715188e93eb460b30be859",
+			"sha256sum --check --status",
+			"sudo install --owner=root --group=root --mode=0644 \"$profile_source\" /etc/apparmor.d/bwrap-userns-restrict",
+			"sudo /usr/sbin/apparmor_parser --replace /etc/apparmor.d/bwrap-userns-restrict",
+			"sudo /usr/sbin/aa-status --enabled",
+			`[[ -f /usr/bin/bwrap && ! -L /usr/bin/bwrap && -x /usr/bin/bwrap ]]`,
+			`stat --format='%u:%a' /usr/bin/bwrap`,
+			`/usr/bin/dpkg-query --search /usr/bin/bwrap`,
+			`/usr/bin/dpkg --verify --verify-format=rpm bubblewrap`,
+			"--unshare-user --unshare-ipc --unshare-pid --unshare-uts --unshare-cgroup",
+			"--symlink usr/bin /bin",
+			"--symlink usr/sbin /sbin",
+			"--symlink usr/lib /lib",
+			"--symlink usr/lib64 /lib64",
+			workflow.architectureCheck,
+		} {
+			if got := strings.Count(text, setup); got != 1 {
+				t.Errorf("%s contains Ubuntu Bubblewrap setup %q %d times, want 1", workflow.name, setup, got)
+			}
+		}
+		for _, unsafe := range []string{
+			"kernel.apparmor_restrict_unprivileged_userns=0",
+			"apparmor_parser -R",
+			"/etc/apparmor.d/disable",
+		} {
+			if strings.Contains(text, unsafe) {
+				t.Errorf("%s weakens AppArmor with %q", workflow.name, unsafe)
+			}
+		}
+		if workflow.platformGuard != "" && strings.Count(text, workflow.platformGuard) != 1 {
+			t.Errorf("%s does not restrict Ubuntu Bubblewrap setup to its Linux matrix entries", workflow.name)
+		}
+		if strings.Index(text, "sudo apt-get install --yes --no-install-recommends apparmor apparmor-utils bubblewrap") > strings.Index(text, "go test ./...") {
+			t.Errorf("%s installs Bubblewrap after native tests", workflow.name)
+		}
+		if strings.Index(text, "--unshare-user --unshare-ipc --unshare-pid --unshare-uts --unshare-cgroup") < strings.Index(text, "/usr/sbin/apparmor_parser --replace") {
+			t.Errorf("%s probes Bubblewrap before provisioning the AppArmor profile", workflow.name)
+		}
+	}
+}
+
+func TestWorkflowsUseEquivalentBubblewrapCapabilityProbe(t *testing.T) {
+	workflows := []string{"ci.yml", "promoted-artifacts.yml", "release.yml"}
+	var want string
+	for _, name := range workflows {
+		contents, err := os.ReadFile(filepath.Join("..", ".github", "workflows", name))
+		if err != nil {
+			t.Fatalf("read %s: %v", name, err)
+		}
+		probe := bubblewrapCapabilityProbeBlock(t, string(contents))
+		if want == "" {
+			want = probe
+			continue
+		}
+		if probe != want {
+			t.Errorf("%s Bubblewrap capability probe differs:\n%s\nwant:\n%s", name, probe, want)
+		}
+	}
+}
+
+func bubblewrapCapabilityProbeBlock(t *testing.T, workflow string) string {
+	t.Helper()
+	const start = "          /usr/bin/bwrap \\\n"
+	const end = "            --setenv PATH /usr/bin:/bin --chdir /tmp -- /usr/bin/true"
+	first := strings.Index(workflow, start)
+	if first == -1 {
+		t.Fatal("workflow does not contain a Bubblewrap capability probe")
+	}
+	last := strings.Index(workflow[first:], end)
+	if last == -1 {
+		t.Fatal("workflow does not contain the Bubblewrap capability probe target")
+	}
+	return workflow[first : first+last+len(end)]
+}
+
+func TestReadmeDescribesCurrentPlatformSandboxCapabilities(t *testing.T) {
 	contents, err := os.ReadFile(filepath.Join("..", "README.md"))
 	if err != nil {
 		t.Fatalf("read README.md: %v", err)
@@ -224,27 +342,85 @@ func TestReadmeDescribesDarwinSeatbeltAndLinuxFailClosedLifecycle(t *testing.T) 
 	text := strings.Join(strings.Fields(string(contents)), " ")
 	for _, required := range []string{
 		"Seatbelt-contained interactive launches on macOS 26",
-		"fail-closed validation of Ubuntu launches until the Bubblewrap backend",
 		"On macOS 26, this command runs every Devin preflight, interactive process, and descendant inside Seatbelt",
-		"On Ubuntu 24.04 LTS, ACS reports `backend_unavailable`",
-		"Bubblewrap backend in #64",
-		"ACS does not offer an unsandboxed launch fallback",
+		"`/usr/bin/sandbox-exec`",
+		"Ubuntu 24.04",
+		"`/usr/bin/bwrap`",
+		"signed Ubuntu `bubblewrap` package",
+		"package database and packaged checksums are controlled by root",
+		"outbound IP networking",
+		"host Unix sockets",
+		"There is no unsandboxed fallback on either platform",
 		"ACS removes a leased Session after launch setup fails, or only after the sandboxed process tree has exited or been terminated and containment is settled",
-		"That contained Session lifecycle is available on macOS; Ubuntu continues to fail before leasing a Session",
+		"That contained Session lifecycle is available through Seatbelt on macOS and Bubblewrap on Ubuntu",
 	} {
 		if !strings.Contains(text, required) {
 			t.Errorf("README.md does not explain the sandbox launch state with %q", required)
 		}
 	}
-
 	for _, obsolete := range []string{
 		"current sandbox increment is fail-closed",
 		"Seatbelt backend in #57",
+		"Bubblewrap backend in #64",
 		"After the native backend for the host lands",
 		"That Session lifecycle is not currently available",
+		"macOS launches remain unavailable",
 	} {
 		if strings.Contains(text, obsolete) {
 			t.Errorf("README.md retains obsolete all-platform fail-closed text %q", obsolete)
+		}
+	}
+}
+
+func TestDocumentationDescribesTargetedAppArmorRemediation(t *testing.T) {
+	contributors, err := os.ReadFile(filepath.Join("..", "CONTRIBUTING.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{
+		"Ubuntu native-test remediation",
+		"`bwrap-userns-restrict` profile for `/usr/bin/bwrap`",
+		"Ubuntu Noble exposes this optional profile through\n`apparmor-profiles`",
+		"not enabled by default",
+		"documented\ncompatibility may lag upstream",
+		"AppArmor project v4.0.3",
+		"a964037f6cf0df1099f14226b037eaedde6237c86e715188e93eb460b30be859",
+		"real `/usr/bin/bwrap` user-namespace\nprobe",
+		"does not\nset `kernel.apparmor_restrict_unprivileged_userns=0`",
+		"skip\nnative tests",
+		"runtime capability checks",
+	} {
+		if !strings.Contains(string(contributors), required) {
+			t.Errorf("CONTRIBUTING.md is missing AppArmor remediation detail %q", required)
+		}
+	}
+	if strings.Contains(string(contributors), "apparmor-profiles-extra") {
+		t.Fatal("CONTRIBUTING.md names the wrong Ubuntu Noble profile package")
+	}
+
+	readme, err := os.ReadFile(filepath.Join("..", "README.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{
+		"host AppArmor policy blocks unprivileged user namespaces",
+		"does not disable the global AppArmor restriction or run without\ncontainment",
+	} {
+		if !strings.Contains(string(readme), required) {
+			t.Errorf("README.md is missing AppArmor remediation detail %q", required)
+		}
+	}
+
+	architecture, err := os.ReadFile(filepath.Join("..", "docs", "architecture.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{
+		"pinned,\nSHA-256-verified AppArmor upstream release",
+		"preserves Ubuntu's global unprivileged-user-namespace\nrestriction",
+	} {
+		if !strings.Contains(string(architecture), required) {
+			t.Errorf("docs/architecture.md is missing AppArmor remediation detail %q", required)
 		}
 	}
 }
