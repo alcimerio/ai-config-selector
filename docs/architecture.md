@@ -276,11 +276,10 @@ credentials, environment values, or account details.
 The required release gate stays credential-free: one candidate artifact set is
 installed and exercised natively on darwin/arm64, darwin/amd64, linux/amd64,
 and linux/arm64. The native matrix declares the sandbox backend capability
-expected at each increment. In the shared-layer increment, before #57 adds the
-macOS backend and #64 adds the Ubuntu backend, the installed candidate must
-return the stable `backend_unavailable` category without starting the target or
-leasing a Session. The same acceptance harness retains the successful launch
-and lifecycle contract for each backend increment to activate. A real-Devin
+expected at each increment. Darwin rows exercise the successful Seatbelt launch
+and lifecycle contract; until #64 adds the Ubuntu backend, Linux rows require
+the stable `backend_unavailable` category without starting the target or
+leasing a Session. A real-Devin
 smoke is an optional maintainer check for changes that affect authentication,
 the Devin Adapter, Profile selection, Session isolation, or interactive
 lifecycle behavior. It runs only on an authorized macOS 26 arm64 maintainer
@@ -355,9 +354,13 @@ backend selector, policy input, environment passthrough, or sandbox bypass.
 It also classifies process-start and non-exit wait failures at the boundary so
 backend output, generated policy, host paths, and environment values do not
 enter CLI diagnostics; ordinary child exit status remains intact.
-Native Seatbelt and Bubblewrap policy and mount implementations are separate
-backend work; until the backend for a supported host is present, interactive
-launch fails closed rather than running Devin without containment.
+The Darwin backend verifies the root-owned system `sandbox-exec`, builds a
+default-deny Seatbelt policy from validated parameters, and confines the
+workspace, Session, named runtime reads, IP networking, resolver socket, and
+terminal operations. Seatbelt applies the profile to descendants and blocks
+unrelated host paths, Unix sockets, environment values, and descriptors.
+Bubblewrap remains separate backend work; until it is present on Ubuntu,
+interactive launch fails closed rather than running Devin without containment.
 
 Repository-local Skills remain visible because Devin runs in the selected
 repository. ACS reports them but does not filter, copy, or manage them.

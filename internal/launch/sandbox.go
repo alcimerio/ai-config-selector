@@ -197,7 +197,7 @@ type nativeProcessSandbox struct {
 // NewProcessSandbox returns the fail-closed native sandbox selector. Native
 // backends register inside this package; callers cannot select or bypass them.
 func NewProcessSandbox() ProcessSandbox {
-	return newNativeProcessSandbox(CurrentPlatform, nil)
+	return newNativeProcessSandbox(CurrentPlatform, defaultSandboxBackends())
 }
 
 func newNativeProcessSandbox(platform platformProbe, backends map[string]sandboxBackend) *nativeProcessSandbox {

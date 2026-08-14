@@ -142,12 +142,11 @@ then installs and exercises the candidate executable as a black box. The
 acceptance harness uses only a synthetic home, a fake Devin executable, and
 temporary install and Session directories. It does not read real Devin
 credentials or modify a maintainer installation. Each target declares the
-native sandbox capability expected at that release increment. Until the
-Seatbelt work in #57 and Bubblewrap work in #64 land, all four targets require
-the installed launch to fail closed with `backend_unavailable` before a
-Session is leased or the fake Devin process starts; the successful launch,
-signal, terminal-resize, and concurrent-lease assertions remain in the same
-harness for those backend increments to activate.
+native sandbox capability expected at that release increment. Darwin targets
+exercise successful Seatbelt launch, signal, terminal-resize, and
+concurrent-lease behavior. Until the Bubblewrap work in #64 lands, Linux
+targets require the installed launch to fail closed with `backend_unavailable`
+before a Session is leased or the fake Devin process starts.
 
 After building a clean candidate locally, run the validator on a matching
 native host with a fresh absolute install directory:

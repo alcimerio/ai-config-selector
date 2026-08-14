@@ -57,12 +57,12 @@ jobs:
             runner: macos-26
             os: darwin
             arch: arm64
-            sandbox_backend: unavailable
+            sandbox_backend: available
           - target: darwin/amd64
             runner: macos-26-intel
             os: darwin
             arch: amd64
-            sandbox_backend: unavailable
+            sandbox_backend: available
           - target: linux/amd64
             runner: ubuntu-24.04
             os: linux

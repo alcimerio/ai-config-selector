@@ -233,6 +233,22 @@ func TestProcessSandboxRejectsMissingBackendBeforePathPreparation(t *testing.T) 
 	assertSandboxCategory(t, err, SandboxBackendUnavailable)
 }
 
+func TestDefaultSandboxBackendsAreRegisteredOnlyForTheNativeOperatingSystem(t *testing.T) {
+	backends := defaultSandboxBackends()
+	if runtime.GOOS == "darwin" {
+		if backends["darwin"] == nil {
+			t.Fatal("Darwin build omitted the Seatbelt backend")
+		}
+		if len(backends) != 1 {
+			t.Fatalf("Darwin backends = %v, want only darwin", backends)
+		}
+		return
+	}
+	if len(backends) != 0 {
+		t.Fatalf("non-Darwin build registered native backends: %v", backends)
+	}
+}
+
 func TestProcessSandboxSelectsBackendAndPassesOnlyValidatedInputs(t *testing.T) {
 	root := t.TempDir()
 	workspace := filepath.Join(root, "home", "user", "workspace")
