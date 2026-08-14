@@ -362,7 +362,35 @@ The Darwin backend verifies the root-owned system `sandbox-exec`, builds a
 default-deny Seatbelt policy from validated parameters, and confines the
 workspace, Session, named runtime reads, IP networking, resolver socket, and
 terminal operations. Seatbelt applies the profile to descendants and blocks
-unrelated host paths, Unix sockets, environment values, and descriptors.
+unrelated host paths, Unix sockets, environment values, and descriptors. Each
+launch places one internal ACS supervisor and its target in a dedicated
+Seatbelt instance. The target receives only standard input, output, and error;
+the supervisor alone retains a close-on-exec control socket used for signal
+forwarding and an outer-ACS cleanup challenge.
+
+After the target leader exits, the supervisor uses the public libproc
+`proc_listallpids` and `proc_pidinfo` APIs to find same-instance processes.
+It repeatedly stops live targets until the set is quiescent, revalidates each
+PID plus process start time before destructive signals, kills the stopped set,
+and repeats until no non-zombie target remains. The Seatbelt
+`(target same-sandbox)` signal rule is the final authorization boundary, so a
+reused PID or an identical concurrent profile cannot authorize a cross-instance
+signal. Enumeration failure, changed or ambiguous credentials, and bounded
+nonconvergence produce no cleanup proof.
+
+The outer ACS releases the Session reference only after it receives a
+versioned proof containing its random challenge, a zero-live-target result,
+and a target status matching the supervisor exit. Missing, malformed,
+unauthenticated, timed-out, or negative proof leaves the cleanup barrier and
+Session permanently quarantined. Same-instance signal authorization is
+symmetric, so a hostile target can kill its supervisor; that attack therefore
+sacrifices cleanup availability but cannot manufacture proof or release the
+Session. Durable recovery of an abandoned quarantine after ACS itself exits is
+outside this lifecycle boundary.
+
+The Darwin process API binding uses the pure-Go `purego` foreign-function
+interface against public symbols in `libSystem`; release binaries remain
+compatible with the repository's `CGO_ENABLED=0` four-target build matrix.
 
 On certified Ubuntu 24.04 targets, the production backend requires the
 root-owned, non-group/world-writable regular `/usr/bin/bwrap` executable. The

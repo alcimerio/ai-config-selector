@@ -7,6 +7,7 @@ require (
 	charm.land/bubbletea/v2 v2.0.8
 	github.com/charmbracelet/x/ansi v0.11.7
 	github.com/creack/pty v1.1.24
+	github.com/ebitengine/purego v0.10.0
 	golang.org/x/sys v0.46.0
 )
 

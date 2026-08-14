@@ -5,11 +5,14 @@ package launch
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -37,6 +40,7 @@ func TestSeatbeltPolicyIsDefaultDenyAndUsesParametersForValidatedPaths(t *testin
 		"(version 1)", "(deny default)", `(param "WORKSPACE")`,
 		`(param "SESSION")`, `(param "EXECUTABLE")`, `(param "RUNTIME_0")`,
 		`(remote ip)`, `(literal "/private/var/run/mDNSResponder")`,
+		`(literal "/var")`,
 		`(literal "/private/var/select/sh")`,
 		`(literal "/dev/tty")`, `(target same-sandbox)`,
 	} {
@@ -46,7 +50,7 @@ func TestSeatbeltPolicyIsDefaultDenyAndUsesParametersForValidatedPaths(t *testin
 	}
 	for _, forbidden := range []string{
 		request.workspace, request.sessionDirectory, request.executable,
-		request.runtimeInputs[0], "(allow file-read*)\n", "(allow mach-lookup)",
+		request.runtimeInputs[0], "(allow file-read*)\n", "(allow mach-lookup",
 		"(allow sysctl-read)\n", "(allow iokit", "(allow network*)",
 	} {
 		if strings.Contains(policy, forbidden) {
@@ -126,6 +130,422 @@ func TestSeatbeltRejectsInvalidGeneratedPolicyBeforeAttachingTargetStreams(t *te
 			}
 			if _, err := os.Stat(marker); !errors.Is(err, os.ErrNotExist) {
 				t.Fatalf("target marker exists after invalid policy: %v", err)
+			}
+		})
+	}
+}
+
+func TestSeatbeltCleansDescendantAfterProcessGroupAndSessionEscape(t *testing.T) {
+	skipSeatbeltNativeTestBinaryUnderRace(t)
+	request := seatbeltTestRequest(t)
+	result := filepath.Join(request.workspace, "setsid-result")
+	marker := filepath.Join(request.workspace, "escaped-descendant-survived")
+	request.arguments = []string{
+		"-test.run=TestSeatbeltHelperProcess", "--", "process-group-escape-parent", result, marker,
+	}
+	process, err := newSeatbeltBackend(seatbeltExecutable).prepare(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := process.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if err := process.Wait(); err != nil {
+		t.Fatalf("top-level target failed: %v", err)
+	}
+	resultContents, err := os.ReadFile(result)
+	if err != nil {
+		t.Fatalf("read descendant setsid result: %v", err)
+	}
+	if got := strings.TrimSpace(string(resultContents)); got != "escaped" {
+		t.Fatalf("descendant setsid result = %q, want a real process-group escape", got)
+	}
+	if err := os.RemoveAll(request.sessionDirectory); err != nil {
+		t.Fatalf("remove settled Session: %v", err)
+	}
+	time.Sleep(500 * time.Millisecond)
+	if _, err := os.Stat(marker); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("descendant survived CleanupDone after process-group escape attempt: %v", err)
+	}
+}
+
+func TestSeatbeltResolvesHostnameThroughMDNSSocketAlias(t *testing.T) {
+	skipSeatbeltNativeTestBinaryUnderRace(t)
+	request := seatbeltTestRequest(t)
+	request.arguments = []string{
+		"-test.run=TestSeatbeltHelperProcess", "--", "resolve-hostname", "example.com",
+	}
+	var output bytes.Buffer
+	request.terminal = Terminal{Output: &output, ErrorOutput: &output}
+	process, err := newSeatbeltBackend(seatbeltExecutable).prepare(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := process.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if err := process.Wait(); err != nil {
+		t.Fatalf("hostname lookup failed: %v; output=%q", err, output.String())
+	}
+	if got := strings.TrimSpace(output.String()); got != "resolved" {
+		t.Fatalf("hostname lookup output = %q", got)
+	}
+}
+
+func TestSeatbeltRejectsMalformedMissingAndSpoofedCleanupProof(t *testing.T) {
+	challenge := bytes.Repeat([]byte{0x5a}, seatbeltChallengeSize)
+	validWrongChallenge, err := json.Marshal(seatbeltCleanupProof{
+		Magic: seatbeltProofMagic, Version: seatbeltProofVersion,
+		Challenge:       strings.Repeat("00", seatbeltChallengeSize),
+		ZeroLiveTargets: true, TargetExited: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name     string
+		response []byte
+	}{
+		{name: "missing"},
+		{name: "malformed", response: []byte("not-json\n")},
+		{name: "spoofed", response: append(validWrongChallenge, '\n')},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			parent, peer := seatbeltTestSocketPair(t)
+			process := newSeatbeltLifecycleTestProcess(exec.Command("/usr/bin/true"))
+			process.supervised = true
+			process.control = parent
+			process.challenge = append([]byte(nil), challenge...)
+			go func() {
+				defer peer.Close()
+				got := make([]byte, len(challenge))
+				_, _ = io.ReadFull(peer, got)
+				if len(test.response) > 0 {
+					_, _ = peer.Write(test.response)
+				}
+			}()
+			if err := process.Start(); err != nil {
+				t.Fatal(err)
+			}
+			err := process.Wait()
+			assertSandboxCategory(t, err, SandboxProcessWaitFailed)
+			select {
+			case <-process.CleanupDone():
+				t.Fatal("untrusted proof released cleanup quarantine")
+			default:
+			}
+		})
+	}
+}
+
+func TestSeatbeltCleanupProofTimeoutFailsClosed(t *testing.T) {
+	parent, peer := seatbeltTestSocketPair(t)
+	process := newSeatbeltLifecycleTestProcess(exec.Command("/usr/bin/true"))
+	process.supervised = true
+	process.control = parent
+	process.challenge = bytes.Repeat([]byte{0xa5}, seatbeltChallengeSize)
+	timedOut := make(chan time.Time)
+	close(timedOut)
+	process.proofTimeout = func() <-chan time.Time { return timedOut }
+	releasePeer := make(chan struct{})
+	go func() {
+		challenge := make([]byte, seatbeltChallengeSize)
+		_, _ = io.ReadFull(peer, challenge)
+		<-releasePeer
+	}()
+	if err := process.Start(); err != nil {
+		t.Fatal(err)
+	}
+	err := process.Wait()
+	close(releasePeer)
+	assertSandboxCategory(t, err, SandboxProcessWaitFailed)
+	select {
+	case <-process.CleanupDone():
+		t.Fatal("cleanup proof timeout released quarantine")
+	default:
+	}
+}
+
+func TestSeatbeltEnumerationFailureAndNonconvergenceNeverProveCleanup(t *testing.T) {
+	enumerationFailure := seatbeltTestEnumerator{allErr: errors.New("injected enumeration failure")}
+	if err := settleSeatbeltInstance(enumerationFailure, newSeatbeltIdentityLedger(), os.Getpid(), 0, time.Now().Add(time.Second)); err == nil {
+		t.Fatal("enumeration failure unexpectedly proved cleanup")
+	}
+	nonconverging := seatbeltTestEnumerator{}
+	if err := settleSeatbeltInstance(nonconverging, newSeatbeltIdentityLedger(), os.Getpid(), 0, time.Now().Add(-time.Millisecond)); err == nil {
+		t.Fatal("expired convergence deadline unexpectedly proved cleanup")
+	}
+}
+
+func TestSeatbeltCredentialAmbiguityFailsClosed(t *testing.T) {
+	pid := os.Getpid()
+	info := seatbeltBSDInfo{
+		PID: uint32(pid), UID: uint32(os.Geteuid() + 1), RUID: uint32(os.Geteuid() + 1),
+		SVUID: uint32(os.Geteuid() + 1), GID: uint32(os.Getegid()),
+		RGID: uint32(os.Getegid()), SVGID: uint32(os.Getegid()),
+		StartSecond: 1, StartMicrosecond: 2,
+	}
+	enumerator := seatbeltTestEnumerator{pids: []int{pid}, infos: map[int]seatbeltBSDInfo{pid: info}}
+	if err := recordSeatbeltTargets(enumerator, -1, newSeatbeltIdentityLedger()); err == nil {
+		t.Fatal("changed target credentials unexpectedly remained eligible for cleanup proof")
+	}
+}
+
+func TestSeatbeltTargetCannotInheritOrSpoofControlDescriptor(t *testing.T) {
+	skipSeatbeltNativeTestBinaryUnderRace(t)
+	request := seatbeltTestRequest(t)
+	request.arguments = []string{"-test.run=TestSeatbeltHelperProcess", "--", "check-extra-descriptors"}
+	var output bytes.Buffer
+	request.terminal = Terminal{Output: &output, ErrorOutput: &output}
+	process, err := newSeatbeltBackend(seatbeltExecutable).prepare(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := process.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if err := process.Wait(); err != nil {
+		t.Fatalf("descriptor probe failed: %v; output=%q", err, output.String())
+	}
+	if got := strings.TrimSpace(output.String()); got != "sealed" {
+		t.Fatalf("descriptor probe = %q, want sealed", got)
+	}
+}
+
+func TestSeatbeltHelperAttackKeepsCleanupQuarantined(t *testing.T) {
+	skipSeatbeltNativeTestBinaryUnderRace(t)
+	request := seatbeltTestRequest(t)
+	session, err := CreateSession(request.sessionsDirectory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.sessionDirectory = session.RootDir
+	request.sessionHome = filepath.Join(session.RootDir, "home")
+	request.temporaryDirectory = filepath.Join(session.RootDir, "tmp")
+	for _, directory := range []string{request.sessionHome, request.temporaryDirectory} {
+		if err := os.MkdirAll(directory, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	request.environment, err = buildProcessEnvironment(request.sessionHome, request.temporaryDirectory, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.arguments = []string{"-test.run=TestSeatbeltHelperProcess", "--", "kill-supervisor"}
+	process, err := newSeatbeltBackend(seatbeltExecutable).prepare(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	retained, err := RetainSessionUntilProcessDone(process, session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := retained.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if err := session.Remove(); err != nil {
+		t.Fatal(err)
+	}
+	if err := retained.Wait(); err == nil {
+		t.Fatal("supervisor attack unexpectedly produced cleanup proof")
+	}
+	select {
+	case <-retained.(ProcessCleanup).CleanupDone():
+		t.Fatal("supervisor death released cleanup quarantine")
+	default:
+	}
+	if _, err := os.Stat(session.RootDir); err != nil {
+		t.Fatalf("quarantined Session was released after supervisor death: %v", err)
+	}
+}
+
+func TestSeatbeltPreservesNormalAndSignalExitStatus(t *testing.T) {
+	skipSeatbeltNativeTestBinaryUnderRace(t)
+	for _, test := range []struct {
+		name        string
+		mode        string
+		exitCode    int
+		deathSignal syscall.Signal
+	}{
+		{name: "exit", mode: "exit-code", exitCode: 37},
+		{name: "signal", mode: "self-signal", deathSignal: syscall.SIGTERM},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			request := seatbeltTestRequest(t)
+			request.arguments = []string{"-test.run=TestSeatbeltHelperProcess", "--", test.mode}
+			process, err := newSeatbeltBackend(seatbeltExecutable).prepare(context.Background(), request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := process.Start(); err != nil {
+				t.Fatal(err)
+			}
+			waitErr := process.Wait()
+			var exitError *exec.ExitError
+			if !errors.As(waitErr, &exitError) {
+				t.Fatalf("Wait error = %v, want exit status", waitErr)
+			}
+			status := exitError.Sys().(syscall.WaitStatus)
+			if test.deathSignal != 0 && (!status.Signaled() || status.Signal() != test.deathSignal) {
+				t.Fatalf("signal status = %v, want %v", status, test.deathSignal)
+			}
+			if test.deathSignal == 0 && (!status.Exited() || status.ExitStatus() != test.exitCode) {
+				t.Fatalf("exit status = %v, want %d", status, test.exitCode)
+			}
+			select {
+			case <-process.(ProcessCleanup).CleanupDone():
+			default:
+				t.Fatal("valid cleanup proof did not complete cleanup")
+			}
+		})
+	}
+}
+
+func TestSeatbeltForwardsOnlyRequestedSignalToTarget(t *testing.T) {
+	skipSeatbeltNativeTestBinaryUnderRace(t)
+	request := seatbeltTestRequest(t)
+	marker := filepath.Join(request.workspace, "signal-received")
+	request.arguments = []string{"-test.run=TestSeatbeltHelperProcess", "--", "await-signal", marker}
+	process, err := newSeatbeltBackend(seatbeltExecutable).prepare(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := process.Start(); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(50 * time.Millisecond)
+	if err := process.Signal(syscall.SIGUSR1); err != nil {
+		t.Fatal(err)
+	}
+	if err := process.Wait(); err != nil {
+		t.Fatal(err)
+	}
+	if contents, err := os.ReadFile(marker); err != nil || string(contents) != "user defined signal 1" {
+		t.Fatalf("forwarded signal marker = %q, %v", contents, err)
+	}
+}
+
+func TestSeatbeltCancellationStillRequiresCleanupProof(t *testing.T) {
+	skipSeatbeltNativeTestBinaryUnderRace(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	request := seatbeltTestRequest(t)
+	request.arguments = []string{"-test.run=TestSeatbeltHelperProcess", "--", "sleep"}
+	process, err := newSeatbeltBackend(seatbeltExecutable).prepare(ctx, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := process.Start(); err != nil {
+		t.Fatal(err)
+	}
+	cancel()
+	if err := process.Wait(); err == nil {
+		t.Fatal("canceled target unexpectedly reported success")
+	}
+	select {
+	case <-process.(ProcessCleanup).CleanupDone():
+	case <-time.After(time.Second):
+		t.Fatal("canceled target did not produce cleanup proof")
+	}
+}
+
+func TestSeatbeltCleanupDoesNotCrossConcurrentIdenticalInstances(t *testing.T) {
+	skipSeatbeltNativeTestBinaryUnderRace(t)
+	firstRequest := seatbeltTestRequest(t)
+	secondRequest := seatbeltTestRequest(t)
+	firstMarker := filepath.Join(firstRequest.workspace, "first-signal")
+	secondMarker := filepath.Join(secondRequest.workspace, "second-signal")
+	firstRequest.arguments = []string{"-test.run=TestSeatbeltHelperProcess", "--", "await-signal", firstMarker}
+	secondRequest.arguments = []string{"-test.run=TestSeatbeltHelperProcess", "--", "await-signal", secondMarker}
+	first, err := newSeatbeltBackend(seatbeltExecutable).prepare(context.Background(), firstRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := newSeatbeltBackend(seatbeltExecutable).prepare(context.Background(), secondRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := first.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if err := second.Start(); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(75 * time.Millisecond)
+	if err := first.Signal(syscall.SIGUSR1); err != nil {
+		t.Fatal(err)
+	}
+	if err := first.Wait(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(secondMarker); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("first cleanup affected the concurrent instance: %v", err)
+	}
+	if err := second.Signal(syscall.SIGUSR1); err != nil {
+		t.Fatal(err)
+	}
+	if err := second.Wait(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSeatbeltCleanupDoesNotSignalUnrelatedProcess(t *testing.T) {
+	skipSeatbeltNativeTestBinaryUnderRace(t)
+	marker := filepath.Join(t.TempDir(), "outside-signal")
+	unrelated := exec.Command(os.Args[0], "-test.run=TestSeatbeltHelperProcess", "--", "await-signal", marker)
+	unrelated.Env = os.Environ()
+	if err := unrelated.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = unrelated.Process.Kill()
+		_ = unrelated.Wait()
+	})
+
+	request := seatbeltTestRequest(t)
+	request.arguments = []string{"-test.run=TestSeatbeltHelperProcess", "--", "exit-code-zero"}
+	process, err := newSeatbeltBackend(seatbeltExecutable).prepare(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := process.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if err := process.Wait(); err != nil {
+		t.Fatal(err)
+	}
+	if err := unrelated.Process.Signal(syscall.SIGUSR1); err != nil {
+		t.Fatal(err)
+	}
+	if err := unrelated.Wait(); err != nil {
+		t.Fatal(err)
+	}
+	contents, err := os.ReadFile(marker)
+	if err != nil || string(contents) != syscall.SIGUSR1.String() {
+		t.Fatalf("unrelated process marker = %q, %v", contents, err)
+	}
+}
+
+func TestSeatbeltConvergesAcrossForkingAndZombieDescendants(t *testing.T) {
+	skipSeatbeltNativeTestBinaryUnderRace(t)
+	for _, mode := range []string{"fork-churn-parent", "zombie-parent"} {
+		t.Run(mode, func(t *testing.T) {
+			request := seatbeltTestRequest(t)
+			ready := filepath.Join(request.workspace, mode+"-ready")
+			marker := filepath.Join(request.workspace, mode+"-survived")
+			request.arguments = []string{"-test.run=TestSeatbeltHelperProcess", "--", mode, ready, marker}
+			process, err := newSeatbeltBackend(seatbeltExecutable).prepare(context.Background(), request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := process.Start(); err != nil {
+				t.Fatal(err)
+			}
+			if err := process.Wait(); err != nil {
+				t.Fatal(err)
+			}
+			time.Sleep(500 * time.Millisecond)
+			if _, err := os.Stat(marker); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("descendant survived converged cleanup: %v", err)
 			}
 		})
 	}
@@ -497,6 +917,36 @@ func TestSeatbeltPreservesRawTerminalDescriptors(t *testing.T) {
 	}
 }
 
+func TestSeatbeltPreservesTerminalResize(t *testing.T) {
+	skipSeatbeltNativeTestBinaryUnderRace(t)
+	request := seatbeltTestRequest(t)
+	request.arguments = []string{"-test.run=TestSeatbeltHelperProcess", "--", "terminal-size"}
+	master, terminal, err := pty.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer master.Close()
+	defer terminal.Close()
+	if err := pty.Setsize(master, &pty.Winsize{Rows: 43, Cols: 117}); err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	request.terminal = Terminal{Input: terminal, Output: &output, ErrorOutput: &output}
+	process, err := newSeatbeltBackend(seatbeltExecutable).prepare(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := process.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if err := process.Wait(); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.TrimSpace(output.String()); got != "43x117" {
+		t.Fatalf("terminal size = %q, want 43x117", got)
+	}
+}
+
 func TestSeatbeltHelperProcess(t *testing.T) {
 	separator := -1
 	for index, argument := range os.Args {
@@ -539,6 +989,13 @@ func TestSeatbeltHelperProcess(t *testing.T) {
 		}
 		fmt.Fprintln(os.Stdout, "raw")
 		os.Exit(0)
+	case "terminal-size":
+		size, err := pty.GetsizeFull(os.Stdin)
+		if err != nil {
+			os.Exit(110)
+		}
+		fmt.Fprintf(os.Stdout, "%dx%d\n", size.Rows, size.Cols)
+		os.Exit(0)
 	case "outliving-parent":
 		child := exec.Command(os.Args[0], "-test.run=TestSeatbeltHelperProcess", "--", "delayed-descendant", arguments[1], arguments[2])
 		child.Env = os.Environ()
@@ -547,6 +1004,135 @@ func TestSeatbeltHelperProcess(t *testing.T) {
 		child.Stderr = nil
 		if err := child.Start(); err != nil {
 			os.Exit(87)
+		}
+		os.Exit(0)
+	case "process-group-escape-parent":
+		child := exec.Command(os.Args[0], "-test.run=TestSeatbeltHelperProcess", "--", "process-group-escape-child", arguments[1], arguments[2])
+		child.Env = os.Environ()
+		child.Stdin = nil
+		child.Stdout = nil
+		child.Stderr = nil
+		if err := child.Start(); err != nil {
+			os.Exit(90)
+		}
+		deadline := time.Now().Add(2 * time.Second)
+		for {
+			if _, err := os.Stat(arguments[1]); err == nil {
+				os.Exit(0)
+			}
+			if time.Now().After(deadline) {
+				os.Exit(91)
+			}
+			time.Sleep(time.Millisecond)
+		}
+	case "process-group-escape-child":
+		result := "escaped"
+		if _, err := unix.Setsid(); err != nil {
+			if !isSeatbeltPermission(err) {
+				os.Exit(92)
+			}
+			result = "denied"
+		}
+		if err := os.WriteFile(arguments[1], []byte(result), 0o600); err != nil {
+			os.Exit(93)
+		}
+		time.Sleep(300 * time.Millisecond)
+		if err := os.WriteFile(arguments[2], []byte("alive"), 0o600); err != nil {
+			os.Exit(94)
+		}
+		os.Exit(0)
+	case "resolve-hostname":
+		addresses, err := net.DefaultResolver.LookupHost(context.Background(), arguments[1])
+		if err != nil || len(addresses) == 0 {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(95)
+		}
+		fmt.Fprintln(os.Stdout, "resolved")
+		os.Exit(0)
+	case "check-extra-descriptors":
+		for fd := 3; fd < 64; fd++ {
+			if _, err := unix.FcntlInt(uintptr(fd), unix.F_GETFD, 0); err == nil {
+				fmt.Fprintf(os.Stdout, "leaked-fd-%d\n", fd)
+				os.Exit(96)
+			}
+		}
+		fmt.Fprintln(os.Stdout, "sealed")
+		os.Exit(0)
+	case "kill-supervisor":
+		if err := syscall.Kill(os.Getppid(), syscall.SIGKILL); err != nil {
+			os.Exit(97)
+		}
+		time.Sleep(20 * time.Millisecond)
+		os.Exit(0)
+	case "exit-code":
+		os.Exit(37)
+	case "exit-code-zero":
+		os.Exit(0)
+	case "self-signal":
+		signal.Reset(syscall.SIGTERM)
+		if err := syscall.Kill(os.Getpid(), syscall.SIGTERM); err != nil {
+			os.Exit(98)
+		}
+		time.Sleep(time.Second)
+		os.Exit(99)
+	case "await-signal":
+		signals := make(chan os.Signal, 1)
+		signal.Notify(signals, syscall.SIGUSR1)
+		received := <-signals
+		signal.Stop(signals)
+		if err := os.WriteFile(arguments[1], []byte(received.String()), 0o600); err != nil {
+			os.Exit(100)
+		}
+		os.Exit(0)
+	case "sleep":
+		time.Sleep(30 * time.Second)
+		os.Exit(0)
+	case "fork-churn-parent":
+		child := exec.Command(os.Args[0], "-test.run=TestSeatbeltHelperProcess", "--", "fork-churn-child", arguments[1], arguments[2])
+		child.Env = os.Environ()
+		child.Stdin, child.Stdout, child.Stderr = nil, nil, nil
+		if err := child.Start(); err != nil {
+			os.Exit(101)
+		}
+		waitForSeatbeltHelperMarker(arguments[1], 102)
+		os.Exit(0)
+	case "fork-churn-child":
+		if err := os.WriteFile(arguments[1], []byte("ready"), 0o600); err != nil {
+			os.Exit(103)
+		}
+		deadline := time.Now().Add(350 * time.Millisecond)
+		for time.Now().Before(deadline) {
+			child := exec.Command("/usr/bin/true")
+			child.Env = os.Environ()
+			_ = child.Run()
+		}
+		if err := os.WriteFile(arguments[2], []byte("alive"), 0o600); err != nil {
+			os.Exit(104)
+		}
+		os.Exit(0)
+	case "zombie-parent":
+		child := exec.Command(os.Args[0], "-test.run=TestSeatbeltHelperProcess", "--", "zombie-holder", arguments[1], arguments[2])
+		child.Env = os.Environ()
+		child.Stdin, child.Stdout, child.Stderr = nil, nil, nil
+		if err := child.Start(); err != nil {
+			os.Exit(105)
+		}
+		waitForSeatbeltHelperMarker(arguments[1], 106)
+		os.Exit(0)
+	case "zombie-holder":
+		zombie := exec.Command(os.Args[0], "-test.run=TestSeatbeltHelperProcess", "--", "exit-code-zero")
+		zombie.Env = os.Environ()
+		zombie.Stdin, zombie.Stdout, zombie.Stderr = nil, nil, nil
+		if err := zombie.Start(); err != nil {
+			os.Exit(107)
+		}
+		time.Sleep(40 * time.Millisecond)
+		if err := os.WriteFile(arguments[1], []byte("ready"), 0o600); err != nil {
+			os.Exit(108)
+		}
+		time.Sleep(350 * time.Millisecond)
+		if err := os.WriteFile(arguments[2], []byte("alive"), 0o600); err != nil {
+			os.Exit(109)
 		}
 		os.Exit(0)
 	case "delayed-descendant":
@@ -629,6 +1215,19 @@ func acceptSeatbeltTestConnection(listener net.Listener) {
 	}
 }
 
+func waitForSeatbeltHelperMarker(path string, exitCode int) {
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if _, err := os.Stat(path); err == nil {
+			return
+		}
+		if time.Now().After(deadline) {
+			os.Exit(exitCode)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
 func seatbeltTestRequest(t *testing.T) validatedProcessRequest {
 	t.Helper()
 	root, err := os.MkdirTemp("/private/tmp", "acs-seatbelt-test-")
@@ -670,4 +1269,36 @@ func newSeatbeltLifecycleTestProcess(command *exec.Cmd) *seatbeltProcess {
 	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	process := &seatbeltProcess{command: command, cleanupDone: make(chan struct{})}
 	return process
+}
+
+func seatbeltTestSocketPair(t *testing.T) (*os.File, *os.File) {
+	t.Helper()
+	descriptors, err := unix.Socketpair(unix.AF_UNIX, unix.SOCK_STREAM, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parent := os.NewFile(uintptr(descriptors[0]), "seatbelt-test-parent")
+	peer := os.NewFile(uintptr(descriptors[1]), "seatbelt-test-peer")
+	t.Cleanup(func() {
+		_ = parent.Close()
+		_ = peer.Close()
+	})
+	return parent, peer
+}
+
+type seatbeltTestEnumerator struct {
+	allErr error
+	pids   []int
+	infos  map[int]seatbeltBSDInfo
+}
+
+func (enumerator seatbeltTestEnumerator) allPIDs() ([]int, error) {
+	return enumerator.pids, enumerator.allErr
+}
+
+func (enumerator seatbeltTestEnumerator) info(pid int) (seatbeltBSDInfo, error) {
+	if info, ok := enumerator.infos[pid]; ok {
+		return info, nil
+	}
+	return seatbeltBSDInfo{}, errors.New("unexpected process inspection")
 }
