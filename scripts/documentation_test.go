@@ -167,6 +167,24 @@ func TestLinuxWorkflowsUseTheCompleteDocumentedCancelreaderException(t *testing.
 	}
 }
 
+func TestContributingDocumentsDarwinSeatbeltRaceExceptionWithoutNumericClaim(t *testing.T) {
+	contents, err := os.ReadFile(filepath.Join("..", "CONTRIBUTING.md"))
+	if err != nil {
+		t.Fatalf("read CONTRIBUTING.md: %v", err)
+	}
+	text := string(contents)
+	normalizedText := strings.ToLower(strings.Join(strings.Fields(text), " "))
+
+	if strings.Contains(text, "skip only the three Darwin tests") {
+		t.Fatal("CONTRIBUTING.md contains the inaccurate numeric Darwin Seatbelt race-test claim")
+	}
+
+	const required = "only darwin tests that require nested execution of the race-instrumented test binary inside the production seatbelt policy are skipped"
+	if !strings.Contains(normalizedText, required) {
+		t.Errorf("CONTRIBUTING.md must explain the Darwin Seatbelt race-test exception: %q", required)
+	}
+}
+
 func TestPromotedArtifactGateDeclaresExpectedSandboxCapability(t *testing.T) {
 	for _, workflow := range []string{"promoted-artifacts.yml", "release.yml"} {
 		contents, err := os.ReadFile(filepath.Join("..", ".github", "workflows", workflow))

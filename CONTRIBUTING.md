@@ -94,13 +94,14 @@ go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
 The race-test skip is only for the documented third-party Linux cancelreader
 shutdown race in the abrupt `runtime_error` and `recovered_panic` PTY cases.
 The normal suite still exercises both cases. On macOS, the ThreadSanitizer
-runtime cannot start inside the production Seatbelt policy, so standard race
-build tags skip only the three Darwin tests that execute the race-instrumented
-test binary. Policy construction, escaping, backend verification, input
-sanitization, and every test that does not require nested execution remain in
-`go test -race ./...`; the preceding non-race native suite and the installed
-promoted-artifact acceptance still exercise native containment without changing
-the production policy. Also cross-build and cross-test-compile all four
+runtime cannot start inside the production Seatbelt policy. Only Darwin tests
+that require nested execution of the race-instrumented test binary inside the
+production Seatbelt policy are skipped by standard race build tags. Policy
+construction, escaping, backend verification, input sanitization, and every
+test that does not require nested execution remain in `go test -race ./...`;
+the preceding non-race native suite and the installed promoted-artifact
+acceptance still exercise native containment without changing the production
+policy. Also cross-build and cross-test-compile all four
 Supported Release Targets and reconcile the final worktree. Native jobs, not
 cross-compilation, provide promoted-artifact acceptance evidence.
 
