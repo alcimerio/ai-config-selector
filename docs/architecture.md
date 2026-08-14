@@ -347,6 +347,9 @@ be validated; a later preparation failure removes the unused Session.
 The shared layer passes only Session-scoped HOME, XDG, and temporary paths, a
 fixed safe PATH, and validated terminal and locale values. It has no public
 backend selector, policy input, environment passthrough, or sandbox bypass.
+It also classifies process-start and non-exit wait failures at the boundary so
+backend output, generated policy, host paths, and environment values do not
+enter CLI diagnostics; ordinary child exit status remains intact.
 Native Seatbelt and Bubblewrap policy and mount implementations are separate
 backend work; until the backend for a supported host is present, interactive
 launch fails closed rather than running Devin without containment.

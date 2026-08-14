@@ -25,6 +25,8 @@ const (
 	SandboxInvalidEnvironment  SandboxErrorCategory = "invalid_environment"
 	SandboxInvalidDescriptor   SandboxErrorCategory = "invalid_descriptor"
 	SandboxSetupFailed         SandboxErrorCategory = "setup_failed"
+	SandboxProcessStartFailed  SandboxErrorCategory = "process_start_failed"
+	SandboxProcessWaitFailed   SandboxErrorCategory = "process_wait_failed"
 )
 
 // SandboxError deliberately reports only a stable category. Backend output,
@@ -45,6 +47,10 @@ func (e *SandboxError) Error() string {
 		return "process sandbox preparation failed: invalid environment"
 	case SandboxInvalidDescriptor:
 		return "process sandbox preparation failed: invalid file descriptor"
+	case SandboxProcessStartFailed:
+		return "sandboxed process failed to start"
+	case SandboxProcessWaitFailed:
+		return "sandboxed process failed while waiting"
 	default:
 		return "process sandbox preparation failed"
 	}
@@ -248,7 +254,37 @@ func (sandbox *nativeProcessSandbox) Prepare(ctx context.Context, request Proces
 		}
 		return nil, sandboxError(SandboxSetupFailed, err)
 	}
-	return process, nil
+	if process == nil {
+		return nil, sandboxError(SandboxSetupFailed, nil)
+	}
+	return sanitizedProcess{process: process}, nil
+}
+
+type sanitizedProcess struct {
+	process Process
+}
+
+func (process sanitizedProcess) Start() error {
+	if err := process.process.Start(); err != nil {
+		return sandboxError(SandboxProcessStartFailed, err)
+	}
+	return nil
+}
+
+func (process sanitizedProcess) Wait() error {
+	err := process.process.Wait()
+	if err == nil {
+		return nil
+	}
+	var exitError *exec.ExitError
+	if errors.As(err, &exitError) {
+		return err
+	}
+	return sandboxError(SandboxProcessWaitFailed, err)
+}
+
+func (process sanitizedProcess) Signal(signal os.Signal) error {
+	return process.process.Signal(signal)
 }
 
 type validatedSandboxCheck struct {

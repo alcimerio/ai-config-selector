@@ -23,7 +23,6 @@ import (
 	"github.com/alcimerio/ai-config-selector/internal/category"
 	"github.com/alcimerio/ai-config-selector/internal/cli"
 	"github.com/alcimerio/ai-config-selector/internal/launch"
-	"github.com/alcimerio/ai-config-selector/internal/launch/launchtest"
 	"github.com/alcimerio/ai-config-selector/internal/profile"
 	"github.com/alcimerio/ai-config-selector/internal/skills"
 )
@@ -223,7 +222,7 @@ func TestDryRunLoadsVersionOneProfileWithoutRewritingIt(t *testing.T) {
 
 func TestLaunchRunsPreflightBeforeInteractiveDevinAndCleansUpSession(t *testing.T) {
 	fixture := newLaunchTestFixture(t)
-	recorder := &recordingSandbox{delegate: launchtest.DirectSandbox{}}
+	recorder := &recordingSandbox{delegate: directSandbox{}}
 	fixture.sandbox = recorder
 	workingDirectory := t.TempDir()
 
@@ -1420,7 +1419,7 @@ func newLaunchTestFixture(t *testing.T) launchTestFixture {
 		existingHome:      existingHome,
 		profiles:          profiles,
 		sessionsDirectory: filepath.Join(acsHome, "sessions"),
-		sandbox:           launchtest.DirectSandbox{},
+		sandbox:           directSandbox{},
 	}
 }
 
@@ -1433,7 +1432,7 @@ func (fixture launchTestFixture) application(
 	errorOutput io.Writer,
 ) cli.App {
 	t.Helper()
-	adapter, err := devin.New(devin.Config{BinaryPath: binaryPath, ExistingHomeDir: fixture.existingHome, Sandbox: fixture.sandbox})
+	adapter, err := newAdapterWithSandbox(devin.Config{BinaryPath: binaryPath, ExistingHomeDir: fixture.existingHome}, fixture.sandbox)
 	if err != nil {
 		t.Fatal(err)
 	}

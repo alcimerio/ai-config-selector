@@ -66,7 +66,6 @@ func ProjectSourceDirectories() []string {
 type Config struct {
 	BinaryPath      string
 	ExistingHomeDir string
-	Sandbox         launch.ProcessSandbox
 	RuntimeInputs   []string
 }
 
@@ -97,6 +96,12 @@ type Session struct {
 }
 
 func New(config Config) (*Adapter, error) {
+	return newAdapter(config, launch.NewProcessSandbox())
+}
+
+// newAdapter is the package-private assembly seam. Production callers always
+// receive the fail-closed native sandbox from New.
+func newAdapter(config Config, sandbox launch.ProcessSandbox) (*Adapter, error) {
 	if config.BinaryPath == "" {
 		return nil, errors.New("create Devin Adapter: binary path is required")
 	}
@@ -106,11 +111,11 @@ func New(config Config) (*Adapter, error) {
 	adapter := &Adapter{
 		binaryPath:      config.BinaryPath,
 		existingHomeDir: filepath.Clean(config.ExistingHomeDir),
-		sandbox:         config.Sandbox,
+		sandbox:         sandbox,
 		runtimeInputs:   append([]string(nil), config.RuntimeInputs...),
 	}
 	if adapter.sandbox == nil {
-		adapter.sandbox = launch.NewProcessSandbox()
+		return nil, errors.New("create Devin Adapter: process sandbox is required")
 	}
 	registry, binding, err := newCategoryRegistry(adapter)
 	if err != nil {

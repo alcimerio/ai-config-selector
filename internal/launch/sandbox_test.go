@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"runtime"
@@ -281,6 +282,66 @@ func TestProcessSandboxSanitizesBackendFailures(t *testing.T) {
 	}
 }
 
+func TestPreparedProcessSanitizesStartAndNonExitWaitFailures(t *testing.T) {
+	secret := filepath.Join(t.TempDir(), "PRIVATE_EXECUTABLE")
+	request := validProcessRequest(t)
+	tests := []struct {
+		name    string
+		process Process
+		invoke  func(Process) error
+		want    SandboxErrorCategory
+	}{
+		{
+			name:    "start",
+			process: &stubLifecycleProcess{startErr: errors.New("start " + secret + " ENV=PRIVATE_VALUE")},
+			invoke:  func(process Process) error { return process.Start() },
+			want:    SandboxProcessStartFailed,
+		},
+		{
+			name:    "wait",
+			process: &stubLifecycleProcess{waitErr: errors.New("wait " + secret + " policy=(allow file-read*)")},
+			invoke:  func(process Process) error { return process.Wait() },
+			want:    SandboxProcessWaitFailed,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			backend := &capturingBackend{process: test.process}
+			sandbox := newNativeProcessSandbox(
+				func() (Platform, error) { return Platform{OS: "darwin", Architecture: "arm64", Release: "26.1"}, nil },
+				map[string]sandboxBackend{"darwin": backend},
+			)
+			process, err := sandbox.Prepare(context.Background(), request)
+			if err != nil {
+				t.Fatalf("Prepare: %v", err)
+			}
+			err = test.invoke(process)
+			assertSandboxCategory(t, err, test.want)
+			for _, private := range []string{secret, "PRIVATE_EXECUTABLE", "PRIVATE_VALUE", "policy"} {
+				if strings.Contains(err.Error(), private) {
+					t.Fatalf("process lifecycle error leaked %q: %v", private, err)
+				}
+			}
+		})
+	}
+}
+
+func TestPreparedProcessPreservesChildExitStatus(t *testing.T) {
+	exitError := &exec.ExitError{}
+	backend := &capturingBackend{process: &stubLifecycleProcess{waitErr: exitError}}
+	sandbox := newNativeProcessSandbox(
+		func() (Platform, error) { return Platform{OS: "darwin", Architecture: "arm64", Release: "26.1"}, nil },
+		map[string]sandboxBackend{"darwin": backend},
+	)
+	process, err := sandbox.Prepare(context.Background(), validProcessRequest(t))
+	if err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	if err := process.Wait(); err != exitError {
+		t.Fatalf("Wait error = %T %v, want original child exit error", err, err)
+	}
+}
+
 func TestCurrentPlatformMatchesRuntimeFamily(t *testing.T) {
 	platform, err := CurrentPlatform()
 	if err != nil {
@@ -305,11 +366,15 @@ func assertSandboxCategory(t *testing.T, err error, want SandboxErrorCategory) {
 type capturingBackend struct {
 	checkErr error
 	request  validatedProcessRequest
+	process  Process
 }
 
 func (backend *capturingBackend) check(context.Context) error { return backend.checkErr }
 func (backend *capturingBackend) prepare(_ context.Context, request validatedProcessRequest) (Process, error) {
 	backend.request = request
+	if backend.process != nil {
+		return backend.process, nil
+	}
 	return stubProcess{}, nil
 }
 
@@ -318,3 +383,35 @@ type stubProcess struct{}
 func (stubProcess) Start() error           { return nil }
 func (stubProcess) Wait() error            { return nil }
 func (stubProcess) Signal(os.Signal) error { return nil }
+
+type stubLifecycleProcess struct {
+	startErr error
+	waitErr  error
+}
+
+func (process *stubLifecycleProcess) Start() error           { return process.startErr }
+func (process *stubLifecycleProcess) Wait() error            { return process.waitErr }
+func (process *stubLifecycleProcess) Signal(os.Signal) error { return nil }
+
+func validProcessRequest(t *testing.T) ProcessRequest {
+	t.Helper()
+	root := t.TempDir()
+	workspace := filepath.Join(root, "workspace")
+	sessions := filepath.Join(root, "sessions")
+	session := filepath.Join(sessions, "session-one")
+	home := filepath.Join(session, "home")
+	temporary := filepath.Join(session, "tmp")
+	executable := filepath.Join(root, "devin")
+	for _, directory := range []string{workspace, home, temporary} {
+		if err := os.MkdirAll(directory, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(executable, []byte("#!/bin/sh\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return ProcessRequest{
+		Workspace: workspace, SessionsDirectory: sessions, SessionDirectory: session,
+		SessionHome: home, TemporaryDirectory: temporary, Executable: executable,
+	}
+}

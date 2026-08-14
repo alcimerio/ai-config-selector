@@ -1,5 +1,4 @@
-// Package launchtest provides test-only Process Sandbox implementations.
-package launchtest
+package devin
 
 import (
 	"context"
@@ -14,21 +13,19 @@ import (
 	"github.com/alcimerio/ai-config-selector/internal/launch"
 )
 
-// DirectSandbox runs fixture commands directly. Production assembly never
-// imports this package.
-type DirectSandbox struct{}
+type directSandbox struct{}
 
-func (DirectSandbox) Check(_ context.Context, request launch.SandboxCheck) error {
+func (directSandbox) Check(_ context.Context, request launch.SandboxCheck) error {
 	if request.Workspace == "" || request.Executable == "" || request.SessionsDirectory == "" {
 		return &launch.SandboxError{Category: launch.SandboxUnsafePath}
 	}
 	return nil
 }
 
-func (DirectSandbox) Prepare(ctx context.Context, request launch.ProcessRequest) (launch.Process, error) {
+func (directSandbox) Prepare(ctx context.Context, request launch.ProcessRequest) (launch.Process, error) {
 	command := exec.CommandContext(ctx, request.Executable, request.Arguments...)
 	command.Dir = request.Workspace
-	command.Env = directEnvironment(request.SessionHome, request.TemporaryDirectory)
+	command.Env = directTestEnvironment(request.SessionHome, request.TemporaryDirectory)
 	command.Stdin = request.Terminal.Input
 	command.Stdout = request.Terminal.Output
 	command.Stderr = request.Terminal.ErrorOutput
@@ -48,7 +45,7 @@ func (DirectSandbox) Prepare(ctx context.Context, request launch.ProcessRequest)
 	return &directProcess{command: command}, nil
 }
 
-func directEnvironment(home, temporaryDirectory string) []string {
+func directTestEnvironment(home, temporaryDirectory string) []string {
 	overrides := map[string]string{
 		"HOME": home, "TMPDIR": temporaryDirectory,
 		"XDG_CONFIG_HOME": filepath.Join(home, ".config"),

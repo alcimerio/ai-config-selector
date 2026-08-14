@@ -113,28 +113,28 @@ func TestPromotedArtifactDryRunAndFakeDevinLaunchPreserveTheRuntimeBoundary(t *t
 	eventsPath := filepath.Join(fixtureRoot, "events")
 	writeFakeDevin(t, filepath.Join(toolsDirectory, "devin"), `#!/bin/sh
 if [ "$1" = "skills" ]; then
-  printf 'preflight-skills:%s\n' "$HOME" >> "$FAKE_DEVIN_EVENTS"
+  printf 'preflight-skills:%s\n' "$HOME" >> ./events
   printf '[{"name":"review","provider":"Devin","base_dir":"%s"}]\n' "$HOME/.config/devin/skills/review"
   exit 0
 fi
 if [ "$1" = "auth" ]; then
-  printf 'preflight-auth:%s\n' "$HOME" >> "$FAKE_DEVIN_EVENTS"
+  printf 'preflight-auth:%s\n' "$HOME" >> ./events
   [ -f "$HOME/.local/share/devin/credentials.toml" ] || exit 65
-  if [ "${FAKE_DEVIN_AUTH_FAIL:-0}" = 1 ]; then
+  if [ -f ./auth-fail ]; then
     printf 'token=DO_NOT_LEAK\n' >&2
     exit 66
   fi
   printf 'Logged in (fixture).\n'
   exit 0
 fi
-printf 'launch:%s:%s\n' "$HOME" "$#" >> "$FAKE_DEVIN_EVENTS"
+printf 'launch:%s:%s\n' "$HOME" "$#" >> ./events
 IFS= read -r line
 printf 'fake stdout:%s\n' "$line"
 printf 'fake stderr:%s\n' "$line" >&2
 exit 23
 `)
 	path := toolsDirectory + string(os.PathListSeparator) + basePath
-	environment := append(promotedEnvironment(home, path), "FAKE_DEVIN_EVENTS="+eventsPath)
+	environment := promotedEnvironment(home, path)
 
 	dryRun := exec.Command(binary, "devin", "--profile", "reviews", "--dry-run")
 	dryRun.Env = environment
@@ -191,8 +191,11 @@ exit 23
 		if err := os.Remove(eventsPath); err != nil {
 			t.Fatal(err)
 		}
+		if err := os.WriteFile(filepath.Join(fixtureRoot, "auth-fail"), []byte("fail\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
 		failed := exec.Command(binary, "devin", "--profile", "reviews")
-		failed.Env = append(environment, "FAKE_DEVIN_AUTH_FAIL=1")
+		failed.Env = environment
 		failed.Dir = fixtureRoot
 		output, err := failed.CombinedOutput()
 		if err == nil {
@@ -221,12 +224,11 @@ func TestPromotedArtifactForwardsSignalsAndPreservesConcurrentSessionLeases(t *t
 	t.Run("signal forwarding", func(t *testing.T) {
 		for _, test := range []struct {
 			name       string
-			mode       string
 			signal     os.Signal
 			wantExit   int
 			wantRecord string
 		}{
-			{name: "termination", mode: "signal", signal: syscall.SIGTERM, wantExit: 42, wantRecord: "SIGTERM\n"},
+			{name: "termination", signal: syscall.SIGTERM, wantExit: 42, wantRecord: "SIGTERM\n"},
 		} {
 			t.Run(test.name, func(t *testing.T) {
 				home, path := prepareRuntimeHome(t)
@@ -238,27 +240,11 @@ func TestPromotedArtifactForwardsSignalsAndPreservesConcurrentSessionLeases(t *t
 				readyPath := filepath.Join(fixtureRoot, "ready")
 				recordPath := filepath.Join(fixtureRoot, "record")
 				writeFakeDevin(t, filepath.Join(toolsDirectory, "devin"), successfulFakeDevin(`
-case "$FAKE_DEVIN_MODE" in
-  signal)
-    trap 'printf "SIGTERM\n" > "$FAKE_DEVIN_RECORD"; exit 42' TERM
-    touch "$FAKE_DEVIN_READY"
-    while :; do sleep 1; done
-    ;;
-  resize)
-    trap 'printf "SIGWINCH\n" > "$FAKE_DEVIN_RECORD"' WINCH
-    touch "$FAKE_DEVIN_READY"
-    while [ ! -e "$FAKE_DEVIN_RECORD" ]; do sleep 0.05; done
-    exit 0
-    ;;
-esac
-exit 64
+trap 'printf "SIGTERM\n" > ./record; exit 42' TERM
+touch ./ready
+while :; do sleep 1; done
 `))
-				environment := append(
-					promotedEnvironment(home, toolsDirectory+string(os.PathListSeparator)+path),
-					"FAKE_DEVIN_MODE="+test.mode,
-					"FAKE_DEVIN_READY="+readyPath,
-					"FAKE_DEVIN_RECORD="+recordPath,
-				)
+				environment := promotedEnvironment(home, toolsDirectory+string(os.PathListSeparator)+path)
 				command := exec.Command(binary, "devin", "--profile", "reviews")
 				command.Env = environment
 				command.Dir = fixtureRoot
@@ -298,16 +284,12 @@ exit 64
 		readyPath := filepath.Join(fixtureRoot, "ready")
 		recordPath := filepath.Join(fixtureRoot, "resize")
 		writeFakeDevin(t, filepath.Join(toolsDirectory, "devin"), successfulFakeDevin(`
-trap 'stty size > "$FAKE_DEVIN_RESIZE"' WINCH
-touch "$FAKE_DEVIN_READY"
-while [ ! -e "$FAKE_DEVIN_RESIZE" ]; do sleep 0.05; done
+trap 'stty size > ./resize' WINCH
+touch ./ready
+while [ ! -e ./resize ]; do sleep 0.05; done
 exit 0
 `))
-		environment := append(
-			promotedEnvironment(home, toolsDirectory+string(os.PathListSeparator)+path),
-			"FAKE_DEVIN_READY="+readyPath,
-			"FAKE_DEVIN_RESIZE="+recordPath,
-		)
+		environment := promotedEnvironment(home, toolsDirectory+string(os.PathListSeparator)+path)
 
 		master, terminal, err := pty.Open()
 		if err != nil {
@@ -375,22 +357,16 @@ exit 0
 		if err := os.Mkdir(toolsDirectory, 0o700); err != nil {
 			t.Fatal(err)
 		}
-		claimPath := filepath.Join(fixtureRoot, "claim")
 		readyPath := filepath.Join(fixtureRoot, "first-ready")
 		releasePath := filepath.Join(fixtureRoot, "release-first")
 		writeFakeDevin(t, filepath.Join(toolsDirectory, "devin"), successfulFakeDevin(`
-if mkdir "$FAKE_DEVIN_CLAIM" 2>/dev/null; then
-  printf '%s\n' "$HOME" > "$FAKE_DEVIN_READY"
-  while [ ! -e "$FAKE_DEVIN_RELEASE" ]; do sleep 0.05; done
+if mkdir ./claim 2>/dev/null; then
+  printf '%s\n' "$HOME" > ./first-ready
+  while [ ! -e ./release-first ]; do sleep 0.05; done
 fi
 exit 0
 `))
-		environment := append(
-			promotedEnvironment(home, toolsDirectory+string(os.PathListSeparator)+path),
-			"FAKE_DEVIN_CLAIM="+claimPath,
-			"FAKE_DEVIN_READY="+readyPath,
-			"FAKE_DEVIN_RELEASE="+releasePath,
-		)
+		environment := promotedEnvironment(home, toolsDirectory+string(os.PathListSeparator)+path)
 		newCommand := func() (*exec.Cmd, *bytes.Buffer) {
 			command := exec.Command(binary, "devin", "--profile", "reviews")
 			command.Env = environment
