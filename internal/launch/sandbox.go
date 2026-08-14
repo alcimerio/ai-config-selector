@@ -78,7 +78,7 @@ func bubblewrapUnavailable() error {
 func bubblewrapCapabilityUnavailable() error {
 	return &SandboxError{
 		Category:    SandboxBackendUnavailable,
-		remediation: "review and enable the targeted AppArmor bwrap user-namespace profile for /usr/bin/bwrap",
+		remediation: "review and enable the targeted AppArmor 'bwrap-userns-restrict' profile for /usr/bin/bwrap",
 	}
 }
 
