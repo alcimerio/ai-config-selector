@@ -34,6 +34,7 @@ type seatbeltCleanupProof struct {
 	Version         int    `json:"version"`
 	Challenge       string `json:"challenge"`
 	ZeroLiveTargets bool   `json:"zero_live_targets"`
+	NoTargetStarted bool   `json:"no_target_started,omitempty"`
 	TargetExited    bool   `json:"target_exited"`
 	TargetExitCode  int    `json:"target_exit_code,omitempty"`
 	TargetSignal    int    `json:"target_signal,omitempty"`
@@ -63,7 +64,7 @@ func runSeatbeltSupervisor(controlFD int, target string, arguments []string) int
 	}
 	api, err := loadSeatbeltProcAPI()
 	if err != nil {
-		return 125
+		return seatbeltNoTargetFailure(control, challenge)
 	}
 
 	command := exec.Command(target, arguments...)
@@ -79,7 +80,7 @@ func runSeatbeltSupervisor(controlFD int, target string, arguments []string) int
 		command.SysProcAttr.Ctty = terminalFD
 	}
 	if err := command.Start(); err != nil {
-		return 125
+		return seatbeltNoTargetFailure(control, challenge)
 	}
 	targetPID := command.Process.Pid
 	targetGroup := targetPID
@@ -139,6 +140,17 @@ func runSeatbeltSupervisor(controlFD int, target string, arguments []string) int
 	}
 	if proof.TargetExited {
 		return proof.TargetExitCode
+	}
+	return 125
+}
+
+func seatbeltNoTargetFailure(control *os.File, challenge []byte) int {
+	proof := seatbeltCleanupProof{
+		Magic: seatbeltProofMagic, Version: seatbeltProofVersion,
+		Challenge: hex.EncodeToString(challenge), ZeroLiveTargets: true, NoTargetStarted: true,
+	}
+	if err := json.NewEncoder(control).Encode(proof); err != nil {
+		return 125
 	}
 	return 125
 }
@@ -436,6 +448,12 @@ func validateSeatbeltCleanupProof(data, challenge []byte) error {
 	}
 	if proof.Magic != seatbeltProofMagic || proof.Version != seatbeltProofVersion || !proof.ZeroLiveTargets {
 		return errors.New("negative Seatbelt cleanup proof")
+	}
+	if proof.NoTargetStarted {
+		if proof.TargetExited || proof.TargetExitCode != 0 || proof.TargetSignal != 0 {
+			return errors.New("invalid Seatbelt no-target proof")
+		}
+		return nil
 	}
 	if proof.TargetExited == (proof.TargetSignal != 0) || proof.TargetExitCode < 0 || proof.TargetExitCode > 255 || proof.TargetSignal < 0 || proof.TargetSignal > 127 {
 		return errors.New("invalid Seatbelt target status proof")

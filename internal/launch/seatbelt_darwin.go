@@ -207,16 +207,16 @@ func (process *seatbeltProcess) Start() error {
 	}
 	if err == nil && process.supervised {
 		if writeErr := process.writeControl(process.challenge); writeErr != nil {
+			process.closeControl()
 			process.quarantineUnprovenCleanup()
-			return sandboxError(SandboxProcessStartFailed, writeErr)
+			process.reapStartedSupervisor()
+			return errors.Join(sandboxError(SandboxProcessStartFailed, writeErr), process.restoreForegroundTerminal())
 		}
 	}
 	if err == nil {
 		return nil
 	}
-	if process.control != nil {
-		_ = process.control.Close()
-	}
+	process.closeControl()
 	process.markCleanupDone()
 	return errors.Join(err, process.restoreForegroundTerminal())
 }
@@ -297,6 +297,17 @@ func matchSeatbeltProofStatus(data []byte, waitErr error) error {
 	var proof seatbeltCleanupProof
 	if err := json.Unmarshal(data, &proof); err != nil {
 		return errors.New("decode Seatbelt target status proof")
+	}
+	if proof.NoTargetStarted {
+		exitError, ok := waitErr.(*exec.ExitError)
+		if !ok {
+			return errors.New("Seatbelt no-target proof requires a supervisor exit status")
+		}
+		status, ok := exitError.Sys().(syscall.WaitStatus)
+		if !ok || !status.Exited() || status.ExitStatus() != 125 {
+			return errors.New("Seatbelt no-target proof does not match supervisor status")
+		}
+		return nil
 	}
 	if waitErr == nil {
 		if proof.TargetExited && proof.TargetExitCode == 0 {
@@ -411,6 +422,22 @@ func (process *seatbeltProcess) writeControl(data []byte) error {
 		data = data[written:]
 	}
 	return nil
+}
+
+func (process *seatbeltProcess) closeControl() {
+	process.controlMutex.Lock()
+	defer process.controlMutex.Unlock()
+	if process.control != nil {
+		_ = process.control.Close()
+	}
+}
+
+func (process *seatbeltProcess) reapStartedSupervisor() {
+	waitDone := make(chan error, 1)
+	process.retainLeaderWait(waitDone)
+	go func() {
+		waitDone <- process.command.Wait()
+	}()
 }
 
 func (process *seatbeltProcess) stableProcessGroup() int {

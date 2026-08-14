@@ -5,6 +5,7 @@ package launch
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -197,22 +198,28 @@ func TestSeatbeltRejectsMalformedMissingAndSpoofedCleanupProof(t *testing.T) {
 	validWrongChallenge, err := json.Marshal(seatbeltCleanupProof{
 		Magic: seatbeltProofMagic, Version: seatbeltProofVersion,
 		Challenge:       strings.Repeat("00", seatbeltChallengeSize),
-		ZeroLiveTargets: true, TargetExited: true,
+		ZeroLiveTargets: true, NoTargetStarted: true,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, test := range []struct {
 		name     string
+		command  *exec.Cmd
 		response []byte
 	}{
 		{name: "missing"},
 		{name: "malformed", response: []byte("not-json\n")},
 		{name: "spoofed", response: append(validWrongChallenge, '\n')},
+		{name: "raw-status-125", command: exec.Command("/bin/sh", "-c", "exit 125")},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			parent, peer := seatbeltTestSocketPair(t)
-			process := newSeatbeltLifecycleTestProcess(exec.Command("/usr/bin/true"))
+			command := test.command
+			if command == nil {
+				command = exec.Command("/usr/bin/true")
+			}
+			process := newSeatbeltLifecycleTestProcess(command)
 			process.supervised = true
 			process.control = parent
 			process.challenge = append([]byte(nil), challenge...)
@@ -235,6 +242,197 @@ func TestSeatbeltRejectsMalformedMissingAndSpoofedCleanupProof(t *testing.T) {
 			default:
 			}
 		})
+	}
+}
+
+func TestSeatbeltSupervisorProvesPreTargetStartFailure(t *testing.T) {
+	control, peer := seatbeltTestSocketPair(t)
+	supervisorFD, err := unix.Dup(int(peer.Fd()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := peer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	challenge := bytes.Repeat([]byte{0x6b}, seatbeltChallengeSize)
+	result := make(chan int, 1)
+	go func() {
+		result <- runSeatbeltSupervisor(supervisorFD, filepath.Join(t.TempDir(), "missing-target"), nil)
+	}()
+	if _, err := control.Write(challenge); err != nil {
+		t.Fatal(err)
+	}
+	proof, err := io.ReadAll(control)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status := <-result; status != 125 {
+		t.Fatalf("pre-target supervisor status = %d, want 125", status)
+	}
+	if err := validateSeatbeltCleanupProof(proof, challenge); err != nil {
+		t.Fatalf("pre-target proof = %q, want valid: %v", proof, err)
+	}
+	var decoded seatbeltCleanupProof
+	if err := json.Unmarshal(proof, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if !decoded.NoTargetStarted || decoded.TargetExited || decoded.TargetExitCode != 0 || decoded.TargetSignal != 0 {
+		t.Fatalf("pre-target proof = %#v, want an explicit no-target result", decoded)
+	}
+	if err := matchSeatbeltProofStatus(proof, seatbeltTestExitStatus(t, 125)); err != nil {
+		t.Fatalf("pre-target status match = %v, want success", err)
+	}
+}
+
+func TestSeatbeltRejectsSpoofedPreTargetProof(t *testing.T) {
+	challenge := bytes.Repeat([]byte{0x37}, seatbeltChallengeSize)
+	for _, test := range []struct {
+		name  string
+		proof seatbeltCleanupProof
+	}{
+		{
+			name: "target-status",
+			proof: seatbeltCleanupProof{
+				Magic: seatbeltProofMagic, Version: seatbeltProofVersion,
+				Challenge: hex.EncodeToString(challenge), ZeroLiveTargets: true,
+				NoTargetStarted: true, TargetExited: true,
+			},
+		},
+		{
+			name: "target-exit-code",
+			proof: seatbeltCleanupProof{
+				Magic: seatbeltProofMagic, Version: seatbeltProofVersion,
+				Challenge: hex.EncodeToString(challenge), ZeroLiveTargets: true,
+				NoTargetStarted: true, TargetExitCode: 125,
+			},
+		},
+		{
+			name: "wrong-challenge",
+			proof: seatbeltCleanupProof{
+				Magic: seatbeltProofMagic, Version: seatbeltProofVersion,
+				Challenge: strings.Repeat("00", seatbeltChallengeSize), ZeroLiveTargets: true,
+				NoTargetStarted: true,
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			data, err := json.Marshal(test.proof)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := validateSeatbeltCleanupProof(data, challenge); err == nil {
+				t.Fatalf("spoofed pre-target proof %q unexpectedly validated", data)
+			}
+		})
+	}
+	valid, err := json.Marshal(seatbeltCleanupProof{
+		Magic: seatbeltProofMagic, Version: seatbeltProofVersion,
+		Challenge: hex.EncodeToString(challenge), ZeroLiveTargets: true, NoTargetStarted: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := matchSeatbeltProofStatus(valid, seatbeltTestExitStatus(t, 124)); err == nil {
+		t.Fatal("pre-target proof accepted a supervisor status other than 125")
+	}
+}
+
+func TestSeatbeltAuthenticatedPreTargetFailureReleasesSession(t *testing.T) {
+	skipSeatbeltNativeTestBinaryUnderRace(t)
+	request := seatbeltTestRequest(t)
+	session, err := CreateSession(request.sessionsDirectory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.sessionDirectory = session.RootDir
+	request.sessionHome = filepath.Join(session.RootDir, "home")
+	request.temporaryDirectory = filepath.Join(session.RootDir, "tmp")
+	for _, directory := range []string{request.sessionHome, request.temporaryDirectory} {
+		if err := os.MkdirAll(directory, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	request.environment, err = buildProcessEnvironment(request.sessionHome, request.temporaryDirectory, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.executable = filepath.Join(t.TempDir(), "missing-target")
+	process, err := newSeatbeltBackend(seatbeltExecutable).prepare(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	retained, err := RetainSessionUntilProcessDone(process, session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := retained.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if err := session.Remove(); err != nil {
+		t.Fatal(err)
+	}
+	waitErr := retained.Wait()
+	if waitErr == nil {
+		t.Fatal("trusted pre-target failure unexpectedly reported success")
+	}
+	var exitError *exec.ExitError
+	if !errors.As(waitErr, &exitError) {
+		t.Fatalf("pre-target Wait error = %v, want exit status 125", waitErr)
+	}
+	status, ok := exitError.Sys().(syscall.WaitStatus)
+	if !ok || !status.Exited() || status.ExitStatus() != 125 {
+		t.Fatalf("pre-target Wait status = %v, want exit 125", exitError.Sys())
+	}
+	select {
+	case <-retained.(ProcessCleanup).CleanupDone():
+	case <-time.After(time.Second):
+		t.Fatal("trusted pre-target proof did not complete cleanup")
+	}
+	seatbeltRequireSessionRemoved(t, session.RootDir)
+}
+
+func TestSeatbeltControlWriteFailureReapsStartedSupervisorButKeepsSessionQuarantined(t *testing.T) {
+	session, err := CreateSession(filepath.Join(t.TempDir(), "sessions"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	parent, peer := seatbeltTestSocketPair(t)
+	if err := peer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	process := newSeatbeltLifecycleTestProcess(exec.Command("/usr/bin/true"))
+	process.supervised = true
+	process.control = parent
+	process.challenge = bytes.Repeat([]byte{0xc4}, seatbeltChallengeSize)
+	retained, err := RetainSessionUntilProcessDone(process, session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	startErr := retained.Start()
+	assertSandboxCategory(t, startErr, SandboxProcessStartFailed)
+	if err := session.Remove(); err != nil {
+		t.Fatal(err)
+	}
+	reaped := make(chan struct{})
+	go func() {
+		process.awaitRetainedLeader()
+		close(reaped)
+	}()
+	select {
+	case <-reaped:
+	case <-time.After(time.Second):
+		t.Fatal("started supervisor was not reaped after control write failure")
+	}
+	if process.command.ProcessState == nil {
+		t.Fatal("started supervisor lacks a reaped process state")
+	}
+	select {
+	case <-retained.(ProcessCleanup).CleanupDone():
+		t.Fatal("control write failure released the cleanup quarantine")
+	default:
+	}
+	if _, err := os.Stat(session.RootDir); err != nil {
+		t.Fatalf("quarantined control-write failure released Session: %v", err)
 	}
 }
 
@@ -405,7 +603,8 @@ func TestSeatbeltForwardsOnlyRequestedSignalToTarget(t *testing.T) {
 	skipSeatbeltNativeTestBinaryUnderRace(t)
 	request := seatbeltTestRequest(t)
 	marker := filepath.Join(request.workspace, "signal-received")
-	request.arguments = []string{"-test.run=TestSeatbeltHelperProcess", "--", "await-signal", marker}
+	ready := filepath.Join(request.workspace, "signal-ready")
+	request.arguments = []string{"-test.run=TestSeatbeltHelperProcess", "--", "await-signal", marker, ready}
 	process, err := newSeatbeltBackend(seatbeltExecutable).prepare(context.Background(), request)
 	if err != nil {
 		t.Fatal(err)
@@ -413,7 +612,7 @@ func TestSeatbeltForwardsOnlyRequestedSignalToTarget(t *testing.T) {
 	if err := process.Start(); err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(50 * time.Millisecond)
+	seatbeltWaitForMarker(t, ready)
 	if err := process.Signal(syscall.SIGUSR1); err != nil {
 		t.Fatal(err)
 	}
@@ -454,8 +653,10 @@ func TestSeatbeltCleanupDoesNotCrossConcurrentIdenticalInstances(t *testing.T) {
 	secondRequest := seatbeltTestRequest(t)
 	firstMarker := filepath.Join(firstRequest.workspace, "first-signal")
 	secondMarker := filepath.Join(secondRequest.workspace, "second-signal")
-	firstRequest.arguments = []string{"-test.run=TestSeatbeltHelperProcess", "--", "await-signal", firstMarker}
-	secondRequest.arguments = []string{"-test.run=TestSeatbeltHelperProcess", "--", "await-signal", secondMarker}
+	firstReady := filepath.Join(firstRequest.workspace, "first-signal-ready")
+	secondReady := filepath.Join(secondRequest.workspace, "second-signal-ready")
+	firstRequest.arguments = []string{"-test.run=TestSeatbeltHelperProcess", "--", "await-signal", firstMarker, firstReady}
+	secondRequest.arguments = []string{"-test.run=TestSeatbeltHelperProcess", "--", "await-signal", secondMarker, secondReady}
 	first, err := newSeatbeltBackend(seatbeltExecutable).prepare(context.Background(), firstRequest)
 	if err != nil {
 		t.Fatal(err)
@@ -470,7 +671,8 @@ func TestSeatbeltCleanupDoesNotCrossConcurrentIdenticalInstances(t *testing.T) {
 	if err := second.Start(); err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(75 * time.Millisecond)
+	seatbeltWaitForMarker(t, firstReady)
+	seatbeltWaitForMarker(t, secondReady)
 	if err := first.Signal(syscall.SIGUSR1); err != nil {
 		t.Fatal(err)
 	}
@@ -491,11 +693,13 @@ func TestSeatbeltCleanupDoesNotCrossConcurrentIdenticalInstances(t *testing.T) {
 func TestSeatbeltCleanupDoesNotSignalUnrelatedProcess(t *testing.T) {
 	skipSeatbeltNativeTestBinaryUnderRace(t)
 	marker := filepath.Join(t.TempDir(), "outside-signal")
-	unrelated := exec.Command(os.Args[0], "-test.run=TestSeatbeltHelperProcess", "--", "await-signal", marker)
+	ready := filepath.Join(t.TempDir(), "outside-signal-ready")
+	unrelated := exec.Command(os.Args[0], "-test.run=TestSeatbeltHelperProcess", "--", "await-signal", marker, ready)
 	unrelated.Env = os.Environ()
 	if err := unrelated.Start(); err != nil {
 		t.Fatal(err)
 	}
+	seatbeltWaitForMarker(t, ready)
 	t.Cleanup(func() {
 		_ = unrelated.Process.Kill()
 		_ = unrelated.Wait()
@@ -1078,10 +1282,15 @@ func TestSeatbeltHelperProcess(t *testing.T) {
 	case "await-signal":
 		signals := make(chan os.Signal, 1)
 		signal.Notify(signals, syscall.SIGUSR1)
+		if len(arguments) > 2 {
+			if err := os.WriteFile(arguments[2], []byte("ready"), 0o600); err != nil {
+				os.Exit(100)
+			}
+		}
 		received := <-signals
 		signal.Stop(signals)
 		if err := os.WriteFile(arguments[1], []byte(received.String()), 0o600); err != nil {
-			os.Exit(100)
+			os.Exit(101)
 		}
 		os.Exit(0)
 	case "sleep":
@@ -1223,6 +1432,45 @@ func waitForSeatbeltHelperMarker(path string, exitCode int) {
 		}
 		if time.Now().After(deadline) {
 			os.Exit(exitCode)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+func seatbeltWaitForMarker(t *testing.T, path string) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if _, err := os.Stat(path); err == nil {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for Seatbelt helper marker %q", path)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+func seatbeltTestExitStatus(t *testing.T, status int) error {
+	t.Helper()
+	command := exec.Command("/bin/sh", "-c", fmt.Sprintf("exit %d", status))
+	err := command.Run()
+	if err == nil {
+		t.Fatalf("exit %d command unexpectedly succeeded", status)
+	}
+	return err
+}
+
+func seatbeltRequireSessionRemoved(t *testing.T, root string) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for {
+		_, err := os.Stat(root)
+		if errors.Is(err, os.ErrNotExist) {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("Session remained after authenticated cleanup: %v", err)
 		}
 		time.Sleep(time.Millisecond)
 	}

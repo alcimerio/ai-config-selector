@@ -380,13 +380,16 @@ nonconvergence produce no cleanup proof.
 
 The outer ACS releases the Session reference only after it receives a
 versioned proof containing its random challenge, a zero-live-target result,
-and a target status matching the supervisor exit. Missing, malformed,
-unauthenticated, timed-out, or negative proof leaves the cleanup barrier and
-Session permanently quarantined. Same-instance signal authorization is
-symmetric, so a hostile target can kill its supervisor; that attack therefore
-sacrifices cleanup availability but cannot manufacture proof or release the
-Session. Durable recovery of an abandoned quarantine after ACS itself exits is
-outside this lifecycle boundary.
+and a target status matching the supervisor exit. A supervisor that received
+the challenge but cannot start a target may instead return the authenticated
+no-target result with its reserved status 125; that result safely releases the
+unused Session. Missing, malformed, unauthenticated, timed-out, raw status
+125, or negative proof leaves the cleanup barrier and Session permanently
+quarantined. Same-instance signal authorization is symmetric, so a hostile
+target can kill its supervisor; that attack therefore sacrifices cleanup
+availability but cannot manufacture proof or release the Session. Durable
+recovery of an abandoned quarantine after ACS itself exits is outside this
+lifecycle boundary.
 
 The Darwin process API binding uses the pure-Go `purego` foreign-function
 interface against public symbols in `libSystem`; release binaries remain
