@@ -123,6 +123,60 @@ func TestLaunchRemovesUnusedSessionWhenSandboxSetupFails(t *testing.T) {
 	}
 }
 
+func TestLaunchRetainsSessionWhileStartupCleanupIsQuarantined(t *testing.T) {
+	fixture := newLaunchTestFixture(t)
+	cleanupDone := make(chan struct{})
+	quarantine := &startupQuarantineSandbox{delegate: directSandbox{}, cleanupDone: cleanupDone}
+	fixture.sandbox = quarantine
+	application := fixture.application(
+		t,
+		writeFakeDevin(t, successfulDevinScript("exit 0\n")),
+		t.TempDir(),
+		strings.NewReader(""),
+		&bytes.Buffer{},
+		&bytes.Buffer{},
+	)
+
+	exitCode, err := application.adapter.Launch(
+		context.Background(), application.sessionsDirectory, application.workingDirectory,
+		application.resolved, application.terminal,
+	)
+	if exitCode != 1 || err == nil {
+		t.Fatalf("launch result = (%d, %v), want bounded startup failure", exitCode, err)
+	}
+	if quarantine.sessionRoot == "" {
+		t.Fatal("startup quarantine did not observe the Session")
+	}
+	if _, err := os.Stat(quarantine.sessionRoot); err != nil {
+		t.Fatalf("Adapter removed Session before startup quarantine completed: %v", err)
+	}
+
+	concurrent, err := launch.CreateSession(fixture.sessionsDirectory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(quarantine.sessionRoot); err != nil {
+		t.Fatalf("later Session cleanup removed startup quarantine's active Session: %v", err)
+	}
+	if err := concurrent.Remove(); err != nil {
+		t.Fatal(err)
+	}
+
+	close(cleanupDone)
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if _, err := os.Stat(quarantine.sessionRoot); os.IsNotExist(err) {
+			break
+		} else if err != nil {
+			t.Fatal(err)
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("Session remained after startup quarantine completed")
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
 func TestLaunchRemovesAbandonedSessionFromAnEarlierRun(t *testing.T) {
 	fixture := newLaunchTestFixture(t)
 	abandonedSession := filepath.Join(fixture.sessionsDirectory, "session-abandoned")
@@ -482,6 +536,37 @@ func (sandbox failingSandbox) Check(context.Context, launch.SandboxCheck) error 
 func (sandbox failingSandbox) Prepare(context.Context, launch.ProcessRequest) (launch.Process, error) {
 	return nil, sandbox.prepareErr
 }
+
+type startupQuarantineSandbox struct {
+	delegate    launch.ProcessSandbox
+	cleanupDone chan struct{}
+	sessionRoot string
+}
+
+func (sandbox *startupQuarantineSandbox) Check(ctx context.Context, request launch.SandboxCheck) error {
+	return sandbox.delegate.Check(ctx, request)
+}
+
+func (sandbox *startupQuarantineSandbox) Prepare(ctx context.Context, request launch.ProcessRequest) (launch.Process, error) {
+	if len(request.Arguments) != 0 {
+		return sandbox.delegate.Prepare(ctx, request)
+	}
+	sandbox.sessionRoot = request.SessionDirectory
+	return startupQuarantineProcess{cleanupDone: sandbox.cleanupDone}, nil
+}
+
+type startupQuarantineProcess struct {
+	cleanupDone <-chan struct{}
+}
+
+func (process startupQuarantineProcess) Start() error {
+	return fmt.Errorf("startup cleanup quarantined")
+}
+func (startupQuarantineProcess) Wait() error { return nil }
+func (startupQuarantineProcess) Signal(os.Signal) error {
+	return nil
+}
+func (process startupQuarantineProcess) CleanupDone() <-chan struct{} { return process.cleanupDone }
 
 func writeFakeDevin(t *testing.T, script string) string {
 	t.Helper()

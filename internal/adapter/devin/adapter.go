@@ -93,6 +93,7 @@ type Session struct {
 	WorkingDirectory string
 
 	expectedCatalog []SkillReference
+	lease           *launch.SessionLease
 }
 
 func New(config Config) (*Adapter, error) {
@@ -406,6 +407,10 @@ func (a *Adapter) runSandboxed(ctx context.Context, session *Session, arguments 
 		TemporaryDirectory: session.TemporaryDir, Executable: a.binaryPath,
 		RuntimeInputs: a.runtimeInputs, Arguments: arguments, Terminal: terminal,
 	})
+	if err != nil {
+		return err
+	}
+	process, err = launch.RetainSessionUntilProcessDone(process, session.lease)
 	if err != nil {
 		return err
 	}

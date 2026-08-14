@@ -193,17 +193,34 @@ Launch Devin with the Profile:
 acs devin --profile backend-review
 ```
 
-This command is the intended interactive launch workflow, but the current
-sandbox increment is fail-closed. Until the Seatbelt backend in #57 and the
-Bubblewrap backend in #64 land, ACS reports `backend_unavailable` on every
-Supported Platform before it leases a Session or starts Devin. Profile
-creation and dry-run inspection remain available; there is no unsandboxed
-launch fallback.
+On Ubuntu 24.04, this command runs every Devin probe and the interactive
+process through `/usr/bin/bwrap`. ACS requires the root-owned, non-writable
+executable recorded as installed by the signed Ubuntu `bubblewrap` package and
+checks that its package architecture matches ACS, its payload still matches
+dpkg's packaged checksums, and unprivileged user namespaces work before leasing
+a Session. This is an offline package-integrity boundary, not protection from a
+compromised administrator: the package database and packaged checksums are
+controlled by root. If a prerequisite is missing or invalid, ACS reports
+`backend_unavailable` with package-remediation guidance before it leases a
+Session or starts Devin. ACS neither bundles Bubblewrap nor downloads it at
+runtime; administrators install it from Ubuntu's configured signed apt
+repositories. If host AppArmor policy blocks unprivileged user namespaces,
+administrators must review and enable an appropriate targeted Bubblewrap
+profile; ACS does not disable the global AppArmor restriction or run without
+containment.
+
+The Bubblewrap namespace exposes the workspace and Session as writable,
+including Session-local temporary storage. Named runtime inputs and the
+minimal operating-system runtime are read-only. The host home and host Unix
+sockets are absent. Devin retains outbound IP networking, but ACS does not
+mount host SSH, Docker, proxy, or agent sockets. There is no unsandboxed
+fallback. On macOS, launch remains fail-closed with `backend_unavailable`
+until the Seatbelt backend in #57 lands.
 
 ### Session lifecycle
 
-After the native backend for the host lands, the same command first completes
-sandbox preflight, then creates an ephemeral Session with a synthetic home,
+On Ubuntu, the command first completes sandbox preflight, then creates an
+ephemeral Session with a synthetic home,
 copies the selected Skill Bundles and existing Devin credential into that
 Session, verifies the selection and authentication state, and starts Devin in
 the current working directory through the native sandbox. ACS removes the
@@ -249,9 +266,9 @@ Existing v0.1.0 Profiles do not require migration.
 - Profiles cannot be listed, edited, deleted, imported, or exported through
   the CLI.
 - ACS does not filter repository-local Skills.
-- The current sandbox increment deliberately blocks interactive launches until
-  native Seatbelt and Bubblewrap enforcement is available. The synthetic home
-  will provide configuration isolation inside that OS sandbox; it is not a
+- Interactive launches require a certified native backend. Bubblewrap is
+  active on Ubuntu 24.04; macOS remains blocked until Seatbelt enforcement is
+  available. The synthetic home complements the OS sandbox and is not a
   substitute for native enforcement.
 - ACS does not manage MCP servers, hooks, instructions, agents, or arbitrary
   target settings.
