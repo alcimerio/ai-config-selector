@@ -227,22 +227,41 @@ func TestWorkflowsRunningNativeTestsProvisionTrustedUbuntuBubblewrap(t *testing.
 		text := string(contents)
 		for _, setup := range []string{
 			"sudo apt-get update",
-			"sudo apt-get install --yes --no-install-recommends bubblewrap",
+			"sudo apt-get install --yes --no-install-recommends apparmor apparmor-utils bubblewrap",
+			"https://gitlab.com/apparmor/apparmor/-/raw/v4.0.3/profiles/apparmor/profiles/extras/bwrap-userns-restrict",
+			"a964037f6cf0df1099f14226b037eaedde6237c86e715188e93eb460b30be859",
+			"sha256sum --check --status",
+			"sudo install --owner=root --group=root --mode=0644 \"$profile_source\" /etc/apparmor.d/bwrap-userns-restrict",
+			"sudo /usr/sbin/apparmor_parser --replace /etc/apparmor.d/bwrap-userns-restrict",
+			"sudo /usr/sbin/aa-status --enabled",
 			`[[ -f /usr/bin/bwrap && ! -L /usr/bin/bwrap && -x /usr/bin/bwrap ]]`,
 			`stat --format='%u:%a' /usr/bin/bwrap`,
 			`/usr/bin/dpkg-query --search /usr/bin/bwrap`,
 			`/usr/bin/dpkg --verify --verify-format=rpm bubblewrap`,
+			"--unshare-user --unshare-ipc --unshare-pid --unshare-uts --unshare-cgroup",
 			workflow.architectureCheck,
 		} {
 			if got := strings.Count(text, setup); got != 1 {
 				t.Errorf("%s contains Ubuntu Bubblewrap setup %q %d times, want 1", workflow.name, setup, got)
 			}
 		}
+		for _, unsafe := range []string{
+			"kernel.apparmor_restrict_unprivileged_userns=0",
+			"apparmor_parser -R",
+			"/etc/apparmor.d/disable",
+		} {
+			if strings.Contains(text, unsafe) {
+				t.Errorf("%s weakens AppArmor with %q", workflow.name, unsafe)
+			}
+		}
 		if workflow.platformGuard != "" && strings.Count(text, workflow.platformGuard) != 1 {
 			t.Errorf("%s does not restrict Ubuntu Bubblewrap setup to its Linux matrix entries", workflow.name)
 		}
-		if strings.Index(text, "sudo apt-get install --yes --no-install-recommends bubblewrap") > strings.Index(text, "go test ./...") {
+		if strings.Index(text, "sudo apt-get install --yes --no-install-recommends apparmor apparmor-utils bubblewrap") > strings.Index(text, "go test ./...") {
 			t.Errorf("%s installs Bubblewrap after native tests", workflow.name)
+		}
+		if strings.Index(text, "--unshare-user --unshare-ipc --unshare-pid --unshare-uts --unshare-cgroup") < strings.Index(text, "/usr/sbin/apparmor_parser --replace") {
+			t.Errorf("%s probes Bubblewrap before provisioning the AppArmor profile", workflow.name)
 		}
 	}
 }
@@ -270,6 +289,53 @@ func TestReadmeDescribesCurrentPlatformSandboxCapabilities(t *testing.T) {
 		}
 	}
 
+}
+
+func TestDocumentationDescribesTargetedAppArmorRemediation(t *testing.T) {
+	contributors, err := os.ReadFile(filepath.Join("..", "CONTRIBUTING.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{
+		"Ubuntu native-test remediation",
+		"`bwrap-userns-restrict` profile for `/usr/bin/bwrap`",
+		"AppArmor project v4.0.3",
+		"a964037f6cf0df1099f14226b037eaedde6237c86e715188e93eb460b30be859",
+		"real `/usr/bin/bwrap` user-namespace\nprobe",
+		"does not\nset `kernel.apparmor_restrict_unprivileged_userns=0`",
+		"skip\nnative tests",
+		"runtime capability checks",
+	} {
+		if !strings.Contains(string(contributors), required) {
+			t.Errorf("CONTRIBUTING.md is missing AppArmor remediation detail %q", required)
+		}
+	}
+
+	readme, err := os.ReadFile(filepath.Join("..", "README.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{
+		"host AppArmor policy blocks unprivileged user namespaces",
+		"does not disable the global AppArmor restriction or run without\ncontainment",
+	} {
+		if !strings.Contains(string(readme), required) {
+			t.Errorf("README.md is missing AppArmor remediation detail %q", required)
+		}
+	}
+
+	architecture, err := os.ReadFile(filepath.Join("..", "docs", "architecture.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{
+		"pinned,\nSHA-256-verified AppArmor upstream release",
+		"preserves Ubuntu's global unprivileged-user-namespace\nrestriction",
+	} {
+		if !strings.Contains(string(architecture), required) {
+			t.Errorf("docs/architecture.md is missing AppArmor remediation detail %q", required)
+		}
+	}
 }
 
 func TestContributorRaceGateKeepsTheExceptionLinuxOnly(t *testing.T) {

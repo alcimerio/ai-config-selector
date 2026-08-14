@@ -204,7 +204,10 @@ controlled by root. If a prerequisite is missing or invalid, ACS reports
 `backend_unavailable` with package-remediation guidance before it leases a
 Session or starts Devin. ACS neither bundles Bubblewrap nor downloads it at
 runtime; administrators install it from Ubuntu's configured signed apt
-repositories.
+repositories. If host AppArmor policy blocks unprivileged user namespaces,
+administrators must review and enable an appropriate targeted Bubblewrap
+profile; ACS does not disable the global AppArmor restriction or run without
+containment.
 
 The Bubblewrap namespace exposes the workspace and Session as writable,
 including Session-local temporary storage. Named runtime inputs and the

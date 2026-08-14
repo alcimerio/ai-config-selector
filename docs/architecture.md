@@ -277,10 +277,14 @@ The required release gate stays credential-free: one candidate artifact set is
 installed and exercised natively on darwin/arm64, darwin/amd64, linux/amd64,
 and linux/arm64. The native matrix declares the sandbox backend capability
 expected at each increment. The Ubuntu rows require the Bubblewrap launch and
-lifecycle contract; the macOS rows return the stable `backend_unavailable`
-category without starting the target or leasing a Session until #57 adds
-Seatbelt. A real-Devin smoke is an optional maintainer check for changes that
-affect authentication,
+lifecycle contract; before their native tests, they install the targeted
+`bwrap-userns-restrict` AppArmor profile for `/usr/bin/bwrap` from a pinned,
+SHA-256-verified AppArmor upstream release and execute a real Bubblewrap
+user-namespace probe. This preserves Ubuntu's global unprivileged-user-namespace
+restriction while authorizing only the required Bubblewrap executable. The
+macOS rows return the stable `backend_unavailable` category without starting the
+target or leasing a Session until #57 adds Seatbelt. A real-Devin smoke is an
+optional maintainer check for changes that affect authentication,
 the Devin Adapter, Profile selection, Session isolation, or interactive
 lifecycle behavior. It runs only on an authorized macOS 26 arm64 maintainer
 host and never places personal credentials in CI or a release artifact.
