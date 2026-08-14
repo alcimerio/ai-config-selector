@@ -183,6 +183,21 @@ func TestPromotedArtifactGateDeclaresExpectedSandboxCapability(t *testing.T) {
 		if !strings.Contains(text, "ACS_PROMOTED_SANDBOX_BACKEND: ${{ matrix.sandbox_backend }}") {
 			t.Errorf("%s does not pass the target sandbox capability to installed-artifact acceptance", workflow)
 		}
+		for _, setup := range []string{
+			`if: matrix.os == 'linux'`,
+			"sudo apt-get update",
+			"sudo apt-get install --yes --no-install-recommends bubblewrap",
+			`/usr/bin/dpkg-query --search /usr/bin/bwrap`,
+			`/usr/bin/dpkg --verify --verify-format=rpm bubblewrap`,
+			`$'ii \nbubblewrap\nbubblewrap\n'"${{ matrix.arch }}"`,
+		} {
+			if got := strings.Count(text, setup); got != 1 {
+				t.Errorf("%s contains Ubuntu Bubblewrap setup %q %d times, want 1", workflow, setup, got)
+			}
+		}
+		if strings.Index(text, "sudo apt-get install --yes --no-install-recommends bubblewrap") > strings.Index(text, "Exercise installed candidate as a black box") {
+			t.Errorf("%s installs Bubblewrap after installed-artifact acceptance", workflow)
+		}
 	}
 
 	acceptance, err := os.ReadFile(filepath.Join("..", "acceptance", "promoted_artifact_test.go"))
@@ -210,6 +225,7 @@ func TestReadmeDescribesCurrentPlatformSandboxCapabilities(t *testing.T) {
 		"Ubuntu 24.04",
 		"`/usr/bin/bwrap`",
 		"signed Ubuntu `bubblewrap` package",
+		"package database and packaged checksums are controlled by root",
 		"outbound IP networking",
 		"host Unix sockets",
 		"Seatbelt backend in #57",

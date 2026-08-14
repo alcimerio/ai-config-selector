@@ -100,6 +100,23 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      - name: Install and verify Ubuntu Bubblewrap
+        if: matrix.os == 'linux'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends bubblewrap
+          [[ -f /usr/bin/bwrap && ! -L /usr/bin/bwrap && -x /usr/bin/bwrap ]]
+          [[ "$(stat --format='%u:%a' /usr/bin/bwrap)" == "0:755" ]]
+          [[ "$(env -i LC_ALL=C PATH=/usr/sbin:/usr/bin:/sbin:/bin /usr/bin/dpkg-query --search /usr/bin/bwrap)" == "bubblewrap: /usr/bin/bwrap" ]]
+          package_record="$(env -i LC_ALL=C PATH=/usr/sbin:/usr/bin:/sbin:/bin /usr/bin/dpkg-query --show --showformat='${db:Status-Abbrev}\n${binary:Package}\n${source:Package}\n${Architecture}\n' bubblewrap)"
+          [[ "$package_record" == $'ii \nbubblewrap\nbubblewrap\n'"${{ matrix.arch }}" ]]
+          verify_stdout="$(mktemp)"
+          verify_stderr="$(mktemp)"
+          trap 'rm -f "$verify_stdout" "$verify_stderr"' EXIT
+          env -i LC_ALL=C PATH=/usr/sbin:/usr/bin:/sbin:/bin /usr/bin/dpkg --verify --verify-format=rpm bubblewrap >"$verify_stdout" 2>"$verify_stderr"
+          [[ ! -s "$verify_stdout" && ! -s "$verify_stderr" ]]
+
       - name: Download the exact candidate artifact set
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
