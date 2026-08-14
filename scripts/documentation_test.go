@@ -461,7 +461,7 @@ func TestContributorRaceGateDocumentsNarrowNativeExceptions(t *testing.T) {
 	normalized := strings.Join(strings.Fields(text), " ")
 	for _, want := range []string{
 		"ThreadSanitizer runtime cannot start inside the production Seatbelt policy",
-		"only the three Darwin tests that execute the race-instrumented test binary",
+		"Only Darwin tests that require nested execution of the race-instrumented test binary inside the production Seatbelt policy are skipped",
 		"preceding non-race native suite and the installed promoted-artifact acceptance",
 	} {
 		if !strings.Contains(normalized, want) {
