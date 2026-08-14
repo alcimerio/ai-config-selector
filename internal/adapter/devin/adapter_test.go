@@ -67,6 +67,30 @@ func TestConfigDoesNotExposeProcessSandboxOverride(t *testing.T) {
 	}
 }
 
+func TestSandboxAssemblyHasNoCrossPackageBypass(t *testing.T) {
+	patterns := []string{
+		filepath.Join("..", "devin", "*.go"),
+		filepath.Join("..", "..", "cli", "*.go"),
+	}
+	for _, pattern := range patterns {
+		paths, err := filepath.Glob(pattern)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, path := range paths {
+			source, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, bypass := range []string{"go:" + "linkname", strconv.Quote("un" + "safe")} {
+				if strings.Contains(string(source), bypass) {
+					t.Fatalf("sandbox assembly bypass %q found in %s", bypass, path)
+				}
+			}
+		}
+	}
+}
+
 func TestPreflightReportsSanitizedCatalogMismatch(t *testing.T) {
 	fixture := newFakeDevinFixture(t, []fakeObservedSkill{{
 		Name:     "token=SUPER_SECRET_STDOUT",

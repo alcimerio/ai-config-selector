@@ -9,10 +9,10 @@ import (
 	"os/signal"
 	"sync"
 	"syscall"
-	"unsafe"
 
 	"github.com/alcimerio/ai-config-selector/internal/category"
 	"github.com/alcimerio/ai-config-selector/internal/launch"
+	"golang.org/x/sys/unix"
 )
 
 // Launch creates an ephemeral ACS Session, verifies the Devin Adapter
@@ -209,12 +209,6 @@ func foregroundTerminalProcessGroup(terminal *os.File) (int32, bool) {
 	if terminal == nil {
 		return 0, false
 	}
-	var processGroup int32
-	_, _, errno := syscall.Syscall(
-		syscall.SYS_IOCTL,
-		terminal.Fd(),
-		syscall.TIOCGPGRP,
-		uintptr(unsafe.Pointer(&processGroup)),
-	)
-	return processGroup, errno == 0
+	processGroup, err := unix.IoctlGetInt(int(terminal.Fd()), unix.TIOCGPGRP)
+	return int32(processGroup), err == nil
 }
