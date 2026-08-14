@@ -3,13 +3,16 @@
 package launch
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -63,6 +66,9 @@ func (backend *seatbeltBackend) prepare(ctx context.Context, request validatedPr
 	if err != nil {
 		return nil, sandboxError(SandboxSetupFailed, err)
 	}
+	if err := backend.validateGeneratedPolicy(ctx, request, policy, definitions); err != nil {
+		return nil, sandboxError(SandboxSetupFailed, err)
+	}
 	arguments := make([]string, 0, 4+len(definitions)+len(request.arguments))
 	arguments = append(arguments, "-p", policy)
 	arguments = append(arguments, definitions...)
@@ -75,33 +81,67 @@ func (backend *seatbeltBackend) prepare(ctx context.Context, request validatedPr
 	command.Stdout = request.terminal.Output
 	command.Stderr = request.terminal.ErrorOutput
 	command.ExtraFiles = nil
-	ownProcessGroup := !seatbeltUsesInvokingTerminal(request.terminal)
-	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: ownProcessGroup}
+	terminal, foregroundGroup := seatbeltForegroundTerminal(request.terminal)
+	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if terminal != nil {
+		command.SysProcAttr.Foreground = true
+		command.SysProcAttr.Ctty = int(terminal.Fd())
+	}
 	command.Cancel = func() error {
 		if command.Process == nil {
 			return os.ErrProcessDone
 		}
-		pid := command.Process.Pid
-		if ownProcessGroup {
-			pid = -pid
-		}
-		err := syscall.Kill(pid, syscall.SIGKILL)
+		err := syscall.Kill(-command.Process.Pid, syscall.SIGKILL)
 		if errors.Is(err, syscall.ESRCH) {
 			return os.ErrProcessDone
 		}
 		return err
 	}
 	command.WaitDelay = time.Second
-	return &seatbeltProcess{command: command, ownProcessGroup: ownProcessGroup}, nil
+	return &seatbeltProcess{command: command, terminal: terminal, foregroundGroup: foregroundGroup}, nil
+}
+
+func (backend *seatbeltBackend) validateGeneratedPolicy(
+	ctx context.Context,
+	request validatedProcessRequest,
+	policy string,
+	definitions []string,
+) error {
+	arguments := make([]string, 0, 4+len(definitions))
+	arguments = append(arguments, "-p", policy)
+	arguments = append(arguments, definitions...)
+	arguments = append(arguments, "--", "/usr/bin/true")
+	command := exec.CommandContext(ctx, backend.executable, arguments...)
+	command.Dir = request.workspace
+	command.Env = append([]string(nil), request.environment...)
+	command.Stdin = nil
+	var diagnostics bytes.Buffer
+	command.Stdout = &diagnostics
+	command.Stderr = &diagnostics
+	command.ExtraFiles = nil
+	return command.Run()
 }
 
 type seatbeltProcess struct {
 	command         *exec.Cmd
-	ownProcessGroup bool
+	terminal        *os.File
+	foregroundGroup int
 }
 
 func (process *seatbeltProcess) Start() error { return process.command.Start() }
-func (process *seatbeltProcess) Wait() error  { return process.command.Wait() }
+
+func (process *seatbeltProcess) Wait() error {
+	waitErr := process.command.Wait()
+	pid := process.command.Process.Pid
+	settleSeatbeltProcessGroup(pid)
+	if process.terminal != nil {
+		if err := setSeatbeltForegroundProcessGroup(process.terminal, process.foregroundGroup); err != nil {
+			return errors.Join(waitErr, err)
+		}
+	}
+	return waitErr
+}
+
 func (process *seatbeltProcess) Signal(signal os.Signal) error {
 	if process.command.Process == nil {
 		return os.ErrProcessDone
@@ -110,24 +150,46 @@ func (process *seatbeltProcess) Signal(signal os.Signal) error {
 	if !ok {
 		return process.command.Process.Signal(signal)
 	}
-	pid := process.command.Process.Pid
-	if process.ownProcessGroup {
-		pid = -pid
-	}
-	err := syscall.Kill(pid, unixSignal)
+	err := syscall.Kill(-process.command.Process.Pid, unixSignal)
 	if errors.Is(err, syscall.ESRCH) {
 		return os.ErrProcessDone
 	}
 	return err
 }
 
-func seatbeltUsesInvokingTerminal(terminal Terminal) bool {
+func seatbeltForegroundTerminal(terminal Terminal) (*os.File, int) {
 	input, ok := terminal.Input.(*os.File)
 	if !ok {
-		return false
+		return nil, 0
 	}
-	_, err := unix.IoctlGetInt(int(input.Fd()), unix.TIOCGPGRP)
-	return err == nil
+	foregroundGroup, err := unix.IoctlGetInt(int(input.Fd()), unix.TIOCGPGRP)
+	if err != nil || foregroundGroup != syscall.Getpgrp() {
+		return nil, 0
+	}
+	return input, foregroundGroup
+}
+
+var seatbeltTerminalProcessGroupMutex sync.Mutex
+
+func setSeatbeltForegroundProcessGroup(terminal *os.File, processGroup int) error {
+	seatbeltTerminalProcessGroupMutex.Lock()
+	defer seatbeltTerminalProcessGroupMutex.Unlock()
+	alreadyIgnored := signal.Ignored(syscall.SIGTTOU)
+	if !alreadyIgnored {
+		signal.Ignore(syscall.SIGTTOU)
+		defer signal.Reset(syscall.SIGTTOU)
+	}
+	return unix.IoctlSetPointerInt(int(terminal.Fd()), unix.TIOCSPGRP, processGroup)
+}
+
+func settleSeatbeltProcessGroup(processGroup int) {
+	for {
+		err := syscall.Kill(-processGroup, syscall.SIGKILL)
+		if errors.Is(err, syscall.ESRCH) {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }
 
 func buildSeatbeltPolicy(request validatedProcessRequest) (string, []string, error) {

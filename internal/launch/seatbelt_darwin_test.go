@@ -78,26 +78,84 @@ func TestSeatbeltCheckRejectsUnsafeSystemExecutable(t *testing.T) {
 	}
 }
 
-func TestSeatbeltInvalidPolicyStopsBeforeTargetMarker(t *testing.T) {
-	request := seatbeltTestRequest(t)
-	marker := filepath.Join(request.workspace, "target-started")
-	request.arguments = []string{"-test.run=TestSeatbeltHelperProcess", "--", "mark", marker}
-	backend := newSeatbeltBackend(seatbeltExecutable)
-	backend.policy = func(validatedProcessRequest) (string, []string, error) {
-		return `(version 1) (invalid-operation default)`, nil, nil
+func TestSeatbeltRejectsInvalidGeneratedPolicyBeforeAttachingTargetStreams(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		policy      string
+		definitions []string
+	}{
+		{name: "policy", policy: `(version 1) (REJECTED_POLICY_TOKEN default)`},
+		{
+			name:        "definition",
+			policy:      `(version 1) (deny default)`,
+			definitions: []string{"-DREJECTED_DEFINITION_TOKEN"},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			request := seatbeltTestRequest(t)
+			marker := filepath.Join(request.workspace, "target-started")
+			request.arguments = []string{"-test.run=TestSeatbeltHelperProcess", "--", "mark", marker}
+			var output bytes.Buffer
+			var errorOutput bytes.Buffer
+			request.terminal = Terminal{Output: &output, ErrorOutput: &errorOutput}
+			backend := newSeatbeltBackend(seatbeltExecutable)
+			backend.policy = func(validatedProcessRequest) (string, []string, error) {
+				return test.policy, test.definitions, nil
+			}
+
+			process, err := backend.prepare(context.Background(), request)
+			if err == nil {
+				t.Fatal("invalid generated policy unexpectedly prepared a target")
+			}
+			if process != nil {
+				t.Fatal("invalid generated policy returned a target process")
+			}
+			assertSandboxCategory(t, err, SandboxSetupFailed)
+			for _, leaked := range []string{
+				"REJECTED_POLICY_TOKEN", "REJECTED_DEFINITION_TOKEN", "sandbox-exec",
+			} {
+				if strings.Contains(err.Error(), leaked) || strings.Contains(output.String(), leaked) ||
+					strings.Contains(errorOutput.String(), leaked) {
+					t.Fatalf("rejected backend diagnostic %q leaked: error=%q stdout=%q stderr=%q", leaked, err, output.String(), errorOutput.String())
+				}
+			}
+			if output.Len() != 0 || errorOutput.Len() != 0 {
+				t.Fatalf("policy validation reached target streams: stdout=%q stderr=%q", output.String(), errorOutput.String())
+			}
+			if _, err := os.Stat(marker); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("target marker exists after invalid policy: %v", err)
+			}
+		})
 	}
-	process, err := backend.prepare(context.Background(), request)
+}
+
+func TestSeatbeltWaitSettlesOutlivingDescendantsBeforeSessionRemoval(t *testing.T) {
+	request := seatbeltTestRequest(t)
+	root := filepath.Dir(filepath.Dir(request.workspace))
+	secret := filepath.Join(root, "secret")
+	if err := os.WriteFile(secret, []byte("private"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	marker := filepath.Join(request.workspace, "descendant-survived")
+	request.arguments = []string{
+		"-test.run=TestSeatbeltHelperProcess", "--", "outliving-parent", secret, marker,
+	}
+	process, err := newSeatbeltBackend(seatbeltExecutable).prepare(context.Background(), request)
 	if err != nil {
-		t.Fatalf("prepare invalid policy: %v", err)
+		t.Fatal(err)
 	}
 	if err := process.Start(); err != nil {
-		t.Fatalf("start sandbox verifier: %v", err)
+		t.Fatal(err)
 	}
-	if err := process.Wait(); err == nil {
-		t.Fatal("invalid policy unexpectedly succeeded")
+	if err := process.Wait(); err != nil {
+		t.Fatalf("top-level target failed: %v", err)
 	}
+	if err := os.RemoveAll(request.sessionDirectory); err != nil {
+		t.Fatalf("remove settled Session: %v", err)
+	}
+	time.Sleep(750 * time.Millisecond)
 	if _, err := os.Stat(marker); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("target marker exists after invalid policy: %v", err)
+		t.Fatalf("descendant wrote after Wait returned and Session was removed: %v", err)
 	}
 }
 
@@ -249,6 +307,26 @@ func TestSeatbeltHelperProcess(t *testing.T) {
 			os.Exit(83)
 		}
 		fmt.Fprintln(os.Stdout, "raw")
+		os.Exit(0)
+	case "outliving-parent":
+		child := exec.Command(os.Args[0], "-test.run=TestSeatbeltHelperProcess", "--", "delayed-descendant", arguments[1], arguments[2])
+		child.Env = os.Environ()
+		child.Stdin = nil
+		child.Stdout = nil
+		child.Stderr = nil
+		if err := child.Start(); err != nil {
+			os.Exit(87)
+		}
+		os.Exit(0)
+	case "delayed-descendant":
+		time.Sleep(400 * time.Millisecond)
+		_, readErr := os.ReadFile(arguments[1])
+		if !isSeatbeltPermission(readErr) {
+			os.Exit(88)
+		}
+		if err := os.WriteFile(arguments[2], []byte("alive"), 0o600); err != nil {
+			os.Exit(89)
+		}
 		os.Exit(0)
 	}
 }
