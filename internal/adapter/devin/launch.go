@@ -57,6 +57,7 @@ func (a *Adapter) Launch(
 	if err != nil {
 		return 1, err
 	}
+	session.lease = sessionLease
 	if err := resolved.Verify(preflightContext, launch.VerificationContext{
 		SessionsDirectory:  sessionsDirectory,
 		SessionDirectory:   session.RootDir,
@@ -69,8 +70,11 @@ func (a *Adapter) Launch(
 	if err := a.verifyAuthentication(preflightContext, session); err != nil {
 		return 1, err
 	}
+	if preflightContext.Err() != nil {
+		return 1, errors.New("Devin launch interrupted before the interactive process started")
+	}
 
-	process, err := a.sandbox.Prepare(ctx, launch.ProcessRequest{
+	process, err := a.sandbox.Prepare(preflightContext, launch.ProcessRequest{
 		Workspace: session.WorkingDirectory, SessionsDirectory: sessionsDirectory,
 		SessionDirectory: session.RootDir, SessionHome: session.HomeDir,
 		TemporaryDirectory: session.TemporaryDir, Executable: a.binaryPath,
@@ -79,12 +83,16 @@ func (a *Adapter) Launch(
 	if err != nil {
 		return 1, err
 	}
-	if preflightContext.Err() != nil {
-		return 1, errors.New("Devin launch interrupted before the interactive process started")
+	process, err = launch.RetainSessionUntilProcessDone(process, sessionLease)
+	if err != nil {
+		return 1, err
 	}
 	if err := runAttached(process, supervisor); err != nil {
 		if ctx.Err() != nil {
 			return 1, fmt.Errorf("Devin launch interrupted: %w", ctx.Err())
+		}
+		if preflightContext.Err() != nil {
+			return 1, errors.New("Devin launch interrupted before the interactive process started")
 		}
 		var exitError *exec.ExitError
 		if errors.As(err, &exitError) {

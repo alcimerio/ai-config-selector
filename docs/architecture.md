@@ -371,9 +371,21 @@ read-only named runtime inputs and system runtime, Session-local temporary
 storage, and no host-home or host-socket mounts. IPC, PID, UTS, cgroup, and user
 namespaces contain descendants while the host IP network namespace preserves ordinary
 outbound networking. The backend clears the environment before applying the
-shared allowlist and inherits only the three shared terminal descriptors.
-Bubblewrap and the kernel user namespace jointly contain the process tree and
-propagate target exit and cancellation behavior to the caller. Missing,
+shared allowlist, and the target inherits only the three shared terminal
+descriptors. Bubblewrap setup temporarily inherits two private pipe
+descriptors for the child-identity and user-namespace release handshake; ACS
+closes them before the target execs.
+
+ACS holds that release barrier until the Bubblewrap monitor and namespace
+child have stable pidfd identities and user-namespace setup is complete.
+Startup abort freezes the stable monitor, captures stable identities for its
+blocked children, and proves those children dead before releasing the barrier;
+cleanup failures retain the closed barrier under explicit quarantine ownership.
+Unhandled terminating signals stop the namespace target, terminate and prove
+the monitor exited without reaping its requested-signal status, and then kill
+the target fail-closed. Bubblewrap and the kernel user namespace jointly
+contain the process tree and propagate target exit and cancellation behavior
+to the caller. Missing,
 modified, unpackaged, or incapable Bubblewrap installations fail closed with
 fixed package-remediation guidance. Seatbelt remains separate backend work;
 until it is present, macOS launch fails closed rather than running Devin
@@ -588,4 +600,5 @@ Skills guards fuzzy search and navigation responsiveness.
   minimum-size recovery, and contextual controls.
 - Profiles cannot be edited, deleted, imported, or exported through the CLI.
 - ACS does not filter repository-local Skills.
-- ACS does not provide whole-process filesystem or network containment.
+- On Ubuntu, Bubblewrap provides filesystem and process isolation, while
+  outbound networking remains allowed and ACS does not filter that traffic.

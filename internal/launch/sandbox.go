@@ -192,6 +192,13 @@ type Process interface {
 	Signal(os.Signal) error
 }
 
+// ProcessCleanup optionally exposes completion of backend cleanup that
+// continues after a bounded Start or Wait failure. A nil channel means the
+// Process has no deferred cleanup phase.
+type ProcessCleanup interface {
+	CleanupDone() <-chan struct{}
+}
+
 // ProcessSandbox is the shared launch boundary used by probes and interactive
 // targets alike.
 type ProcessSandbox interface {
@@ -307,6 +314,14 @@ func (process sanitizedProcess) Wait() error {
 
 func (process sanitizedProcess) Signal(signal os.Signal) error {
 	return process.process.Signal(signal)
+}
+
+func (process sanitizedProcess) CleanupDone() <-chan struct{} {
+	cleanup, ok := process.process.(ProcessCleanup)
+	if !ok {
+		return nil
+	}
+	return cleanup.CleanupDone()
 }
 
 type validatedSandboxCheck struct {
