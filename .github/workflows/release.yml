@@ -126,7 +126,10 @@ jobs:
           /usr/bin/bwrap \
             --unshare-user --unshare-ipc --unshare-pid --unshare-uts --unshare-cgroup \
             --die-with-parent --clearenv --proc /proc --dev /dev \
-            --dir /tmp --ro-bind /usr /usr --remount-ro / \
+            --dir /tmp \
+            --symlink usr/bin /bin --symlink usr/sbin /sbin \
+            --symlink usr/lib /lib --symlink usr/lib64 /lib64 \
+            --ro-bind /usr /usr --remount-ro / \
             --setenv PATH /usr/bin:/bin --chdir /tmp -- /usr/bin/true
 
       - name: Download the exact candidate artifact set

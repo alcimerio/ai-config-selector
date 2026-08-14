@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -128,6 +129,23 @@ func TestBubblewrapNativeContainmentContract(t *testing.T) {
 	}
 }
 
+func TestBubblewrapCapabilityProbeArgumentsUseProductionMergedUsrTopology(t *testing.T) {
+	want := []string{
+		"--unshare-user", "--unshare-ipc", "--unshare-pid", "--unshare-uts", "--unshare-cgroup",
+		"--die-with-parent", "--clearenv", "--proc", "/proc", "--dev", "/dev",
+		"--dir", "/tmp",
+		"--symlink", "usr/bin", "/bin",
+		"--symlink", "usr/sbin", "/sbin",
+		"--symlink", "usr/lib", "/lib",
+		"--symlink", "usr/lib64", "/lib64",
+		"--ro-bind", "/usr", "/usr", "--remount-ro", "/",
+		"--setenv", "PATH", safeProcessPath, "--chdir", "/tmp", "--", "/usr/bin/true",
+	}
+	if got := bubblewrapCapabilityProbeArguments(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("capability probe arguments = %q, want %q", got, want)
+	}
+}
+
 func TestBubblewrapTrustFailuresStopBeforeTheCapabilityProbe(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -220,12 +238,12 @@ func TestBubblewrapCapabilityProbeFailureProvidesAppArmorRemediationWithoutBacke
 }
 
 func TestBubblewrapTrustPassesOnlyAfterPackagedIntegrityVerification(t *testing.T) {
-	var commands []string
+	var commands [][]string
 	checker := bubblewrapTrustChecker{
 		architecture:    "amd64",
 		validExecutable: func(string) bool { return true },
 		run: func(_ context.Context, path string, arguments ...string) bubblewrapCommandResult {
-			commands = append(commands, path+" "+strings.Join(arguments, " "))
+			commands = append(commands, append([]string{path}, arguments...))
 			switch len(commands) {
 			case 1:
 				return bubblewrapCommandResult{output: []byte("bubblewrap: /usr/bin/bwrap\n")}
@@ -239,14 +257,14 @@ func TestBubblewrapTrustPassesOnlyAfterPackagedIntegrityVerification(t *testing.
 	if err := checker.check(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	wantOrder := []string{dpkgQueryExecutable + " --search", dpkgQueryExecutable + " --show", dpkgExecutable + " --verify --verify-format=rpm bubblewrap", bubblewrapExecutable + " --unshare-user"}
-	if len(commands) != len(wantOrder) {
-		t.Fatalf("commands = %q, want %d", commands, len(wantOrder))
+	want := [][]string{
+		{dpkgQueryExecutable, "--search", bubblewrapExecutable},
+		{dpkgQueryExecutable, "--show", "--showformat=${db:Status-Abbrev}\n${binary:Package}\n${source:Package}\n${Architecture}\n", "bubblewrap"},
+		{dpkgExecutable, "--verify", "--verify-format=rpm", "bubblewrap"},
+		append([]string{bubblewrapExecutable}, bubblewrapCapabilityProbeArguments()...),
 	}
-	for index, prefix := range wantOrder {
-		if !strings.HasPrefix(commands[index], prefix) {
-			t.Errorf("command %d = %q, want prefix %q", index, commands[index], prefix)
-		}
+	if !reflect.DeepEqual(commands, want) {
+		t.Fatalf("commands = %q, want %q", commands, want)
 	}
 }
 

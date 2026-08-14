@@ -253,6 +253,10 @@ func TestWorkflowsRunningNativeTestsProvisionTrustedUbuntuBubblewrap(t *testing.
 			`/usr/bin/dpkg-query --search /usr/bin/bwrap`,
 			`/usr/bin/dpkg --verify --verify-format=rpm bubblewrap`,
 			"--unshare-user --unshare-ipc --unshare-pid --unshare-uts --unshare-cgroup",
+			"--symlink usr/bin /bin",
+			"--symlink usr/sbin /sbin",
+			"--symlink usr/lib /lib",
+			"--symlink usr/lib64 /lib64",
 			workflow.architectureCheck,
 		} {
 			if got := strings.Count(text, setup); got != 1 {
@@ -278,6 +282,40 @@ func TestWorkflowsRunningNativeTestsProvisionTrustedUbuntuBubblewrap(t *testing.
 			t.Errorf("%s probes Bubblewrap before provisioning the AppArmor profile", workflow.name)
 		}
 	}
+}
+
+func TestWorkflowsUseEquivalentBubblewrapCapabilityProbe(t *testing.T) {
+	workflows := []string{"ci.yml", "promoted-artifacts.yml", "release.yml"}
+	var want string
+	for _, name := range workflows {
+		contents, err := os.ReadFile(filepath.Join("..", ".github", "workflows", name))
+		if err != nil {
+			t.Fatalf("read %s: %v", name, err)
+		}
+		probe := bubblewrapCapabilityProbeBlock(t, string(contents))
+		if want == "" {
+			want = probe
+			continue
+		}
+		if probe != want {
+			t.Errorf("%s Bubblewrap capability probe differs:\n%s\nwant:\n%s", name, probe, want)
+		}
+	}
+}
+
+func bubblewrapCapabilityProbeBlock(t *testing.T, workflow string) string {
+	t.Helper()
+	const start = "          /usr/bin/bwrap \\\n"
+	const end = "            --setenv PATH /usr/bin:/bin --chdir /tmp -- /usr/bin/true"
+	first := strings.Index(workflow, start)
+	if first == -1 {
+		t.Fatal("workflow does not contain a Bubblewrap capability probe")
+	}
+	last := strings.Index(workflow[first:], end)
+	if last == -1 {
+		t.Fatal("workflow does not contain the Bubblewrap capability probe target")
+	}
+	return workflow[first : first+last+len(end)]
 }
 
 func TestReadmeDescribesCurrentPlatformSandboxCapabilities(t *testing.T) {

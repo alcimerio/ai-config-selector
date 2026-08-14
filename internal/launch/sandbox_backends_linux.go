@@ -61,16 +61,25 @@ func (checker bubblewrapTrustChecker) check(ctx context.Context) error {
 	if !trustedCommandSucceeded(integrity) || len(integrity.output) != 0 {
 		return bubblewrapUnavailable()
 	}
-	probe := checker.run(ctx, bubblewrapExecutable,
-		"--unshare-user", "--unshare-ipc", "--unshare-pid", "--unshare-uts", "--unshare-cgroup",
-		"--die-with-parent", "--clearenv", "--proc", "/proc", "--dev", "/dev",
-		"--dir", "/tmp", "--ro-bind", "/usr", "/usr", "--remount-ro", "/",
-		"--setenv", "PATH", safeProcessPath, "--chdir", "/tmp", "--", "/usr/bin/true",
-	)
+	probe := checker.run(ctx, bubblewrapExecutable, bubblewrapCapabilityProbeArguments()...)
 	if !trustedCommandSucceeded(probe) {
 		return bubblewrapCapabilityUnavailable()
 	}
 	return nil
+}
+
+func bubblewrapCapabilityProbeArguments() []string {
+	return []string{
+		"--unshare-user", "--unshare-ipc", "--unshare-pid", "--unshare-uts", "--unshare-cgroup",
+		"--die-with-parent", "--clearenv", "--proc", "/proc", "--dev", "/dev",
+		"--dir", "/tmp",
+		"--symlink", "usr/bin", "/bin",
+		"--symlink", "usr/sbin", "/sbin",
+		"--symlink", "usr/lib", "/lib",
+		"--symlink", "usr/lib64", "/lib64",
+		"--ro-bind", "/usr", "/usr", "--remount-ro", "/",
+		"--setenv", "PATH", safeProcessPath, "--chdir", "/tmp", "--", "/usr/bin/true",
+	}
 }
 
 func trustedCommandSucceeded(result bubblewrapCommandResult) bool {
