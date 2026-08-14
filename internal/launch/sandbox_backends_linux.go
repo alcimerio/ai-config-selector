@@ -3,14 +3,17 @@
 package launch
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
 	"os/exec"
+	"runtime"
 	"syscall"
 )
 
 const bubblewrapExecutable = "/usr/bin/bwrap"
+const dpkgExecutable = "/usr/bin/dpkg"
 const dpkgQueryExecutable = "/usr/bin/dpkg-query"
 
 func nativeSandboxBackends() map[string]sandboxBackend {
@@ -20,33 +23,68 @@ func nativeSandboxBackends() map[string]sandboxBackend {
 type bubblewrapBackend struct{}
 
 func (bubblewrapBackend) check(ctx context.Context) error {
-	if !validRootOwnedSystemExecutable(bubblewrapExecutable) || !validRootOwnedSystemExecutable(dpkgQueryExecutable) {
+	checker := bubblewrapTrustChecker{
+		architecture:    runtime.GOARCH,
+		validExecutable: validRootOwnedSystemExecutable,
+		run:             runBubblewrapTrustCommand,
+	}
+	return checker.check(ctx)
+}
+
+type bubblewrapCommandResult struct {
+	output []byte
+	stderr []byte
+	err    error
+}
+
+type bubblewrapTrustChecker struct {
+	architecture    string
+	validExecutable func(string) bool
+	run             func(context.Context, string, ...string) bubblewrapCommandResult
+}
+
+func (checker bubblewrapTrustChecker) check(ctx context.Context) error {
+	for _, executable := range []string{bubblewrapExecutable, dpkgQueryExecutable, dpkgExecutable} {
+		if !checker.validExecutable(executable) {
+			return bubblewrapUnavailable()
+		}
+	}
+	owner := checker.run(ctx, dpkgQueryExecutable, "--search", bubblewrapExecutable)
+	if !trustedCommandSucceeded(owner) {
 		return bubblewrapUnavailable()
 	}
-	owner := exec.CommandContext(ctx, dpkgQueryExecutable, "--search", bubblewrapExecutable)
-	owner.Env = []string{}
-	output, err := owner.Output()
-	if err != nil {
+	show := checker.run(ctx, dpkgQueryExecutable, "--show", "--showformat=${db:Status-Abbrev}\n${binary:Package}\n${source:Package}\n${Architecture}\n", "bubblewrap")
+	if !trustedCommandSucceeded(show) || !validBubblewrapPackageRecord(string(owner.output), string(show.output), checker.architecture) {
 		return bubblewrapUnavailable()
 	}
-	ownerOutput := string(output)
-	status := exec.CommandContext(ctx, dpkgQueryExecutable, "--show", "--showformat=${db:Status-Abbrev}", "bubblewrap")
-	status.Env = []string{}
-	output, err = status.Output()
-	if err != nil || !validBubblewrapPackageRecord(ownerOutput, string(output)) {
+	integrity := checker.run(ctx, dpkgExecutable, "--verify", "--verify-format=rpm", "bubblewrap")
+	if !trustedCommandSucceeded(integrity) || len(integrity.output) != 0 {
 		return bubblewrapUnavailable()
 	}
-	probe := exec.CommandContext(ctx, bubblewrapExecutable,
+	probe := checker.run(ctx, bubblewrapExecutable,
 		"--unshare-user", "--unshare-ipc", "--unshare-pid", "--unshare-uts", "--unshare-cgroup",
 		"--die-with-parent", "--clearenv", "--proc", "/proc", "--dev", "/dev",
 		"--dir", "/tmp", "--ro-bind", "/usr", "/usr", "--remount-ro", "/",
 		"--setenv", "PATH", safeProcessPath, "--chdir", "/tmp", "--", "/usr/bin/true",
 	)
-	probe.Env = []string{}
-	if err := probe.Run(); err != nil {
+	if !trustedCommandSucceeded(probe) {
 		return bubblewrapUnavailable()
 	}
 	return nil
+}
+
+func trustedCommandSucceeded(result bubblewrapCommandResult) bool {
+	return result.err == nil && len(result.stderr) == 0
+}
+
+func runBubblewrapTrustCommand(ctx context.Context, path string, arguments ...string) bubblewrapCommandResult {
+	command := exec.CommandContext(ctx, path, arguments...)
+	command.Env = []string{"LC_ALL=C", "PATH=" + safeProcessPath}
+	var stdout, stderr bytes.Buffer
+	command.Stdout = &stdout
+	command.Stderr = &stderr
+	err := command.Run()
+	return bubblewrapCommandResult{output: stdout.Bytes(), stderr: stderr.Bytes(), err: err}
 }
 
 func validRootOwnedSystemExecutable(path string) bool {

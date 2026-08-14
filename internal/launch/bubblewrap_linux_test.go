@@ -128,6 +128,95 @@ func TestBubblewrapNativeContainmentContract(t *testing.T) {
 	}
 }
 
+func TestBubblewrapTrustFailuresStopBeforeTheCapabilityProbe(t *testing.T) {
+	tests := []struct {
+		name       string
+		metadataOK bool
+		outputs    []bubblewrapCommandResult
+	}{
+		{name: "replaced executable", metadataOK: false},
+		{name: "mismatched package", metadataOK: true, outputs: []bubblewrapCommandResult{{output: []byte("other: /usr/bin/bwrap\n")}}},
+		{name: "mismatched architecture", metadataOK: true, outputs: []bubblewrapCommandResult{
+			{output: []byte("bubblewrap: /usr/bin/bwrap\n")},
+			{output: []byte("ii \nbubblewrap\nbubblewrap\narm64\n")},
+		}},
+		{name: "failed packaged integrity", metadataOK: true, outputs: []bubblewrapCommandResult{
+			{output: []byte("bubblewrap: /usr/bin/bwrap\n")},
+			{output: []byte("ii \nbubblewrap\nbubblewrap\namd64\n")},
+			{output: []byte("??5??????   /usr/bin/bwrap\n")},
+		}},
+		{name: "integrity warning", metadataOK: true, outputs: []bubblewrapCommandResult{
+			{output: []byte("bubblewrap: /usr/bin/bwrap\n")},
+			{output: []byte("ii \nbubblewrap\nbubblewrap\namd64\n")},
+			{stderr: []byte("untrusted integrity warning containing a host path")},
+		}},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			targetMarker := filepath.Join(t.TempDir(), "target-marker")
+			resultIndex := 0
+			checker := bubblewrapTrustChecker{
+				architecture: "amd64",
+				validExecutable: func(path string) bool {
+					return test.metadataOK
+				},
+				run: func(_ context.Context, path string, _ ...string) bubblewrapCommandResult {
+					if path == bubblewrapExecutable {
+						if err := os.WriteFile(targetMarker, []byte("started"), 0o600); err != nil {
+							t.Fatal(err)
+						}
+						return bubblewrapCommandResult{}
+					}
+					if resultIndex >= len(test.outputs) {
+						return bubblewrapCommandResult{}
+					}
+					result := test.outputs[resultIndex]
+					resultIndex++
+					return result
+				},
+			}
+			if err := checker.check(context.Background()); err == nil || err.Error() != bubblewrapUnavailable().Error() {
+				t.Fatalf("trust check error = %v, want exact sanitized backend_unavailable", err)
+			}
+			if _, err := os.Stat(targetMarker); !os.IsNotExist(err) {
+				t.Fatalf("target marker exists after trust validation failed: %v", err)
+			}
+		})
+	}
+}
+
+func TestBubblewrapTrustPassesOnlyAfterPackagedIntegrityVerification(t *testing.T) {
+	var commands []string
+	checker := bubblewrapTrustChecker{
+		architecture:    "amd64",
+		validExecutable: func(string) bool { return true },
+		run: func(_ context.Context, path string, arguments ...string) bubblewrapCommandResult {
+			commands = append(commands, path+" "+strings.Join(arguments, " "))
+			switch len(commands) {
+			case 1:
+				return bubblewrapCommandResult{output: []byte("bubblewrap: /usr/bin/bwrap\n")}
+			case 2:
+				return bubblewrapCommandResult{output: []byte("ii \nbubblewrap\nbubblewrap\namd64\n")}
+			default:
+				return bubblewrapCommandResult{}
+			}
+		},
+	}
+	if err := checker.check(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	wantOrder := []string{dpkgQueryExecutable + " --search", dpkgQueryExecutable + " --show", dpkgExecutable + " --verify --verify-format=rpm bubblewrap", bubblewrapExecutable + " --unshare-user"}
+	if len(commands) != len(wantOrder) {
+		t.Fatalf("commands = %q, want %d", commands, len(wantOrder))
+	}
+	for index, prefix := range wantOrder {
+		if !strings.HasPrefix(commands[index], prefix) {
+			t.Errorf("command %d = %q, want prefix %q", index, commands[index], prefix)
+		}
+	}
+}
+
 func TestBubblewrapNativeContextCancellationStopsTheTarget(t *testing.T) {
 	platform, err := CurrentPlatform()
 	if err != nil {

@@ -12,8 +12,11 @@ func validBubblewrapExecutableMetadata(mode os.FileMode, owner uint32) bool {
 	return mode.IsRegular() && mode&special == 0 && owner == 0 && mode.Perm() == 0o755
 }
 
-func validBubblewrapPackageRecord(ownerOutput, statusOutput string) bool {
-	return strings.TrimSpace(ownerOutput) == "bubblewrap: /usr/bin/bwrap" && statusOutput == "ii "
+func validBubblewrapPackageRecord(ownerOutput, packageOutput, architecture string) bool {
+	fields := strings.Split(strings.TrimSuffix(packageOutput, "\n"), "\n")
+	return strings.TrimSpace(ownerOutput) == "bubblewrap: /usr/bin/bwrap" &&
+		len(fields) == 4 && fields[0] == "ii " && fields[1] == "bubblewrap" &&
+		fields[2] == "bubblewrap" && fields[3] == architecture
 }
 
 var bubblewrapSystemReadOnlyPaths = []string{

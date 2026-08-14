@@ -355,12 +355,17 @@ It also classifies process-start and non-exit wait failures at the boundary so
 backend output, generated policy, host paths, and environment values do not
 enter CLI diagnostics; ordinary child exit status remains intact.
 On certified Ubuntu 24.04 targets, the production backend requires the
-root-owned `/usr/bin/bwrap` recorded by the Ubuntu package database and proves
-user-namespace capability before a Session lease. It constructs an empty-root
-mount namespace with writable workspace and Session mounts, read-only named
-runtime inputs and system runtime, Session-local temporary storage, and no
-host-home or host-socket mounts. IPC, PID, UTS, cgroup, and user namespaces
-contain descendants while the host IP network namespace preserves ordinary
+root-owned, non-group/world-writable regular `/usr/bin/bwrap` executable. The
+installed binary and source package must both be `bubblewrap`, its dpkg
+architecture must match the certified ACS runtime, and `dpkg --verify` must
+report no packaged-checksum differences before the backend proves
+user-namespace capability and leases a Session. This is an offline check
+against root-controlled dpkg state; it does not defend against an administrator
+who can replace both the executable and that state. The backend constructs an
+empty-root mount namespace with writable workspace and Session mounts,
+read-only named runtime inputs and system runtime, Session-local temporary
+storage, and no host-home or host-socket mounts. IPC, PID, UTS, cgroup, and user
+namespaces contain descendants while the host IP network namespace preserves ordinary
 outbound networking. The backend clears the environment before applying the
 shared allowlist and inherits only the three shared terminal descriptors.
 Bubblewrap and the kernel user namespace jointly contain the process tree and

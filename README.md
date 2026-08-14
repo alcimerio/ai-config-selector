@@ -196,9 +196,15 @@ acs devin --profile backend-review
 On Ubuntu 24.04, this command runs every Devin probe and the interactive
 process through `/usr/bin/bwrap`. ACS requires the root-owned, non-writable
 executable recorded as installed by the signed Ubuntu `bubblewrap` package and
-verifies that unprivileged user namespaces work before leasing a Session. If
-that prerequisite is missing or invalid, ACS reports `backend_unavailable`
-with package-remediation guidance before it leases a Session or starts Devin.
+checks that its package architecture matches ACS, its payload still matches
+dpkg's packaged checksums, and unprivileged user namespaces work before leasing
+a Session. This is an offline package-integrity boundary, not protection from a
+compromised administrator: the package database and packaged checksums are
+controlled by root. If a prerequisite is missing or invalid, ACS reports
+`backend_unavailable` with package-remediation guidance before it leases a
+Session or starts Devin. ACS neither bundles Bubblewrap nor downloads it at
+runtime; administrators install it from Ubuntu's configured signed apt
+repositories.
 
 The Bubblewrap namespace exposes the workspace and Session as writable,
 including Session-local temporary storage. Named runtime inputs and the

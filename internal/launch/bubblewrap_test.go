@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -34,17 +35,21 @@ func TestBubblewrapRequiresCanonicalPackageExecutableMetadata(t *testing.T) {
 
 func TestBubblewrapRequiresInstalledUbuntuPackageRecord(t *testing.T) {
 	for _, test := range []struct {
-		name         string
-		owner, state string
-		valid        bool
+		name                               string
+		owner, state, binary, source, arch string
+		valid                              bool
 	}{
-		{name: "installed distribution package", owner: "bubblewrap: /usr/bin/bwrap\n", state: "ii ", valid: true},
-		{name: "unowned executable", state: "ii "},
-		{name: "other package", owner: "local-bubblewrap: /usr/bin/bwrap\n", state: "ii "},
-		{name: "removed package", owner: "bubblewrap: /usr/bin/bwrap\n", state: "rc "},
+		{name: "installed distribution package", owner: "bubblewrap: /usr/bin/bwrap\n", state: "ii ", binary: "bubblewrap", source: "bubblewrap", arch: "amd64", valid: true},
+		{name: "unowned executable", state: "ii ", binary: "bubblewrap", source: "bubblewrap", arch: "amd64"},
+		{name: "other owning package", owner: "local-bubblewrap: /usr/bin/bwrap\n", state: "ii ", binary: "bubblewrap", source: "bubblewrap", arch: "amd64"},
+		{name: "removed package", owner: "bubblewrap: /usr/bin/bwrap\n", state: "rc ", binary: "bubblewrap", source: "bubblewrap", arch: "amd64"},
+		{name: "other binary package", owner: "bubblewrap: /usr/bin/bwrap\n", state: "ii ", binary: "bubblewrap-custom", source: "bubblewrap", arch: "amd64"},
+		{name: "other source package", owner: "bubblewrap: /usr/bin/bwrap\n", state: "ii ", binary: "bubblewrap", source: "bubblewrap-custom", arch: "amd64"},
+		{name: "other architecture", owner: "bubblewrap: /usr/bin/bwrap\n", state: "ii ", binary: "bubblewrap", source: "bubblewrap", arch: "arm64"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			if got := validBubblewrapPackageRecord(test.owner, test.state); got != test.valid {
+			show := strings.Join([]string{test.state, test.binary, test.source, test.arch, ""}, "\n")
+			if got := validBubblewrapPackageRecord(test.owner, show, "amd64"); got != test.valid {
 				t.Fatalf("package record validity = %t, want %t", got, test.valid)
 			}
 		})
