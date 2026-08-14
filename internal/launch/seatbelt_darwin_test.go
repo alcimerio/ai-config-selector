@@ -21,8 +21,10 @@ import (
 	"syscall"
 	"testing"
 	"time"
+	"unsafe"
 
 	"github.com/creack/pty"
+	"github.com/ebitengine/purego"
 	"golang.org/x/sys/unix"
 )
 
@@ -44,6 +46,7 @@ func TestSeatbeltPolicyIsDefaultDenyAndUsesParametersForValidatedPaths(t *testin
 		`(literal "/var")`,
 		`(literal "/private/var/select/sh")`,
 		`(literal "/dev/tty")`, `(target same-sandbox)`,
+		"(allow mach-lookup\n  (global-name \"com.apple.SecurityServer\"))",
 	} {
 		if !strings.Contains(policy, want) {
 			t.Errorf("policy omits %q", want)
@@ -51,12 +54,18 @@ func TestSeatbeltPolicyIsDefaultDenyAndUsesParametersForValidatedPaths(t *testin
 	}
 	for _, forbidden := range []string{
 		request.workspace, request.sessionDirectory, request.executable,
-		request.runtimeInputs[0], "(allow file-read*)\n", "(allow mach-lookup",
+		request.runtimeInputs[0], "(allow file-read*)\n",
 		"(allow sysctl-read)\n", "(allow iokit", "(allow network*)",
 	} {
 		if strings.Contains(policy, forbidden) {
 			t.Errorf("policy contains forbidden text %q", forbidden)
 		}
+	}
+	if got := strings.Count(policy, "(allow mach-lookup"); got != 1 {
+		t.Fatalf("Mach lookup rule count = %d, want only com.apple.SecurityServer", got)
+	}
+	if got := strings.Count(policy, "(global-name"); got != 1 {
+		t.Fatalf("Mach service count = %d, want only com.apple.SecurityServer", got)
 	}
 	wantDefinitions := []string{
 		"-DWORKSPACE=" + request.workspace,
@@ -190,6 +199,26 @@ func TestSeatbeltResolvesHostnameThroughMDNSSocketAlias(t *testing.T) {
 	}
 	if got := strings.TrimSpace(output.String()); got != "resolved" {
 		t.Fatalf("hostname lookup output = %q", got)
+	}
+}
+
+func TestSeatbeltReadsSystemTrustSettingsThroughSecurityServer(t *testing.T) {
+	skipSeatbeltNativeTestBinaryUnderRace(t)
+	request := seatbeltTestRequest(t)
+	request.arguments = []string{
+		"-test.run=TestSeatbeltHelperProcess", "--", "copy-system-trust-settings",
+	}
+	var output bytes.Buffer
+	request.terminal = Terminal{Output: &output, ErrorOutput: &output}
+	process, err := newSeatbeltBackend(seatbeltExecutable).prepare(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := process.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if err := process.Wait(); err != nil {
+		t.Fatalf("trust-settings read failed: %v; output=%q", err, output.String())
 	}
 }
 
@@ -1253,6 +1282,12 @@ func TestSeatbeltHelperProcess(t *testing.T) {
 		}
 		fmt.Fprintln(os.Stdout, "resolved")
 		os.Exit(0)
+	case "copy-system-trust-settings":
+		if err := seatbeltCopySystemTrustSettings(); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(111)
+		}
+		os.Exit(0)
 	case "check-extra-descriptors":
 		for fd := 3; fd < 64; fd++ {
 			if _, err := unix.FcntlInt(uintptr(fd), unix.F_GETFD, 0); err == nil {
@@ -1415,6 +1450,35 @@ func runSeatbeltContainmentHelper(arguments []string) {
 
 func isSeatbeltPermission(err error) bool {
 	return errors.Is(err, os.ErrPermission) || errors.Is(err, syscall.EPERM) || errors.Is(err, syscall.EACCES)
+}
+
+func seatbeltCopySystemTrustSettings() error {
+	security, err := purego.Dlopen("/System/Library/Frameworks/Security.framework/Security", purego.RTLD_NOW|purego.RTLD_LOCAL)
+	if err != nil {
+		return err
+	}
+	coreFoundation, err := purego.Dlopen("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation", purego.RTLD_NOW|purego.RTLD_LOCAL)
+	if err != nil {
+		return err
+	}
+	var copyCertificates func(uint32, *unsafe.Pointer) int32
+	var arrayCount func(unsafe.Pointer) int
+	var release func(unsafe.Pointer)
+	purego.RegisterLibFunc(&copyCertificates, security, "SecTrustSettingsCopyCertificates")
+	purego.RegisterLibFunc(&arrayCount, coreFoundation, "CFArrayGetCount")
+	purego.RegisterLibFunc(&release, coreFoundation, "CFRelease")
+	var certificates unsafe.Pointer
+	status := copyCertificates(2, &certificates) // kSecTrustSettingsDomainSystem
+	if certificates != nil {
+		defer release(certificates)
+	}
+	if status != 0 || certificates == nil {
+		return fmt.Errorf("copy system trust settings: status=%d certificates=%t", status, certificates != nil)
+	}
+	if count := arrayCount(certificates); count <= 0 {
+		return errors.New("copy system trust settings: no certificates")
+	}
+	return nil
 }
 
 func acceptSeatbeltTestConnection(listener net.Listener) {

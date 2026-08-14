@@ -361,12 +361,15 @@ enter CLI diagnostics; ordinary child exit status remains intact.
 The Darwin backend verifies the root-owned system `sandbox-exec`, builds a
 default-deny Seatbelt policy from validated parameters, and confines the
 workspace, Session, named runtime reads, IP networking, resolver socket, and
-terminal operations. Seatbelt applies the profile to descendants and blocks
-unrelated host paths, Unix sockets, environment values, and descriptors. Each
-launch places one internal ACS supervisor and its target in a dedicated
-Seatbelt instance. The target receives only standard input, output, and error;
-the supervisor alone retains a close-on-exec control socket used for signal
-forwarding and an outer-ACS cleanup challenge.
+terminal operations. Its only external Mach lookup is the exact
+`com.apple.SecurityServer` service required for Security.framework trust
+settings; broad or other Mach lookup remains denied. Seatbelt applies the
+profile to descendants and blocks unrelated host paths, Unix sockets,
+environment values, and descriptors. Each launch places one internal ACS
+supervisor and its target in a dedicated Seatbelt instance. The target receives
+only standard input, output, and error; the supervisor alone retains a
+close-on-exec control socket used for signal forwarding and an outer-ACS
+cleanup challenge.
 
 After the target leader exits, the supervisor uses the public libproc
 `proc_listallpids` and `proc_pidinfo` APIs to find same-instance processes.

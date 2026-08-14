@@ -646,6 +646,11 @@ func buildSeatbeltPolicy(request validatedProcessRequest) (string, []string, err
   (remote ip)
   (literal "/private/var/run/mDNSResponder"))
 
+; Security.framework reads system trust settings through this exact Mach
+; service. All other Mach services remain denied by default.
+(allow mach-lookup
+  (global-name "com.apple.SecurityServer"))
+
 ; Preserve the invoking terminal, raw mode, and resize operations.
 (allow pseudo-tty)
 (allow file-ioctl file-read-data file-write-data
