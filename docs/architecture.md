@@ -275,11 +275,16 @@ credentials, environment values, or account details.
 
 The required release gate stays credential-free: one candidate artifact set is
 installed and exercised natively on darwin/arm64, darwin/amd64, linux/amd64,
-and linux/arm64. A real-Devin smoke is an optional maintainer check for changes
-that affect authentication, the Devin Adapter, Profile selection, Session
-isolation, or interactive lifecycle behavior. It runs only on an authorized
-macOS 26 arm64 maintainer host and never places personal credentials in CI or a
-release artifact.
+and linux/arm64. The native matrix declares the sandbox backend capability
+expected at each increment. In the shared-layer increment, before #57 adds the
+macOS backend and #64 adds the Ubuntu backend, the installed candidate must
+return the stable `backend_unavailable` category without starting the target or
+leasing a Session. The same acceptance harness retains the successful launch
+and lifecycle contract for each backend increment to activate. A real-Devin
+smoke is an optional maintainer check for changes that affect authentication,
+the Devin Adapter, Profile selection, Session isolation, or interactive
+lifecycle behavior. It runs only on an authorized macOS 26 arm64 maintainer
+host and never places personal credentials in CI or a release artifact.
 
 ### Immutable release publication
 

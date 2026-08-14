@@ -58,10 +58,17 @@ func TestSandboxErrorsExposeOnlyStableCategory(t *testing.T) {
 	secret := filepath.Join(t.TempDir(), "PRIVATE_WORKSPACE")
 	err := sandboxError(SandboxUnsafePath, errors.New("backend rejected "+secret+" policy=(allow file-read*)"))
 	assertSandboxCategory(t, err, SandboxUnsafePath)
+	if got, want := err.Error(), "unsafe_path: process sandbox preparation failed: unsafe runtime path"; got != want {
+		t.Fatalf("sandbox error = %q, want %q", got, want)
+	}
 	for _, private := range []string{secret, "PRIVATE_WORKSPACE", "backend rejected", "policy"} {
 		if strings.Contains(err.Error(), private) {
 			t.Fatalf("sandbox error leaked %q: %v", private, err)
 		}
+	}
+	unknown := (&SandboxError{Category: SandboxErrorCategory("PRIVATE_CATEGORY")}).Error()
+	if got, want := unknown, "setup_failed: process sandbox preparation failed"; got != want {
+		t.Fatalf("unknown sandbox error = %q, want %q", got, want)
 	}
 }
 

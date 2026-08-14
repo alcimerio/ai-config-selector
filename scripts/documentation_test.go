@@ -167,6 +167,36 @@ func TestLinuxWorkflowsUseTheCompleteDocumentedCancelreaderException(t *testing.
 	}
 }
 
+func TestPromotedArtifactGateDeclaresExpectedSandboxCapability(t *testing.T) {
+	for _, workflow := range []string{"promoted-artifacts.yml", "release.yml"} {
+		contents, err := os.ReadFile(filepath.Join("..", ".github", "workflows", workflow))
+		if err != nil {
+			t.Fatalf("read %s: %v", workflow, err)
+		}
+		text := string(contents)
+		if got := strings.Count(text, "sandbox_backend: unavailable"); got != 4 {
+			t.Errorf("%s declares unavailable sandbox capability %d times, want 4", workflow, got)
+		}
+		if !strings.Contains(text, "ACS_PROMOTED_SANDBOX_BACKEND: ${{ matrix.sandbox_backend }}") {
+			t.Errorf("%s does not pass the target sandbox capability to installed-artifact acceptance", workflow)
+		}
+	}
+
+	acceptance, err := os.ReadFile(filepath.Join("..", "acceptance", "promoted_artifact_test.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(acceptance)
+	for _, preserved := range []string{
+		"assertPromotedArtifactDryRunAndFakeDevinLaunchPreserveTheRuntimeBoundary",
+		"assertPromotedArtifactForwardsSignalsAndPreservesConcurrentSessionLeases",
+	} {
+		if !strings.Contains(text, preserved) {
+			t.Errorf("installed-artifact acceptance no longer preserves %s", preserved)
+		}
+	}
+}
+
 func TestContributorRaceGateKeepsTheExceptionLinuxOnly(t *testing.T) {
 	contents, err := os.ReadFile(filepath.Join("..", "CONTRIBUTING.md"))
 	if err != nil {

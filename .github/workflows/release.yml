@@ -69,18 +69,22 @@ jobs:
             runner: macos-26
             os: darwin
             arch: arm64
+            sandbox_backend: unavailable
           - target: darwin/amd64
             runner: macos-26-intel
             os: darwin
             arch: amd64
+            sandbox_backend: unavailable
           - target: linux/amd64
             runner: ubuntu-24.04
             os: linux
             arch: amd64
+            sandbox_backend: unavailable
           - target: linux/arm64
             runner: ubuntu-24.04-arm
             os: linux
             arch: arm64
+            sandbox_backend: unavailable
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 20
 
@@ -143,6 +147,7 @@ jobs:
       - name: Exercise installed candidate as a black box
         env:
           ACS_PROMOTED_BINARY: ${{ runner.temp }}/acs-release-${{ matrix.os }}-${{ matrix.arch }}/bin/acs
+          ACS_PROMOTED_SANDBOX_BACKEND: ${{ matrix.sandbox_backend }}
         run: ACS_PROMOTED_VERSION="$GITHUB_REF_NAME" go test ./acceptance -count=1
 
   attest:

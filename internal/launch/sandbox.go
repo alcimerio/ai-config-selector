@@ -36,24 +36,28 @@ type SandboxError struct {
 }
 
 func (e *SandboxError) Error() string {
+	var message string
 	switch e.Category {
 	case SandboxUnsupportedPlatform:
-		return "process sandbox unavailable: unsupported platform"
+		message = "process sandbox unavailable: unsupported platform"
 	case SandboxBackendUnavailable:
-		return "process sandbox unavailable: required system backend is unavailable"
+		message = "process sandbox unavailable: required system backend is unavailable"
 	case SandboxUnsafePath:
-		return "process sandbox preparation failed: unsafe runtime path"
+		message = "process sandbox preparation failed: unsafe runtime path"
 	case SandboxInvalidEnvironment:
-		return "process sandbox preparation failed: invalid environment"
+		message = "process sandbox preparation failed: invalid environment"
 	case SandboxInvalidDescriptor:
-		return "process sandbox preparation failed: invalid file descriptor"
+		message = "process sandbox preparation failed: invalid file descriptor"
+	case SandboxSetupFailed:
+		message = "process sandbox preparation failed"
 	case SandboxProcessStartFailed:
-		return "sandboxed process failed to start"
+		message = "sandboxed process failed to start"
 	case SandboxProcessWaitFailed:
-		return "sandboxed process failed while waiting"
+		message = "sandboxed process failed while waiting"
 	default:
-		return "process sandbox preparation failed"
+		return string(SandboxSetupFailed) + ": process sandbox preparation failed"
 	}
+	return string(e.Category) + ": " + message
 }
 
 func sandboxError(category SandboxErrorCategory, _ error) error {

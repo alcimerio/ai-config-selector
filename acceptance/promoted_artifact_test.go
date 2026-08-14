@@ -101,7 +101,65 @@ func TestPromotedArtifactRestoresThePTYForOrdinaryAndChangedDraftCancellation(t 
 	})
 }
 
-func TestPromotedArtifactDryRunAndFakeDevinLaunchPreserveTheRuntimeBoundary(t *testing.T) {
+func TestPromotedArtifactSandboxContract(t *testing.T) {
+	_ = promotedBinary(t)
+	contracts := map[string]func(*testing.T){
+		"unavailable": assertPromotedArtifactFailsClosedWithoutABackend,
+		"available": func(t *testing.T) {
+			assertPromotedArtifactDryRunAndFakeDevinLaunchPreserveTheRuntimeBoundary(t)
+			assertPromotedArtifactForwardsSignalsAndPreservesConcurrentSessionLeases(t)
+		},
+	}
+	capability := promotedSandboxCapability(t)
+	contract, ok := contracts[capability]
+	if !ok {
+		t.Fatalf("ACS_PROMOTED_SANDBOX_BACKEND = %q, want unavailable or available", capability)
+	}
+	t.Run(capability, contract)
+}
+
+func assertPromotedArtifactFailsClosedWithoutABackend(t *testing.T) {
+	binary := promotedBinary(t)
+	home, basePath := prepareRuntimeHome(t)
+	fixtureRoot := realTemporaryDirectory(t)
+	toolsDirectory := filepath.Join(fixtureRoot, "private-tools")
+	if err := os.Mkdir(toolsDirectory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	targetMarker := filepath.Join(fixtureRoot, "target-started")
+	writeFakeDevin(t, filepath.Join(toolsDirectory, "devin"), `#!/bin/sh
+touch ./target-started
+printf 'PRIVATE_BACKEND_OUTPUT\n'
+printf 'PRIVATE_POLICY_TEXT\n' >&2
+exit 23
+`)
+
+	launch := exec.Command(binary, "devin", "--profile", "reviews")
+	launch.Env = append(promotedEnvironment(home, toolsDirectory+string(os.PathListSeparator)+basePath), "PRIVATE_ENVIRONMENT_VALUE=DO_NOT_LEAK")
+	launch.Dir = fixtureRoot
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	launch.Stdout = &stdout
+	launch.Stderr = &stderr
+	err := launch.Run()
+	exitError, ok := err.(*exec.ExitError)
+	if !ok || exitError.ExitCode() != 1 {
+		t.Fatalf("promoted launch error = %v, want exit 1; stdout=%q stderr=%q", err, stdout.String(), stderr.String())
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("backend-unavailable launch wrote stdout: %q", stdout.String())
+	}
+	wantDiagnostic := "acs: launch Profile \"reviews\": backend_unavailable: process sandbox unavailable: required system backend is unavailable\n"
+	if got := stderr.String(); got != wantDiagnostic {
+		t.Fatalf("backend-unavailable diagnostic = %q, want %q", got, wantDiagnostic)
+	}
+	if _, err := os.Stat(targetMarker); !os.IsNotExist(err) {
+		t.Fatalf("fake Devin started without a sandbox backend: %v", err)
+	}
+	assertNoSessions(t, home)
+}
+
+func assertPromotedArtifactDryRunAndFakeDevinLaunchPreserveTheRuntimeBoundary(t *testing.T) {
 	binary := promotedBinary(t)
 	home, basePath := prepareRuntimeHome(t)
 
@@ -218,7 +276,7 @@ exit 23
 	})
 }
 
-func TestPromotedArtifactForwardsSignalsAndPreservesConcurrentSessionLeases(t *testing.T) {
+func assertPromotedArtifactForwardsSignalsAndPreservesConcurrentSessionLeases(t *testing.T) {
 	binary := promotedBinary(t)
 
 	t.Run("signal forwarding", func(t *testing.T) {
@@ -690,6 +748,15 @@ func promotedVersion(t *testing.T) string {
 		t.Fatal("ACS_PROMOTED_VERSION is required for promoted-artifact acceptance")
 	}
 	return version
+}
+
+func promotedSandboxCapability(t *testing.T) string {
+	t.Helper()
+	capability := os.Getenv("ACS_PROMOTED_SANDBOX_BACKEND")
+	if capability == "" {
+		t.Fatal("ACS_PROMOTED_SANDBOX_BACKEND is required for promoted-artifact acceptance")
+	}
+	return capability
 }
 
 func promotedEnvironment(home, path string) []string {
