@@ -6,12 +6,12 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"runtime/debug"
 	"strings"
 
 	"github.com/alcimerio/ai-config-selector/internal/adapter/devin"
 	"github.com/alcimerio/ai-config-selector/internal/cli"
+	"github.com/alcimerio/ai-config-selector/internal/launch"
 	"github.com/alcimerio/ai-config-selector/internal/profile"
 )
 
@@ -19,7 +19,7 @@ var releaseVersionPattern = regexp.MustCompile(`^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]
 var releaseVersion string
 
 func main() {
-	if err := requireSupportedPlatform(runtime.GOOS); err != nil {
+	if err := requireSupportedPlatform(launch.CurrentPlatform); err != nil {
 		fmt.Fprintf(os.Stderr, "acs: %v\n", err)
 		os.Exit(1)
 	}
@@ -85,9 +85,10 @@ func buildVersion(builderVersion string, readBuildInfo func() (*debug.BuildInfo,
 	return version
 }
 
-func requireSupportedPlatform(goos string) error {
-	if goos != "darwin" && goos != "linux" {
-		return fmt.Errorf("ACS supports macOS and Linux only; current platform is %s", goos)
+func requireSupportedPlatform(probe func() (launch.Platform, error)) error {
+	platform, err := probe()
+	if err != nil {
+		return err
 	}
-	return nil
+	return launch.ValidatePlatform(platform)
 }

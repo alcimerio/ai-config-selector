@@ -23,6 +23,7 @@ import (
 	"github.com/alcimerio/ai-config-selector/internal/category"
 	"github.com/alcimerio/ai-config-selector/internal/cli"
 	"github.com/alcimerio/ai-config-selector/internal/launch"
+	"github.com/alcimerio/ai-config-selector/internal/launch/launchtest"
 	"github.com/alcimerio/ai-config-selector/internal/profile"
 	"github.com/alcimerio/ai-config-selector/internal/skills"
 )
@@ -222,6 +223,8 @@ func TestDryRunLoadsVersionOneProfileWithoutRewritingIt(t *testing.T) {
 
 func TestLaunchRunsPreflightBeforeInteractiveDevinAndCleansUpSession(t *testing.T) {
 	fixture := newLaunchTestFixture(t)
+	recorder := &recordingSandbox{delegate: launchtest.DirectSandbox{}}
+	fixture.sandbox = recorder
 	workingDirectory := t.TempDir()
 
 	eventsPath := filepath.Join(t.TempDir(), "events")
@@ -266,12 +269,59 @@ exit 23
 	if got, want := string(events), "preflight-skills\npreflight-auth\nlaunch-args=0:\n"; got != want {
 		t.Fatalf("Devin events = %q, want %q", got, want)
 	}
+	if got, want := recorder.arguments, [][]string{{"skills", "list", "--json"}, {"auth", "status"}, nil}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("sandbox process arguments = %#v, want %#v", got, want)
+	}
 	entries, err := os.ReadDir(fixture.sessionsDirectory)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(entries) != 0 {
 		t.Fatalf("launch left Session data behind: %v", entries)
+	}
+}
+
+func TestLaunchRejectsUnavailableSandboxBeforeCreatingSession(t *testing.T) {
+	fixture := newLaunchTestFixture(t)
+	fixture.sandbox = failingSandbox{checkErr: &launch.SandboxError{Category: launch.SandboxBackendUnavailable}}
+	marker := filepath.Join(t.TempDir(), "target-started")
+	script := "#!/bin/sh\ntouch " + strconv.Quote(marker) + "\n"
+	var stderr bytes.Buffer
+	application := fixture.application(t, writeFakeDevin(t, script), t.TempDir(), strings.NewReader(""), &bytes.Buffer{}, &stderr)
+
+	if exitCode := application.Run(context.Background(), []string{"devin", "--profile", "reviews"}); exitCode == 0 {
+		t.Fatal("launch succeeded without a sandbox backend")
+	}
+	if !strings.Contains(stderr.String(), string(launch.SandboxBackendUnavailable)) && !strings.Contains(stderr.String(), "required system backend") {
+		t.Fatalf("sandbox diagnostic lacks its stable category: %s", stderr.String())
+	}
+	if _, err := os.Stat(fixture.sessionsDirectory); !os.IsNotExist(err) {
+		t.Fatalf("early sandbox failure created a Session: %v", err)
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("target started after early sandbox failure: %v", err)
+	}
+}
+
+func TestLaunchRemovesUnusedSessionWhenSandboxSetupFails(t *testing.T) {
+	fixture := newLaunchTestFixture(t)
+	fixture.sandbox = failingSandbox{prepareErr: &launch.SandboxError{Category: launch.SandboxSetupFailed}}
+	marker := filepath.Join(t.TempDir(), "target-started")
+	script := "#!/bin/sh\ntouch " + strconv.Quote(marker) + "\n"
+	application := fixture.application(t, writeFakeDevin(t, script), t.TempDir(), strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
+
+	if exitCode := application.Run(context.Background(), []string{"devin", "--profile", "reviews"}); exitCode == 0 {
+		t.Fatal("launch succeeded after sandbox setup failed")
+	}
+	entries, err := os.ReadDir(fixture.sessionsDirectory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("sandbox setup failure left Session data behind: %v", entries)
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("target started after sandbox setup failure: %v", err)
 	}
 }
 
@@ -1341,6 +1391,7 @@ type launchTestFixture struct {
 	existingHome      string
 	profiles          *profile.Store
 	sessionsDirectory string
+	sandbox           launch.ProcessSandbox
 }
 
 func newLaunchTestFixture(t *testing.T) launchTestFixture {
@@ -1369,6 +1420,7 @@ func newLaunchTestFixture(t *testing.T) launchTestFixture {
 		existingHome:      existingHome,
 		profiles:          profiles,
 		sessionsDirectory: filepath.Join(acsHome, "sessions"),
+		sandbox:           launchtest.DirectSandbox{},
 	}
 }
 
@@ -1381,7 +1433,7 @@ func (fixture launchTestFixture) application(
 	errorOutput io.Writer,
 ) cli.App {
 	t.Helper()
-	adapter, err := devin.New(devin.Config{BinaryPath: binaryPath, ExistingHomeDir: fixture.existingHome})
+	adapter, err := devin.New(devin.Config{BinaryPath: binaryPath, ExistingHomeDir: fixture.existingHome, Sandbox: fixture.sandbox})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1397,6 +1449,33 @@ func (fixture launchTestFixture) application(
 		Output:            output,
 		ErrorOutput:       errorOutput,
 	}
+}
+
+type recordingSandbox struct {
+	delegate  launch.ProcessSandbox
+	arguments [][]string
+}
+
+func (sandbox *recordingSandbox) Check(ctx context.Context, request launch.SandboxCheck) error {
+	return sandbox.delegate.Check(ctx, request)
+}
+
+func (sandbox *recordingSandbox) Prepare(ctx context.Context, request launch.ProcessRequest) (launch.Process, error) {
+	sandbox.arguments = append(sandbox.arguments, append([]string(nil), request.Arguments...))
+	return sandbox.delegate.Prepare(ctx, request)
+}
+
+type failingSandbox struct {
+	checkErr   error
+	prepareErr error
+}
+
+func (sandbox failingSandbox) Check(context.Context, launch.SandboxCheck) error {
+	return sandbox.checkErr
+}
+
+func (sandbox failingSandbox) Prepare(context.Context, launch.ProcessRequest) (launch.Process, error) {
+	return nil, sandbox.prepareErr
 }
 
 func writeFakeDevin(t *testing.T, script string) string {

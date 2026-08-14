@@ -12,6 +12,8 @@ import (
 	"testing"
 
 	"github.com/alcimerio/ai-config-selector/internal/adapter/devin"
+	"github.com/alcimerio/ai-config-selector/internal/launch"
+	"github.com/alcimerio/ai-config-selector/internal/launch/launchtest"
 	"github.com/alcimerio/ai-config-selector/internal/skills"
 )
 
@@ -87,6 +89,28 @@ func TestPreflightReportsSanitizedCatalogMismatch(t *testing.T) {
 		if strings.Contains(diagnostic, sensitive) {
 			t.Errorf("diagnostic leaked catalog data: %q", diagnostic)
 		}
+	}
+}
+
+func TestPreflightPreservesStableSandboxFailureCategory(t *testing.T) {
+	adapter, err := devin.New(devin.Config{
+		BinaryPath: "devin", ExistingHomeDir: t.TempDir(), Sandbox: setupFailureSandbox{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	workingDirectory := t.TempDir()
+	session, err := adapter.PrepareSession(filepath.Join(t.TempDir(), "session"), workingDirectory, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = adapter.Preflight(context.Background(), session)
+	var sandboxFailure *launch.SandboxError
+	if !errors.As(err, &sandboxFailure) {
+		t.Fatalf("Preflight error type = %T, want *launch.SandboxError: %v", err, err)
+	}
+	if sandboxFailure.Category != launch.SandboxSetupFailed {
+		t.Fatalf("sandbox category = %q, want %q", sandboxFailure.Category, launch.SandboxSetupFailed)
 	}
 }
 
@@ -324,6 +348,13 @@ type fakeObservedSkill struct {
 	BaseDir  string `json:"base_dir"`
 }
 
+type setupFailureSandbox struct{}
+
+func (setupFailureSandbox) Check(context.Context, launch.SandboxCheck) error { return nil }
+func (setupFailureSandbox) Prepare(context.Context, launch.ProcessRequest) (launch.Process, error) {
+	return nil, &launch.SandboxError{Category: launch.SandboxSetupFailed}
+}
+
 type fakeDevinFixture struct {
 	testRoot             string
 	existingHome         string
@@ -396,7 +427,7 @@ exit 64
 	t.Setenv("FAKE_DEVIN_AUTH_OUTPUT", authOutputPath)
 	t.Setenv("FAKE_DEVIN_AUTH_EXIT", strconv.Itoa(fixture.authExitStatus))
 
-	adapter, err := devin.New(devin.Config{BinaryPath: binaryPath, ExistingHomeDir: fixture.existingHome})
+	adapter, err := devin.New(devin.Config{BinaryPath: binaryPath, ExistingHomeDir: fixture.existingHome, Sandbox: launchtest.DirectSandbox{}})
 	if err != nil {
 		t.Fatal(err)
 	}

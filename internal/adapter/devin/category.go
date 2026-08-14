@@ -194,9 +194,11 @@ func (contribution skillsContribution) Materialize(sessionHome string) error {
 
 func (contribution skillsContribution) Verify(ctx context.Context, verification launch.VerificationContext) error {
 	return contribution.adapter.verifySkillIsolation(ctx, &Session{
+		RootDir:          verification.SessionDirectory,
 		HomeDir:          verification.SessionHome,
+		TemporaryDir:     verification.TemporaryDirectory,
+		SessionsDir:      verification.SessionsDirectory,
 		WorkingDirectory: verification.WorkingDirectory,
-		Environment:      verification.Environment,
 		expectedCatalog:  contribution.expected,
 	})
 }
