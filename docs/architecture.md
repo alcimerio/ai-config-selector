@@ -22,7 +22,7 @@ capability types and CLI Adapters.
 
 The current source-built implementation supports:
 
-- macOS and Linux;
+- macOS 26 and Ubuntu 24.04 LTS on amd64 and arm64;
 - one CLI Adapter, for Devin;
 - user-global Skills discovered from Devin and shared-agent locations;
 - named Profiles stored on the local machine;
@@ -98,13 +98,13 @@ or supplies package-manager, automatic-update, or uninstaller behavior.
 
 | Module | Responsibility |
 | --- | --- |
-| `cmd/acs` | Enforces platform support, resolves host paths, and assembles the application. |
+| `cmd/acs` | Identifies the host, enforces the certified platform matrix, resolves host paths, and assembles the application. |
 | `internal/cli` | Parses public commands and coordinates Profile creation, dry runs, and launches through narrow interfaces. |
 | `internal/profile` | Validates Profile names and owns local JSON persistence. |
 | `internal/category` | Binds typed category modules and owns ordered draft, schema, resolution, and launch-contribution coordination. |
 | `internal/skills` | Defines Skill Catalog types and resolves strict Skill References. |
 | `internal/adapter/devin` | Encapsulates Devin discovery paths, Session layout, preflight checks, launch planning, and process supervision. |
-| `internal/launch` | Owns Session leases and the CLI-neutral launch plan and terminal types. |
+| `internal/launch` | Owns Session leases, certified-platform checks, the shared Process Sandbox boundary, and CLI-neutral launch and terminal types. |
 
 ```mermaid
 flowchart LR
@@ -150,8 +150,9 @@ planning, and launch interfaces. It does not import Skills types or switch on
 category IDs. A CLI Adapter assembles its fixed Registry and implements
 target-specific editing and process behavior. Profile storage delegates schema
 normalization to that Registry and does not depend on target paths.
-The Session boundary in the diagram represents configuration isolation; it is
-not an OS sandbox around the target process.
+The Session boundary in the diagram represents configuration isolation. The
+separate Process Sandbox boundary prepares every target process and owns native
+backend selection and containment policy.
 
 ## Profile lifecycle
 
@@ -205,15 +206,15 @@ sequenceDiagram
     ACS->>Registry: Resolve registered categories in order
     Registry-->>ACS: Ordered launch contributions or error
     ACS->>Adapter: Launch resolved Profile
+    Adapter->>Target: Validate sandbox backend and pre-Session runtime inputs
     Adapter->>Session: Create lease
     Adapter->>Registry: Materialize category contributions
     Adapter->>Session: Copy allowlisted target state
-    Note over Session,Target: Synthetic home changes configuration discovery
-    Note over Session,Target: Repository-local capabilities remain visible
+    Note over Session,Target: Sandbox preparation validates resolved workspace, Session, executable, temporary, and runtime paths
     Adapter->>Registry: Verify category contributions
-    Adapter->>Target: Verify target authentication
+    Adapter->>Target: Verify target authentication through Process Sandbox
     Target-->>Adapter: Capability and authentication status
-    Adapter->>Target: Start interactive process with Session environment
+    Adapter->>Target: Start interactive process through Process Sandbox
     Target-->>Adapter: Exit status
     Adapter->>Session: Remove Session
     Adapter-->>ACS: Exit status
@@ -274,11 +275,16 @@ credentials, environment values, or account details.
 
 The required release gate stays credential-free: one candidate artifact set is
 installed and exercised natively on darwin/arm64, darwin/amd64, linux/amd64,
-and linux/arm64. A real-Devin smoke is an optional maintainer check for changes
-that affect authentication, the Devin Adapter, Profile selection, Session
-isolation, or interactive lifecycle behavior. It runs only on an authorized
-macOS 26 arm64 maintainer host and never places personal credentials in CI or a
-release artifact.
+and linux/arm64. The native matrix declares the sandbox backend capability
+expected at each increment. In the shared-layer increment, before #57 adds the
+macOS backend and #64 adds the Ubuntu backend, the installed candidate must
+return the stable `backend_unavailable` category without starting the target or
+leasing a Session. The same acceptance harness retains the successful launch
+and lifecycle contract for each backend increment to activate. A real-Devin
+smoke is an optional maintainer check for changes that affect authentication,
+the Devin Adapter, Profile selection, Session isolation, or interactive
+lifecycle behavior. It runs only on an authorized macOS 26 arm64 maintainer
+host and never places personal credentials in CI or a release artifact.
 
 ### Immutable release publication
 
@@ -336,10 +342,22 @@ The synthetic home isolates Devin's normal configuration discovery from the
 user's global Skill directories. ACS copies only selected global Skill Bundles
 and the allowlisted credential into that home.
 
-The current runtime does not place the Devin process inside an OS filesystem
-sandbox. A process that knows an absolute host path may still read it. ACS also
-preserves Devin's normal network access. The Session provides configuration
-isolation, not containment for hostile code.
+The shared Process Sandbox boundary owns certified-host validation, native
+backend selection, path resolution, environment filtering, descriptor rules,
+and process-group preparation. Every Devin capability probe and interactive
+launch uses that boundary. ACS fails closed before leasing a Session when the
+host, executable, workspace, runtime inputs, or required native backend cannot
+be validated; a later preparation failure removes the unused Session.
+
+The shared layer passes only Session-scoped HOME, XDG, and temporary paths, a
+fixed safe PATH, and validated terminal and locale values. It has no public
+backend selector, policy input, environment passthrough, or sandbox bypass.
+It also classifies process-start and non-exit wait failures at the boundary so
+backend output, generated policy, host paths, and environment values do not
+enter CLI diagnostics; ordinary child exit status remains intact.
+Native Seatbelt and Bubblewrap policy and mount implementations are separate
+backend work; until the backend for a supported host is present, interactive
+launch fails closed rather than running Devin without containment.
 
 Repository-local Skills remain visible because Devin runs in the selected
 repository. ACS reports them but does not filter, copy, or manage them.
@@ -540,7 +558,8 @@ Skills guards fuzzy search and navigation responsiveness.
 
 ## Current limitations
 
-- ACS rejects platforms other than macOS and Linux.
+- ACS accepts only macOS 26 and Ubuntu 24.04 LTS on amd64 or arm64, and rejects
+  unidentified hosts and missing native sandbox backends.
 - ACS ships only the Devin Adapter.
 - The Devin Registry currently contains only the Skills category.
 - Profile creation uses the hardened Bubble Tea builder with search, lazy

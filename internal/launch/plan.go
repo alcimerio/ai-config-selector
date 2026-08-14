@@ -17,9 +17,11 @@ type Contribution interface {
 // VerificationContext is the target process environment visible to category
 // verification after Session materialization.
 type VerificationContext struct {
-	SessionHome      string
-	WorkingDirectory string
-	Environment      []string
+	SessionsDirectory  string
+	SessionDirectory   string
+	SessionHome        string
+	TemporaryDirectory string
+	WorkingDirectory   string
 }
 
 // Plan describes what ACS would materialize and what the target CLI may

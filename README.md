@@ -28,8 +28,12 @@ On every Supported Platform, ACS supports:
 
 - the Devin CLI, installed and authenticated;
 - user-global Skills discovered from Devin and shared-agent locations;
-- interactive Profile creation, persistence, dry-run inspection, and launch;
-- configuration isolation through an ephemeral Session.
+- interactive Profile creation, persistence, and dry-run inspection;
+- fail-closed validation of interactive launches until the native sandbox
+  backends are available;
+- after the native sandbox backend for the host lands, the intended interactive
+  launch workflow will isolate configuration through an ephemeral Session
+  inside that sandbox.
 
 The Profile Builder requires confirmation before it creates an empty Profile.
 Windows, WSL, other Linux distributions, and other operating-system or
@@ -189,10 +193,22 @@ Launch Devin with the Profile:
 acs devin --profile backend-review
 ```
 
-The adapter creates an ephemeral Session with a synthetic home, copies the
-selected Skill Bundles and the existing Devin credential into that Session,
-verifies the selection and authentication state, and starts Devin in the
-current working directory. ACS removes the Session after Devin exits.
+This command is the intended interactive launch workflow, but the current
+sandbox increment is fail-closed. Until the Seatbelt backend in #57 and the
+Bubblewrap backend in #64 land, ACS reports `backend_unavailable` on every
+Supported Platform before it leases a Session or starts Devin. Profile
+creation and dry-run inspection remain available; there is no unsandboxed
+launch fallback.
+
+### Session lifecycle
+
+After the native backend for the host lands, the same command first completes
+sandbox preflight, then creates an ephemeral Session with a synthetic home,
+copies the selected Skill Bundles and existing Devin credential into that
+Session, verifies the selection and authentication state, and starts Devin in
+the current working directory through the native sandbox. ACS removes the
+Session after Devin exits or launch fails. A failure before the Session lease
+does not create Session data.
 
 Repository-local Skills remain under Devin's control. ACS reports them during
 a dry run but does not copy, filter, or isolate them.
@@ -215,9 +231,11 @@ and unknown categories.
 v0.2.0 preserves the v0.1.0 Profile envelopes, category schemas, public
 commands, accepted messages, file permissions, and atomic Profile persistence.
 It also preserves Profile Builder behavior, Devin Adapter discovery and
-preflight behavior, launch and signal handling, ACS Home at `~/.acs`, and
-isolated per-launch Session creation and cleanup. Existing v0.1.0 Profiles do
-not require migration.
+preflight behavior, launch and signal handling, ACS Home at `~/.acs`, and the
+intended per-launch Session creation and cleanup contract. That Session
+lifecycle is not currently available: until the native backends land, an
+interactive launch returns `backend_unavailable` before leasing a Session.
+Existing v0.1.0 Profiles do not require migration.
 
 ## Known limitations
 
@@ -231,8 +249,10 @@ not require migration.
 - Profiles cannot be listed, edited, deleted, imported, or exported through
   the CLI.
 - ACS does not filter repository-local Skills.
-- The synthetic home provides configuration isolation, not an OS sandbox.
-  It does not restrict network access or known absolute host paths.
+- The current sandbox increment deliberately blocks interactive launches until
+  native Seatbelt and Bubblewrap enforcement is available. The synthetic home
+  will provide configuration isolation inside that OS sandbox; it is not a
+  substitute for native enforcement.
 - ACS does not manage MCP servers, hooks, instructions, agents, or arbitrary
   target settings.
 - ACS has no package-manager distribution, automatic updates, or uninstaller.

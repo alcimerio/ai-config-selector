@@ -1,9 +1,11 @@
 package main
 
 import (
+	"errors"
 	"runtime/debug"
-	"strings"
 	"testing"
+
+	"github.com/alcimerio/ai-config-selector/internal/launch"
 )
 
 func TestBuildVersionUsesTaggedModuleMetadata(t *testing.T) {
@@ -75,28 +77,19 @@ func TestBuildVersionFallsBackForDevelopmentAndUnavailableMetadata(t *testing.T)
 	}
 }
 
-func TestRequireSupportedPlatformAcceptsDarwinAndLinux(t *testing.T) {
-	for _, goos := range []string{"darwin", "linux"} {
-		t.Run(goos, func(t *testing.T) {
-			if err := requireSupportedPlatform(goos); err != nil {
-				t.Fatalf("%s rejected: %v", goos, err)
-			}
-		})
+func TestRequireSupportedPlatformUsesIdentifiedHost(t *testing.T) {
+	err := requireSupportedPlatform(func() (launch.Platform, error) {
+		return launch.Platform{OS: "darwin", Architecture: "arm64", Release: "26.5.1"}, nil
+	})
+	if err != nil {
+		t.Fatalf("supported host rejected: %v", err)
 	}
 }
 
-func TestRequireSupportedPlatformRejectsEveryOtherOperatingSystemFamily(t *testing.T) {
-	for _, goos := range []string{"aix", "android", "dragonfly", "freebsd", "illumos", "ios", "js", "netbsd", "openbsd", "plan9", "solaris", "wasip1", "windows"} {
-		t.Run(goos, func(t *testing.T) {
-			err := requireSupportedPlatform(goos)
-			if err == nil {
-				t.Fatal("unsupported platform was accepted")
-			}
-			for _, want := range []string{"macOS", "Linux", goos} {
-				if !strings.Contains(err.Error(), want) {
-					t.Fatalf("unsupported-platform error omits %q: %v", want, err)
-				}
-			}
-		})
+func TestRequireSupportedPlatformRejectsUnidentifiedHost(t *testing.T) {
+	probeFailure := errors.New("private probe output")
+	err := requireSupportedPlatform(func() (launch.Platform, error) { return launch.Platform{}, probeFailure })
+	if !errors.Is(err, probeFailure) {
+		t.Fatalf("probe error = %v, want original category", err)
 	}
 }

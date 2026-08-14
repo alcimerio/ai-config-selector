@@ -9,10 +9,10 @@ import (
 	"os/signal"
 	"sync"
 	"syscall"
-	"unsafe"
 
 	"github.com/alcimerio/ai-config-selector/internal/category"
 	"github.com/alcimerio/ai-config-selector/internal/launch"
+	"golang.org/x/sys/unix"
 )
 
 // Launch creates an ephemeral ACS Session, verifies the Devin Adapter
@@ -30,6 +30,12 @@ func (a *Adapter) Launch(
 	terminalFile := terminalFile(terminal.Input)
 	supervisor := newSignalSupervisor(cancelPreflight, terminalFile)
 	defer supervisor.stop()
+	if err := a.sandbox.Check(preflightContext, launch.SandboxCheck{
+		Workspace: workingDirectory, SessionsDirectory: sessionsDirectory,
+		Executable: a.binaryPath, RuntimeInputs: a.runtimeInputs,
+	}); err != nil {
+		return 1, err
+	}
 
 	sessionLease, err := launch.CreateSession(sessionsDirectory)
 	if err != nil {
@@ -52,9 +58,11 @@ func (a *Adapter) Launch(
 		return 1, err
 	}
 	if err := resolved.Verify(preflightContext, launch.VerificationContext{
-		SessionHome:      session.HomeDir,
-		WorkingDirectory: session.WorkingDirectory,
-		Environment:      session.Environment,
+		SessionsDirectory:  sessionsDirectory,
+		SessionDirectory:   session.RootDir,
+		SessionHome:        session.HomeDir,
+		TemporaryDirectory: session.TemporaryDir,
+		WorkingDirectory:   session.WorkingDirectory,
 	}); err != nil {
 		return 1, err
 	}
@@ -62,16 +70,19 @@ func (a *Adapter) Launch(
 		return 1, err
 	}
 
-	command := exec.CommandContext(ctx, a.binaryPath)
-	command.Dir = session.WorkingDirectory
-	command.Env = session.Environment
-	command.Stdin = terminal.Input
-	command.Stdout = terminal.Output
-	command.Stderr = terminal.ErrorOutput
+	process, err := a.sandbox.Prepare(ctx, launch.ProcessRequest{
+		Workspace: session.WorkingDirectory, SessionsDirectory: sessionsDirectory,
+		SessionDirectory: session.RootDir, SessionHome: session.HomeDir,
+		TemporaryDirectory: session.TemporaryDir, Executable: a.binaryPath,
+		RuntimeInputs: a.runtimeInputs, Terminal: terminal,
+	})
+	if err != nil {
+		return 1, err
+	}
 	if preflightContext.Err() != nil {
 		return 1, errors.New("Devin launch interrupted before the interactive process started")
 	}
-	if err := runAttached(command, supervisor); err != nil {
+	if err := runAttached(process, supervisor); err != nil {
 		if ctx.Err() != nil {
 			return 1, fmt.Errorf("Devin launch interrupted: %w", ctx.Err())
 		}
@@ -89,12 +100,12 @@ func (a *Adapter) Launch(
 	return 0, nil
 }
 
-func runAttached(command *exec.Cmd, supervisor *signalSupervisor) error {
-	if err := command.Start(); err != nil {
+func runAttached(process launch.Process, supervisor *signalSupervisor) error {
+	if err := process.Start(); err != nil {
 		return err
 	}
-	supervisor.attach(command.Process)
-	err := command.Wait()
+	supervisor.attach(process)
+	err := process.Wait()
 	supervisor.detach()
 	return err
 }
@@ -104,7 +115,7 @@ type signalSupervisor struct {
 	done            chan struct{}
 	cancelPreflight context.CancelFunc
 	mutex           sync.Mutex
-	child           *os.Process
+	child           launch.Process
 	pending         os.Signal
 	terminal        *os.File
 }
@@ -157,7 +168,7 @@ func (supervisor *signalSupervisor) run() {
 	}
 }
 
-func (supervisor *signalSupervisor) attach(child *os.Process) {
+func (supervisor *signalSupervisor) attach(child launch.Process) {
 	supervisor.mutex.Lock()
 	defer supervisor.mutex.Unlock()
 	supervisor.child = child
@@ -198,12 +209,6 @@ func foregroundTerminalProcessGroup(terminal *os.File) (int32, bool) {
 	if terminal == nil {
 		return 0, false
 	}
-	var processGroup int32
-	_, _, errno := syscall.Syscall(
-		syscall.SYS_IOCTL,
-		terminal.Fd(),
-		syscall.TIOCGPGRP,
-		uintptr(unsafe.Pointer(&processGroup)),
-	)
-	return processGroup, errno == 0
+	processGroup, err := unix.IoctlGetInt(int(terminal.Fd()), unix.TIOCGPGRP)
+	return int32(processGroup), err == nil
 }

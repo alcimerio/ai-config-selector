@@ -1,4 +1,4 @@
-package devin_test
+package devin
 
 import (
 	"context"
@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/alcimerio/ai-config-selector/internal/adapter/devin"
+	"github.com/alcimerio/ai-config-selector/internal/launch"
 	"github.com/alcimerio/ai-config-selector/internal/skills"
 )
 
@@ -31,7 +31,7 @@ func TestDiscoverGlobalSkillCatalogKeepsSourceIdentityForDuplicateNames(t *testi
 		}
 	}
 
-	adapter, err := devin.New(devin.Config{BinaryPath: "devin", ExistingHomeDir: existingHome})
+	adapter, err := New(Config{BinaryPath: "devin", ExistingHomeDir: existingHome})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,6 +56,41 @@ func TestDiscoverGlobalSkillCatalogKeepsSourceIdentityForDuplicateNames(t *testi
 	}
 }
 
+func TestConfigDoesNotExposeProcessSandboxOverride(t *testing.T) {
+	sandboxType := reflect.TypeOf((*launch.ProcessSandbox)(nil)).Elem()
+	configType := reflect.TypeOf(Config{})
+	for index := 0; index < configType.NumField(); index++ {
+		field := configType.Field(index)
+		if field.IsExported() && field.Type.Implements(sandboxType) {
+			t.Fatalf("Config exposes ProcessSandbox override %q", field.Name)
+		}
+	}
+}
+
+func TestSandboxAssemblyHasNoCrossPackageBypass(t *testing.T) {
+	patterns := []string{
+		filepath.Join("..", "devin", "*.go"),
+		filepath.Join("..", "..", "cli", "*.go"),
+	}
+	for _, pattern := range patterns {
+		paths, err := filepath.Glob(pattern)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, path := range paths {
+			source, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, bypass := range []string{"go:" + "linkname", strconv.Quote("un" + "safe")} {
+				if strings.Contains(string(source), bypass) {
+					t.Fatalf("sandbox assembly bypass %q found in %s", bypass, path)
+				}
+			}
+		}
+	}
+}
+
 func TestPreflightReportsSanitizedCatalogMismatch(t *testing.T) {
 	fixture := newFakeDevinFixture(t, []fakeObservedSkill{{
 		Name:     "token=SUPER_SECRET_STDOUT",
@@ -70,12 +105,12 @@ func TestPreflightReportsSanitizedCatalogMismatch(t *testing.T) {
 		t.Fatal("Preflight succeeded with the wrong global Skill Catalog")
 	}
 
-	var preflightError *devin.PreflightError
+	var preflightError *PreflightError
 	if !errors.As(err, &preflightError) {
-		t.Fatalf("Preflight error type = %T, want *devin.PreflightError", err)
+		t.Fatalf("Preflight error type = %T, want *PreflightError", err)
 	}
-	if preflightError.Capability != devin.CapabilitySkillIsolation {
-		t.Errorf("failed capability = %q, want %q", preflightError.Capability, devin.CapabilitySkillIsolation)
+	if preflightError.Capability != CapabilitySkillIsolation {
+		t.Errorf("failed capability = %q, want %q", preflightError.Capability, CapabilitySkillIsolation)
 	}
 	diagnostic := err.Error()
 	for _, required := range []string{"skill isolation", "incompatible"} {
@@ -87,6 +122,28 @@ func TestPreflightReportsSanitizedCatalogMismatch(t *testing.T) {
 		if strings.Contains(diagnostic, sensitive) {
 			t.Errorf("diagnostic leaked catalog data: %q", diagnostic)
 		}
+	}
+}
+
+func TestPreflightPreservesStableSandboxFailureCategory(t *testing.T) {
+	adapter, err := newAdapter(Config{
+		BinaryPath: "devin", ExistingHomeDir: t.TempDir(),
+	}, setupFailureSandbox{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	workingDirectory := t.TempDir()
+	session, err := adapter.PrepareSession(filepath.Join(t.TempDir(), "session"), workingDirectory, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = adapter.Preflight(context.Background(), session)
+	var sandboxFailure *launch.SandboxError
+	if !errors.As(err, &sandboxFailure) {
+		t.Fatalf("Preflight error type = %T, want *launch.SandboxError: %v", err, err)
+	}
+	if sandboxFailure.Category != launch.SandboxSetupFailed {
+		t.Fatalf("sandbox category = %q, want %q", sandboxFailure.Category, launch.SandboxSetupFailed)
 	}
 }
 
@@ -158,12 +215,12 @@ func TestPreflightReportsSanitizedUnavailableAuthentication(t *testing.T) {
 		t.Fatal("Preflight succeeded without usable authentication")
 	}
 
-	var preflightError *devin.PreflightError
+	var preflightError *PreflightError
 	if !errors.As(err, &preflightError) {
-		t.Fatalf("Preflight error type = %T, want *devin.PreflightError", err)
+		t.Fatalf("Preflight error type = %T, want *PreflightError", err)
 	}
-	if preflightError.Capability != devin.CapabilityAuthentication {
-		t.Errorf("failed capability = %q, want %q", preflightError.Capability, devin.CapabilityAuthentication)
+	if preflightError.Capability != CapabilityAuthentication {
+		t.Errorf("failed capability = %q, want %q", preflightError.Capability, CapabilityAuthentication)
 	}
 	diagnostic := err.Error()
 	if !strings.Contains(diagnostic, "devin auth login") {
@@ -257,7 +314,7 @@ func TestPrepareSessionCopiesOnlySelectedBundlesAndCredentialAllowlist(t *testin
 func TestPrepareSessionSanitizesCredentialPathFailures(t *testing.T) {
 	sensitiveComponent := "PRIVATE_TOKEN_PATH" + strings.Repeat("x", 300)
 	existingHome := filepath.Join(t.TempDir(), sensitiveComponent)
-	adapter, err := devin.New(devin.Config{BinaryPath: "devin", ExistingHomeDir: existingHome})
+	adapter, err := New(Config{BinaryPath: "devin", ExistingHomeDir: existingHome})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -286,7 +343,7 @@ func TestPrepareSessionPreservesRegularSymlinkBackedCredentials(t *testing.T) {
 	if err := os.Symlink(credentialTarget, credentialPath); err != nil {
 		t.Fatal(err)
 	}
-	adapter, err := devin.New(devin.Config{BinaryPath: "devin", ExistingHomeDir: existingHome})
+	adapter, err := New(Config{BinaryPath: "devin", ExistingHomeDir: existingHome})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -304,16 +361,16 @@ func TestPrepareSessionPreservesRegularSymlinkBackedCredentials(t *testing.T) {
 }
 
 func TestSourceRulesSeparateGlobalAndProjectLocalSkills(t *testing.T) {
-	wantGlobal := []devin.SourceRule{
-		{Source: devin.GlobalSourceDevinConfig, RelativeDirectory: filepath.Join(".config", "devin", "skills")},
-		{Source: devin.GlobalSourceSharedAgents, RelativeDirectory: filepath.Join(".agents", "skills")},
+	wantGlobal := []SourceRule{
+		{Source: GlobalSourceDevinConfig, RelativeDirectory: filepath.Join(".config", "devin", "skills")},
+		{Source: GlobalSourceSharedAgents, RelativeDirectory: filepath.Join(".agents", "skills")},
 	}
-	if got := devin.GlobalSourceRules(); !reflect.DeepEqual(got, wantGlobal) {
+	if got := GlobalSourceRules(); !reflect.DeepEqual(got, wantGlobal) {
 		t.Fatalf("global source rules = %#v, want %#v", got, wantGlobal)
 	}
 
 	wantProject := []string{filepath.Join(".devin", "skills"), filepath.Join(".agents", "skills")}
-	if got := devin.ProjectSourceDirectories(); !reflect.DeepEqual(got, wantProject) {
+	if got := ProjectSourceDirectories(); !reflect.DeepEqual(got, wantProject) {
 		t.Fatalf("project source rules = %#v, want %#v", got, wantProject)
 	}
 }
@@ -322,6 +379,13 @@ type fakeObservedSkill struct {
 	Name     string `json:"name"`
 	Provider string `json:"provider"`
 	BaseDir  string `json:"base_dir"`
+}
+
+type setupFailureSandbox struct{}
+
+func (setupFailureSandbox) Check(context.Context, launch.SandboxCheck) error { return nil }
+func (setupFailureSandbox) Prepare(context.Context, launch.ProcessRequest) (launch.Process, error) {
+	return nil, &launch.SandboxError{Category: launch.SandboxSetupFailed}
 }
 
 type fakeDevinFixture struct {
@@ -355,7 +419,7 @@ func newFakeDevinFixture(t *testing.T, skills []fakeObservedSkill, authOutput st
 	}
 }
 
-func (fixture *fakeDevinFixture) prepare(t *testing.T) (*devin.Adapter, *devin.Session) {
+func (fixture *fakeDevinFixture) prepare(t *testing.T) (*Adapter, *Session) {
 	t.Helper()
 	binaryPath := filepath.Join(fixture.testRoot, "fake-devin")
 	skillsJSONPath := filepath.Join(fixture.testRoot, "skills.json")
@@ -396,16 +460,16 @@ exit 64
 	t.Setenv("FAKE_DEVIN_AUTH_OUTPUT", authOutputPath)
 	t.Setenv("FAKE_DEVIN_AUTH_EXIT", strconv.Itoa(fixture.authExitStatus))
 
-	adapter, err := devin.New(devin.Config{BinaryPath: binaryPath, ExistingHomeDir: fixture.existingHome})
+	adapter, err := newAdapter(Config{BinaryPath: binaryPath, ExistingHomeDir: fixture.existingHome}, directSandbox{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	session, err := adapter.PrepareSession(
 		filepath.Join(fixture.testRoot, "session"),
 		plannedWorkingDirectory(t),
-		[]devin.SkillBundle{{
-			Reference: devin.SkillReference{
-				Source:       devin.GlobalSourceDevinConfig,
+		[]SkillBundle{{
+			Reference: SkillReference{
+				Source:       GlobalSourceDevinConfig,
 				RelativePath: fixture.selectedRelativePath,
 			},
 			BundlePath: filepath.Join("testdata", "selected-skill"),

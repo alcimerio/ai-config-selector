@@ -14,11 +14,10 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"syscall"
-	"time"
 
 	"github.com/alcimerio/ai-config-selector/internal/builder"
 	"github.com/alcimerio/ai-config-selector/internal/category"
+	"github.com/alcimerio/ai-config-selector/internal/launch"
 	"github.com/alcimerio/ai-config-selector/internal/skills"
 )
 
@@ -67,6 +66,7 @@ func ProjectSourceDirectories() []string {
 type Config struct {
 	BinaryPath      string
 	ExistingHomeDir string
+	RuntimeInputs   []string
 }
 
 type Adapter struct {
@@ -75,6 +75,8 @@ type Adapter struct {
 	categories      *category.Registry
 	editors         *builder.EditorRegistry
 	skillsCategory  category.Binding[[]skills.SkillReference, []skills.SkillBundle, skillsContribution]
+	sandbox         launch.ProcessSandbox
+	runtimeInputs   []string
 }
 
 type SkillBundle = skills.SkillBundle
@@ -86,13 +88,20 @@ type SkillReference = skills.SkillReference
 type Session struct {
 	RootDir          string
 	HomeDir          string
+	TemporaryDir     string
+	SessionsDir      string
 	WorkingDirectory string
-	Environment      []string
 
 	expectedCatalog []SkillReference
 }
 
 func New(config Config) (*Adapter, error) {
+	return newAdapter(config, launch.NewProcessSandbox())
+}
+
+// newAdapter is the package-private assembly seam. Production callers always
+// receive the fail-closed native sandbox from New.
+func newAdapter(config Config, sandbox launch.ProcessSandbox) (*Adapter, error) {
 	if config.BinaryPath == "" {
 		return nil, errors.New("create Devin Adapter: binary path is required")
 	}
@@ -102,6 +111,11 @@ func New(config Config) (*Adapter, error) {
 	adapter := &Adapter{
 		binaryPath:      config.BinaryPath,
 		existingHomeDir: filepath.Clean(config.ExistingHomeDir),
+		sandbox:         sandbox,
+		runtimeInputs:   append([]string(nil), config.RuntimeInputs...),
+	}
+	if adapter.sandbox == nil {
+		return nil, errors.New("create Devin Adapter: process sandbox is required")
 	}
 	registry, binding, err := newCategoryRegistry(adapter)
 	if err != nil {
@@ -127,6 +141,10 @@ func (a *Adapter) Categories() *category.Registry {
 // Bundles, and preserves only the allowlisted credential file.
 func (a *Adapter) PrepareSession(rootDir, workingDirectory string, selected []SkillBundle) (*Session, error) {
 	homeDir := filepath.Join(rootDir, "home")
+	temporaryDir := filepath.Join(rootDir, "tmp")
+	if err := os.MkdirAll(temporaryDir, 0o700); err != nil {
+		return nil, fmt.Errorf("prepare Devin Session temporary directory: %w", err)
+	}
 	for _, rule := range globalSourceRules {
 		if err := os.MkdirAll(filepath.Join(homeDir, rule.RelativeDirectory), 0o700); err != nil {
 			return nil, fmt.Errorf("prepare Devin Session global source %q: %w", rule.Source, err)
@@ -162,14 +180,19 @@ func (a *Adapter) PrepareSession(rootDir, workingDirectory string, selected []Sk
 	return &Session{
 		RootDir:          filepath.Clean(rootDir),
 		HomeDir:          homeDir,
+		TemporaryDir:     temporaryDir,
+		SessionsDir:      filepath.Dir(filepath.Clean(rootDir)),
 		WorkingDirectory: filepath.Clean(workingDirectory),
-		Environment:      isolatedEnvironment(homeDir),
 		expectedCatalog:  expected,
 	}, nil
 }
 
 func (a *Adapter) prepareResolvedSession(rootDir, workingDirectory string, resolved category.ResolvedProfile) (*Session, error) {
 	homeDir := filepath.Join(rootDir, "home")
+	temporaryDir := filepath.Join(rootDir, "tmp")
+	if err := os.MkdirAll(temporaryDir, 0o700); err != nil {
+		return nil, fmt.Errorf("prepare Devin Session temporary directory: %w", err)
+	}
 	if err := resolved.Materialize(homeDir); err != nil {
 		return nil, err
 	}
@@ -181,8 +204,9 @@ func (a *Adapter) prepareResolvedSession(rootDir, workingDirectory string, resol
 	return &Session{
 		RootDir:          filepath.Clean(rootDir),
 		HomeDir:          homeDir,
+		TemporaryDir:     temporaryDir,
+		SessionsDir:      filepath.Dir(filepath.Clean(rootDir)),
 		WorkingDirectory: filepath.Clean(workingDirectory),
-		Environment:      isolatedEnvironment(homeDir),
 	}, nil
 }
 
@@ -196,21 +220,26 @@ func (a *Adapter) Preflight(ctx context.Context, session *Session) error {
 }
 
 func (a *Adapter) verifyAuthentication(ctx context.Context, session *Session) error {
-	command := preflightCommand(ctx, a.binaryPath, "auth", "status")
-	command.Dir = session.WorkingDirectory
-	command.Env = session.Environment
-	output, err := command.CombinedOutput()
+	var output bytes.Buffer
+	err := a.runSandboxed(ctx, session, []string{"auth", "status"}, launch.Terminal{Output: &output, ErrorOutput: io.Discard})
 	if err != nil {
+		var sandboxFailure *launch.SandboxError
+		if errors.As(err, &sandboxFailure) {
+			return err
+		}
 		return &PreflightError{Capability: CapabilityAuthentication, reason: commandFailureReason(ctx, err, reasonAuthenticationCommandFailed)}
 	}
-	if !strings.HasPrefix(strings.TrimSpace(string(output)), "Logged in") {
+	if !strings.HasPrefix(strings.TrimSpace(output.String()), "Logged in") {
 		return &PreflightError{Capability: CapabilityAuthentication, reason: reasonAuthenticationUnavailable}
 	}
 	return nil
 }
 
 func (a *Adapter) verifySkillIsolation(ctx context.Context, session *Session) error {
-	observed, failure := a.observeGlobalCatalog(ctx, session)
+	observed, failure, err := a.observeGlobalCatalog(ctx, session)
+	if err != nil {
+		return err
+	}
 	if failure != 0 {
 		return &PreflightError{Capability: CapabilitySkillIsolation, reason: failure}
 	}
@@ -235,20 +264,19 @@ type catalogObservation struct {
 	unmanaged bool
 }
 
-func (a *Adapter) observeGlobalCatalog(ctx context.Context, session *Session) (catalogObservation, preflightFailureReason) {
-	command := preflightCommand(ctx, a.binaryPath, "skills", "list", "--json")
-	command.Dir = session.WorkingDirectory
-	command.Env = session.Environment
+func (a *Adapter) observeGlobalCatalog(ctx context.Context, session *Session) (catalogObservation, preflightFailureReason, error) {
 	var stdout bytes.Buffer
-	command.Stdout = &stdout
-	command.Stderr = io.Discard
-	if err := command.Run(); err != nil {
-		return catalogObservation{}, commandFailureReason(ctx, err, reasonSkillInspectionCommandFailed)
+	if err := a.runSandboxed(ctx, session, []string{"skills", "list", "--json"}, launch.Terminal{Output: &stdout, ErrorOutput: io.Discard}); err != nil {
+		var sandboxFailure *launch.SandboxError
+		if errors.As(err, &sandboxFailure) {
+			return catalogObservation{}, 0, err
+		}
+		return catalogObservation{}, commandFailureReason(ctx, err, reasonSkillInspectionCommandFailed), nil
 	}
 
 	var skills []observedSkill
 	if err := json.Unmarshal(stdout.Bytes(), &skills); err != nil {
-		return catalogObservation{}, reasonSkillInspectionOutputInvalid
+		return catalogObservation{}, reasonSkillInspectionOutputInvalid, nil
 	}
 
 	projectBundles := discoverProjectBundles(session.WorkingDirectory)
@@ -272,7 +300,7 @@ func (a *Adapter) observeGlobalCatalog(ctx context.Context, session *Session) (c
 		observed.unmanaged = true
 	}
 	sortSkillReferences(observed.managed)
-	return observed, 0
+	return observed, 0, nil
 }
 
 func managedReference(homeDir, baseDir string) (SkillReference, bool) {
@@ -371,41 +399,18 @@ func commandFailureReason(ctx context.Context, err error, commandFailed prefligh
 	return commandFailed
 }
 
-func preflightCommand(ctx context.Context, binaryPath string, arguments ...string) *exec.Cmd {
-	command := exec.CommandContext(ctx, binaryPath, arguments...)
-	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	command.Cancel = func() error {
-		err := syscall.Kill(-command.Process.Pid, syscall.SIGKILL)
-		if errors.Is(err, syscall.ESRCH) {
-			return os.ErrProcessDone
-		}
+func (a *Adapter) runSandboxed(ctx context.Context, session *Session, arguments []string, terminal launch.Terminal) error {
+	process, err := a.sandbox.Prepare(ctx, launch.ProcessRequest{
+		Workspace: session.WorkingDirectory, SessionsDirectory: session.SessionsDir,
+		SessionDirectory: session.RootDir, SessionHome: session.HomeDir,
+		TemporaryDirectory: session.TemporaryDir, Executable: a.binaryPath,
+		RuntimeInputs: a.runtimeInputs, Arguments: arguments, Terminal: terminal,
+	})
+	if err != nil {
 		return err
 	}
-	command.WaitDelay = time.Second
-	return command
-}
-
-func isolatedEnvironment(homeDir string) []string {
-	overrides := map[string]string{
-		"HOME":            homeDir,
-		"XDG_CONFIG_HOME": filepath.Join(homeDir, ".config"),
-		"XDG_DATA_HOME":   filepath.Join(homeDir, ".local", "share"),
-		"XDG_CACHE_HOME":  filepath.Join(homeDir, ".cache"),
-		"XDG_STATE_HOME":  filepath.Join(homeDir, ".local", "state"),
+	if err := process.Start(); err != nil {
+		return err
 	}
-
-	environment := make([]string, 0, len(os.Environ())+len(overrides))
-	for _, entry := range os.Environ() {
-		key, _, found := strings.Cut(entry, "=")
-		if found {
-			if _, overridden := overrides[key]; overridden {
-				continue
-			}
-		}
-		environment = append(environment, entry)
-	}
-	for key, value := range overrides {
-		environment = append(environment, key+"="+value)
-	}
-	return environment
+	return process.Wait()
 }
