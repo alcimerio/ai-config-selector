@@ -276,12 +276,11 @@ credentials, environment values, or account details.
 The required release gate stays credential-free: one candidate artifact set is
 installed and exercised natively on darwin/arm64, darwin/amd64, linux/amd64,
 and linux/arm64. The native matrix declares the sandbox backend capability
-expected at each increment. In the shared-layer increment, before #57 adds the
-macOS backend and #64 adds the Ubuntu backend, the installed candidate must
-return the stable `backend_unavailable` category without starting the target or
-leasing a Session. The same acceptance harness retains the successful launch
-and lifecycle contract for each backend increment to activate. A real-Devin
-smoke is an optional maintainer check for changes that affect authentication,
+expected at each increment. The Ubuntu rows require the Bubblewrap launch and
+lifecycle contract; the macOS rows return the stable `backend_unavailable`
+category without starting the target or leasing a Session until #57 adds
+Seatbelt. A real-Devin smoke is an optional maintainer check for changes that
+affect authentication,
 the Devin Adapter, Profile selection, Session isolation, or interactive
 lifecycle behavior. It runs only on an authorized macOS 26 arm64 maintainer
 host and never places personal credentials in CI or a release artifact.
@@ -355,9 +354,21 @@ backend selector, policy input, environment passthrough, or sandbox bypass.
 It also classifies process-start and non-exit wait failures at the boundary so
 backend output, generated policy, host paths, and environment values do not
 enter CLI diagnostics; ordinary child exit status remains intact.
-Native Seatbelt and Bubblewrap policy and mount implementations are separate
-backend work; until the backend for a supported host is present, interactive
-launch fails closed rather than running Devin without containment.
+On certified Ubuntu 24.04 targets, the production backend requires the
+root-owned `/usr/bin/bwrap` recorded by the Ubuntu package database and proves
+user-namespace capability before a Session lease. It constructs an empty-root
+mount namespace with writable workspace and Session mounts, read-only named
+runtime inputs and system runtime, Session-local temporary storage, and no
+host-home or host-socket mounts. IPC, PID, UTS, cgroup, and user namespaces
+contain descendants while the host IP network namespace preserves ordinary
+outbound networking. The backend clears the environment before applying the
+shared allowlist and inherits only the three shared terminal descriptors.
+Bubblewrap and the kernel user namespace jointly contain the process tree and
+propagate target exit and cancellation behavior to the caller. Missing,
+modified, unpackaged, or incapable Bubblewrap installations fail closed with
+fixed package-remediation guidance. Seatbelt remains separate backend work;
+until it is present, macOS launch fails closed rather than running Devin
+without containment.
 
 Repository-local Skills remain visible because Devin runs in the selected
 repository. ACS reports them but does not filter, copy, or manage them.
@@ -559,7 +570,8 @@ Skills guards fuzzy search and navigation responsiveness.
 ## Current limitations
 
 - ACS accepts only macOS 26 and Ubuntu 24.04 LTS on amd64 or arm64, and rejects
-  unidentified hosts and missing native sandbox backends.
+  unidentified hosts and missing native sandbox backends. Ubuntu launches use
+  the verified system Bubblewrap package; macOS launches remain unavailable.
 - ACS ships only the Devin Adapter.
 - The Devin Registry currently contains only the Skills category.
 - Profile creation uses the hardened Bubble Tea builder with search, lazy

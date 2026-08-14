@@ -142,12 +142,13 @@ then installs and exercises the candidate executable as a black box. The
 acceptance harness uses only a synthetic home, a fake Devin executable, and
 temporary install and Session directories. It does not read real Devin
 credentials or modify a maintainer installation. Each target declares the
-native sandbox capability expected at that release increment. Until the
-Seatbelt work in #57 and Bubblewrap work in #64 land, all four targets require
-the installed launch to fail closed with `backend_unavailable` before a
-Session is leased or the fake Devin process starts; the successful launch,
-signal, terminal-resize, and concurrent-lease assertions remain in the same
-harness for those backend increments to activate.
+native sandbox capability expected at that release increment. The two macOS
+targets require the installed launch to fail closed with
+`backend_unavailable` before a Session is leased or the fake Devin process
+starts. The two Ubuntu targets require the installed launch, signal,
+terminal-resize, and concurrent-lease assertions to succeed through the
+system Bubblewrap backend. Ubuntu-native tests additionally prove filesystem,
+environment, descriptor, networking, descendant, and lifecycle containment.
 
 After building a clean candidate locally, run the validator on a matching
 native host with a fresh absolute install directory:
@@ -160,7 +161,7 @@ scripts/validate-promoted-artifact.sh \
   dist/release-candidate "$install_root/bin"
 ACS_PROMOTED_BINARY="$install_root/bin/acs" \
   ACS_PROMOTED_VERSION=v0.2.0 \
-  ACS_PROMOTED_SANDBOX_BACKEND=unavailable \
+  ACS_PROMOTED_SANDBOX_BACKEND=<available-on-ubuntu-or-unavailable-on-macos> \
   go test ./acceptance -count=1
 ```
 

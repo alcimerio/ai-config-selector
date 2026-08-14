@@ -32,7 +32,8 @@ const (
 // SandboxError deliberately reports only a stable category. Backend output,
 // generated policy, host paths, and environment values stay private.
 type SandboxError struct {
-	Category SandboxErrorCategory
+	Category    SandboxErrorCategory
+	remediation string
 }
 
 func (e *SandboxError) Error() string {
@@ -57,11 +58,21 @@ func (e *SandboxError) Error() string {
 	default:
 		return string(SandboxSetupFailed) + ": process sandbox preparation failed"
 	}
+	if e.remediation != "" {
+		message += "; " + e.remediation
+	}
 	return string(e.Category) + ": " + message
 }
 
 func sandboxError(category SandboxErrorCategory, _ error) error {
 	return &SandboxError{Category: category}
+}
+
+func bubblewrapUnavailable() error {
+	return &SandboxError{
+		Category:    SandboxBackendUnavailable,
+		remediation: "install or repair the signed Ubuntu package with 'sudo apt-get install --reinstall bubblewrap'",
+	}
 }
 
 // Platform identifies the host properties relevant to the supported sandbox
@@ -197,7 +208,7 @@ type nativeProcessSandbox struct {
 // NewProcessSandbox returns the fail-closed native sandbox selector. Native
 // backends register inside this package; callers cannot select or bypass them.
 func NewProcessSandbox() ProcessSandbox {
-	return newNativeProcessSandbox(CurrentPlatform, nil)
+	return newNativeProcessSandbox(CurrentPlatform, nativeSandboxBackends())
 }
 
 func newNativeProcessSandbox(platform platformProbe, backends map[string]sandboxBackend) *nativeProcessSandbox {
@@ -219,7 +230,7 @@ func (sandbox *nativeProcessSandbox) selectedBackend(ctx context.Context) (sandb
 	if err := backend.check(ctx); err != nil {
 		var classified *SandboxError
 		if errors.As(err, &classified) {
-			return nil, sandboxError(classified.Category, nil)
+			return nil, &SandboxError{Category: classified.Category, remediation: classified.remediation}
 		}
 		return nil, sandboxError(SandboxBackendUnavailable, err)
 	}
@@ -307,6 +318,9 @@ func validateSandboxCheck(request SandboxCheck) (validatedSandboxCheck, error) {
 	if err != nil {
 		return validatedSandboxCheck{}, sandboxError(SandboxUnsafePath, err)
 	}
+	if workspace == string(filepath.Separator) || workspace == sessionsDirectory || pathWithin(workspace, sessionsDirectory) {
+		return validatedSandboxCheck{}, sandboxError(SandboxUnsafePath, nil)
+	}
 	executable, err := resolveExecutable(request.Executable)
 	if err != nil {
 		return validatedSandboxCheck{}, sandboxError(SandboxUnsafePath, err)
@@ -315,7 +329,19 @@ func validateSandboxCheck(request SandboxCheck) (validatedSandboxCheck, error) {
 	if err != nil {
 		return validatedSandboxCheck{}, sandboxError(SandboxUnsafePath, err)
 	}
+	for _, input := range runtimeInputs {
+		if broadRuntimeInput(input, workspace, sessionsDirectory) {
+			return validatedSandboxCheck{}, sandboxError(SandboxUnsafePath, nil)
+		}
+	}
 	return validatedSandboxCheck{workspace: workspace, sessionsDirectory: sessionsDirectory, executable: executable, runtimeInputs: runtimeInputs}, nil
+}
+
+func broadRuntimeInput(input, workspace, sessionsDirectory string) bool {
+	if input == string(filepath.Separator) || input == workspace || input == sessionsDirectory {
+		return true
+	}
+	return pathWithin(input, workspace) || pathWithin(input, sessionsDirectory)
 }
 
 type validatedProcessRequest struct {
