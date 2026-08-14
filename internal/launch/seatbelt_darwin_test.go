@@ -1457,10 +1457,12 @@ func seatbeltCopySystemTrustSettings() error {
 	if err != nil {
 		return err
 	}
+	defer func() { _ = purego.Dlclose(security) }()
 	coreFoundation, err := purego.Dlopen("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation", purego.RTLD_NOW|purego.RTLD_LOCAL)
 	if err != nil {
 		return err
 	}
+	defer func() { _ = purego.Dlclose(coreFoundation) }()
 	var copyCertificates func(uint32, *unsafe.Pointer) int32
 	var arrayCount func(unsafe.Pointer) int
 	var release func(unsafe.Pointer)
