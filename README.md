@@ -202,10 +202,10 @@ On macOS, the command first completes sandbox preflight, then creates an
 ephemeral Session with a synthetic home,
 copies the selected Skill Bundles and existing Devin credential into that
 Session, verifies the selection and authentication state, and starts Devin in
-the current working directory through the native sandbox. ACS removes the
-Session only after the sandboxed process tree has exited or been terminated
-and containment is settled. A failure before the Session lease does not create
-Session data.
+the current working directory through the native sandbox. ACS removes a leased
+Session after launch setup fails, or only after the sandboxed process tree has
+exited or been terminated and containment is settled. A failure before the
+Session lease does not create Session data.
 
 Repository-local Skills remain under Devin's control. ACS reports them during
 a dry run but does not copy, filter, or isolate them.

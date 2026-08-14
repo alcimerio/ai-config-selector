@@ -223,7 +223,7 @@ func TestReadmeDescribesDarwinSeatbeltAndLinuxFailClosedLifecycle(t *testing.T) 
 		"On Ubuntu 24.04 LTS, ACS reports `backend_unavailable`",
 		"Bubblewrap backend in #64",
 		"ACS does not offer an unsandboxed launch fallback",
-		"Session only after the sandboxed process tree has exited or been terminated and containment is settled",
+		"ACS removes a leased Session after launch setup fails, or only after the sandboxed process tree has exited or been terminated and containment is settled",
 		"That contained Session lifecycle is available on macOS; Ubuntu continues to fail before leasing a Session",
 	} {
 		if !strings.Contains(text, required) {
