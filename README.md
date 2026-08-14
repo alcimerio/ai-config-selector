@@ -31,7 +31,9 @@ On every Supported Platform, ACS supports:
 - interactive Profile creation, persistence, and dry-run inspection;
 - fail-closed validation of interactive launches until the native sandbox
   backends are available;
-- configuration isolation through an ephemeral Session.
+- after the native sandbox backend for the host lands, the intended interactive
+  launch workflow will isolate configuration through an ephemeral Session
+  inside that sandbox.
 
 The Profile Builder requires confirmation before it creates an empty Profile.
 Windows, WSL, other Linux distributions, and other operating-system or
@@ -229,9 +231,11 @@ and unknown categories.
 v0.2.0 preserves the v0.1.0 Profile envelopes, category schemas, public
 commands, accepted messages, file permissions, and atomic Profile persistence.
 It also preserves Profile Builder behavior, Devin Adapter discovery and
-preflight behavior, launch and signal handling, ACS Home at `~/.acs`, and
-isolated per-launch Session creation and cleanup. Existing v0.1.0 Profiles do
-not require migration.
+preflight behavior, launch and signal handling, ACS Home at `~/.acs`, and the
+intended per-launch Session creation and cleanup contract. That Session
+lifecycle is not currently available: until the native backends land, an
+interactive launch returns `backend_unavailable` before leasing a Session.
+Existing v0.1.0 Profiles do not require migration.
 
 ## Known limitations
 

@@ -209,11 +209,23 @@ func TestReadmeDescribesCurrentFailClosedLaunchAndIntendedSessionLifecycle(t *te
 		"Bubblewrap backend in #64",
 		"`backend_unavailable`",
 		"before it leases a Session or starts Devin",
+		"after the native sandbox backend for the host lands, the intended interactive launch workflow will isolate configuration",
 		"After the native backend for the host lands",
 		"removes the Session after Devin exits or launch fails",
+		"intended per-launch Session creation and cleanup contract",
+		"That Session lifecycle is not currently available",
 	} {
 		if !strings.Contains(text, required) {
 			t.Errorf("README.md does not explain the sandbox launch state with %q", required)
+		}
+	}
+
+	for _, unqualified := range []string{
+		"configuration isolation through an ephemeral Session.",
+		"isolated per-launch Session creation and cleanup.",
+	} {
+		if strings.Contains(text, unqualified) {
+			t.Errorf("README.md describes unavailable Session isolation as current behavior with %q", unqualified)
 		}
 	}
 }
