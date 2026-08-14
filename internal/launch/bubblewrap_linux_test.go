@@ -15,11 +15,27 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
+	"syscall"
 	"testing"
 	"time"
 
 	"golang.org/x/sys/unix"
 )
+
+func TestMain(m *testing.M) {
+	handled, err := RunBubblewrapHelper(os.Args[1:])
+	if handled {
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "launch: Bubblewrap helper failed")
+			os.Exit(1)
+		}
+		return
+	}
+	os.Exit(m.Run())
+}
+
+var bubblewrapNativeTargetArguments = []string{"ordinary", "--", "--setenv", "PWD=/private/workspace", ""}
 
 func TestBubblewrapNativeContainmentContract(t *testing.T) {
 	platform, err := CurrentPlatform()
@@ -129,6 +145,73 @@ func TestBubblewrapNativeContainmentContract(t *testing.T) {
 	}
 }
 
+func TestBubblewrapNativeSanitizesDescriptorsAcrossConcurrentLaunches(t *testing.T) {
+	platform, err := CurrentPlatform()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidatePlatform(platform); err != nil {
+		t.Fatalf("native Bubblewrap test requires certified Ubuntu 24.04: %v", err)
+	}
+	secret := filepath.Join(t.TempDir(), "host-secret")
+	if err := os.WriteFile(secret, []byte("private"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	descriptor, err := os.Open(secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer descriptor.Close()
+	if _, err := unix.FcntlInt(descriptor.Fd(), unix.F_SETFD, 0); err != nil {
+		t.Fatal(err)
+	}
+
+	processes := make([]Process, 4)
+	for index := range processes {
+		request := validProcessRequest(t)
+		request.Executable = os.Args[0]
+		request.Arguments = []string{
+			"-test.run=^TestBubblewrapNativeDescriptorHelper$", "--", strconv.Itoa(int(descriptor.Fd())), secret,
+		}
+		process, err := NewProcessSandbox().Prepare(context.Background(), request)
+		if err != nil {
+			t.Fatalf("prepare concurrent sandbox %d: %v", index, err)
+		}
+		processes[index] = process
+	}
+
+	start := make(chan struct{})
+	errors := make(chan error, len(processes))
+	var group sync.WaitGroup
+	for _, process := range processes {
+		group.Add(1)
+		go func(process Process) {
+			defer group.Done()
+			<-start
+			if err := process.Start(); err != nil {
+				errors <- err
+				return
+			}
+			errors <- process.Wait()
+		}(process)
+	}
+	close(start)
+	group.Wait()
+	close(errors)
+	for err := range errors {
+		if err != nil {
+			t.Fatalf("concurrent sandbox process failed: %v", err)
+		}
+	}
+	flags, err := unix.FcntlInt(descriptor.Fd(), unix.F_GETFD, 0)
+	if err != nil || flags&unix.FD_CLOEXEC != 0 {
+		t.Fatalf("parent descriptor flags = %d, err = %v, want non-CLOEXEC", flags, err)
+	}
+	if contents, err := os.ReadFile(descriptor.Name()); err != nil || string(contents) != "private" {
+		t.Fatalf("parent descriptor changed after concurrent launch: contents=%q, err=%v", contents, err)
+	}
+}
+
 func TestBubblewrapCapabilityProbeArgumentsUseProductionMergedUsrTopology(t *testing.T) {
 	want := []string{
 		"--unshare-user", "--unshare-ipc", "--unshare-pid", "--unshare-uts", "--unshare-cgroup",
@@ -143,6 +226,42 @@ func TestBubblewrapCapabilityProbeArgumentsUseProductionMergedUsrTopology(t *tes
 	}
 	if got := bubblewrapCapabilityProbeArguments(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("capability probe arguments = %q, want %q", got, want)
+	}
+}
+
+func TestBubblewrapHelperArgumentsDoNotDependOnExecutableName(t *testing.T) {
+	arguments := []string{"--setenv", "TERM", "xterm-256color", "--", "/opt/devin/bin/devin", "skills", "list", "--json"}
+	want := append([]string{"/proc/self/exe", bubblewrapHelperFlag}, arguments...)
+	originalExecutable := os.Args[0]
+	defer func() { os.Args[0] = originalExecutable }()
+
+	for _, executable := range []string{"/usr/local/bin/acs", "/tmp/launch.test", "/tmp/arbitrary-name"} {
+		t.Run(filepath.Base(executable), func(t *testing.T) {
+			os.Args[0] = executable
+			command, err := newBubblewrapCommand(context.Background(), arguments)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := command.Args; !reflect.DeepEqual(got, want) {
+				t.Fatalf("helper arguments for %q = %q, want %q", executable, got, want)
+			}
+		})
+	}
+}
+
+func TestBubblewrapPreparedProcessKeepsParentDeathSignal(t *testing.T) {
+	process, err := (bubblewrapBackend{}).prepare(context.Background(), validatedProcessRequest{
+		workspace: "/workspace", sessionDirectory: "/session", executable: "/target", environment: []string{"PATH=" + safeProcessPath},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bubblewrap, ok := process.(*bubblewrapProcess)
+	if !ok {
+		t.Fatalf("prepared process = %T, want *bubblewrapProcess", process)
+	}
+	if bubblewrap.command.SysProcAttr == nil || bubblewrap.command.SysProcAttr.Pdeathsig != syscall.SIGKILL {
+		t.Fatalf("parent death signal = %v, want %v", bubblewrap.command.SysProcAttr, syscall.SIGKILL)
 	}
 }
 
@@ -341,6 +460,72 @@ func TestBubblewrapNativePreservesTargetExitStatus(t *testing.T) {
 	}
 }
 
+func TestBubblewrapNativePreservesTargetArgumentsWithoutPWD(t *testing.T) {
+	platform, err := CurrentPlatform()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidatePlatform(platform); err != nil {
+		t.Fatalf("native Bubblewrap test requires certified Ubuntu 24.04: %v", err)
+	}
+	request := validProcessRequest(t)
+	request.Executable = os.Args[0]
+	request.Arguments = append([]string{"-test.run=^TestBubblewrapNativeTargetArgumentsHelper$", "--"}, bubblewrapNativeTargetArguments...)
+	process, err := NewProcessSandbox().Prepare(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := process.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if err := process.Wait(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestBubblewrapNativeDescriptorHelper(t *testing.T) {
+	separator := -1
+	for index, argument := range os.Args {
+		if argument == "--" {
+			separator = index
+			break
+		}
+	}
+	if separator < 0 {
+		return
+	}
+	arguments := os.Args[separator+1:]
+	if len(arguments) != 2 {
+		t.Fatalf("descriptor helper arguments = %q", arguments)
+	}
+	descriptor, err := strconv.Atoi(arguments[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if target, err := os.Readlink(filepath.Join("/proc/self/fd", strconv.Itoa(descriptor))); err == nil && target == arguments[1] {
+		t.Fatal("unexpected host file descriptor was inherited")
+	}
+}
+
+func TestBubblewrapNativeTargetArgumentsHelper(t *testing.T) {
+	separator := -1
+	for index, argument := range os.Args {
+		if argument == "--" {
+			separator = index
+			break
+		}
+	}
+	if separator < 0 {
+		return
+	}
+	if got := os.Args[separator+1:]; !reflect.DeepEqual(got, bubblewrapNativeTargetArguments) {
+		t.Fatalf("target arguments = %q, want %q", got, bubblewrapNativeTargetArguments)
+	}
+	if _, exists := os.LookupEnv("PWD"); exists {
+		t.Fatal("target environment unexpectedly contains PWD")
+	}
+}
+
 func TestBubblewrapNativeHelper(t *testing.T) {
 	separator := -1
 	for index, argument := range os.Args {
@@ -438,6 +623,7 @@ func TestBubblewrapNativeHelper(t *testing.T) {
 	if output, err := child.CombinedOutput(); err != nil {
 		t.Fatalf("contained descendant failed: %v; output=%q", err, output)
 	}
+	os.Exit(0)
 }
 
 func TestBubblewrapNativeDescendantHelper(t *testing.T) {

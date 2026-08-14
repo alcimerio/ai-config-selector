@@ -64,7 +64,7 @@ func TestBubblewrapArgumentsBuildMinimalMountNamespace(t *testing.T) {
 		temporaryDirectory: "/home/alice/.acs/sessions/session-one/tmp",
 		executable:         "/opt/devin/bin/devin",
 		runtimeInputs:      []string{"/etc/ssl/certs/ca-certificates.crt", "/opt/devin/runtime"},
-		arguments:          []string{"skills", "list", "--json"},
+		arguments:          []string{"skills", "--", "--setenv", "PWD=/private/workspace", ""},
 		environment:        []string{"HOME=/home/alice/.acs/sessions/session-one/home", "PATH=/usr/local/bin:/usr/bin:/bin"},
 	}
 
@@ -92,8 +92,9 @@ func TestBubblewrapArgumentsBuildMinimalMountNamespace(t *testing.T) {
 	if containsArgument(arguments, "--unshare-net") || containsArgument(arguments, "--share-net") {
 		t.Fatalf("Bubblewrap arguments alter the host IP network namespace: %q", arguments)
 	}
-	if got := arguments[len(arguments)-4:]; !reflect.DeepEqual(got, []string{"--", request.executable, "skills", "list", "--json"}[1:]) {
-		t.Fatalf("Bubblewrap target suffix = %q", got)
+	wantTarget := append([]string{"--", bubblewrapEnvironmentExecutable, "-u", "PWD", "--", request.executable}, request.arguments...)
+	if got := arguments[len(arguments)-len(wantTarget):]; !reflect.DeepEqual(got, wantTarget) {
+		t.Fatalf("Bubblewrap target suffix = %q, want %q", got, wantTarget)
 	}
 	if !containsAdjacent(arguments, "--chdir", request.workspace) {
 		t.Errorf("Bubblewrap arguments do not select the workspace: %q", arguments)
@@ -103,6 +104,9 @@ func TestBubblewrapArgumentsBuildMinimalMountNamespace(t *testing.T) {
 		if !containsTriple(arguments, "--setenv", key, value) {
 			t.Errorf("Bubblewrap arguments omit environment entry %q: %q", entry, arguments)
 		}
+	}
+	if containsAdjacent(arguments, "--setenv", "PWD") {
+		t.Fatalf("Bubblewrap arguments restore PWD after --clearenv: %q", arguments)
 	}
 	if containsArgument(arguments, "PRIVATE_ENVIRONMENT_VALUE") {
 		t.Fatalf("Bubblewrap arguments include an unexpected environment value: %q", arguments)

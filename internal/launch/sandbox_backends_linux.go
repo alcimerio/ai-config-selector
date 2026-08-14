@@ -88,6 +88,13 @@ func trustedCommandSucceeded(result bubblewrapCommandResult) bool {
 
 func runBubblewrapTrustCommand(ctx context.Context, path string, arguments ...string) bubblewrapCommandResult {
 	command := exec.CommandContext(ctx, path, arguments...)
+	if path == bubblewrapExecutable {
+		var err error
+		command, err = newBubblewrapCommand(ctx, arguments)
+		if err != nil {
+			return bubblewrapCommandResult{err: err}
+		}
+	}
 	command.Env = []string{"LC_ALL=C", "PATH=" + safeProcessPath}
 	var stdout, stderr bytes.Buffer
 	command.Stdout = &stdout
@@ -106,7 +113,10 @@ func validRootOwnedSystemExecutable(path string) bool {
 }
 
 func (bubblewrapBackend) prepare(ctx context.Context, request validatedProcessRequest) (Process, error) {
-	command := exec.CommandContext(ctx, bubblewrapExecutable, bubblewrapArguments(request)...)
+	command, err := newBubblewrapCommand(ctx, bubblewrapArguments(request))
+	if err != nil {
+		return nil, err
+	}
 	command.Env = []string{}
 	command.Stdin = request.terminal.Input
 	command.Stdout = request.terminal.Output

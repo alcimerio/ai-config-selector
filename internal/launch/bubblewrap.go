@@ -7,6 +7,8 @@ import (
 	"strings"
 )
 
+const bubblewrapEnvironmentExecutable = "/usr/bin/env"
+
 func validBubblewrapExecutableMetadata(mode os.FileMode, owner uint32) bool {
 	const special = os.ModeSetuid | os.ModeSetgid | os.ModeSticky
 	return mode.IsRegular() && mode&special == 0 && owner == 0 && mode.Perm() == 0o755
@@ -79,7 +81,7 @@ func bubblewrapArguments(request validatedProcessRequest) []string {
 			arguments = append(arguments, "--setenv", key, value)
 		}
 	}
-	arguments = append(arguments, "--chdir", request.workspace, "--", request.executable)
+	arguments = append(arguments, "--chdir", request.workspace, "--", bubblewrapEnvironmentExecutable, "-u", "PWD", "--", request.executable)
 	arguments = append(arguments, request.arguments...)
 	return arguments
 }
