@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -42,11 +43,15 @@ func TestSeatbeltPolicyIsDefaultDenyAndUsesParametersForValidatedPaths(t *testin
 	for _, want := range []string{
 		"(version 1)", "(deny default)", `(param "WORKSPACE")`,
 		`(param "SESSION")`, `(param "EXECUTABLE")`, `(param "RUNTIME_0")`,
+		`(param "EXECUTABLE_ANCESTOR_0")`, `(param "EXECUTABLE_ANCESTOR_1")`,
+		`(param "EXECUTABLE_ANCESTOR_2")`, `(param "EXECUTABLE_ANCESTOR_3")`,
 		`(remote ip)`, `(literal "/private/var/run/mDNSResponder")`,
 		`(literal "/var")`,
 		`(literal "/private/var/select/sh")`,
 		`(literal "/dev/tty")`, `(target same-sandbox)`,
 		"(allow mach-lookup\n  (global-name \"com.apple.SecurityServer\"))",
+		"(allow mach-lookup\n  (global-name \"com.apple.trustd.agent\"))",
+		"(allow file-read-metadata\n  (literal (param \"EXECUTABLE_ANCESTOR_0\"))\n  (literal (param \"EXECUTABLE_ANCESTOR_1\"))\n  (literal (param \"EXECUTABLE_ANCESTOR_2\"))\n  (literal (param \"EXECUTABLE_ANCESTOR_3\")))",
 	} {
 		if !strings.Contains(policy, want) {
 			t.Errorf("policy omits %q", want)
@@ -56,25 +61,64 @@ func TestSeatbeltPolicyIsDefaultDenyAndUsesParametersForValidatedPaths(t *testin
 		request.workspace, request.sessionDirectory, request.executable,
 		request.runtimeInputs[0], "(allow file-read*)\n",
 		"(allow sysctl-read)\n", "(allow iokit", "(allow network*)",
+		"(subpath (param \"EXECUTABLE_ANCESTOR_",
+		"com.apple.system.opendirectoryd.libinfo", "com.apple.SystemConfiguration.configd",
+		"com.apple.notificationcenter", "com.apple.logd",
 	} {
 		if strings.Contains(policy, forbidden) {
 			t.Errorf("policy contains forbidden text %q", forbidden)
 		}
 	}
-	if got := strings.Count(policy, "(allow mach-lookup"); got != 1 {
-		t.Fatalf("Mach lookup rule count = %d, want only com.apple.SecurityServer", got)
+	if got := strings.Count(policy, "(allow mach-lookup"); got != 2 {
+		t.Fatalf("Mach lookup rule count = %d, want only SecurityServer and trustd.agent", got)
 	}
-	if got := strings.Count(policy, "(global-name"); got != 1 {
-		t.Fatalf("Mach service count = %d, want only com.apple.SecurityServer", got)
+	if got := strings.Count(policy, "(global-name"); got != 2 {
+		t.Fatalf("Mach service count = %d, want only SecurityServer and trustd.agent", got)
 	}
 	wantDefinitions := []string{
 		"-DWORKSPACE=" + request.workspace,
 		"-DSESSION=" + request.sessionDirectory,
 		"-DEXECUTABLE=" + request.executable,
+		"-DEXECUTABLE_ANCESTOR_0=/private/tmp/bin",
+		"-DEXECUTABLE_ANCESTOR_1=/private/tmp",
+		"-DEXECUTABLE_ANCESTOR_2=/private",
+		"-DEXECUTABLE_ANCESTOR_3=/",
 		"-DRUNTIME_0=" + request.runtimeInputs[0],
 	}
 	if strings.Join(definitions, "\n") != strings.Join(wantDefinitions, "\n") {
 		t.Fatalf("definitions = %#v, want %#v", definitions, wantDefinitions)
+	}
+}
+
+func TestSeatbeltExecutableAncestors(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		executable string
+		want       []string
+	}{
+		{
+			name:       "variable depth",
+			executable: "/private/tmp/acs/nested/launch/target",
+			want: []string{
+				"/private/tmp/acs/nested/launch",
+				"/private/tmp/acs/nested",
+				"/private/tmp/acs",
+				"/private/tmp",
+				"/private",
+				"/",
+			},
+		},
+		{
+			name:       "root executable",
+			executable: "/target",
+			want:       []string{"/"},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := seatbeltExecutableAncestors(test.executable); !reflect.DeepEqual(got, test.want) {
+				t.Fatalf("seatbeltExecutableAncestors(%q) = %q, want %q", test.executable, got, test.want)
+			}
+		})
 	}
 }
 
@@ -219,6 +263,48 @@ func TestSeatbeltReadsSystemTrustSettingsThroughSecurityServer(t *testing.T) {
 	}
 	if err := process.Wait(); err != nil {
 		t.Fatalf("trust-settings read failed: %v; output=%q", err, output.String())
+	}
+}
+
+func TestSeatbeltProductionTLSRequiresOnlyExecutableMetadataAndTrustdAgent(t *testing.T) {
+	skipSeatbeltNativeTestBinaryUnderRace(t)
+	t.Setenv(seatbeltParentCredentialSentinel, "parent-only")
+	request, output := seatbeltProductionTLSRequest(t)
+
+	tests := []struct {
+		name    string
+		omitted string
+		want    string
+	}{
+		{
+			name: "restored rules allow offline platform trust evaluation",
+			want: "tls-ready",
+		},
+		{
+			name:    "removing executable metadata blocks offline platform trust evaluation",
+			omitted: "executable metadata",
+			want:    "tls-policy-unavailable",
+		},
+		{
+			name:    "removing trustd agent blocks offline platform trust evaluation",
+			omitted: "trustd agent",
+			want:    "local-system-trust-unavailable",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			output.Reset()
+			err := seatbeltRunProductionTLS(seatbeltProductionTLSSandbox(t, test.omitted), request)
+			if test.omitted == "" && err != nil {
+				t.Fatalf("production platform trust evaluation failed: %v; output=%q", err, output.String())
+			}
+			if test.omitted != "" && err == nil {
+				t.Fatalf("platform trust evaluation succeeded without %s; output=%q", test.omitted, output.String())
+			}
+			if got := output.String(); !strings.Contains(got, test.want) {
+				t.Fatalf("platform trust evaluation output = %q, want semantic outcome %q", got, test.want)
+			}
+		})
 	}
 }
 
@@ -1288,6 +1374,21 @@ func TestSeatbeltHelperProcess(t *testing.T) {
 			os.Exit(111)
 		}
 		os.Exit(0)
+	case "security-policy-and-local-system-trust":
+		if _, inherited := os.LookupEnv(seatbeltParentCredentialSentinel); inherited {
+			fmt.Fprintln(os.Stdout, "parent-credential-sentinel-inherited")
+			os.Exit(111)
+		}
+		if err := seatbeltCreateTLSVerificationPolicy(); err != nil {
+			fmt.Fprintln(os.Stdout, "tls-policy-unavailable")
+			os.Exit(112)
+		}
+		if err := seatbeltEvaluateLocalSystemTrustCertificate(); err != nil {
+			fmt.Fprintln(os.Stdout, "local-system-trust-unavailable")
+			os.Exit(113)
+		}
+		fmt.Fprintln(os.Stdout, "tls-ready")
+		os.Exit(0)
 	case "check-extra-descriptors":
 		for fd := 3; fd < 64; fd++ {
 			if _, err := unix.FcntlInt(uintptr(fd), unix.F_GETFD, 0); err == nil {
@@ -1483,6 +1584,97 @@ func seatbeltCopySystemTrustSettings() error {
 	return nil
 }
 
+func seatbeltCreateTLSVerificationPolicy() error {
+	security, err := purego.Dlopen("/System/Library/Frameworks/Security.framework/Security", purego.RTLD_NOW|purego.RTLD_LOCAL)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = purego.Dlclose(security) }()
+	coreFoundation, err := purego.Dlopen("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation", purego.RTLD_NOW|purego.RTLD_LOCAL)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = purego.Dlclose(coreFoundation) }()
+	var createSSL func(uint8, unsafe.Pointer) unsafe.Pointer
+	var release func(unsafe.Pointer)
+	purego.RegisterLibFunc(&createSSL, security, "SecPolicyCreateSSL")
+	purego.RegisterLibFunc(&release, coreFoundation, "CFRelease")
+	policy := createSSL(1, nil)
+	if policy == nil {
+		return errors.New("SecPolicyCreateSSL returned nil")
+	}
+	defer release(policy)
+	return nil
+}
+
+func seatbeltEvaluateLocalSystemTrustCertificate() error {
+	security, err := purego.Dlopen("/System/Library/Frameworks/Security.framework/Security", purego.RTLD_NOW|purego.RTLD_LOCAL)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = purego.Dlclose(security) }()
+	coreFoundation, err := purego.Dlopen("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation", purego.RTLD_NOW|purego.RTLD_LOCAL)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = purego.Dlclose(coreFoundation) }()
+	var copyCertificates func(uint32, *unsafe.Pointer) int32
+	var arrayCount func(unsafe.Pointer) int
+	var arrayValueAtIndex func(unsafe.Pointer, int) unsafe.Pointer
+	var createBasicX509 func() unsafe.Pointer
+	var createTrust func(unsafe.Pointer, unsafe.Pointer, *unsafe.Pointer) int32
+	var setNetworkFetchAllowed func(unsafe.Pointer, uint8) int32
+	var evaluateTrust func(unsafe.Pointer, *unsafe.Pointer) bool
+	var errorCode func(unsafe.Pointer) int64
+	var release func(unsafe.Pointer)
+	purego.RegisterLibFunc(&copyCertificates, security, "SecTrustSettingsCopyCertificates")
+	purego.RegisterLibFunc(&arrayCount, coreFoundation, "CFArrayGetCount")
+	purego.RegisterLibFunc(&arrayValueAtIndex, coreFoundation, "CFArrayGetValueAtIndex")
+	purego.RegisterLibFunc(&createBasicX509, security, "SecPolicyCreateBasicX509")
+	purego.RegisterLibFunc(&createTrust, security, "SecTrustCreateWithCertificates")
+	purego.RegisterLibFunc(&setNetworkFetchAllowed, security, "SecTrustSetNetworkFetchAllowed")
+	purego.RegisterLibFunc(&evaluateTrust, security, "SecTrustEvaluateWithError")
+	purego.RegisterLibFunc(&errorCode, coreFoundation, "CFErrorGetCode")
+	purego.RegisterLibFunc(&release, coreFoundation, "CFRelease")
+	var certificates unsafe.Pointer
+	if status := copyCertificates(2, &certificates); status != 0 || certificates == nil {
+		return fmt.Errorf("copy system trust certificates: status=%d certificates=%t", status, certificates != nil)
+	}
+	defer release(certificates)
+	if arrayCount(certificates) <= 0 {
+		return errors.New("copy system trust certificates: no certificates")
+	}
+	certificate := arrayValueAtIndex(certificates, 0)
+	if certificate == nil {
+		return errors.New("copy system trust certificates: first certificate is nil")
+	}
+	policy := createBasicX509()
+	if policy == nil {
+		return errors.New("SecPolicyCreateBasicX509 returned nil")
+	}
+	defer release(policy)
+	var trust unsafe.Pointer
+	if status := createTrust(certificate, policy, &trust); status != 0 || trust == nil {
+		return fmt.Errorf("SecTrustCreateWithCertificates: status=%d trust=%t", status, trust != nil)
+	}
+	defer release(trust)
+	if status := setNetworkFetchAllowed(trust, 0); status != 0 {
+		return fmt.Errorf("SecTrustSetNetworkFetchAllowed: status=%d", status)
+	}
+	var evaluationError unsafe.Pointer
+	trusted := evaluateTrust(trust, &evaluationError)
+	if evaluationError != nil {
+		defer release(evaluationError)
+	}
+	if trusted {
+		return nil
+	}
+	if evaluationError == nil {
+		return errors.New("SecTrustEvaluateWithError failed without a CFError")
+	}
+	return fmt.Errorf("SecTrustEvaluateWithError: OSStatus %d", errorCode(evaluationError))
+}
+
 func acceptSeatbeltTestConnection(listener net.Listener) {
 	connection, err := listener.Accept()
 	if err == nil {
@@ -1577,6 +1769,120 @@ func seatbeltTestRequest(t *testing.T) validatedProcessRequest {
 		sessionHome: home, temporaryDirectory: temporary, executable: executable,
 		environment: environment,
 	}
+}
+
+func seatbeltProductionTLSRequest(t *testing.T) (ProcessRequest, *bytes.Buffer) {
+	t.Helper()
+	root, err := os.MkdirTemp("/private/tmp", "acs-seatbelt-tls-test-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(root) })
+	workspace := filepath.Join(root, "workspace")
+	sessions := filepath.Join(root, "sessions")
+	session := filepath.Join(sessions, "session-one")
+	home := filepath.Join(session, "home")
+	temporary := filepath.Join(session, "tmp")
+	executable := filepath.Join(root, "nested", "launch", "target", "bin", "seatbelt-tls.test")
+	for _, directory := range []string{workspace, home, temporary, filepath.Dir(executable)} {
+		if err := os.MkdirAll(directory, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sourcePath, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, err := os.Open(sourcePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer source.Close()
+	target, err := os.OpenFile(executable, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o700)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.Copy(target, source); err != nil {
+		_ = target.Close()
+		t.Fatal(err)
+	}
+	if err := target.Close(); err != nil {
+		t.Fatal(err)
+	}
+	output := new(bytes.Buffer)
+	return ProcessRequest{
+		Workspace: workspace, SessionsDirectory: sessions, SessionDirectory: session,
+		SessionHome: home, TemporaryDirectory: temporary, Executable: executable,
+		Arguments: []string{"-test.run=^TestSeatbeltHelperProcess$", "--", "security-policy-and-local-system-trust"},
+		Terminal:  Terminal{Output: output, ErrorOutput: output},
+	}, output
+}
+
+func seatbeltRunProductionTLS(sandbox ProcessSandbox, request ProcessRequest) error {
+	process, err := sandbox.Prepare(context.Background(), request)
+	if err != nil {
+		return err
+	}
+	if err := process.Start(); err != nil {
+		return err
+	}
+	return process.Wait()
+}
+
+const seatbeltParentCredentialSentinel = "ACS_SEATBELT_PARENT_CREDENTIAL_SENTINEL"
+
+const seatbeltRemoteIPOutboundAllowance = "  (remote ip)\n"
+
+func seatbeltProductionTLSSandbox(t *testing.T, omitted string) ProcessSandbox {
+	t.Helper()
+	sandbox, ok := NewProcessSandbox().(*nativeProcessSandbox)
+	if !ok {
+		t.Fatalf("NewProcessSandbox() = %T, want *nativeProcessSandbox", sandbox)
+	}
+	backend, ok := sandbox.backends["darwin"].(*seatbeltBackend)
+	if !ok || backend == nil {
+		t.Fatalf("production Darwin backend = %T, want *seatbeltBackend", sandbox.backends["darwin"])
+	}
+	backend.policy = func(request validatedProcessRequest) (string, []string, error) {
+		policy, definitions, err := buildSeatbeltPolicy(request)
+		if err != nil {
+			return "", nil, err
+		}
+		if policy, err = seatbeltRemovePolicyTextExactlyOnce(policy, seatbeltRemoteIPOutboundAllowance, "remote-IP outbound allowance"); err != nil {
+			return "", nil, err
+		}
+		switch omitted {
+		case "":
+			return policy, definitions, nil
+		case "executable metadata":
+			start := strings.Index(policy, "(allow file-read-metadata\n")
+			if start < 0 {
+				return "", nil, errors.New("executable metadata rule is missing")
+			}
+			end := strings.Index(policy[start:], "\n\n; Writes are limited")
+			if end < 0 {
+				return "", nil, errors.New("executable metadata rule is malformed")
+			}
+			policy, err = seatbeltRemovePolicyTextExactlyOnce(policy, policy[start:start+end+2], "executable metadata rule")
+		case "trustd agent":
+			const rule = "(allow mach-lookup\n  (global-name \"com.apple.trustd.agent\"))\n"
+			policy, err = seatbeltRemovePolicyTextExactlyOnce(policy, rule, "trustd agent rule")
+		default:
+			return "", nil, fmt.Errorf("unknown omitted TLS rule %q", omitted)
+		}
+		if err != nil {
+			return "", nil, err
+		}
+		return policy, definitions, nil
+	}
+	return sandbox
+}
+
+func seatbeltRemovePolicyTextExactlyOnce(policy, text, description string) (string, error) {
+	if count := strings.Count(policy, text); count != 1 {
+		return "", fmt.Errorf("%s count = %d, want 1", description, count)
+	}
+	return strings.Replace(policy, text, "", 1), nil
 }
 
 func newSeatbeltLifecycleTestProcess(command *exec.Cmd) *seatbeltProcess {

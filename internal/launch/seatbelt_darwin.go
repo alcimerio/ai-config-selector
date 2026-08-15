@@ -595,6 +595,12 @@ func buildSeatbeltPolicy(request validatedProcessRequest) (string, []string, err
 		"-DSESSION=" + request.sessionDirectory,
 		"-DEXECUTABLE=" + request.executable,
 	}
+	var executableAncestorRules strings.Builder
+	for index, ancestor := range seatbeltExecutableAncestors(request.executable) {
+		name := "EXECUTABLE_ANCESTOR_" + strconv.Itoa(index)
+		definitions = append(definitions, "-D"+name+"="+ancestor)
+		fmt.Fprintf(&executableAncestorRules, "\n  (literal (param %q))", name)
+	}
 	var runtimeRules strings.Builder
 	for index, input := range request.runtimeInputs {
 		name := "RUNTIME_" + strconv.Itoa(index)
@@ -634,6 +640,11 @@ func buildSeatbeltPolicy(request validatedProcessRequest) (string, []string, err
   (literal (param "WORKSPACE")) (subpath (param "WORKSPACE"))
   (literal (param "SESSION")) (subpath (param "SESSION"))` + runtimeRules.String() + `)
 
+; Security.framework creates TLS policies by inspecting the running executable.
+; Metadata access is restricted to the already validated executable's ancestors;
+; it does not permit reading any directory's contents.
+(allow file-read-metadata` + executableAncestorRules.String() + `)
+
 ; Writes are limited to the selected workspace and leased Session.
 (allow file-write*
   (literal (param "WORKSPACE")) (subpath (param "WORKSPACE"))
@@ -646,10 +657,12 @@ func buildSeatbeltPolicy(request validatedProcessRequest) (string, []string, err
   (remote ip)
   (literal "/private/var/run/mDNSResponder"))
 
-; Security.framework reads system trust settings through this exact Mach
-; service. All other Mach services remain denied by default.
+; Security.framework reads system trust settings and evaluates platform TLS
+; through these exact Mach services. All other Mach services remain denied.
 (allow mach-lookup
   (global-name "com.apple.SecurityServer"))
+(allow mach-lookup
+  (global-name "com.apple.trustd.agent"))
 
 ; Preserve the invoking terminal, raw mode, and resize operations.
 (allow pseudo-tty)
@@ -668,4 +681,14 @@ func buildSeatbeltPolicy(request validatedProcessRequest) (string, []string, err
   (literal "/dev/fd")
   (subpath "/dev/fd"))`
 	return policy, definitions, nil
+}
+
+func seatbeltExecutableAncestors(executable string) []string {
+	ancestors := make([]string, 0, 8)
+	for ancestor := filepath.Dir(executable); ; ancestor = filepath.Dir(ancestor) {
+		ancestors = append(ancestors, ancestor)
+		if ancestor == string(filepath.Separator) {
+			return ancestors
+		}
+	}
 }
