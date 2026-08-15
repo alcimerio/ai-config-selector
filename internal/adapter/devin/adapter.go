@@ -305,13 +305,18 @@ func (a *Adapter) observeGlobalCatalog(ctx context.Context, session *Session) (c
 }
 
 func managedReference(homeDir, baseDir string) (SkillReference, bool) {
+	resolvedHomeDir, err := filepath.EvalSymlinks(filepath.Clean(homeDir))
+	if err != nil {
+		return SkillReference{}, false
+	}
 	resolvedBaseDir, err := filepath.EvalSymlinks(filepath.Clean(baseDir))
 	if err != nil {
 		return SkillReference{}, false
 	}
 	for _, rule := range globalSourceRules {
-		resolvedRoot, err := filepath.EvalSymlinks(filepath.Join(homeDir, rule.RelativeDirectory))
-		if err != nil {
+		expectedRoot := filepath.Join(resolvedHomeDir, rule.RelativeDirectory)
+		resolvedRoot, err := filepath.EvalSymlinks(expectedRoot)
+		if err != nil || resolvedRoot != expectedRoot {
 			continue
 		}
 		relative, ok := relativeWithin(resolvedRoot, resolvedBaseDir)

@@ -122,23 +122,39 @@ func TestPreflightAcceptsCanonicalManagedSkillPathsFromAliasedSession(t *testing
 	}
 }
 
-func TestManagedReferenceRejectsSymlinkEscape(t *testing.T) {
-	homeDir := t.TempDir()
-	managedRoot := filepath.Join(homeDir, ".config", "devin", "skills")
-	if err := os.MkdirAll(managedRoot, 0o700); err != nil {
+func TestPreflightRejectsManagedSourceRootSymlinkEscape(t *testing.T) {
+	fixture := newFakeDevinFixture(t, nil, "Logged in (via Devin).", 0)
+	externalRoot := filepath.Join(t.TempDir(), "external-skills")
+	externalBundle := filepath.Join(externalRoot, "acs-selected-fixture")
+	if err := os.MkdirAll(externalBundle, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	outsideBundle := filepath.Join(t.TempDir(), "outside-bundle")
-	if err := os.MkdirAll(outsideBundle, 0o700); err != nil {
+	canonicalExternalBundle, err := filepath.EvalSymlinks(externalBundle)
+	if err != nil {
 		t.Fatal(err)
 	}
-	escapedBundle := filepath.Join(managedRoot, "escaped")
-	if err := os.Symlink(outsideBundle, escapedBundle); err != nil {
+	fixture.skills = []fakeObservedSkill{{
+		Name:     "acs-selected-fixture",
+		Provider: "Devin",
+		BaseDir:  canonicalExternalBundle,
+	}}
+
+	adapter, session := fixture.prepare(t)
+	managedRoot := filepath.Join(session.HomeDir, ".config", "devin", "skills")
+	movedRoot := filepath.Join(fixture.testRoot, "moved-managed-root")
+	if err := os.Rename(managedRoot, movedRoot); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(externalRoot, managedRoot); err != nil {
 		t.Fatal(err)
 	}
 
-	if _, managed := managedReference(homeDir, escapedBundle); managed {
-		t.Fatal("managedReference accepted a symlink escape from a managed source")
+	err = adapter.Preflight(context.Background(), session)
+	if err == nil {
+		t.Fatal("Preflight accepted a managed source root symlink escape")
+	}
+	if strings.Contains(err.Error(), externalRoot) {
+		t.Fatalf("Preflight exposed the escaped source root: %q", err)
 	}
 }
 
