@@ -158,6 +158,47 @@ func TestPreflightRejectsManagedSourceRootSymlinkEscape(t *testing.T) {
 	}
 }
 
+func TestPreflightRejectsSelectedBundleSymlinkEscape(t *testing.T) {
+	fixture := newFakeDevinFixture(t, nil, "Logged in (via Devin).", 0)
+	selectedBundle := filepath.Join(plannedSessionHome(t), ".config", "devin", "skills", "acs-selected-fixture")
+	fixture.skills = []fakeObservedSkill{{
+		Name:     "acs-selected-fixture",
+		Provider: "Devin",
+		BaseDir:  selectedBundle,
+	}}
+	externalBundle := filepath.Join(t.TempDir(), "external-selected-bundle")
+	if err := os.MkdirAll(externalBundle, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	adapter, session := fixture.prepare(t)
+	managedRoot := filepath.Join(session.HomeDir, ".config", "devin", "skills")
+	rootInfo, err := os.Lstat(managedRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !rootInfo.IsDir() || rootInfo.Mode()&os.ModeSymlink != 0 {
+		t.Fatal("managed source root is not a regular directory")
+	}
+	movedBundle := filepath.Join(fixture.testRoot, "moved-selected-bundle")
+	if err := os.Rename(selectedBundle, movedBundle); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(externalBundle, selectedBundle); err != nil {
+		t.Fatal(err)
+	}
+
+	err = adapter.Preflight(context.Background(), session)
+	if err == nil {
+		t.Fatal("Preflight accepted a selected bundle symlink escape")
+	}
+	for _, sensitivePath := range []string{externalBundle, selectedBundle} {
+		if strings.Contains(err.Error(), sensitivePath) {
+			t.Fatalf("Preflight exposed a managed bundle path: %q", err)
+		}
+	}
+}
+
 func TestPreflightReportsSanitizedCatalogMismatch(t *testing.T) {
 	fixture := newFakeDevinFixture(t, []fakeObservedSkill{{
 		Name:     "token=SUPER_SECRET_STDOUT",
