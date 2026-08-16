@@ -100,13 +100,16 @@ func (session *SessionLease) releaseReference() error {
 }
 
 func (session *SessionLease) removeLocked() error {
-	if session.guard != nil {
-		closeLockedFile(session.guard)
-		session.guard = nil
-	}
+	// Keep the lease locked until removal succeeds. A failed cleanup must remain
+	// owned by this ACS process so concurrent abandoned-session recovery cannot
+	// remove a Session whose contained process cleanup is still in progress.
 	if err := os.RemoveAll(session.RootDir); err != nil {
 		session.cleanupErr = errors.New("delete ACS Session: cleanup failed")
 		return session.cleanupErr
+	}
+	if session.guard != nil {
+		closeLockedFile(session.guard)
+		session.guard = nil
 	}
 	session.cleanupErr = nil
 	return nil
