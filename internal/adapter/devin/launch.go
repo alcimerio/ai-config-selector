@@ -107,12 +107,23 @@ func (a *Adapter) Launch(
 }
 
 func runAttached(process launch.Process, supervisor *signalSupervisor) error {
-	if err := supervisor.start(process); err != nil {
-		return err
+	started, startErr := supervisor.start(process)
+	if !started {
+		return startErr
 	}
-	err := process.Wait()
-	supervisor.detach()
-	return err
+	defer supervisor.detach()
+	waitErr := process.Wait()
+	if startErr == nil {
+		return waitErr
+	}
+	// A replay failure is reported as the primary launch failure, but a
+	// successful Start has made the process and its Session lease live. Always
+	// reap it before returning; expose only stable sandbox categories on this
+	// otherwise sensitive error path.
+	if waitErr == nil {
+		return startErr
+	}
+	return errors.Join(startErr, &launch.SandboxError{Category: launch.SandboxProcessWaitFailed})
 }
 
 type signalSupervisor struct {
@@ -173,11 +184,11 @@ func (supervisor *signalSupervisor) run() {
 	}
 }
 
-func (supervisor *signalSupervisor) start(child launch.Process) error {
+func (supervisor *signalSupervisor) start(child launch.Process) (bool, error) {
 	supervisor.mutex.Lock()
 	if supervisor.pending != nil {
 		supervisor.mutex.Unlock()
-		return errors.New("Devin launch interrupted before the interactive process started")
+		return false, errors.New("Devin launch interrupted before the interactive process started")
 	}
 	supervisor.starting = true
 	supervisor.mutex.Unlock()
@@ -187,18 +198,21 @@ func (supervisor *signalSupervisor) start(child launch.Process) error {
 	defer supervisor.mutex.Unlock()
 	supervisor.starting = false
 	if err != nil {
-		return err
+		return false, err
 	}
 	supervisor.child = child
 	pending := supervisor.pending
 	supervisor.pending = nil
 	if pending == nil {
-		return nil
+		return true, nil
 	}
 	supervisor.mutex.Unlock()
 	err = child.Signal(pending)
 	supervisor.mutex.Lock()
-	return err
+	if err != nil {
+		return true, &launch.SandboxError{Category: launch.SandboxProcessStartFailed}
+	}
+	return true, nil
 }
 
 func (supervisor *signalSupervisor) detach() {

@@ -3,6 +3,7 @@ package devin
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -365,6 +366,57 @@ func TestRunAttachedDoesNotCancelAndReforwardOneSignalDuringStart(t *testing.T) 
 	}
 }
 
+func TestRunAttachedWaitsAndReleasesSessionAfterReplaySignalFailure(t *testing.T) {
+	sessionsDirectory := filepath.Join(t.TempDir(), "sessions")
+	session, err := launch.CreateSession(sessionsDirectory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	process := &replaySignalFailureProcess{
+		startEntered: make(chan struct{}),
+		allowStart:   make(chan struct{}),
+		cleanupDone:  make(chan struct{}),
+	}
+	retained, err := launch.RetainSessionUntilProcessDone(process, session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, cancelPreflight := context.WithCancel(context.Background())
+	defer cancelPreflight()
+	supervisor := newSignalSupervisor(cancelPreflight)
+	defer supervisor.stop()
+
+	finished := make(chan error, 1)
+	go func() { finished <- runAttached(retained, supervisor) }()
+	<-process.startEntered
+	supervisor.forwarded <- syscall.SIGTERM
+	waitForPendingSignal(t, supervisor, syscall.SIGTERM)
+	close(process.allowStart)
+	err = <-finished
+
+	var sandboxErr *launch.SandboxError
+	if !errors.As(err, &sandboxErr) || sandboxErr.Category != launch.SandboxProcessStartFailed {
+		t.Fatalf("replayed signal error = %v, want sanitized process_start_failed", err)
+	}
+	if strings.Contains(err.Error(), "SUPER_SECRET_REPLAY_FAILURE") {
+		t.Fatalf("replayed signal error leaked process detail: %v", err)
+	}
+	if got := process.waits; got != 1 {
+		t.Fatalf("Wait calls = %d, want exactly one after successful Start", got)
+	}
+	select {
+	case <-process.cleanupDone:
+	default:
+		t.Fatal("replayed signal failure did not settle native cleanup")
+	}
+	if err := session.Remove(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(session.RootDir); !os.IsNotExist(err) {
+		t.Fatalf("Session remained leased after replay cleanup: %v", err)
+	}
+}
+
 func TestLaunchSignalDuringPreflightCancelsVerificationAndCleansUpSession(t *testing.T) {
 	fixture := newLaunchTestFixture(t)
 	readyPath := filepath.Join(t.TempDir(), "preflight-ready")
@@ -588,6 +640,46 @@ type startAttachRaceProcess struct {
 	preflightContext context.Context
 	mutex            sync.Mutex
 	signals          []syscall.Signal
+}
+
+type replaySignalFailureProcess struct {
+	startEntered chan struct{}
+	allowStart   chan struct{}
+	cleanupDone  chan struct{}
+	waits        int
+}
+
+func (process *replaySignalFailureProcess) Start() error {
+	close(process.startEntered)
+	<-process.allowStart
+	return nil
+}
+
+func (process *replaySignalFailureProcess) Wait() error {
+	process.waits++
+	close(process.cleanupDone)
+	return nil
+}
+
+func (*replaySignalFailureProcess) Signal(os.Signal) error {
+	return errors.New("SUPER_SECRET_REPLAY_FAILURE")
+}
+
+func (process *replaySignalFailureProcess) CleanupDone() <-chan struct{} { return process.cleanupDone }
+
+func waitForPendingSignal(t *testing.T, supervisor *signalSupervisor, want os.Signal) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		supervisor.mutex.Lock()
+		got := supervisor.pending
+		supervisor.mutex.Unlock()
+		if got == want {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("signal supervisor did not retain the startup signal for replay")
 }
 
 func (process *startAttachRaceProcess) Start() error {

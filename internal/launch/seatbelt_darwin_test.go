@@ -3,6 +3,7 @@
 package launch
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/hex"
@@ -1443,6 +1444,275 @@ func TestSeatbeltPreservesTerminalResize(t *testing.T) {
 	}
 	if got := strings.TrimSpace(output.String()); got != "43x117" {
 		t.Fatalf("terminal size = %q, want 43x117", got)
+	}
+}
+
+const seatbeltNativePTYHarnessEnvironment = "ACS_SEATBELT_NATIVE_PTY_HARNESS"
+
+func TestSeatbeltNativeRoutesTerminalSignalsOnlyToContainedTarget(t *testing.T) {
+	skipSeatbeltNativeTestBinaryUnderRace(t)
+	for _, test := range []struct {
+		name   string
+		signal syscall.Signal
+	}{
+		{name: "terminal interrupt", signal: syscall.SIGINT},
+		{name: "terminal resize", signal: syscall.SIGWINCH},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root, err := os.MkdirTemp("/private/tmp", "acs-seatbelt-terminal-")
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = os.RemoveAll(root) })
+			master, terminal, err := pty.Open()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer master.Close()
+			defer terminal.Close()
+			command := exec.Command(os.Args[0], "-test.run=^TestSeatbeltNativePTYHarness$")
+			command.Env = append(os.Environ(),
+				seatbeltNativePTYHarnessEnvironment+"=1",
+				"ACS_SEATBELT_NATIVE_PTY_ROOT="+root,
+				"ACS_SEATBELT_NATIVE_PTY_SIGNAL="+strconv.Itoa(int(test.signal)),
+			)
+			command.Stdin, command.Stdout, command.Stderr = terminal, terminal, terminal
+			command.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true, Ctty: 0}
+			if err := command.Start(); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = command.Process.Kill() })
+			if err := terminal.Close(); err != nil {
+				t.Fatal(err)
+			}
+			paths := seatbeltNativePTYPaths(root)
+			waitForSeatbeltPTYMarker(t, paths.ready)
+			switch test.signal {
+			case syscall.SIGINT:
+				if _, err := master.Write([]byte{3}); err != nil {
+					t.Fatal(err)
+				}
+			case syscall.SIGWINCH:
+				if err := pty.Setsize(master, &pty.Winsize{Rows: 41, Cols: 119}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			waitForSeatbeltPTYMarker(t, paths.received)
+			if _, err := master.Write([]byte("snapshot\n")); err != nil {
+				t.Fatal(err)
+			}
+			waitForSeatbeltPTYMarker(t, paths.observed)
+			if count, err := os.ReadFile(paths.observed); err != nil || string(count) != "1\n" {
+				t.Fatalf("terminal %s deliveries = %q, %v; want exactly one", test.signal, count, err)
+			}
+			if _, err := master.Write([]byte("release\n")); err != nil {
+				t.Fatal(err)
+			}
+			waitSeatbeltNativePTYHarness(t, command)
+		})
+	}
+}
+
+func TestSeatbeltNativePTYHarness(t *testing.T) {
+	if os.Getenv(seatbeltNativePTYHarnessEnvironment) != "1" {
+		return
+	}
+	root := os.Getenv("ACS_SEATBELT_NATIVE_PTY_ROOT")
+	signalNumber, err := strconv.Atoi(os.Getenv("ACS_SEATBELT_NATIVE_PTY_SIGNAL"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	paths := seatbeltNativePTYPaths(root)
+	request, err := seatbeltNativePTYRequest(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.arguments = []string{
+		"-test.run=^TestSeatbeltNativePTYTarget$", "--", strconv.Itoa(signalNumber),
+		paths.ready, paths.received, paths.observed,
+	}
+	request.terminal = Terminal{Input: os.Stdin, Output: os.Stdout, ErrorOutput: os.Stderr}
+	process, err := newSeatbeltBackend(seatbeltExecutable).prepare(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := process.Start(); err != nil {
+		t.Fatal(err)
+	}
+	waitForSeatbeltPTYMarker(t, paths.ready)
+	assertSeatbeltPTYForegroundTarget(t, os.Stdin, paths.ready)
+	if err := process.Wait(); err != nil {
+		t.Fatal(err)
+	}
+	assertSeatbeltPTYForegroundRestored(t, os.Stdin)
+}
+
+func TestSeatbeltNativePTYTarget(t *testing.T) {
+	arguments := seatbeltPTYTargetArguments()
+	if arguments == nil {
+		return
+	}
+	signalNumber, err := strconv.Atoi(arguments[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := syscall.Signal(signalNumber)
+	signals := make(chan os.Signal, 8)
+	signal.Notify(signals, want)
+	defer signal.Stop(signals)
+	commands := make(chan string, 2)
+	go func() {
+		scanner := bufio.NewScanner(os.Stdin)
+		for scanner.Scan() {
+			commands <- scanner.Text()
+		}
+	}()
+	if err := os.WriteFile(arguments[1], []byte(strconv.Itoa(syscall.Getpgrp())+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	deliveries := 0
+	observed := false
+	for {
+		select {
+		case received := <-signals:
+			if received != want {
+				t.Fatalf("received terminal signal %v, want %v", received, want)
+			}
+			deliveries++
+			if err := os.WriteFile(arguments[2], []byte(strconv.Itoa(deliveries)+"\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		case command := <-commands:
+			switch command {
+			case "snapshot":
+				if err := os.WriteFile(arguments[3], []byte(strconv.Itoa(deliveries)+"\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				observed = true
+			case "release":
+				if !observed {
+					t.Fatal("terminal signal delivery was released before observation")
+				}
+				return
+			default:
+				t.Fatalf("unexpected native PTY command %q", command)
+			}
+		}
+	}
+}
+
+type seatbeltPTYPaths struct {
+	ready, received, observed string
+}
+
+func seatbeltNativePTYPaths(root string) seatbeltPTYPaths {
+	base := filepath.Join(root, "sessions", "session-one")
+	return seatbeltPTYPaths{
+		ready: filepath.Join(base, "terminal-signal-ready"), received: filepath.Join(base, "terminal-signal-received"),
+		observed: filepath.Join(base, "terminal-signal-observed"),
+	}
+}
+
+func seatbeltNativePTYRequest(root string) (validatedProcessRequest, error) {
+	workspace := filepath.Join(root, "home", "workspace")
+	session := filepath.Join(root, "sessions", "session-one")
+	home := filepath.Join(session, "home")
+	temporary := filepath.Join(session, "tmp")
+	for _, directory := range []string{workspace, home, temporary} {
+		if err := os.MkdirAll(directory, 0o700); err != nil {
+			return validatedProcessRequest{}, err
+		}
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		return validatedProcessRequest{}, err
+	}
+	executable, err = filepath.EvalSymlinks(executable)
+	if err != nil {
+		return validatedProcessRequest{}, err
+	}
+	environment, err := buildProcessEnvironment(home, temporary, []string{"TERM=xterm-256color"})
+	if err != nil {
+		return validatedProcessRequest{}, err
+	}
+	return validatedProcessRequest{
+		workspace: workspace, sessionsDirectory: filepath.Dir(session), sessionDirectory: session,
+		sessionHome: home, temporaryDirectory: temporary, executable: executable, environment: environment,
+	}, nil
+}
+
+func seatbeltPTYTargetArguments() []string {
+	for index, argument := range os.Args {
+		if argument == "--" {
+			arguments := os.Args[index+1:]
+			if len(arguments) == 4 {
+				return arguments
+			}
+			break
+		}
+	}
+	return nil
+}
+
+func assertSeatbeltPTYForegroundTarget(t *testing.T, terminal *os.File, ready string) {
+	t.Helper()
+	contents, err := os.ReadFile(ready)
+	if err != nil {
+		t.Fatal(err)
+	}
+	targetGroup, err := strconv.Atoi(strings.TrimSpace(string(contents)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	foregroundGroup, err := unix.IoctlGetInt(int(terminal.Fd()), unix.TIOCGPGRP)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if foregroundGroup != targetGroup || foregroundGroup == syscall.Getpgrp() {
+		t.Fatalf("terminal foreground group = %d, target = %d, harness = %d; want only the contained target", foregroundGroup, targetGroup, syscall.Getpgrp())
+	}
+}
+
+func assertSeatbeltPTYForegroundRestored(t *testing.T, terminal *os.File) {
+	t.Helper()
+	foregroundGroup, err := unix.IoctlGetInt(int(terminal.Fd()), unix.TIOCGPGRP)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if foregroundGroup != syscall.Getpgrp() {
+		t.Fatalf("terminal foreground group after native cleanup = %d, want harness group %d", foregroundGroup, syscall.Getpgrp())
+	}
+}
+
+func waitForSeatbeltPTYMarker(t *testing.T, path string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if _, err := os.Stat(path); err == nil {
+			return
+		} else if !os.IsNotExist(err) {
+			t.Fatal(err)
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for Seatbelt terminal marker %q", filepath.Base(path))
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+func waitSeatbeltNativePTYHarness(t *testing.T, command *exec.Cmd) {
+	t.Helper()
+	wait := make(chan error, 1)
+	go func() { wait <- command.Wait() }()
+	select {
+	case err := <-wait:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		_ = command.Process.Kill()
+		<-wait
+		t.Fatal("native PTY harness did not exit after target release")
 	}
 }
 

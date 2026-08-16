@@ -226,6 +226,13 @@ func removeAbandonedSessions(sessionsDirectory string) error {
 		legacyGuard, err := openLockedFile(filepath.Join(sessionPath, legacySessionLeaseFile), true)
 		if errors.Is(err, syscall.EWOULDBLOCK) {
 			closeLockedFile(guard)
+			// This process holds the startup coordinator and has proved no modern
+			// lease owns guardPath. It was created solely to inspect a legacy
+			// Session, so remove it before preserving the legacy lock. Keeping it
+			// would leave a permanent external artifact once that older ACS exits.
+			if err := os.Remove(guardPath); err != nil && !os.IsNotExist(err) {
+				return errors.New("delete abandoned ACS Session: cleanup failed")
+			}
 			continue
 		}
 		if err != nil && !os.IsNotExist(err) {
