@@ -29,11 +29,8 @@ On every Supported Platform, ACS supports:
 - the Devin CLI, installed and authenticated;
 - user-global Skills discovered from Devin and shared-agent locations;
 - interactive Profile creation, persistence, and dry-run inspection;
-- fail-closed validation of interactive launches until the native sandbox
-  backends are available;
-- after the native sandbox backend for the host lands, the intended interactive
-  launch workflow will isolate configuration through an ephemeral Session
-  inside that sandbox.
+- Seatbelt-contained interactive launches on macOS 26;
+- Bubblewrap-contained interactive launches on Ubuntu 24.04 LTS.
 
 The Profile Builder requires confirmation before it creates an empty Profile.
 Windows, WSL, other Linux distributions, and other operating-system or
@@ -193,6 +190,11 @@ Launch Devin with the Profile:
 acs devin --profile backend-review
 ```
 
+On macOS 26, this command runs every Devin preflight, interactive process, and
+descendant inside Seatbelt. ACS verifies the root-owned system
+`/usr/bin/sandbox-exec`, builds a default-deny policy from validated runtime
+paths, and applies that policy to the complete process tree.
+
 On Ubuntu 24.04, this command runs every Devin probe and the interactive
 process through `/usr/bin/bwrap`. ACS requires the root-owned, non-writable
 executable recorded as installed by the signed Ubuntu `bubblewrap` package and
@@ -214,18 +216,18 @@ including Session-local temporary storage. Named runtime inputs and the
 minimal operating-system runtime are read-only. The host home and host Unix
 sockets are absent. Devin retains outbound IP networking, but ACS does not
 mount host SSH, Docker, proxy, or agent sockets. There is no unsandboxed
-fallback. On macOS, launch remains fail-closed with `backend_unavailable`
-until the Seatbelt backend in #57 lands.
+fallback on either platform.
 
 ### Session lifecycle
 
-On Ubuntu, the command first completes sandbox preflight, then creates an
-ephemeral Session with a synthetic home,
-copies the selected Skill Bundles and existing Devin credential into that
+On every Supported Platform, the command first completes sandbox preflight,
+then creates an ephemeral Session with a synthetic home, copies the selected
+Skill Bundles and existing Devin credential into that
 Session, verifies the selection and authentication state, and starts Devin in
-the current working directory through the native sandbox. ACS removes the
-Session after Devin exits or launch fails. A failure before the Session lease
-does not create Session data.
+the current working directory through the native sandbox. ACS removes a leased
+Session after launch setup fails, or only after the sandboxed process tree has
+exited or been terminated and containment is settled. A failure before the
+Session lease does not create Session data.
 
 Repository-local Skills remain under Devin's control. ACS reports them during
 a dry run but does not copy, filter, or isolate them.
@@ -249,9 +251,9 @@ v0.2.0 preserves the v0.1.0 Profile envelopes, category schemas, public
 commands, accepted messages, file permissions, and atomic Profile persistence.
 It also preserves Profile Builder behavior, Devin Adapter discovery and
 preflight behavior, launch and signal handling, ACS Home at `~/.acs`, and the
-intended per-launch Session creation and cleanup contract. That Session
-lifecycle is not currently available: until the native backends land, an
-interactive launch returns `backend_unavailable` before leasing a Session.
+intended per-launch Session creation and cleanup contract. That contained
+Session lifecycle is available through Seatbelt on macOS and Bubblewrap on
+Ubuntu.
 Existing v0.1.0 Profiles do not require migration.
 
 ## Known limitations
@@ -267,9 +269,9 @@ Existing v0.1.0 Profiles do not require migration.
   the CLI.
 - ACS does not filter repository-local Skills.
 - Interactive launches require a certified native backend. Bubblewrap is
-  active on Ubuntu 24.04; macOS remains blocked until Seatbelt enforcement is
-  available. The synthetic home complements the OS sandbox and is not a
-  substitute for native enforcement.
+  active on Ubuntu 24.04 and Seatbelt is active on macOS 26. The synthetic
+  home complements the OS sandbox and is not a substitute for native
+  enforcement.
 - ACS does not manage MCP servers, hooks, instructions, agents, or arbitrary
   target settings.
 - ACS has no package-manager distribution, automatic updates, or uninstaller.

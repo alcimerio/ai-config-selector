@@ -276,15 +276,15 @@ credentials, environment values, or account details.
 The required release gate stays credential-free: one candidate artifact set is
 installed and exercised natively on darwin/arm64, darwin/amd64, linux/amd64,
 and linux/arm64. The native matrix declares the sandbox backend capability
-expected at each increment. The Ubuntu rows require the Bubblewrap launch and
+expected at each increment. The Darwin rows exercise the Seatbelt launch and
+lifecycle contract. The Ubuntu rows require the Bubblewrap launch and
 lifecycle contract; before their native tests, they install the targeted
 `bwrap-userns-restrict` AppArmor profile for `/usr/bin/bwrap` from a pinned,
 SHA-256-verified AppArmor upstream release and execute a real Bubblewrap
 user-namespace probe. This preserves Ubuntu's global unprivileged-user-namespace
 restriction while authorizing only the required Bubblewrap executable. The
-macOS rows return the stable `backend_unavailable` category without starting the
-target or leasing a Session until #57 adds Seatbelt. A real-Devin smoke is an
-optional maintainer check for changes that affect authentication,
+complete matrix requires successful native containment. A real-Devin smoke is
+an optional maintainer check for changes that affect authentication,
 the Devin Adapter, Profile selection, Session isolation, or interactive
 lifecycle behavior. It runs only on an authorized macOS 26 arm64 maintainer
 host and never places personal credentials in CI or a release artifact.
@@ -358,6 +358,55 @@ backend selector, policy input, environment passthrough, or sandbox bypass.
 It also classifies process-start and non-exit wait failures at the boundary so
 backend output, generated policy, host paths, and environment values do not
 enter CLI diagnostics; ordinary child exit status remains intact.
+The Darwin backend verifies the root-owned system `sandbox-exec`, builds a
+default-deny Seatbelt policy from validated parameters, and confines the
+workspace, Session, named runtime reads, IP networking, resolver socket, and
+terminal operations. Its only external Mach lookups are the exact
+`com.apple.SecurityServer` service for Security.framework trust settings and
+`com.apple.trustd.agent` for platform TLS evaluation. Broad Mach lookup and
+all other services—including OpenDirectory libinfo, SystemConfiguration
+configd, notification center, and logd—remain denied. Security.framework also
+inspects the executable while creating a TLS policy. The two platform-TLS
+compatibility allowances are therefore metadata-only access to each ancestor
+of the validated executable and the exact `com.apple.trustd.agent` Mach
+service. The literal metadata rules do not grant directory contents or
+`subpath` access. A contained offline regression removes remote-IP outbound
+access from its test-only production-derived policy, uses only local system
+trust material, and verifies both allowances independently.
+Seatbelt applies the profile to descendants and blocks unrelated host paths,
+Unix sockets, environment values, and descriptors. Each launch places one
+internal ACS supervisor and its target in a dedicated Seatbelt instance. The
+target receives only standard input, output, and error; the supervisor alone
+retains a close-on-exec control socket used for signal forwarding and an
+outer-ACS cleanup challenge.
+
+After the target leader exits, the supervisor uses the public libproc
+`proc_listallpids` and `proc_pidinfo` APIs to find same-instance processes.
+It repeatedly stops live targets until the set is quiescent, revalidates each
+PID plus process start time before destructive signals, kills the stopped set,
+and repeats until no non-zombie target remains. The Seatbelt
+`(target same-sandbox)` signal rule is the final authorization boundary, so a
+reused PID or an identical concurrent profile cannot authorize a cross-instance
+signal. Enumeration failure, changed or ambiguous credentials, and bounded
+nonconvergence produce no cleanup proof.
+
+The outer ACS releases the Session reference only after it receives a
+versioned proof containing its random challenge, a zero-live-target result,
+and a target status matching the supervisor exit. A supervisor that received
+the challenge but cannot start a target may instead return the authenticated
+no-target result with its reserved status 125; that result safely releases the
+unused Session. Missing, malformed, unauthenticated, timed-out, raw status
+125, or negative proof leaves the cleanup barrier and Session permanently
+quarantined. Same-instance signal authorization is symmetric, so a hostile
+target can kill its supervisor; that attack therefore sacrifices cleanup
+availability but cannot manufacture proof or release the Session. Durable
+recovery of an abandoned quarantine after ACS itself exits is outside this
+lifecycle boundary.
+
+The Darwin process API binding uses the pure-Go `purego` foreign-function
+interface against public symbols in `libSystem`; release binaries remain
+compatible with the repository's `CGO_ENABLED=0` four-target build matrix.
+
 On certified Ubuntu 24.04 targets, the production backend requires the
 root-owned, non-group/world-writable regular `/usr/bin/bwrap` executable. The
 installed binary and source package must both be `bubblewrap`, its dpkg
@@ -387,9 +436,8 @@ the target fail-closed. Bubblewrap and the kernel user namespace jointly
 contain the process tree and propagate target exit and cancellation behavior
 to the caller. Missing,
 modified, unpackaged, or incapable Bubblewrap installations fail closed with
-fixed package-remediation guidance. Seatbelt remains separate backend work;
-until it is present, macOS launch fails closed rather than running Devin
-without containment.
+fixed package-remediation guidance. Both native backends enforce the shared
+fail-closed Session-lease boundary without an unsandboxed fallback.
 
 Repository-local Skills remain visible because Devin runs in the selected
 repository. ACS reports them but does not filter, copy, or manage them.
@@ -591,8 +639,9 @@ Skills guards fuzzy search and navigation responsiveness.
 ## Current limitations
 
 - ACS accepts only macOS 26 and Ubuntu 24.04 LTS on amd64 or arm64, and rejects
-  unidentified hosts and missing native sandbox backends. Ubuntu launches use
-  the verified system Bubblewrap package; macOS launches remain unavailable.
+  unidentified hosts and missing native sandbox backends. macOS launches use
+  the verified system Seatbelt executable; Ubuntu launches use the verified
+  system Bubblewrap package.
 - ACS ships only the Devin Adapter.
 - The Devin Registry currently contains only the Skills category.
 - Profile creation uses the hardened Bubble Tea builder with search, lazy
@@ -602,3 +651,5 @@ Skills guards fuzzy search and navigation responsiveness.
 - ACS does not filter repository-local Skills.
 - On Ubuntu, Bubblewrap provides filesystem and process isolation, while
   outbound networking remains allowed and ACS does not filter that traffic.
+- On macOS, Seatbelt provides filesystem and process isolation while allowing
+  the required IP networking and resolver socket access.

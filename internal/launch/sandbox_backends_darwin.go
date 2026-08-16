@@ -2,4 +2,6 @@
 
 package launch
 
-func nativeSandboxBackends() map[string]sandboxBackend { return nil }
+func nativeSandboxBackends() map[string]sandboxBackend {
+	return map[string]sandboxBackend{"darwin": newSeatbeltBackend(seatbeltExecutable)}
+}

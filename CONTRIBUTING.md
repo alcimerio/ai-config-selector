@@ -93,8 +93,15 @@ go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
 
 The race-test skip is only for the documented third-party Linux cancelreader
 shutdown race in the abrupt `runtime_error` and `recovered_panic` PTY cases.
-The normal suite still exercises both cases, and macOS runs `go test -race
-./...` without that exception. Also cross-build and cross-test-compile all four
+The normal suite still exercises both cases. On macOS, the ThreadSanitizer
+runtime cannot start inside the production Seatbelt policy. Only Darwin tests
+that require nested execution of the race-instrumented test binary inside the
+production Seatbelt policy are skipped by standard race build tags. Policy
+construction, escaping, backend verification, input sanitization, and every
+test that does not require nested execution remain in `go test -race ./...`;
+the preceding non-race native suite and the installed promoted-artifact
+acceptance still exercise native containment without changing the production
+policy. Also cross-build and cross-test-compile all four
 Supported Release Targets and reconcile the final worktree. Native jobs, not
 cross-compilation, provide promoted-artifact acceptance evidence.
 
@@ -163,13 +170,13 @@ then installs and exercises the candidate executable as a black box. The
 acceptance harness uses only a synthetic home, a fake Devin executable, and
 temporary install and Session directories. It does not read real Devin
 credentials or modify a maintainer installation. Each target declares the
-native sandbox capability expected at that release increment. The two macOS
-targets require the installed launch to fail closed with
-`backend_unavailable` before a Session is leased or the fake Devin process
-starts. The two Ubuntu targets require the installed launch, signal,
-terminal-resize, and concurrent-lease assertions to succeed through the
-system Bubblewrap backend. Ubuntu-native tests additionally prove filesystem,
-environment, descriptor, networking, descendant, and lifecycle containment.
+native sandbox capability expected at that release increment. Darwin targets
+exercise successful Seatbelt launch, signal, terminal-resize, and
+concurrent-lease behavior. The two Ubuntu targets require the installed launch,
+signal, terminal-resize, and concurrent-lease assertions to succeed through
+the system Bubblewrap backend. Ubuntu-native tests additionally prove
+filesystem, environment, descriptor, networking, descendant, and lifecycle
+containment.
 
 After building a clean candidate locally, run the validator on a matching
 native host with a fresh absolute install directory:
@@ -182,7 +189,7 @@ scripts/validate-promoted-artifact.sh \
   dist/release-candidate "$install_root/bin"
 ACS_PROMOTED_BINARY="$install_root/bin/acs" \
   ACS_PROMOTED_VERSION=v0.2.0 \
-  ACS_PROMOTED_SANDBOX_BACKEND=<available-on-ubuntu-or-unavailable-on-macos> \
+  ACS_PROMOTED_SANDBOX_BACKEND=available \
   go test ./acceptance -count=1
 ```
 

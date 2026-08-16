@@ -167,6 +167,24 @@ func TestLinuxWorkflowsUseTheCompleteDocumentedCancelreaderException(t *testing.
 	}
 }
 
+func TestContributingDocumentsDarwinSeatbeltRaceExceptionWithoutNumericClaim(t *testing.T) {
+	contents, err := os.ReadFile(filepath.Join("..", "CONTRIBUTING.md"))
+	if err != nil {
+		t.Fatalf("read CONTRIBUTING.md: %v", err)
+	}
+	text := string(contents)
+	normalizedText := strings.ToLower(strings.Join(strings.Fields(text), " "))
+
+	if strings.Contains(text, "skip only the three Darwin tests") {
+		t.Fatal("CONTRIBUTING.md contains the inaccurate numeric Darwin Seatbelt race-test claim")
+	}
+
+	const required = "only darwin tests that require nested execution of the race-instrumented test binary inside the production seatbelt policy are skipped"
+	if !strings.Contains(normalizedText, required) {
+		t.Errorf("CONTRIBUTING.md must explain the Darwin Seatbelt race-test exception: %q", required)
+	}
+}
+
 func TestPromotedArtifactGateDeclaresExpectedSandboxCapability(t *testing.T) {
 	for _, workflow := range []string{"promoted-artifacts.yml", "release.yml"} {
 		contents, err := os.ReadFile(filepath.Join("..", ".github", "workflows", workflow))
@@ -174,14 +192,30 @@ func TestPromotedArtifactGateDeclaresExpectedSandboxCapability(t *testing.T) {
 			t.Fatalf("read %s: %v", workflow, err)
 		}
 		text := string(contents)
-		if got := strings.Count(text, "sandbox_backend: unavailable"); got != 2 {
-			t.Errorf("%s declares unavailable sandbox capability %d times, want 2", workflow, got)
+		if got := strings.Count(text, "sandbox_backend: available"); got != 4 {
+			t.Errorf("%s declares available sandbox capability %d times, want 4", workflow, got)
 		}
-		if got := strings.Count(text, "sandbox_backend: available"); got != 2 {
-			t.Errorf("%s declares available sandbox capability %d times, want 2", workflow, got)
+		if got := strings.Count(text, "sandbox_backend: unavailable"); got != 0 {
+			t.Errorf("%s declares unavailable sandbox capability %d times, want 0", workflow, got)
+		}
+		for _, required := range []string{
+			"target: darwin/arm64\n            runner: macos-26\n            os: darwin\n            arch: arm64\n            sandbox_backend: available",
+			"target: darwin/amd64\n            runner: macos-26-intel\n            os: darwin\n            arch: amd64\n            sandbox_backend: available",
+			"target: linux/amd64\n            runner: ubuntu-24.04\n            os: linux\n            arch: amd64\n            sandbox_backend: available",
+			"target: linux/arm64\n            runner: ubuntu-24.04-arm\n            os: linux\n            arch: arm64\n            sandbox_backend: available",
+		} {
+			if !strings.Contains(text, required) {
+				t.Errorf("%s is missing the expected native capability row %q", workflow, required)
+			}
 		}
 		if !strings.Contains(text, "ACS_PROMOTED_SANDBOX_BACKEND: ${{ matrix.sandbox_backend }}") {
 			t.Errorf("%s does not pass the target sandbox capability to installed-artifact acceptance", workflow)
+		}
+		normalSuite := strings.Index(text, "run: go test ./...")
+		raceSuite := strings.Index(text, "go test -race ./...")
+		promotedAcceptance := strings.Index(text, "go test ./acceptance -count=1")
+		if normalSuite < 0 || raceSuite < normalSuite || promotedAcceptance < raceSuite {
+			t.Errorf("%s does not preserve normal native, race, and promoted-artifact acceptance order", workflow)
 		}
 	}
 
@@ -325,22 +359,35 @@ func TestReadmeDescribesCurrentPlatformSandboxCapabilities(t *testing.T) {
 	}
 	text := strings.Join(strings.Fields(string(contents)), " ")
 	for _, required := range []string{
+		"Seatbelt-contained interactive launches on macOS 26",
+		"On macOS 26, this command runs every Devin preflight, interactive process, and descendant inside Seatbelt",
+		"`/usr/bin/sandbox-exec`",
 		"Ubuntu 24.04",
 		"`/usr/bin/bwrap`",
 		"signed Ubuntu `bubblewrap` package",
 		"package database and packaged checksums are controlled by root",
 		"outbound IP networking",
 		"host Unix sockets",
-		"Seatbelt backend in #57",
-		"`backend_unavailable`",
-		"before it leases a Session or starts Devin",
-		"removes the Session after Devin exits or launch fails",
+		"There is no unsandboxed fallback on either platform",
+		"ACS removes a leased Session after launch setup fails, or only after the sandboxed process tree has exited or been terminated and containment is settled",
+		"That contained Session lifecycle is available through Seatbelt on macOS and Bubblewrap on Ubuntu",
 	} {
 		if !strings.Contains(text, required) {
 			t.Errorf("README.md does not explain the sandbox launch state with %q", required)
 		}
 	}
-
+	for _, obsolete := range []string{
+		"current sandbox increment is fail-closed",
+		"Seatbelt backend in #57",
+		"Bubblewrap backend in #64",
+		"After the native backend for the host lands",
+		"That Session lifecycle is not currently available",
+		"macOS launches remain unavailable",
+	} {
+		if strings.Contains(text, obsolete) {
+			t.Errorf("README.md retains obsolete all-platform fail-closed text %q", obsolete)
+		}
+	}
 }
 
 func TestDocumentationDescribesTargetedAppArmorRemediation(t *testing.T) {
@@ -396,7 +443,7 @@ func TestDocumentationDescribesTargetedAppArmorRemediation(t *testing.T) {
 	}
 }
 
-func TestContributorRaceGateKeepsTheExceptionLinuxOnly(t *testing.T) {
+func TestContributorRaceGateDocumentsNarrowNativeExceptions(t *testing.T) {
 	contents, err := os.ReadFile(filepath.Join("..", "CONTRIBUTING.md"))
 	if err != nil {
 		t.Fatalf("read CONTRIBUTING.md: %v", err)
@@ -409,6 +456,16 @@ func TestContributorRaceGateKeepsTheExceptionLinuxOnly(t *testing.T) {
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("CONTRIBUTING.md is missing the platform-specific race gate %q", want)
+		}
+	}
+	normalized := strings.Join(strings.Fields(text), " ")
+	for _, want := range []string{
+		"ThreadSanitizer runtime cannot start inside the production Seatbelt policy",
+		"Only Darwin tests that require nested execution of the race-instrumented test binary inside the production Seatbelt policy are skipped",
+		"preceding non-race native suite and the installed promoted-artifact acceptance",
+	} {
+		if !strings.Contains(normalized, want) {
+			t.Errorf("CONTRIBUTING.md is missing the macOS race rationale %q", want)
 		}
 	}
 }

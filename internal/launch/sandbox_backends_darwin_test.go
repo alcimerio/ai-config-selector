@@ -2,18 +2,15 @@
 
 package launch
 
-import (
-	"context"
-	"testing"
-)
+import "testing"
 
-func TestProductionDarwinSandboxRemainsUnavailable(t *testing.T) {
-	sandbox := newNativeProcessSandbox(func() (Platform, error) {
-		return Platform{OS: "darwin", Architecture: "arm64", Release: "26.0"}, nil
-	}, nativeSandboxBackends())
-	err := sandbox.Check(context.Background(), SandboxCheck{})
-	if err == nil {
-		t.Fatal("production Darwin sandbox unexpectedly registered a backend")
+func TestProductionDarwinSandboxRegistersSeatbelt(t *testing.T) {
+	backends := nativeSandboxBackends()
+	backend, ok := backends["darwin"].(*seatbeltBackend)
+	if !ok || backend == nil {
+		t.Fatalf("production Darwin sandbox backend = %T, want *seatbeltBackend", backends["darwin"])
 	}
-	assertSandboxCategory(t, err, SandboxBackendUnavailable)
+	if len(backends) != 1 {
+		t.Fatalf("production Darwin sandbox backends = %v, want only darwin", backends)
+	}
 }

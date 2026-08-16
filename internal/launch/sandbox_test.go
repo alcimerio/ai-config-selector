@@ -266,6 +266,27 @@ func TestProcessSandboxRejectsMissingBackendBeforePathPreparation(t *testing.T) 
 	assertSandboxCategory(t, err, SandboxBackendUnavailable)
 }
 
+func TestNativeSandboxBackendsAreRegisteredOnlyForTheNativeOperatingSystem(t *testing.T) {
+	backends := nativeSandboxBackends()
+	wantOS := ""
+	switch runtime.GOOS {
+	case "darwin", "linux":
+		wantOS = runtime.GOOS
+	}
+	if wantOS == "" {
+		if len(backends) != 0 {
+			t.Fatalf("unsupported build registered native backends: %v", backends)
+		}
+		return
+	}
+	if backends[wantOS] == nil {
+		t.Fatalf("%s build omitted its native sandbox backend", wantOS)
+	}
+	if len(backends) != 1 {
+		t.Fatalf("%s backends = %v, want only %s", wantOS, backends, wantOS)
+	}
+}
+
 func TestProcessSandboxSelectsBackendAndPassesOnlyValidatedInputs(t *testing.T) {
 	root := t.TempDir()
 	workspace := filepath.Join(root, "home", "user", "workspace")
