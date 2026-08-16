@@ -22,6 +22,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/creack/pty"
 	"golang.org/x/sys/unix"
 )
 
@@ -1619,6 +1620,48 @@ func TestBubblewrapNativePreservesTargetArgumentsWithoutPWD(t *testing.T) {
 	}
 }
 
+func TestBubblewrapNativePreservesRawTerminalDescriptors(t *testing.T) {
+	platform, err := CurrentPlatform()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidatePlatform(platform); err != nil {
+		t.Fatalf("native Bubblewrap test requires certified Ubuntu 24.04: %v", err)
+	}
+	request := validProcessRequest(t)
+	request.Executable = os.Args[0]
+	request.Arguments = []string{"-test.run=^TestBubblewrapNativeRawTerminalHelper$"}
+	master, terminal, err := pty.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer master.Close()
+	defer terminal.Close()
+	settings, err := unix.IoctlGetTermios(int(terminal.Fd()), unix.TCGETS)
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings.Lflag &^= unix.ICANON | unix.ECHO
+	if err := unix.IoctlSetTermios(int(terminal.Fd()), unix.TCSETS, settings); err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	request.Terminal = Terminal{Input: terminal, Output: &output, ErrorOutput: &output}
+	process, err := NewProcessSandbox().Prepare(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := process.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if err := process.Wait(); err != nil {
+		t.Fatalf("raw-terminal target failed: %v; output=%q", err, output.String())
+	}
+	if got := strings.TrimSpace(output.String()); got != "raw" {
+		t.Fatalf("raw terminal output = %q, want raw", got)
+	}
+}
+
 func TestBubblewrapNativeDescriptorHelper(t *testing.T) {
 	separator := -1
 	for index, argument := range os.Args {
@@ -1684,6 +1727,18 @@ func TestBubblewrapNativeTargetArgumentsHelper(t *testing.T) {
 	if _, exists := os.LookupEnv("PWD"); exists {
 		t.Fatal("target environment unexpectedly contains PWD")
 	}
+}
+
+func TestBubblewrapNativeRawTerminalHelper(t *testing.T) {
+	if os.Getenv("HOME") == "" || !strings.Contains(os.Getenv("HOME"), "session-") {
+		return
+	}
+	settings, err := unix.IoctlGetTermios(int(os.Stdin.Fd()), unix.TCGETS)
+	if err != nil || settings.Lflag&unix.ICANON != 0 || settings.Lflag&unix.ECHO != 0 {
+		os.Exit(83)
+	}
+	fmt.Print("raw")
+	os.Exit(0)
 }
 
 func TestBubblewrapStartupHandshakeHelper(t *testing.T) {

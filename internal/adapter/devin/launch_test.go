@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -349,6 +350,21 @@ exit 0
 	}
 }
 
+func TestRunAttachedDoesNotCancelAndReforwardOneSignalDuringStart(t *testing.T) {
+	preflightContext, cancelPreflight := context.WithCancel(context.Background())
+	defer cancelPreflight()
+	supervisor := newSignalSupervisor(cancelPreflight)
+	defer supervisor.stop()
+	process := &startAttachRaceProcess{preflightContext: preflightContext}
+
+	if err := runAttached(process, supervisor); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := process.receivedSignals(), []syscall.Signal{syscall.SIGTERM}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("signal handoff = %v, want one forwarded SIGTERM", got)
+	}
+}
+
 func TestLaunchSignalDuringPreflightCancelsVerificationAndCleansUpSession(t *testing.T) {
 	fixture := newLaunchTestFixture(t)
 	readyPath := filepath.Join(t.TempDir(), "preflight-ready")
@@ -567,6 +583,45 @@ func (startupQuarantineProcess) Signal(os.Signal) error {
 	return nil
 }
 func (process startupQuarantineProcess) CleanupDone() <-chan struct{} { return process.cleanupDone }
+
+type startAttachRaceProcess struct {
+	preflightContext context.Context
+	mutex            sync.Mutex
+	signals          []syscall.Signal
+}
+
+func (process *startAttachRaceProcess) Start() error {
+	if err := syscall.Kill(os.Getpid(), syscall.SIGTERM); err != nil {
+		return err
+	}
+	select {
+	case <-process.preflightContext.Done():
+		// CommandContext cancellation can stop a just-started process before
+		// the supervisor replays its pending terminating signal.
+		_ = process.Signal(syscall.SIGKILL)
+	case <-time.After(200 * time.Millisecond):
+	}
+	return nil
+}
+
+func (*startAttachRaceProcess) Wait() error { return nil }
+
+func (process *startAttachRaceProcess) Signal(signal os.Signal) error {
+	unixSignal, ok := signal.(syscall.Signal)
+	if !ok {
+		return nil
+	}
+	process.mutex.Lock()
+	defer process.mutex.Unlock()
+	process.signals = append(process.signals, unixSignal)
+	return nil
+}
+
+func (process *startAttachRaceProcess) receivedSignals() []syscall.Signal {
+	process.mutex.Lock()
+	defer process.mutex.Unlock()
+	return append([]syscall.Signal(nil), process.signals...)
+}
 
 func writeFakeDevin(t *testing.T, script string) string {
 	t.Helper()

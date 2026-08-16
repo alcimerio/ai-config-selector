@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -162,10 +163,17 @@ func (bubblewrapBackend) prepare(ctx context.Context, request validatedProcessRe
 	command.Stdin = request.terminal.Input
 	command.Stdout = request.terminal.Output
 	command.Stderr = request.terminal.ErrorOutput
-	command.SysProcAttr = &syscall.SysProcAttr{Pdeathsig: syscall.SIGKILL}
+	terminal, foregroundGroup := bubblewrapForegroundTerminal(request.terminal)
+	command.SysProcAttr = &syscall.SysProcAttr{Pdeathsig: syscall.SIGKILL, Setpgid: true}
+	if terminal != nil {
+		command.SysProcAttr.Foreground = true
+		command.SysProcAttr.Ctty = int(terminal.Fd())
+	}
 	process := &bubblewrapProcess{
 		ctx:               ctx,
 		command:           command,
+		terminal:          terminal,
+		foregroundGroup:   foregroundGroup,
 		information:       informationReader,
 		release:           releaseWriter,
 		childDescriptors:  []*os.File{informationWriter, releaseReader},
@@ -178,52 +186,60 @@ func (bubblewrapBackend) prepare(ctx context.Context, request validatedProcessRe
 }
 
 type bubblewrapProcess struct {
-	ctx                     context.Context
-	command                 *exec.Cmd
-	information             *os.File
-	release                 *os.File
-	childDescriptors        []*os.File
-	monitorDescriptor       int
-	targetDescriptor        int
-	targetPID               int
-	handshakeTimeout        time.Duration
-	monitorPidfdOpen        func(int, int) (int, error)
-	monitorPidfdSignal      func(int, unix.Signal) error
-	monitorPidfdClose       func(int) error
-	monitorPidfdStopped     func(int) error
-	monitorPidfdWait        func(int) error
-	monitorWaitid           func(int, int, *unix.Siginfo, int, *unix.Rusage) error
-	monitorChildren         func(int) ([]int, error)
-	monitorWait             func() error
-	monitorKill             func() error
-	pidfdOpen               func(int, int) (int, error)
-	pidfdAlive              func(int) error
-	pidfdSignal             func(int, unix.Signal) error
-	pidfdClose              func(int) error
-	pidfdWait               func(int) error
-	pidfdPoll               func([]unix.PollFd, int) (int, error)
-	teardownTimeout         time.Duration
-	cleanupRetry            func()
-	cleanupQuarantine       func(*bubblewrapProcess)
-	configureUserNS         func(int) error
-	releaseReady            func(int, int) error
-	targetReady             func(int, int) (bool, error)
-	signalCaught            func(int, syscall.Signal) (bool, error)
-	afterFunc               func(context.Context, func()) func() bool
-	startupIdentityMutex    sync.Mutex
-	cleanupMutex            sync.Mutex
-	cleanupDone             chan struct{}
-	cleanupDoneOnce         sync.Once
-	preIdentityChildrenDead bool
-	preIdentityCleanupDone  bool
-	mutex                   sync.Mutex
+	ctx                       context.Context
+	command                   *exec.Cmd
+	terminal                  *os.File
+	foregroundGroup           int
+	information               *os.File
+	release                   *os.File
+	childDescriptors          []*os.File
+	monitorDescriptor         int
+	targetDescriptor          int
+	targetPID                 int
+	handshakeTimeout          time.Duration
+	monitorPidfdOpen          func(int, int) (int, error)
+	monitorPidfdSignal        func(int, unix.Signal) error
+	monitorPidfdClose         func(int) error
+	monitorPidfdStopped       func(int) error
+	monitorPidfdWait          func(int) error
+	monitorWaitid             func(int, int, *unix.Siginfo, int, *unix.Rusage) error
+	monitorChildren           func(int) ([]int, error)
+	monitorWait               func() error
+	monitorKill               func() error
+	pidfdOpen                 func(int, int) (int, error)
+	pidfdAlive                func(int) error
+	pidfdSignal               func(int, unix.Signal) error
+	pidfdClose                func(int) error
+	pidfdWait                 func(int) error
+	pidfdPoll                 func([]unix.PollFd, int) (int, error)
+	teardownTimeout           time.Duration
+	cleanupRetry              func()
+	cleanupQuarantine         func(*bubblewrapProcess)
+	configureUserNS           func(int) error
+	releaseReady              func(int, int) error
+	targetReady               func(int, int) (bool, error)
+	signalCaught              func(int, syscall.Signal) (bool, error)
+	afterFunc                 func(context.Context, func()) func() bool
+	setForegroundProcessGroup func(*os.File, int) error
+	startupIdentityMutex      sync.Mutex
+	cleanupMutex              sync.Mutex
+	cleanupDone               chan struct{}
+	cleanupDoneOnce           sync.Once
+	preIdentityChildrenDead   bool
+	preIdentityCleanupDone    bool
+	mutex                     sync.Mutex
 }
 
 type bubblewrapInformation struct {
 	ChildPID int `json:"child-pid"`
 }
 
-func (process *bubblewrapProcess) Start() error {
+func (process *bubblewrapProcess) Start() (result error) {
+	defer func() {
+		if result != nil {
+			result = errors.Join(result, process.restoreForegroundTerminal())
+		}
+	}()
 	process.startupIdentityMutex.Lock()
 	if err := process.command.Start(); err != nil {
 		process.startupIdentityMutex.Unlock()
@@ -366,6 +382,7 @@ func configureBubblewrapUserNamespace(pid int) error {
 
 func (process *bubblewrapProcess) Wait() error {
 	waitErr := process.command.Wait()
+	terminalErr := process.restoreForegroundTerminal()
 	process.mutex.Lock()
 	targetDescriptor := process.targetDescriptor
 	monitorDescriptor := process.monitorDescriptor
@@ -382,11 +399,11 @@ func (process *bubblewrapProcess) Wait() error {
 	}
 	if cleanupErr := errors.Join(targetErr, monitorErr); cleanupErr != nil {
 		process.quarantineCleanup()
-		return errors.Join(waitErr, cleanupErr)
+		return errors.Join(waitErr, cleanupErr, terminalErr)
 	}
 	process.closeIdentityDescriptors()
 	process.markCleanupDone()
-	return waitErr
+	return errors.Join(waitErr, terminalErr)
 }
 
 func (process *bubblewrapProcess) CleanupDone() <-chan struct{} {
@@ -708,6 +725,42 @@ func (process *bubblewrapProcess) quarantineCleanup() {
 		quarantine = quarantineBubblewrapCleanup
 	}
 	quarantine(process)
+}
+
+func bubblewrapForegroundTerminal(terminal Terminal) (*os.File, int) {
+	input, ok := terminal.Input.(*os.File)
+	if !ok {
+		return nil, 0
+	}
+	foregroundGroup, err := unix.IoctlGetInt(int(input.Fd()), unix.TIOCGPGRP)
+	if err != nil || foregroundGroup != syscall.Getpgrp() {
+		return nil, 0
+	}
+	return input, foregroundGroup
+}
+
+var bubblewrapTerminalProcessGroupMutex sync.Mutex
+
+func setBubblewrapForegroundProcessGroup(terminal *os.File, processGroup int) error {
+	bubblewrapTerminalProcessGroupMutex.Lock()
+	defer bubblewrapTerminalProcessGroupMutex.Unlock()
+	alreadyIgnored := signal.Ignored(syscall.SIGTTOU)
+	if !alreadyIgnored {
+		signal.Ignore(syscall.SIGTTOU)
+		defer signal.Reset(syscall.SIGTTOU)
+	}
+	return unix.IoctlSetPointerInt(int(terminal.Fd()), unix.TIOCSPGRP, processGroup)
+}
+
+func (process *bubblewrapProcess) restoreForegroundTerminal() error {
+	if process.terminal == nil {
+		return nil
+	}
+	setForeground := process.setForegroundProcessGroup
+	if setForeground == nil {
+		setForeground = setBubblewrapForegroundProcessGroup
+	}
+	return setForeground(process.terminal, process.foregroundGroup)
 }
 
 func (process *bubblewrapProcess) cancel() error {

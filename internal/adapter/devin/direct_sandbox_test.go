@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/alcimerio/ai-config-selector/internal/launch"
+	"golang.org/x/sys/unix"
 )
 
 type directSandbox struct{}
@@ -31,6 +32,12 @@ func (directSandbox) Prepare(ctx context.Context, request launch.ProcessRequest)
 	command.Stderr = request.Terminal.ErrorOutput
 	command.ExtraFiles = nil
 	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if terminal, ok := request.Terminal.Input.(*os.File); ok {
+		if foreground, err := unix.IoctlGetInt(int(terminal.Fd()), unix.TIOCGPGRP); err == nil && foreground == syscall.Getpgrp() {
+			command.SysProcAttr.Foreground = true
+			command.SysProcAttr.Ctty = int(terminal.Fd())
+		}
+	}
 	command.Cancel = func() error {
 		if command.Process == nil {
 			return os.ErrProcessDone
