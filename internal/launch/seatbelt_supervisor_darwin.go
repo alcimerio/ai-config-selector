@@ -11,6 +11,8 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -21,12 +23,13 @@ import (
 )
 
 const (
-	seatbeltHelperArgument    = "--acs-internal-seatbelt-supervisor-v1"
-	seatbeltHelperEnvironment = "ACS_INTERNAL_SEATBELT_SUPERVISOR_FD"
-	seatbeltProofMagic        = "ACS-SEATBELT-CLEANUP"
-	seatbeltProofVersion      = 1
-	seatbeltChallengeSize     = 32
-	seatbeltCleanupDeadline   = 2 * time.Second
+	seatbeltHelperArgument         = "--acs-internal-seatbelt-supervisor-v1"
+	seatbeltHelperEnvironment      = "ACS_INTERNAL_SEATBELT_SUPERVISOR_FD"
+	seatbeltProofMagic             = "ACS-SEATBELT-CLEANUP"
+	seatbeltProofVersion           = 1
+	seatbeltChallengeSize          = 32
+	seatbeltCleanupDeadline        = 2 * time.Second
+	seatbeltDescriptorSealAttempts = 8
 )
 
 type seatbeltCleanupProof struct {
@@ -52,6 +55,12 @@ func init() {
 }
 
 func runSeatbeltSupervisor(controlFD int, target string, arguments []string) int {
+	return runSeatbeltSupervisorWithDescriptorSealer(controlFD, target, arguments, sealSeatbeltTargetDescriptors)
+}
+
+// runSeatbeltSupervisorWithDescriptorSealer keeps the no-target proof path
+// testable without mutable process-wide hooks.
+func runSeatbeltSupervisorWithDescriptorSealer(controlFD int, target string, arguments []string, seal func(seatbeltDescriptorEnumerator) error) int {
 	unix.CloseOnExec(controlFD)
 	control := os.NewFile(uintptr(controlFD), "acs-seatbelt-control")
 	if control == nil {
@@ -66,7 +75,7 @@ func runSeatbeltSupervisor(controlFD int, target string, arguments []string) int
 	if err != nil {
 		return seatbeltNoTargetFailure(control, challenge)
 	}
-	if err := sealSeatbeltTargetDescriptors(api); err != nil {
+	if err := seal(api); err != nil {
 		return seatbeltNoTargetFailure(control, challenge)
 	}
 
@@ -158,27 +167,114 @@ func seatbeltNoTargetFailure(control *os.File, challenge []byte) int {
 	return 125
 }
 
-func sealSeatbeltTargetDescriptors(api seatbeltProcAPI) error {
+type seatbeltDescriptorEnumerator interface {
+	descriptors(int) ([]int, error)
+}
+
+func sealSeatbeltTargetDescriptors(api seatbeltDescriptorEnumerator) error {
+	for attempt := 0; attempt < seatbeltDescriptorSealAttempts; attempt++ {
+		expected, err := seatbeltDescriptorSnapshot(api)
+		if err != nil {
+			return err
+		}
+		unstable, err := sealSeatbeltDescriptorSnapshot(expected)
+		if err != nil {
+			return err
+		}
+		if unstable {
+			continue
+		}
+
+		observed, err := seatbeltDescriptorSnapshot(api)
+		if err != nil {
+			return err
+		}
+		if !slices.Equal(expected, observed) {
+			continue
+		}
+		unstable, err = verifySeatbeltDescriptorSnapshot(observed)
+		if err != nil {
+			return err
+		}
+		if unstable {
+			continue
+		}
+
+		verified, err := seatbeltDescriptorSnapshot(api)
+		if err != nil {
+			return err
+		}
+		if !slices.Equal(observed, verified) {
+			continue
+		}
+		unstable, err = verifySeatbeltDescriptorSnapshot(verified)
+		if err != nil {
+			return err
+		}
+		if !unstable {
+			return nil
+		}
+	}
+	return errors.New("seal supervisor descriptors did not converge")
+}
+
+func seatbeltDescriptorSnapshot(api seatbeltDescriptorEnumerator) ([]int, error) {
 	descriptors, err := api.descriptors(os.Getpid())
 	if err != nil {
-		return errors.New("enumerate supervisor descriptors")
+		return nil, errors.New("enumerate supervisor descriptors")
 	}
+	sort.Ints(descriptors)
+	snapshot := descriptors[:0]
+	for _, fd := range descriptors {
+		if fd < 0 {
+			return nil, errors.New("enumerate supervisor descriptors")
+		}
+		if len(snapshot) == 0 || snapshot[len(snapshot)-1] != fd {
+			snapshot = append(snapshot, fd)
+		}
+	}
+	return snapshot, nil
+}
+
+func sealSeatbeltDescriptorSnapshot(descriptors []int) (bool, error) {
 	for _, fd := range descriptors {
 		if fd <= 2 {
 			continue
 		}
 		flags, err := unix.FcntlInt(uintptr(fd), unix.F_GETFD, 0)
 		if errors.Is(err, syscall.EBADF) {
-			continue
+			return true, nil
 		}
 		if err != nil {
-			return errors.New("inspect supervisor descriptors")
+			return false, errors.New("inspect supervisor descriptors")
 		}
-		if _, err := unix.FcntlInt(uintptr(fd), unix.F_SETFD, flags|unix.FD_CLOEXEC); err != nil && !errors.Is(err, syscall.EBADF) {
-			return errors.New("seal supervisor descriptors")
+		if _, err := unix.FcntlInt(uintptr(fd), unix.F_SETFD, flags|unix.FD_CLOEXEC); err != nil {
+			if errors.Is(err, syscall.EBADF) {
+				return true, nil
+			}
+			return false, errors.New("seal supervisor descriptors")
 		}
 	}
-	return nil
+	return false, nil
+}
+
+func verifySeatbeltDescriptorSnapshot(descriptors []int) (bool, error) {
+	for _, fd := range descriptors {
+		if fd <= 2 {
+			continue
+		}
+		flags, err := unix.FcntlInt(uintptr(fd), unix.F_GETFD, 0)
+		if errors.Is(err, syscall.EBADF) {
+			return true, nil
+		}
+		if err != nil {
+			return false, errors.New("inspect supervisor descriptors")
+		}
+		if flags&unix.FD_CLOEXEC == 0 {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func seatbeltTargetEnvironment(environment []string) []string {

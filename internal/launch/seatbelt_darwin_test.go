@@ -400,6 +400,45 @@ func TestSeatbeltSupervisorProvesPreTargetStartFailure(t *testing.T) {
 	}
 }
 
+func TestSeatbeltSupervisorAuthenticatesDescriptorPreflightFailure(t *testing.T) {
+	control, peer := seatbeltTestSocketPair(t)
+	supervisorFD, err := unix.Dup(int(peer.Fd()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := peer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	challenge := bytes.Repeat([]byte{0x4d}, seatbeltChallengeSize)
+	result := make(chan int, 1)
+	go func() {
+		result <- runSeatbeltSupervisorWithDescriptorSealer(
+			supervisorFD, "/usr/bin/true", nil,
+			func(seatbeltDescriptorEnumerator) error { return errors.New("injected descriptor preflight failure") },
+		)
+	}()
+	if _, err := control.Write(challenge); err != nil {
+		t.Fatal(err)
+	}
+	proof, err := io.ReadAll(control)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status := <-result; status != 125 {
+		t.Fatalf("descriptor preflight supervisor status = %d, want 125", status)
+	}
+	if err := validateSeatbeltCleanupProof(proof, challenge); err != nil {
+		t.Fatalf("descriptor preflight proof = %q, want valid: %v", proof, err)
+	}
+	var decoded seatbeltCleanupProof
+	if err := json.Unmarshal(proof, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if !decoded.NoTargetStarted || decoded.TargetExited || decoded.TargetExitCode != 0 || decoded.TargetSignal != 0 {
+		t.Fatalf("descriptor preflight proof = %#v, want an explicit no-target result", decoded)
+	}
+}
+
 func TestSeatbeltRejectsSpoofedPreTargetProof(t *testing.T) {
 	challenge := bytes.Repeat([]byte{0x37}, seatbeltChallengeSize)
 	for _, test := range []struct {
@@ -589,6 +628,92 @@ func TestSeatbeltEnumerationFailureAndNonconvergenceNeverProveCleanup(t *testing
 	if err := settleSeatbeltInstance(nonconverging, newSeatbeltIdentityLedger(), os.Getpid(), 0, time.Now().Add(-time.Millisecond)); err == nil {
 		t.Fatal("expired convergence deadline unexpectedly proved cleanup")
 	}
+}
+
+func TestSeatbeltDescriptorSealingRetriesTransientEBADF(t *testing.T) {
+	sentinel, err := os.CreateTemp(t.TempDir(), "seatbelt-retry-descriptor")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sentinel.Close()
+
+	sentinelFD := int(sentinel.Fd())
+	originalFlags, err := unix.FcntlInt(uintptr(sentinelFD), unix.F_GETFD, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := unix.FcntlInt(uintptr(sentinelFD), unix.F_SETFD, originalFlags&^unix.FD_CLOEXEC); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		_, _ = unix.FcntlInt(uintptr(sentinelFD), unix.F_SETFD, originalFlags)
+	}()
+
+	vanishedFD, err := unix.FcntlInt(sentinel.Fd(), unix.F_DUPFD, seatbeltTestMinimumSentinelDescriptor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := unix.Close(vanishedFD); err != nil {
+		t.Fatal(err)
+	}
+
+	enumerations := 0
+	enumerator := seatbeltTestDescriptorEnumerator{list: func(int) ([]int, error) {
+		enumerations++
+		if enumerations == 1 {
+			return []int{vanishedFD}, nil
+		}
+		return []int{sentinelFD}, nil
+	}}
+	if err := sealSeatbeltTargetDescriptors(enumerator); err != nil {
+		t.Fatalf("seal descriptors after transient EBADF: %v", err)
+	}
+	if enumerations < 4 {
+		t.Fatalf("descriptor enumerations = %d, want a retry after EBADF", enumerations)
+	}
+	flags, err := unix.FcntlInt(uintptr(sentinelFD), unix.F_GETFD, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if flags&unix.FD_CLOEXEC == 0 {
+		t.Fatal("descriptor discovered after EBADF remained inheritable")
+	}
+}
+
+func TestSeatbeltDescriptorSealingNonconvergenceFailsClosed(t *testing.T) {
+	first, err := os.CreateTemp(t.TempDir(), "seatbelt-first-descriptor")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.Close()
+	second, err := os.CreateTemp(t.TempDir(), "seatbelt-second-descriptor")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Close()
+
+	enumerations := 0
+	enumerator := seatbeltTestDescriptorEnumerator{list: func(int) ([]int, error) {
+		enumerations++
+		if enumerations%2 == 1 {
+			return []int{int(first.Fd())}, nil
+		}
+		return []int{int(second.Fd())}, nil
+	}}
+	if err := sealSeatbeltTargetDescriptors(enumerator); err == nil {
+		t.Fatal("changing descriptor snapshots unexpectedly proved sealed")
+	}
+	if want := seatbeltDescriptorSealAttempts * 2; enumerations != want {
+		t.Fatalf("descriptor enumerations = %d, want bounded %d", enumerations, want)
+	}
+}
+
+type seatbeltTestDescriptorEnumerator struct {
+	list func(int) ([]int, error)
+}
+
+func (enumerator seatbeltTestDescriptorEnumerator) descriptors(pid int) ([]int, error) {
+	return enumerator.list(pid)
 }
 
 func TestSeatbeltCredentialAmbiguityFailsClosed(t *testing.T) {
