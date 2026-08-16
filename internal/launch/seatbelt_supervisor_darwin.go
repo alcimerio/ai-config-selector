@@ -66,6 +66,9 @@ func runSeatbeltSupervisor(controlFD int, target string, arguments []string) int
 	if err != nil {
 		return seatbeltNoTargetFailure(control, challenge)
 	}
+	if err := sealSeatbeltTargetDescriptors(api); err != nil {
+		return seatbeltNoTargetFailure(control, challenge)
+	}
 
 	command := exec.Command(target, arguments...)
 	command.Env = seatbeltTargetEnvironment(os.Environ())
@@ -153,6 +156,29 @@ func seatbeltNoTargetFailure(control *os.File, challenge []byte) int {
 		return 125
 	}
 	return 125
+}
+
+func sealSeatbeltTargetDescriptors(api seatbeltProcAPI) error {
+	descriptors, err := api.descriptors(os.Getpid())
+	if err != nil {
+		return errors.New("enumerate supervisor descriptors")
+	}
+	for _, fd := range descriptors {
+		if fd <= 2 {
+			continue
+		}
+		flags, err := unix.FcntlInt(uintptr(fd), unix.F_GETFD, 0)
+		if errors.Is(err, syscall.EBADF) {
+			continue
+		}
+		if err != nil {
+			return errors.New("inspect supervisor descriptors")
+		}
+		if _, err := unix.FcntlInt(uintptr(fd), unix.F_SETFD, flags|unix.FD_CLOEXEC); err != nil && !errors.Is(err, syscall.EBADF) {
+			return errors.New("seal supervisor descriptors")
+		}
+	}
+	return nil
 }
 
 func seatbeltTargetEnvironment(environment []string) []string {

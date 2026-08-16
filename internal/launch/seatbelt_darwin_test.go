@@ -606,6 +606,25 @@ func TestSeatbeltCredentialAmbiguityFailsClosed(t *testing.T) {
 
 func TestSeatbeltTargetCannotInheritOrSpoofControlDescriptor(t *testing.T) {
 	skipSeatbeltNativeTestBinaryUnderRace(t)
+	sentinel, err := os.CreateTemp(t.TempDir(), "seatbelt-descriptor-sentinel")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sentinelFD := int(sentinel.Fd())
+	flags, err := unix.FcntlInt(uintptr(sentinelFD), unix.F_GETFD, 0)
+	if err != nil {
+		_ = sentinel.Close()
+		t.Fatal(err)
+	}
+	if _, err := unix.FcntlInt(uintptr(sentinelFD), unix.F_SETFD, flags&^unix.FD_CLOEXEC); err != nil {
+		_ = sentinel.Close()
+		t.Fatal(err)
+	}
+	defer func() {
+		_, _ = unix.FcntlInt(uintptr(sentinelFD), unix.F_SETFD, flags)
+		_ = sentinel.Close()
+	}()
+
 	request := seatbeltTestRequest(t)
 	request.arguments = []string{"-test.run=TestSeatbeltHelperProcess", "--", "check-extra-descriptors"}
 	var output bytes.Buffer

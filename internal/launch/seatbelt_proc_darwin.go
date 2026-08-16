@@ -14,6 +14,7 @@ import (
 )
 
 const (
+	seatbeltProcPIDListFDs   = 1
 	seatbeltProcPIDTBSDInfo  = 3
 	seatbeltProcStatusStop   = 4
 	seatbeltProcStatusZombie = 5
@@ -45,6 +46,11 @@ type seatbeltBSDInfo struct {
 	Nice             int32
 	StartSecond      uint64
 	StartMicrosecond uint64
+}
+
+type seatbeltFDInfo struct {
+	Descriptor int32
+	Type       uint32
 }
 
 type seatbeltProcAPI struct {
@@ -121,6 +127,49 @@ func (api seatbeltProcAPI) allPIDs() ([]int, error) {
 		capacity *= 2
 	}
 	return nil, errors.New("enumerate processes: snapshot did not stabilize")
+}
+
+func (api seatbeltProcAPI) descriptors(pid int) ([]int, error) {
+	const initialCapacity = 16
+	const attempts = 8
+	recordSize := int(unsafe.Sizeof(seatbeltFDInfo{}))
+	if recordSize != 8 {
+		return nil, errors.New("public descriptor ABI has an unexpected layout")
+	}
+	capacity := initialCapacity
+	for attempt := 0; attempt < attempts; attempt++ {
+		records := make([]seatbeltFDInfo, capacity)
+		runtime.LockOSThread()
+		errnoPointer := (*int32)(api.errno())
+		*errnoPointer = 0
+		gotValue, _, _ := purego.SyscallN(api.pidInfo, uintptr(pid), seatbeltProcPIDListFDs, 0, uintptr(unsafe.Pointer(&records[0])), uintptr(capacity*recordSize))
+		errno := uintptr(*errnoPointer)
+		runtime.UnlockOSThread()
+		got := int(int32(gotValue))
+		if got <= 0 {
+			if errno == 0 {
+				return nil, errors.New("enumerate descriptors: public process API returned no descriptors")
+			}
+			return nil, fmt.Errorf("enumerate descriptors: public process API failed: %w", syscall.Errno(errno))
+		}
+		if got%recordSize != 0 {
+			return nil, errors.New("enumerate descriptors: public process API returned incomplete data")
+		}
+		count := got / recordSize
+		if count == capacity {
+			capacity *= 2
+			continue
+		}
+		descriptors := make([]int, 0, count)
+		for _, record := range records[:count] {
+			if record.Descriptor < 0 {
+				return nil, errors.New("enumerate descriptors: public process API returned an invalid descriptor")
+			}
+			descriptors = append(descriptors, int(record.Descriptor))
+		}
+		return descriptors, nil
+	}
+	return nil, errors.New("enumerate descriptors: public process API snapshot did not stabilize")
 }
 
 func (api seatbeltProcAPI) info(pid int) (seatbeltBSDInfo, error) {
