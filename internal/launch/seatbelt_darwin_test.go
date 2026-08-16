@@ -16,6 +16,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -604,13 +605,28 @@ func TestSeatbeltCredentialAmbiguityFailsClosed(t *testing.T) {
 	}
 }
 
+const seatbeltTestMinimumSentinelDescriptor = 64 // Above the former bounded probe range.
+
 func TestSeatbeltTargetCannotInheritOrSpoofControlDescriptor(t *testing.T) {
 	skipSeatbeltNativeTestBinaryUnderRace(t)
 	sentinel, err := os.CreateTemp(t.TempDir(), "seatbelt-descriptor-sentinel")
 	if err != nil {
 		t.Fatal(err)
 	}
-	sentinelFD := int(sentinel.Fd())
+	sentinelFD, err := unix.FcntlInt(sentinel.Fd(), unix.F_DUPFD, seatbeltTestMinimumSentinelDescriptor)
+	if err != nil {
+		_ = sentinel.Close()
+		t.Fatal(err)
+	}
+	if err := sentinel.Close(); err != nil {
+		_ = unix.Close(sentinelFD)
+		t.Fatal(err)
+	}
+	sentinel = os.NewFile(uintptr(sentinelFD), "seatbelt-descriptor-sentinel")
+	if sentinel == nil {
+		_ = unix.Close(sentinelFD)
+		t.Fatal("wrap duplicated descriptor sentinel")
+	}
 	flags, err := unix.FcntlInt(uintptr(sentinelFD), unix.F_GETFD, 0)
 	if err != nil {
 		_ = sentinel.Close()
@@ -624,9 +640,16 @@ func TestSeatbeltTargetCannotInheritOrSpoofControlDescriptor(t *testing.T) {
 		_, _ = unix.FcntlInt(uintptr(sentinelFD), unix.F_SETFD, flags)
 		_ = sentinel.Close()
 	}()
+	sentinelIdentity, err := seatbeltTestDescriptorIdentityForFD(sentinelFD)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	request := seatbeltTestRequest(t)
-	request.arguments = []string{"-test.run=TestSeatbeltHelperProcess", "--", "check-extra-descriptors"}
+	request.arguments = []string{
+		"-test.run=TestSeatbeltHelperProcess", "--", "check-extra-descriptors",
+		strconv.FormatUint(sentinelIdentity.device, 10), strconv.FormatUint(sentinelIdentity.inode, 10),
+	}
 	var output bytes.Buffer
 	request.terminal = Terminal{Output: &output, ErrorOutput: &output}
 	process, err := newSeatbeltBackend(seatbeltExecutable).prepare(context.Background(), request)
@@ -642,6 +665,19 @@ func TestSeatbeltTargetCannotInheritOrSpoofControlDescriptor(t *testing.T) {
 	if got := strings.TrimSpace(output.String()); got != "sealed" {
 		t.Fatalf("descriptor probe = %q, want sealed", got)
 	}
+}
+
+type seatbeltTestDescriptorIdentity struct {
+	device uint64
+	inode  uint64
+}
+
+func seatbeltTestDescriptorIdentityForFD(fd int) (seatbeltTestDescriptorIdentity, error) {
+	var stat unix.Stat_t
+	if err := unix.Fstat(fd, &stat); err != nil {
+		return seatbeltTestDescriptorIdentity{}, err
+	}
+	return seatbeltTestDescriptorIdentity{device: uint64(stat.Dev), inode: stat.Ino}, nil
 }
 
 func TestSeatbeltHelperAttackKeepsCleanupQuarantined(t *testing.T) {
@@ -1409,9 +1445,41 @@ func TestSeatbeltHelperProcess(t *testing.T) {
 		fmt.Fprintln(os.Stdout, "tls-ready")
 		os.Exit(0)
 	case "check-extra-descriptors":
-		for fd := 3; fd < 64; fd++ {
-			if _, err := unix.FcntlInt(uintptr(fd), unix.F_GETFD, 0); err == nil {
-				fmt.Fprintf(os.Stdout, "leaked-fd-%d\n", fd)
+		if len(arguments) != 3 {
+			os.Exit(96)
+		}
+		device, err := strconv.ParseUint(arguments[1], 10, 64)
+		if err != nil {
+			os.Exit(96)
+		}
+		inode, err := strconv.ParseUint(arguments[2], 10, 64)
+		if err != nil {
+			os.Exit(96)
+		}
+		api, err := loadSeatbeltProcAPI()
+		if err != nil {
+			fmt.Fprintln(os.Stdout, "enumerate-descriptors-failed")
+			os.Exit(96)
+		}
+		descriptors, err := api.descriptors(os.Getpid())
+		if err != nil {
+			fmt.Fprintln(os.Stdout, "enumerate-descriptors-failed")
+			os.Exit(96)
+		}
+		for _, fd := range descriptors {
+			identity, err := seatbeltTestDescriptorIdentityForFD(fd)
+			if err != nil {
+				fmt.Fprintf(os.Stdout, "inspect-fd-%d-failed\n", fd)
+				os.Exit(96)
+			}
+			if identity.device == device && identity.inode == inode {
+				fmt.Fprintf(os.Stdout, "leaked-sentinel-fd-%d\n", fd)
+				os.Exit(96)
+			}
+		}
+		for _, fd := range descriptors {
+			if fd > 2 {
+				fmt.Fprintf(os.Stdout, "leaked-control-fd-%d\n", fd)
 				os.Exit(96)
 			}
 		}
