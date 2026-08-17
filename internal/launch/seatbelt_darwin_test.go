@@ -140,6 +140,20 @@ func TestSeatbeltCheckRejectsUnsafeSystemExecutable(t *testing.T) {
 	}
 }
 
+func TestSeatbeltCheckClassifiesARejectedCapabilityProbeWithoutItsOutput(t *testing.T) {
+	backend := newSeatbeltBackend(seatbeltExecutable)
+	backend.verify = func(context.Context, string) error {
+		return errors.New("PRIVATE_SEATBELT_OUTPUT\n\x1b[31m")
+	}
+	err := backend.check(context.Background())
+	assertSandboxCategory(t, err, SandboxVerificationFailed)
+	for _, leaked := range []string{"PRIVATE_SEATBELT_OUTPUT", "\n", "\x1b"} {
+		if strings.Contains(err.Error(), leaked) {
+			t.Fatalf("Seatbelt verification failure leaked %q: %q", leaked, err)
+		}
+	}
+}
+
 func TestSeatbeltRejectsInvalidGeneratedPolicyBeforeAttachingTargetStreams(t *testing.T) {
 	for _, test := range []struct {
 		name        string
@@ -172,7 +186,7 @@ func TestSeatbeltRejectsInvalidGeneratedPolicyBeforeAttachingTargetStreams(t *te
 			if process != nil {
 				t.Fatal("invalid generated policy returned a target process")
 			}
-			assertSandboxCategory(t, err, SandboxSetupFailed)
+			assertSandboxCategory(t, err, SandboxPolicyRejected)
 			for _, leaked := range []string{
 				"REJECTED_POLICY_TOKEN", "REJECTED_DEFINITION_TOKEN", "sandbox-exec",
 			} {

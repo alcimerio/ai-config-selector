@@ -1,12 +1,21 @@
 package devin
 
-import "fmt"
-
 type Capability string
 
 const (
 	CapabilitySkillIsolation Capability = "skill isolation"
 	CapabilityAuthentication Capability = "authentication"
+)
+
+// PreflightErrorCategory is a stable, redacted class of existing-Devin
+// capability failure. It deliberately does not include command output,
+// account data, credentials, paths, or environment entries.
+type PreflightErrorCategory string
+
+const (
+	SkillPreflightFailed          PreflightErrorCategory = "skill_preflight_failed"
+	AuthenticationPreflightFailed PreflightErrorCategory = "authentication_preflight_failed"
+	DevinPreflightFailed          PreflightErrorCategory = "devin_preflight_failed"
 )
 
 type preflightFailureReason uint8
@@ -28,23 +37,42 @@ type PreflightError struct {
 	reason     preflightFailureReason
 }
 
+const requiredSandboxNotice = "ACS will not start Devin without the required sandbox"
+
+func (e *PreflightError) Category() PreflightErrorCategory {
+	if e == nil {
+		return DevinPreflightFailed
+	}
+	switch e.Capability {
+	case CapabilitySkillIsolation:
+		return SkillPreflightFailed
+	case CapabilityAuthentication:
+		return AuthenticationPreflightFailed
+	default:
+		return DevinPreflightFailed
+	}
+}
+
 func (e *PreflightError) Error() string {
+	prefix := string(e.Category()) + ": Devin Adapter Preflight failed: "
+	message := ""
 	switch e.reason {
 	case reasonExecutableUnavailable:
-		return "Devin Adapter Preflight failed: the Devin executable could not be started; verify Devin is installed and the configured executable path is valid"
+		message = "the Devin executable could not be started; verify Devin is installed and the configured executable path is valid"
 	case reasonVerificationInterrupted:
-		return fmt.Sprintf("Devin Adapter Preflight failed: %s verification was canceled or timed out; retry with a live Session", e.Capability)
+		message = "verification was canceled or timed out; retry with a live Session"
 	case reasonSkillInspectionCommandFailed:
-		return "Devin Adapter Preflight failed: the skill isolation probe failed; run `devin skills list --json` outside ACS and resolve the reported CLI error"
+		message = "the skill isolation probe failed; run `devin skills list --json` outside ACS and resolve the reported CLI error"
 	case reasonSkillInspectionOutputInvalid:
-		return "Devin Adapter Preflight failed: Devin returned an incompatible global Skill Catalog response; update Devin or ACS before retrying"
+		message = "Devin returned an incompatible global Skill Catalog response; update Devin or ACS before retrying"
 	case reasonCatalogMismatch:
-		return "Devin Adapter Preflight failed: skill isolation could not be verified because the global Skill Catalog did not match; the installed Devin CLI is incompatible with ACS isolation"
+		message = "skill isolation could not be verified because the global Skill Catalog did not match; the installed Devin CLI is incompatible with ACS isolation"
 	case reasonAuthenticationCommandFailed:
-		return "Devin Adapter Preflight failed: the authentication probe failed; run `devin auth status` outside ACS and resolve the reported CLI error"
+		message = "the authentication probe failed; run `devin auth status` outside ACS and resolve the reported CLI error"
 	case reasonAuthenticationUnavailable:
-		return "Devin Adapter Preflight failed: usable existing authentication could not be verified; run `devin auth login` outside ACS and retry"
+		message = "usable existing authentication could not be verified; run `devin auth login` outside ACS and retry"
 	default:
-		return "Devin Adapter Preflight failed"
+		message = "preflight could not be completed"
 	}
+	return prefix + message + "; " + requiredSandboxNotice
 }

@@ -98,7 +98,7 @@ or supplies package-manager, automatic-update, or uninstaller behavior.
 
 | Module | Responsibility |
 | --- | --- |
-| `cmd/acs` | Identifies the host, enforces the certified platform matrix, resolves host paths, and assembles the application. |
+| `cmd/acs` | Resolves host paths and assembles the application. The Process Sandbox reports the certified-platform decision and enforces it before launch. |
 | `internal/cli` | Parses public commands and coordinates Profile creation, dry runs, and launches through narrow interfaces. |
 | `internal/profile` | Validates Profile names and owns local JSON persistence. |
 | `internal/category` | Binds typed category modules and owns ordered draft, schema, resolution, and launch-contribution coordination. |
@@ -184,6 +184,13 @@ sections. The current Skills contribution reports:
 
 - selected global Skill Bundles and their planned Session paths;
 - repository-local Skill Bundles that Devin may inherit.
+
+A dry run also asks the Process Sandbox for a read-only readiness report. It
+contains the required native mode, the selected Seatbelt or Bubblewrap backend,
+the exact detected Supported Platform result, and backend readiness. The
+report performs no launch-path validation, creates no Session, and never
+executes Devin. It may use fixed native backend verification commands; their
+output is never rendered.
 
 A dry run does not create a Session or start Devin.
 
@@ -357,7 +364,14 @@ fixed safe PATH, and validated terminal and locale values. It has no public
 backend selector, policy input, environment passthrough, or sandbox bypass.
 It also classifies process-start and non-exit wait failures at the boundary so
 backend output, generated policy, host paths, and environment values do not
-enter CLI diagnostics; ordinary child exit status remains intact.
+enter CLI diagnostics; ordinary child exit status remains intact. Stable
+categories distinguish unsupported platforms, unavailable or unsafe backends,
+rejected policies, failed sandbox verification, Skill and authentication
+preflight failures, and ordinary Devin exits. Every backend and preflight
+diagnostic suppresses generated policy text, private paths, credentials,
+account values, environment entries, raw backend or Devin output, and terminal
+control characters. ACS has no argument, Profile, configuration, or backend
+selection input that can request an unsandboxed launch.
 The Darwin backend verifies the root-owned system `sandbox-exec`, builds a
 default-deny Seatbelt policy from validated parameters, and confines the
 workspace, Session, named runtime reads, IP networking, resolver socket, and

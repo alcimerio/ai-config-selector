@@ -572,6 +572,10 @@ func (application adapterLaunchApplication) Run(ctx context.Context, _ []string)
 		application.resolved, application.terminal,
 	)
 	if err != nil {
+		var targetExit *DevinExitError
+		if errors.As(err, &targetExit) {
+			return targetExit.ExitCode()
+		}
 		fmt.Fprintln(application.terminal.ErrorOutput, err)
 		return 1
 	}
@@ -581,6 +585,10 @@ func (application adapterLaunchApplication) Run(ctx context.Context, _ []string)
 type recordingSandbox struct {
 	delegate  launch.ProcessSandbox
 	arguments [][]string
+}
+
+func (sandbox *recordingSandbox) Readiness(ctx context.Context) (launch.SandboxReadiness, error) {
+	return sandbox.delegate.Readiness(ctx)
 }
 
 func (sandbox *recordingSandbox) Check(ctx context.Context, request launch.SandboxCheck) error {
@@ -597,6 +605,10 @@ type failingSandbox struct {
 	prepareErr error
 }
 
+func (failingSandbox) Readiness(context.Context) (launch.SandboxReadiness, error) {
+	return launch.SandboxReadiness{RequiredMode: "native", Backend: "test", Platform: "test platform", Supported: true, Ready: true}, nil
+}
+
 func (sandbox failingSandbox) Check(context.Context, launch.SandboxCheck) error {
 	return sandbox.checkErr
 }
@@ -609,6 +621,10 @@ type startupQuarantineSandbox struct {
 	delegate    launch.ProcessSandbox
 	cleanupDone chan struct{}
 	sessionRoot string
+}
+
+func (sandbox *startupQuarantineSandbox) Readiness(ctx context.Context) (launch.SandboxReadiness, error) {
+	return sandbox.delegate.Readiness(ctx)
 }
 
 func (sandbox *startupQuarantineSandbox) Check(ctx context.Context, request launch.SandboxCheck) error {

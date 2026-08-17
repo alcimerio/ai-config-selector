@@ -1364,8 +1364,8 @@ func TestBubblewrapCapabilityProbeFailureProvidesAppArmorRemediationWithoutBacke
 	}
 
 	err := checker.check(context.Background())
-	assertSandboxCategory(t, err, SandboxBackendUnavailable)
-	if got, want := err.Error(), "backend_unavailable: process sandbox unavailable: required system backend is unavailable; review and enable the targeted AppArmor 'bwrap-userns-restrict' profile for /usr/bin/bwrap"; got != want {
+	assertSandboxCategory(t, err, SandboxVerificationFailed)
+	if got, want := err.Error(), "sandbox_verification_failed: process sandbox verification failed; review and enable the targeted AppArmor 'bwrap-userns-restrict' profile for /usr/bin/bwrap; ACS will not start Devin without the required sandbox"; got != want {
 		t.Fatalf("capability probe error = %q, want %q", got, want)
 	}
 	for _, private := range []string{privateOutput, "AppArmor denied", "probe failed"} {

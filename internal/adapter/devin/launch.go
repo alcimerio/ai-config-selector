@@ -37,7 +37,7 @@ func (a *Adapter) Launch(
 
 	sessionLease, err := launch.CreateSession(sessionsDirectory)
 	if err != nil {
-		return 1, err
+		return 1, sanitizeLaunchError(err)
 	}
 	sessionRoot := sessionLease.RootDir
 	defer func() {
@@ -53,7 +53,7 @@ func (a *Adapter) Launch(
 	}()
 	session, err := a.prepareResolvedSession(sessionRoot, workingDirectory, resolved)
 	if err != nil {
-		return 1, err
+		return 1, sanitizeLaunchError(err)
 	}
 	session.lease = sessionLease
 	if err := resolved.Verify(preflightContext, launch.VerificationContext{
@@ -63,10 +63,10 @@ func (a *Adapter) Launch(
 		TemporaryDirectory: session.TemporaryDir,
 		WorkingDirectory:   session.WorkingDirectory,
 	}); err != nil {
-		return 1, err
+		return 1, sanitizeLaunchError(err)
 	}
 	if err := a.verifyAuthentication(preflightContext, session); err != nil {
-		return 1, err
+		return 1, sanitizeLaunchError(err)
 	}
 	if preflightContext.Err() != nil {
 		return 1, errors.New("Devin launch interrupted before the interactive process started")
@@ -79,7 +79,7 @@ func (a *Adapter) Launch(
 		RuntimeInputs: a.runtimeInputs, Terminal: terminal,
 	})
 	if err != nil {
-		return 1, err
+		return 1, sanitizeLaunchError(err)
 	}
 	process, err = launch.RetainSessionUntilProcessDone(process, sessionLease)
 	if err != nil {
@@ -95,15 +95,31 @@ func (a *Adapter) Launch(
 		var exitError *exec.ExitError
 		if errors.As(err, &exitError) {
 			if status, ok := exitError.Sys().(syscall.WaitStatus); ok && status.Signaled() {
-				return 128 + int(status.Signal()), nil
+				return 128 + int(status.Signal()), &DevinExitError{Code: 128 + int(status.Signal())}
 			}
 			if exitCode := exitError.ExitCode(); exitCode >= 0 {
-				return exitCode, nil
+				return exitCode, &DevinExitError{Code: exitCode}
 			}
 		}
 		return 1, fmt.Errorf("start Devin: %w", err)
 	}
 	return 0, nil
+}
+
+// sanitizeLaunchError preserves the fixed sandbox and preflight diagnostics
+// while converting every other launch-preparation error into one safe category.
+// In particular, filesystem failures must not expose Session, credential, or
+// workspace paths through the CLI.
+func sanitizeLaunchError(err error) error {
+	var sandboxFailure *launch.SandboxError
+	if errors.As(err, &sandboxFailure) {
+		return sandboxFailure
+	}
+	var preflightFailure *PreflightError
+	if errors.As(err, &preflightFailure) {
+		return preflightFailure
+	}
+	return &launch.SandboxError{Category: launch.SandboxSetupFailed}
 }
 
 func runAttached(process launch.Process, supervisor *signalSupervisor) error {

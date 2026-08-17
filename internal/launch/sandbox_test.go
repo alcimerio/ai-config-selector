@@ -61,7 +61,7 @@ func TestSandboxErrorsExposeOnlyStableCategory(t *testing.T) {
 	secret := filepath.Join(t.TempDir(), "PRIVATE_WORKSPACE")
 	err := sandboxError(SandboxUnsafePath, errors.New("backend rejected "+secret+" policy=(allow file-read*)"))
 	assertSandboxCategory(t, err, SandboxUnsafePath)
-	if got, want := err.Error(), "unsafe_path: process sandbox preparation failed: unsafe runtime path"; got != want {
+	if got, want := err.Error(), "unsafe_path: process sandbox preparation failed: unsafe runtime path; ACS will not start Devin without the required sandbox"; got != want {
 		t.Fatalf("sandbox error = %q, want %q", got, want)
 	}
 	for _, private := range []string{secret, "PRIVATE_WORKSPACE", "backend rejected", "policy"} {
@@ -78,7 +78,7 @@ func TestSandboxErrorsExposeOnlyStableCategory(t *testing.T) {
 func TestBubblewrapUnavailableProvidesFixedPackageRemediationWithoutBackendOutput(t *testing.T) {
 	err := bubblewrapUnavailable()
 	assertSandboxCategory(t, err, SandboxBackendUnavailable)
-	if got, want := err.Error(), "backend_unavailable: process sandbox unavailable: required system backend is unavailable; install or repair the signed Ubuntu package with 'sudo apt-get install --reinstall bubblewrap'"; got != want {
+	if got, want := err.Error(), "backend_unavailable: process sandbox unavailable: required system backend is unavailable; review Ubuntu's configured signed apt sources, then install or repair Bubblewrap with 'sudo apt-get update && sudo apt-get install --reinstall bubblewrap'; ACS will not start Devin without the required sandbox"; got != want {
 		t.Fatalf("Bubblewrap unavailable error = %q, want %q", got, want)
 	}
 	for _, private := range []string{"PRIVATE_BACKEND_OUTPUT", "/home/alice", "policy=(allow"} {
@@ -368,7 +368,7 @@ func TestProcessSandboxSanitizesBackendFailures(t *testing.T) {
 		map[string]sandboxBackend{"linux": backend},
 	)
 	err := sandbox.Check(context.Background(), SandboxCheck{})
-	assertSandboxCategory(t, err, SandboxBackendUnavailable)
+	assertSandboxCategory(t, err, SandboxVerificationFailed)
 	if strings.Contains(err.Error(), secret) || strings.Contains(err.Error(), "policy") {
 		t.Fatalf("backend failure leaked private output: %v", err)
 	}
@@ -386,7 +386,7 @@ func TestProcessSandboxRebuildsClassifiedBackendFailures(t *testing.T) {
 		{
 			name:     "direct validation failure",
 			category: SandboxBackendUnavailable,
-			message:  "backend_unavailable: process sandbox unavailable: required system backend is unavailable",
+			message:  "backend_unavailable: process sandbox unavailable: required system backend is unavailable; ACS will not start Devin without the required sandbox",
 			invoke: func(sandbox *nativeProcessSandbox) error {
 				return sandbox.Check(context.Background(), SandboxCheck{})
 			},
@@ -394,7 +394,7 @@ func TestProcessSandboxRebuildsClassifiedBackendFailures(t *testing.T) {
 		{
 			name:     "wrapped validation failure",
 			category: SandboxUnsupportedPlatform,
-			message:  "unsupported_platform: process sandbox unavailable: unsupported platform",
+			message:  "unsupported_platform: process sandbox unavailable: unsupported platform; ACS will not start Devin without the required sandbox",
 			wrapped:  true,
 			invoke: func(sandbox *nativeProcessSandbox) error {
 				return sandbox.Check(context.Background(), SandboxCheck{})
@@ -403,7 +403,7 @@ func TestProcessSandboxRebuildsClassifiedBackendFailures(t *testing.T) {
 		{
 			name:     "direct preparation failure",
 			category: SandboxSetupFailed,
-			message:  "setup_failed: process sandbox preparation failed",
+			message:  "setup_failed: process sandbox preparation failed; ACS will not start Devin without the required sandbox",
 			invoke: func(sandbox *nativeProcessSandbox) error {
 				_, err := sandbox.Prepare(context.Background(), validProcessRequest(t))
 				return err
@@ -412,7 +412,7 @@ func TestProcessSandboxRebuildsClassifiedBackendFailures(t *testing.T) {
 		{
 			name:     "wrapped preparation failure",
 			category: SandboxInvalidEnvironment,
-			message:  "invalid_environment: process sandbox preparation failed: invalid environment",
+			message:  "invalid_environment: process sandbox preparation failed: invalid environment; ACS will not start Devin without the required sandbox",
 			wrapped:  true,
 			invoke: func(sandbox *nativeProcessSandbox) error {
 				_, err := sandbox.Prepare(context.Background(), validProcessRequest(t))
@@ -548,9 +548,13 @@ type capturingBackend struct {
 	prepareErr error
 	request    validatedProcessRequest
 	process    Process
+	checks     int
 }
 
-func (backend *capturingBackend) check(context.Context) error { return backend.checkErr }
+func (backend *capturingBackend) check(context.Context) error {
+	backend.checks++
+	return backend.checkErr
+}
 func (backend *capturingBackend) prepare(_ context.Context, request validatedProcessRequest) (Process, error) {
 	backend.request = request
 	if backend.prepareErr != nil {

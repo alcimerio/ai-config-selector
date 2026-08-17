@@ -174,13 +174,18 @@ Profile.
 ### Inspect a launch
 
 Use a dry run to inspect the selected global Skills, their planned Session
-paths, and any repository-local Skills that Devin may inherit:
+paths, any repository-local Skills that Devin may inherit, and whether the
+required native sandbox is ready:
 
 ```bash
 acs devin --profile backend-review --dry-run
 ```
 
-A dry run does not create a Session or start Devin.
+A dry run reports the required `native` sandbox mode, selected backend
+(Seatbelt or Bubblewrap), the exact Supported Platform result, and backend
+readiness. It does not create a Session or start Devin. Backend readiness may
+run a fixed native capability check, but it never executes Devin or reads a
+Devin credential.
 
 ### Launch Devin
 
@@ -202,21 +207,51 @@ checks that its package architecture matches ACS, its payload still matches
 dpkg's packaged checksums, and unprivileged user namespaces work before leasing
 a Session. This is an offline package-integrity boundary, not protection from a
 compromised administrator: the package database and packaged checksums are
-controlled by root. If a prerequisite is missing or invalid, ACS reports
-`backend_unavailable` with package-remediation guidance before it leases a
-Session or starts Devin. ACS neither bundles Bubblewrap nor downloads it at
-runtime; administrators install it from Ubuntu's configured signed apt
-repositories. If host AppArmor policy blocks unprivileged user namespaces,
-administrators must review and enable an appropriate targeted Bubblewrap
-profile; ACS does not disable the global AppArmor restriction or run without
-containment.
+controlled by root. If Bubblewrap is missing or unsafe, ACS reports
+`backend_unavailable` before it leases a Session or starts Devin. Review the
+configured signed apt sources, then an administrator can install or repair the
+package with:
+
+```sh
+sudo apt-get update && sudo apt-get install --reinstall bubblewrap
+```
+
+ACS neither bundles Bubblewrap nor downloads it at runtime. If host AppArmor
+policy blocks unprivileged user namespaces, ACS reports
+`sandbox_verification_failed`; administrators must review and enable an
+appropriate targeted Bubblewrap profile. ACS does not disable the global
+AppArmor restriction or run without containment.
 
 The Bubblewrap namespace exposes the workspace and Session as writable,
 including Session-local temporary storage. Named runtime inputs and the
 minimal operating-system runtime are read-only. The host home and host Unix
 sockets are absent. Devin retains outbound IP networking, but ACS does not
 mount host SSH, Docker, proxy, or agent sockets. There is no unsandboxed
-fallback on either platform.
+fallback on either platform. ACS will not start Devin without the required
+sandbox.
+
+### Launch failure categories
+
+ACS reports fixed, actionable categories without including generated policy,
+private paths, credentials, account values, environment entries, backend
+diagnostics, Devin command output, or terminal control characters:
+
+- `unsupported_platform`: the detected host is outside the supported macOS 26
+  or Ubuntu 24.04 target matrix.
+- `backend_unavailable`: the required native backend is missing, modified, or
+  unsafe.
+- `policy_rejected`: the generated Seatbelt policy was rejected before Devin
+  could start.
+- `sandbox_verification_failed`: the native backend did not pass its fixed
+  capability verification.
+- `skill_preflight_failed` and `authentication_preflight_failed`: existing
+  Devin Skills or login state could not be verified inside the sandbox.
+- `devin_exited`: a normal or signaled Devin exit retains its existing exit
+  code; inspect the attached Devin terminal output for target diagnostics.
+
+Normal Devin output remains attached to the terminal, and a normal or
+signaled Devin exit retains its existing exit-code behavior. ACS does not add
+an additional CLI diagnostic for that ordinary target exit.
 
 ### Session lifecycle
 

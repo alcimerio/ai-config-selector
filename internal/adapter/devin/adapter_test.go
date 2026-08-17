@@ -64,6 +64,11 @@ func TestConfigDoesNotExposeProcessSandboxOverride(t *testing.T) {
 		if field.IsExported() && field.Type.Implements(sandboxType) {
 			t.Fatalf("Config exposes ProcessSandbox override %q", field.Name)
 		}
+		for _, forbidden := range []string{"sandbox", "backend", "unsandbox"} {
+			if field.IsExported() && strings.Contains(strings.ToLower(field.Name), forbidden) {
+				t.Fatalf("Config exposes a sandbox-selection or bypass field %q", field.Name)
+			}
+		}
 	}
 }
 
@@ -490,6 +495,10 @@ type fakeObservedSkill struct {
 }
 
 type setupFailureSandbox struct{}
+
+func (setupFailureSandbox) Readiness(context.Context) (launch.SandboxReadiness, error) {
+	return launch.SandboxReadiness{RequiredMode: "native", Backend: "test", Platform: "test platform", Supported: true, Ready: true}, nil
+}
 
 func (setupFailureSandbox) Check(context.Context, launch.SandboxCheck) error { return nil }
 func (setupFailureSandbox) Prepare(context.Context, launch.ProcessRequest) (launch.Process, error) {

@@ -30,10 +30,6 @@ func main() {
 		}
 		return
 	}
-	if err := requireSupportedPlatform(launch.CurrentPlatform); err != nil {
-		fmt.Fprintf(os.Stderr, "acs: %v\n", err)
-		os.Exit(1)
-	}
 	existingHome, err := os.UserHomeDir()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "acs: resolve user home: %v\n", err)
@@ -94,12 +90,4 @@ func buildVersion(builderVersion string, readBuildInfo func() (*debug.BuildInfo,
 		return "devel"
 	}
 	return version
-}
-
-func requireSupportedPlatform(probe func() (launch.Platform, error)) error {
-	platform, err := probe()
-	if err != nil {
-		return err
-	}
-	return launch.ValidatePlatform(platform)
 }
