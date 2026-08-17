@@ -466,6 +466,7 @@ func TestReadmeDescribesCurrentPlatformSandboxCapabilities(t *testing.T) {
 		"There is no unsandboxed fallback on either platform",
 		"ACS removes a leased Session after launch setup fails, or only after the sandboxed process tree has exited or been terminated and containment is settled",
 		"That contained Session lifecycle is available through Seatbelt on macOS and Bubblewrap on Ubuntu",
+		"`policy_rejected`: the generated native policy was rejected before Devin",
 	} {
 		if !strings.Contains(text, required) {
 			t.Errorf("README.md does not explain the sandbox launch state with %q", required)

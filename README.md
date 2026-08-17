@@ -241,7 +241,7 @@ diagnostics, Devin command output, or terminal control characters:
   or Ubuntu 24.04 target matrix.
 - `backend_unavailable`: the required native backend is missing, modified, or
   unsafe.
-- `policy_rejected`: the generated Seatbelt policy was rejected before Devin
+- `policy_rejected`: the generated native policy was rejected before Devin
   could start.
 - `sandbox_verification_failed`: the native backend did not pass its fixed
   capability verification.
