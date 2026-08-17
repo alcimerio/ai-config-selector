@@ -11,6 +11,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/charmbracelet/x/term"
 )
 
 const safeProcessPath = "/usr/local/bin:/usr/bin:/bin"
@@ -507,11 +509,15 @@ func validateTerminal(terminal Terminal) error {
 		{value: terminal.ErrorOutput, expected: uintptr(os.Stderr.Fd())},
 	} {
 		file, isFile := endpoint.value.(*os.File)
-		if isFile && file.Fd() != endpoint.expected {
+		if isFile && file.Fd() != endpoint.expected && !isTerminalFile(file) {
 			return sandboxError(SandboxInvalidDescriptor, nil)
 		}
 	}
 	return nil
+}
+
+func isTerminalFile(file *os.File) bool {
+	return term.IsTerminal(file.Fd())
 }
 
 func buildProcessEnvironment(sessionHome, temporaryDirectory string, host []string) ([]string, error) {

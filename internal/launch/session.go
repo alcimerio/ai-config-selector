@@ -12,7 +12,9 @@ import (
 
 const (
 	sessionDirectoryPrefix = "session-"
-	sessionLeaseFile       = ".active.lock"
+	legacySessionLeaseFile = ".active.lock"
+	sessionLeaseSuffix     = ".lock"
+	sessionLeasesSuffix    = ".leases"
 )
 
 // SessionLease owns one ephemeral Session directory until Remove is called.
@@ -21,6 +23,7 @@ const (
 type SessionLease struct {
 	RootDir         string
 	guard           *os.File
+	guardPath       string
 	mutex           sync.Mutex
 	references      int
 	removeRequested bool
@@ -36,6 +39,12 @@ func CreateSession(sessionsDirectory string) (*SessionLease, error) {
 	if err := os.Chmod(sessionsDirectory, 0o700); err != nil {
 		return nil, fmt.Errorf("secure ACS Sessions directory: %w", err)
 	}
+	if err := os.MkdirAll(sessionLeasesDirectory(sessionsDirectory), 0o700); err != nil {
+		return nil, fmt.Errorf("create ACS Session leases directory: %w", err)
+	}
+	if err := os.Chmod(sessionLeasesDirectory(sessionsDirectory), 0o700); err != nil {
+		return nil, fmt.Errorf("secure ACS Session leases directory: %w", err)
+	}
 
 	coordinator, err := openLockedFile(sessionsDirectory+".lock", false)
 	if err != nil {
@@ -50,12 +59,13 @@ func CreateSession(sessionsDirectory string) (*SessionLease, error) {
 	if err != nil {
 		return nil, fmt.Errorf("create ACS Session: %w", err)
 	}
-	guard, err := openLockedFile(filepath.Join(rootDir, sessionLeaseFile), false)
+	guardPath := sessionLeasePath(sessionsDirectory, rootDir)
+	guard, err := openLockedFile(guardPath, false)
 	if err != nil {
 		_ = os.RemoveAll(rootDir)
 		return nil, fmt.Errorf("lease ACS Session: %w", err)
 	}
-	return &SessionLease{RootDir: rootDir, guard: guard, references: 1}, nil
+	return &SessionLease{RootDir: rootDir, guard: guard, guardPath: guardPath, references: 1}, nil
 }
 
 // Remove releases the caller's ownership and deletes the leased Session after
@@ -100,11 +110,18 @@ func (session *SessionLease) releaseReference() error {
 }
 
 func (session *SessionLease) removeLocked() error {
+	// Keep the lease locked until removal succeeds. A failed cleanup must remain
+	// owned by this ACS process so concurrent abandoned-session recovery cannot
+	// remove a Session whose contained process cleanup is still in progress.
+	if err := os.RemoveAll(session.RootDir); err != nil {
+		session.cleanupErr = errors.New("delete ACS Session: cleanup failed")
+		return session.cleanupErr
+	}
 	if session.guard != nil {
 		closeLockedFile(session.guard)
 		session.guard = nil
 	}
-	if err := os.RemoveAll(session.RootDir); err != nil {
+	if err := os.Remove(session.guardPath); err != nil && !os.IsNotExist(err) {
 		session.cleanupErr = errors.New("delete ACS Session: cleanup failed")
 		return session.cleanupErr
 	}
@@ -198,23 +215,54 @@ func removeAbandonedSessions(sessionsDirectory string) error {
 			continue
 		}
 
-		guard, err := openLockedFile(filepath.Join(sessionPath, sessionLeaseFile), true)
-		if os.IsNotExist(err) {
-			continue
-		}
+		guardPath := sessionLeasePath(sessionsDirectory, sessionPath)
+		guard, err := openLockedFile(guardPath, true)
 		if errors.Is(err, syscall.EWOULDBLOCK) {
 			continue
 		}
 		if err != nil {
 			return fmt.Errorf("inspect abandoned ACS Session lease: %w", err)
 		}
+		legacyGuard, err := openLockedFile(filepath.Join(sessionPath, legacySessionLeaseFile), true)
+		if errors.Is(err, syscall.EWOULDBLOCK) {
+			closeLockedFile(guard)
+			// This process holds the startup coordinator and has proved no modern
+			// lease owns guardPath. It was created solely to inspect a legacy
+			// Session, so remove it before preserving the legacy lock. Keeping it
+			// would leave a permanent external artifact once that older ACS exits.
+			if err := os.Remove(guardPath); err != nil && !os.IsNotExist(err) {
+				return errors.New("delete abandoned ACS Session: cleanup failed")
+			}
+			continue
+		}
+		if err != nil && !os.IsNotExist(err) {
+			closeLockedFile(guard)
+			return fmt.Errorf("inspect abandoned ACS Session lease: %w", err)
+		}
 		if err := os.RemoveAll(sessionPath); err != nil {
+			if legacyGuard != nil {
+				closeLockedFile(legacyGuard)
+			}
 			closeLockedFile(guard)
 			return errors.New("delete abandoned ACS Session: cleanup failed")
 		}
+		if legacyGuard != nil {
+			closeLockedFile(legacyGuard)
+		}
 		closeLockedFile(guard)
+		if err := os.Remove(guardPath); err != nil && !os.IsNotExist(err) {
+			return errors.New("delete abandoned ACS Session: cleanup failed")
+		}
 	}
 	return nil
+}
+
+func sessionLeasesDirectory(sessionsDirectory string) string {
+	return sessionsDirectory + sessionLeasesSuffix
+}
+
+func sessionLeasePath(sessionsDirectory, sessionRoot string) string {
+	return filepath.Join(sessionLeasesDirectory(sessionsDirectory), filepath.Base(sessionRoot)+sessionLeaseSuffix)
 }
 
 func openLockedFile(path string, nonblocking bool) (*os.File, error) {

@@ -12,7 +12,6 @@ import (
 
 	"github.com/alcimerio/ai-config-selector/internal/category"
 	"github.com/alcimerio/ai-config-selector/internal/launch"
-	"golang.org/x/sys/unix"
 )
 
 // Launch creates an ephemeral ACS Session, verifies the Devin Adapter
@@ -27,8 +26,7 @@ func (a *Adapter) Launch(
 ) (exitCode int, resultErr error) {
 	preflightContext, cancelPreflight := context.WithCancel(ctx)
 	defer cancelPreflight()
-	terminalFile := terminalFile(terminal.Input)
-	supervisor := newSignalSupervisor(cancelPreflight, terminalFile)
+	supervisor := newSignalSupervisor(cancelPreflight)
 	defer supervisor.stop()
 	if err := a.sandbox.Check(preflightContext, launch.SandboxCheck{
 		Workspace: workingDirectory, SessionsDirectory: sessionsDirectory,
@@ -109,13 +107,23 @@ func (a *Adapter) Launch(
 }
 
 func runAttached(process launch.Process, supervisor *signalSupervisor) error {
-	if err := process.Start(); err != nil {
-		return err
+	started, startErr := supervisor.start(process)
+	if !started {
+		return startErr
 	}
-	supervisor.attach(process)
-	err := process.Wait()
-	supervisor.detach()
-	return err
+	defer supervisor.detach()
+	waitErr := process.Wait()
+	if startErr == nil {
+		return waitErr
+	}
+	// A replay failure is reported as the primary launch failure, but a
+	// successful Start has made the process and its Session lease live. Always
+	// reap it before returning; expose only stable sandbox categories on this
+	// otherwise sensitive error path.
+	if waitErr == nil {
+		return startErr
+	}
+	return errors.Join(startErr, &launch.SandboxError{Category: launch.SandboxProcessWaitFailed})
 }
 
 type signalSupervisor struct {
@@ -125,15 +133,14 @@ type signalSupervisor struct {
 	mutex           sync.Mutex
 	child           launch.Process
 	pending         os.Signal
-	terminal        *os.File
+	starting        bool
 }
 
-func newSignalSupervisor(cancelPreflight context.CancelFunc, terminal *os.File) *signalSupervisor {
+func newSignalSupervisor(cancelPreflight context.CancelFunc) *signalSupervisor {
 	supervisor := &signalSupervisor{
 		forwarded:       make(chan os.Signal, 1),
 		done:            make(chan struct{}),
 		cancelPreflight: cancelPreflight,
-		terminal:        terminal,
 	}
 	signal.Notify(
 		supervisor.forwarded,
@@ -154,6 +161,11 @@ func (supervisor *signalSupervisor) run() {
 			supervisor.mutex.Lock()
 			child := supervisor.child
 			if child == nil {
+				if supervisor.starting {
+					supervisor.pending = received
+					supervisor.mutex.Unlock()
+					continue
+				}
 				if received != syscall.SIGWINCH {
 					supervisor.pending = received
 					supervisor.cancelPreflight()
@@ -161,29 +173,46 @@ func (supervisor *signalSupervisor) run() {
 				supervisor.mutex.Unlock()
 				continue
 			}
-			// os/signal does not expose whether a signal came from the
-			// foreground terminal job or was sent only to the ACS process.
-			// Prefer the normal terminal contract: the kernel has already sent
-			// foreground-job signals to Devin and its descendants exactly once.
-			sharesForegroundTerminal := sharesForegroundTerminalProcessGroup(supervisor.terminal)
 			supervisor.mutex.Unlock()
-			if !sharesForegroundTerminal {
-				_ = child.Signal(received)
-			}
+			// Native launchers place the contained controller in the terminal's
+			// foreground process group. A signal observed by ACS is therefore
+			// addressed to ACS, rather than a duplicate terminal-generated signal.
+			_ = child.Signal(received)
 		case <-supervisor.done:
 			return
 		}
 	}
 }
 
-func (supervisor *signalSupervisor) attach(child launch.Process) {
+func (supervisor *signalSupervisor) start(child launch.Process) (bool, error) {
+	supervisor.mutex.Lock()
+	if supervisor.pending != nil {
+		supervisor.mutex.Unlock()
+		return false, errors.New("Devin launch interrupted before the interactive process started")
+	}
+	supervisor.starting = true
+	supervisor.mutex.Unlock()
+
+	err := child.Start()
 	supervisor.mutex.Lock()
 	defer supervisor.mutex.Unlock()
-	supervisor.child = child
-	if supervisor.pending != nil {
-		_ = child.Signal(supervisor.pending)
-		supervisor.pending = nil
+	supervisor.starting = false
+	if err != nil {
+		return false, err
 	}
+	supervisor.child = child
+	pending := supervisor.pending
+	supervisor.pending = nil
+	if pending == nil {
+		return true, nil
+	}
+	supervisor.mutex.Unlock()
+	err = child.Signal(pending)
+	supervisor.mutex.Lock()
+	if err != nil {
+		return true, &launch.SandboxError{Category: launch.SandboxProcessStartFailed}
+	}
+	return true, nil
 }
 
 func (supervisor *signalSupervisor) detach() {
@@ -195,28 +224,4 @@ func (supervisor *signalSupervisor) detach() {
 func (supervisor *signalSupervisor) stop() {
 	signal.Stop(supervisor.forwarded)
 	close(supervisor.done)
-}
-
-func terminalFile(input interface{ Read([]byte) (int, error) }) *os.File {
-	file, ok := input.(*os.File)
-	if !ok {
-		return nil
-	}
-	if _, ok := foregroundTerminalProcessGroup(file); !ok {
-		return nil
-	}
-	return file
-}
-
-func sharesForegroundTerminalProcessGroup(terminal *os.File) bool {
-	foregroundGroup, ok := foregroundTerminalProcessGroup(terminal)
-	return ok && foregroundGroup == int32(syscall.Getpgrp())
-}
-
-func foregroundTerminalProcessGroup(terminal *os.File) (int32, bool) {
-	if terminal == nil {
-		return 0, false
-	}
-	processGroup, err := unix.IoctlGetInt(int(terminal.Fd()), unix.TIOCGPGRP)
-	return int32(processGroup), err == nil
 }

@@ -11,6 +11,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/creack/pty"
 )
 
 func TestValidatePlatformCoversSupportedMatrix(t *testing.T) {
@@ -244,13 +246,41 @@ func TestValidateTerminalRejectsExtraFileDescriptor(t *testing.T) {
 	}
 	defer extra.Close()
 
-	err = validateTerminal(Terminal{Input: extra, Output: os.Stdout, ErrorOutput: os.Stderr})
+	t.Run("regular file", func(t *testing.T) {
+		assertTerminalDescriptorRejected(t, extra)
+	})
+	t.Run("character device that is not a terminal", func(t *testing.T) {
+		descriptor, err := os.Open(os.DevNull)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer descriptor.Close()
+		assertTerminalDescriptorRejected(t, descriptor)
+	})
+	if err := validateTerminal(Terminal{Input: os.Stdin, Output: os.Stdout, ErrorOutput: os.Stderr}); err != nil {
+		t.Fatalf("standard terminal descriptors rejected: %v", err)
+	}
+}
+
+func assertTerminalDescriptorRejected(t *testing.T, descriptor *os.File) {
+	t.Helper()
+	err := validateTerminal(Terminal{Input: descriptor, Output: os.Stdout, ErrorOutput: os.Stderr})
 	if err == nil {
 		t.Fatal("extra file descriptor accepted as the invoking terminal")
 	}
 	assertSandboxCategory(t, err, SandboxInvalidDescriptor)
-	if err := validateTerminal(Terminal{Input: os.Stdin, Output: os.Stdout, ErrorOutput: os.Stderr}); err != nil {
-		t.Fatalf("standard terminal descriptors rejected: %v", err)
+}
+
+func TestValidateTerminalAcceptsPseudoTerminalInput(t *testing.T) {
+	master, terminal, err := pty.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer master.Close()
+	defer terminal.Close()
+
+	if err := validateTerminal(Terminal{Input: terminal, Output: &strings.Builder{}, ErrorOutput: &strings.Builder{}}); err != nil {
+		t.Fatalf("pseudo-terminal input rejected: %v", err)
 	}
 }
 
