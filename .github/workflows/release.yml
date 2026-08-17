@@ -132,7 +132,7 @@ jobs:
             --ro-bind /usr /usr --remount-ro / \
             --setenv PATH /usr/bin:/bin --chdir /tmp -- /usr/bin/true
 
-      - name: Download the exact candidate artifact set
+      - name: Download immutable candidate artifact set
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: release-candidate-${{ github.run_id }}-${{ github.run_attempt }}
@@ -181,6 +181,20 @@ jobs:
           ACS_PROMOTED_BINARY: ${{ runner.temp }}/acs-release-${{ matrix.os }}-${{ matrix.arch }}/bin/acs
           ACS_PROMOTED_SANDBOX_BACKEND: ${{ matrix.sandbox_backend }}
         run: ACS_PROMOTED_VERSION="$GITHUB_REF_NAME" go test ./acceptance -count=1
+
+      - name: Record sanitized native candidate observation
+        shell: bash
+        run: |
+          {
+            printf '%s\n' '## Native candidate gate'
+            printf '%s\n' ''
+            printf '%s\n' "- Target: \`${{ matrix.target }}\` on its required native runner."
+            printf '%s\n' "- Backend observation: required native backend is \`${{ matrix.sandbox_backend }}\`."
+            printf '%s\n' '- Candidate observation: the installed black-box containment and lifecycle suite passed.'
+            printf '%s\n' '- Compatibility rule: macOS uses the verified system Seatbelt backend; Ubuntu uses the verified signed-system Bubblewrap package and targeted AppArmor profile.'
+            printf '%s\n' '- The candidate itself is never rebuilt in this job.'
+            printf '%s\n' '- No credentials, account data, target output, Session contents, private paths, generated policy, environment values, or control characters are recorded.'
+          } >>"$GITHUB_STEP_SUMMARY"
 
   attest:
     name: Attest exact release bytes

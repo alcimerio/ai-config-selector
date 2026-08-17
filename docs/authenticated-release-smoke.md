@@ -1,7 +1,7 @@
 # Optional Authenticated Release Smoke Test
 
-This is a maintainer confidence check, not a release gate. The required release
-contract is the credential-free native CI matrix on macOS 26 and Ubuntu 24.04
+This is a maintainer confidence check, not a release gate. The required native
+candidate gate is the credential-free CI matrix on macOS 26 and Ubuntu 24.04
 LTS for darwin/arm64, darwin/amd64, linux/amd64, and linux/arm64.
 
 Run this smoke on the maintainer's macOS 26 Apple Silicon host before the first
@@ -11,7 +11,25 @@ it for unrelated releases. Do not provision another host solely for this check.
 
 Only run it with the machine owner's explicit authorization. Never place Devin
 credentials in CI, workflow inputs, logs, artifacts, caches, issues, or the
-repository. Do not capture terminal output or account details.
+repository. Do not capture terminal output or account details. The exact
+`ACS_REAL_DEVIN_INTEGRATION=I_ACKNOWLEDGE_LOCAL_CREDENTIAL_ACCESS` value below
+is the explicit acknowledgement for the repository integration probe; do not
+set it without the machine owner's approval.
+
+## Required native candidate gate
+
+The native candidate gate, not this smoke, is the release proof. It installs
+the exact candidate supplied by the single build job without rebuilding it on
+macOS 26 `darwin/arm64` and `darwin/amd64`, and Ubuntu 24.04 LTS
+`linux/amd64` and `linux/arm64`. It records only sanitized supported
+target/backend observations: verified system Seatbelt on macOS, or verified
+signed-system Bubblewrap with the targeted AppArmor compatibility profile on
+Ubuntu. Its logs, artifacts, and job summaries exclude credentials, account
+data, target output, Session contents, private paths, generated policies,
+environment values, and terminal control characters.
+
+The real-Devin smoke is supplemental to that native candidate gate. A completed
+smoke never waives, replaces, or weakens an unavailable or failed native job.
 
 ## Prepare and install the candidate
 

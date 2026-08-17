@@ -234,6 +234,80 @@ func TestPromotedArtifactGateDeclaresExpectedSandboxCapability(t *testing.T) {
 	}
 }
 
+func TestNativeCandidateGateKeepsFourTargetEvidenceSanitizedAndImmutable(t *testing.T) {
+	for _, workflow := range []string{"promoted-artifacts.yml", "release.yml"} {
+		contents, err := os.ReadFile(filepath.Join("..", ".github", "workflows", workflow))
+		if err != nil {
+			t.Fatalf("read %s: %v", workflow, err)
+		}
+		text := string(contents)
+		for _, required := range []string{
+			"Download immutable candidate artifact set",
+			"Restore installer mode normalized by artifact transport",
+			"Verify host and install supplied candidate",
+			"Exercise installed candidate as a black box",
+			"Record sanitized native candidate observation",
+			"The candidate itself is never rebuilt in this job.",
+			"No credentials, account data, target output, Session contents, private paths, generated policy, environment values, or control characters are recorded.",
+		} {
+			if !strings.Contains(text, required) {
+				t.Errorf("%s is missing native-candidate evidence guard %q", workflow, required)
+			}
+		}
+	}
+
+	release, err := os.ReadFile(filepath.Join("..", ".github", "workflows", "release.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(release)
+	native := strings.Index(text, "  native:\n")
+	attest := strings.Index(text, "  attest:\n")
+	publish := strings.Index(text, "  publish:\n")
+	if native < 0 || attest < native || publish < attest ||
+		!strings.Contains(text[attest:publish], "- native") || !strings.Contains(text[publish:], "- native") || !strings.Contains(text[publish:], "- attest") {
+		t.Fatal("attestation and publication do not depend on the completed four-target native gate")
+	}
+
+	acceptance, err := os.ReadFile(filepath.Join("..", "acceptance", "promoted_artifact_native_test.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{
+		"TestPromotedArtifactNativeContainmentContract",
+		"filesystem environment descriptors sockets IP preflight and descendants",
+		"assertPromotedArtifactNativePreflightFailureIsSafe",
+		"assertPromotedArtifactMissingBackendFailsClosed",
+		"assertPromotedArtifactInvalidNativeInputFailsClosed",
+		"assertSafeCandidateFailure",
+		"DescendantStarted",
+		"HostSocketReachable",
+		"DescriptorLeaked",
+	} {
+		if !strings.Contains(string(acceptance), required) {
+			t.Errorf("native installed-candidate acceptance is missing %q", required)
+		}
+	}
+
+	for _, document := range []string{"README.md", "CONTRIBUTING.md", "docs/architecture.md", "docs/authenticated-release-smoke.md"} {
+		contents, err := os.ReadFile(filepath.Join("..", document))
+		if err != nil {
+			t.Fatalf("read %s: %v", document, err)
+		}
+		for _, required := range []string{
+			"native candidate gate",
+			"darwin/arm64",
+			"darwin/amd64",
+			"linux/amd64",
+			"linux/arm64",
+		} {
+			if !strings.Contains(strings.ToLower(string(contents)), strings.ToLower(required)) {
+				t.Errorf("%s does not document native-candidate evidence %q", document, required)
+			}
+		}
+	}
+}
+
 func TestGeneralCIUsesTheCertifiedUbuntuRelease(t *testing.T) {
 	contents, err := os.ReadFile(filepath.Join("..", ".github", "workflows", "ci.yml"))
 	if err != nil {

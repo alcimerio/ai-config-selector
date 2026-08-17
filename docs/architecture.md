@@ -280,7 +280,7 @@ credentials, environment values, or account details.
 
 ### Optional authenticated smoke
 
-The required release gate stays credential-free: one candidate artifact set is
+The required native candidate gate stays credential-free: one candidate artifact set is
 installed and exercised natively on darwin/arm64, darwin/amd64, linux/amd64,
 and linux/arm64. The native matrix declares the sandbox backend capability
 expected at each increment. The Darwin rows exercise the Seatbelt launch and
@@ -295,6 +295,19 @@ an optional maintainer check for changes that affect authentication,
 the Devin Adapter, Profile selection, Session isolation, or interactive
 lifecycle behavior. It runs only on an authorized macOS 26 arm64 maintainer
 host and never places personal credentials in CI or a release artifact.
+
+The installed-candidate fixture exercises backend readiness; allowed and denied
+filesystem rules and symlink escapes; descendants; allowlisted and blocked
+environment values; file descriptors; host Unix sockets; outbound IP; Skill
+and authentication preflight; terminal signals, resize, and exit; concurrent
+and abandoned Session cleanup; and missing-backend or invalid-input
+no-target-start failures. A native job
+records only its supported target, required ready backend, and compatibility
+rule: verified system Seatbelt for macOS 26 or verified signed-system
+Bubblewrap with the targeted AppArmor profile for Ubuntu 24.04 LTS. Neither
+the fixture nor the job summary records credentials, account data, target
+output, Session contents, private paths, generated policies, environment
+values, or control characters.
 
 ### Immutable release publication
 

@@ -46,6 +46,7 @@ func TestPromotedArtifactNativeContainmentContract(t *testing.T) {
 	t.Run("readiness is native and sanitized", assertPromotedArtifactNativeReadiness)
 	t.Run("filesystem environment descriptors sockets IP preflight and descendants", assertPromotedArtifactNativeContainment)
 	t.Run("preflight failure is categorized without target details", assertPromotedArtifactNativePreflightFailureIsSafe)
+	t.Run("missing required backend cannot start a marker", assertPromotedArtifactMissingBackendFailsClosed)
 	t.Run("invalid native launch input cannot start a marker", assertPromotedArtifactInvalidNativeInputFailsClosed)
 }
 
@@ -221,6 +222,33 @@ func assertPromotedArtifactNativePreflightFailureIsSafe(t *testing.T) {
 	assertSafeCandidateFailure(t, output, "authentication_preflight_failed", privatePath, "credential=never-log")
 	if _, err := os.Stat(filepath.Join(workspace, "interactive-started")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("authentication failure started the interactive target")
+	}
+	assertNoSessions(t, home)
+}
+
+func assertPromotedArtifactMissingBackendFailsClosed(t *testing.T) {
+	binary := promotedBinary(t)
+	home, path := prepareRuntimeHome(t)
+	fixtureRoot := realTemporaryDirectory(t)
+	workspace := filepath.Join(fixtureRoot, "workspace")
+	tools := filepath.Join(fixtureRoot, "tools")
+	for _, directory := range []string{workspace, tools} {
+		if err := os.Mkdir(directory, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeFakeDevin(t, filepath.Join(tools, "devin"), "#!/bin/sh\ntouch ./interactive-started\n")
+
+	command := promotedArtifactMissingBackendCommand(t, binary, home, tools+string(os.PathListSeparator)+path, workspace)
+	output, err := command.CombinedOutput()
+	if err == nil {
+		t.Fatal("candidate accepted a missing required backend")
+	}
+	assertSafeCandidateFailure(t, output, "backend_unavailable", fixtureRoot)
+	for _, marker := range []string{"preflight-skills", "preflight-authentication", "interactive-started"} {
+		if _, err := os.Stat(filepath.Join(workspace, marker)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatal("missing required backend started a target marker")
+		}
 	}
 	assertNoSessions(t, home)
 }
