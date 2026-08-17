@@ -138,6 +138,7 @@ func assertPromotedArtifactNativeContainment(t *testing.T) {
 		DescriptorSentinel:  privateDescriptorValue,
 		ExternalWritePath:   filepath.Join(externalRoot, "unrelated-write"),
 	}
+	assertExternalWriteFixtureIsUnrelated(t, config.ExternalWritePath, workspace, home)
 	writeFakeDevinConfiguration(t, workspace, config)
 
 	descriptor, err := os.Open(hostSecret)
@@ -682,4 +683,14 @@ func assertDescendantStopsAfterCandidateReturn(t *testing.T, workspace string) {
 	}
 	assertMarkerAbsent(t, filepath.Join(workspace, "descendant-survived"), "native containment did not clean a descendant before Session removal")
 	assertMarkerAbsent(t, filepath.Join(workspace, "descendant-acknowledged"), "native containment left a descendant alive after candidate return")
+}
+
+func assertExternalWriteFixtureIsUnrelated(t *testing.T, path, workspace, home string) {
+	t.Helper()
+	for _, allowed := range []string{workspace, filepath.Join(home, ".acs", "sessions")} {
+		relative, err := filepath.Rel(allowed, path)
+		if err == nil && relative != "." && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+			t.Fatal("external write fixture is inside an allowed sandbox root")
+		}
+	}
 }
