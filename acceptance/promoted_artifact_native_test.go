@@ -56,7 +56,7 @@ func TestFakeDevinDescendantWaitsForControlledRelease(t *testing.T) {
 	finished := false
 	t.Cleanup(func() {
 		if !finished {
-			releaseFakeDevinDescendant(workspace)
+			_ = releaseFakeDevinDescendant(workspace)
 			select {
 			case <-done:
 				finished = true
@@ -85,7 +85,9 @@ func TestFakeDevinDescendantWaitsForControlledRelease(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	releaseFakeDevinDescendant(workspace)
+	if err := releaseFakeDevinDescendant(workspace); err != nil {
+		t.Fatal("could not release descendant fixture")
+	}
 	if !waitForFakeDevinMarker(filepath.Join(workspace, "descendant-acknowledged"), time.Second) {
 		t.Fatal("descendant fixture did not acknowledge the controlled release")
 	}
@@ -97,6 +99,17 @@ func TestFakeDevinDescendantWaitsForControlledRelease(t *testing.T) {
 		}
 	case <-time.After(fakeDevinDescendantExitWait):
 		t.Fatal("descendant fixture did not exit after the controlled release")
+	}
+}
+
+func TestReleaseFakeDevinDescendantReportsReleaseMarkerWriteFailure(t *testing.T) {
+	workspace := filepath.Join(t.TempDir(), "not-a-workspace")
+	if err := os.WriteFile(workspace, []byte("fixture\n"), 0o600); err != nil {
+		t.Fatal("could not create the release fixture")
+	}
+
+	if err := releaseFakeDevinDescendant(workspace); err == nil {
+		t.Fatal("release helper did not report a release-marker write failure")
 	}
 }
 
@@ -156,7 +169,7 @@ func assertPromotedArtifactNativeContainment(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	t.Cleanup(func() { releaseFakeDevinDescendant(workspace) })
+	t.Cleanup(func() { _ = releaseFakeDevinDescendant(workspace) })
 	installPromotedArtifactFakeDevin(t, tools)
 
 	hostSecret := filepath.Join(fixtureRoot, "host-secret")
@@ -591,8 +604,8 @@ func writeFakeDevinMarker(path string) bool {
 	return path != "" && os.WriteFile(path, []byte("ok\n"), 0o600) == nil
 }
 
-func releaseFakeDevinDescendant(workspace string) {
-	_ = os.WriteFile(filepath.Join(workspace, "descendant-release"), []byte("release\n"), 0o600)
+func releaseFakeDevinDescendant(workspace string) error {
+	return os.WriteFile(filepath.Join(workspace, "descendant-release"), []byte("release\n"), 0o600)
 }
 
 func fakeDevinMarkerExists(path string) bool {
@@ -677,7 +690,9 @@ func assertMarkerAbsent(t *testing.T, path, message string) {
 
 func assertDescendantStopsAfterCandidateReturn(t *testing.T, workspace string) {
 	t.Helper()
-	releaseFakeDevinDescendant(workspace)
+	if err := releaseFakeDevinDescendant(workspace); err != nil {
+		t.Fatal("could not release descendant fixture")
+	}
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
 		if fakeDevinMarkerExists(filepath.Join(workspace, "descendant-survived")) {
