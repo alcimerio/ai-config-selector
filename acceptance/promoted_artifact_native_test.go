@@ -39,6 +39,7 @@ func TestMain(m *testing.M) {
 }
 
 func TestPromotedArtifactNativeContainmentContract(t *testing.T) {
+	_ = promotedBinary(t)
 	if promotedSandboxCapability(t) != "available" {
 		t.Skip("native containment requires the configured native backend")
 	}
