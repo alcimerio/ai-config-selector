@@ -7,6 +7,14 @@ import (
 	"testing"
 )
 
+func installPromotedArtifactPolicyRejectedDevin(t *testing.T, root string) string {
+	t.Helper()
+	// Bubblewrap receives the executable parents as policy directories. Keep the
+	// path below Linux PATH_MAX while making the resulting native request too
+	// large to execute.
+	return installPromotedArtifactDeepFakeDevin(t, root, 3800)
+}
+
 func promotedArtifactMissingBackendCommand(t *testing.T, binary, home, path, workspace string) *exec.Cmd {
 	t.Helper()
 	// The outer namespace intentionally masks only /usr/bin. The supplied,

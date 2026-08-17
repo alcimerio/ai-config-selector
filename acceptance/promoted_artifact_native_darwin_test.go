@@ -7,6 +7,13 @@ import (
 	"testing"
 )
 
+func installPromotedArtifactPolicyRejectedDevin(t *testing.T, root string) string {
+	t.Helper()
+	// Seatbelt receives one parameter definition for every executable ancestor.
+	// A near-PATH_MAX executable path makes that native policy unrepresentable.
+	return installPromotedArtifactDeepFakeDevin(t, root, 1000)
+}
+
 func promotedArtifactMissingBackendCommand(t *testing.T, binary, home, path, workspace string) *exec.Cmd {
 	t.Helper()
 	// This outer policy leaves ACS otherwise operational but denies metadata

@@ -48,7 +48,7 @@ func TestPromotedArtifactNativeContainmentContract(t *testing.T) {
 	t.Run("filesystem environment descriptors sockets IP preflight and descendants", assertPromotedArtifactNativeContainment)
 	t.Run("preflight failure is categorized without target details", assertPromotedArtifactNativePreflightFailureIsSafe)
 	t.Run("missing required backend cannot start a marker", assertPromotedArtifactMissingBackendFailsClosed)
-	t.Run("invalid native launch input cannot start a marker", assertPromotedArtifactInvalidNativeInputFailsClosed)
+	t.Run("invalid native policy is rejected before a target can start", assertPromotedArtifactInvalidNativePolicyFailsClosed)
 }
 
 func assertPromotedArtifactNativeReadiness(t *testing.T) {
@@ -84,6 +84,12 @@ func assertPromotedArtifactNativeContainment(t *testing.T) {
 	fixtureRoot := realTemporaryDirectory(t)
 	workspace := filepath.Join(fixtureRoot, "workspace")
 	tools := filepath.Join(fixtureRoot, "tools")
+	externalRoot := realTemporaryDirectory(t)
+	t.Cleanup(func() {
+		if err := os.RemoveAll(externalRoot); err != nil {
+			t.Error("did not remove the external write fixture")
+		}
+	})
 	for _, directory := range []string{workspace, tools} {
 		if err := os.Mkdir(directory, 0o700); err != nil {
 			t.Fatal(err)
@@ -130,6 +136,7 @@ func assertPromotedArtifactNativeContainment(t *testing.T) {
 		OutboundAddress:     ipListener.Addr().String(),
 		EnvironmentSentinel: privateEnvironmentValue,
 		DescriptorSentinel:  privateDescriptorValue,
+		ExternalWritePath:   filepath.Join(externalRoot, "unrelated-write"),
 	}
 	writeFakeDevinConfiguration(t, workspace, config)
 
@@ -175,6 +182,7 @@ func assertPromotedArtifactNativeContainment(t *testing.T) {
 		"secret environment":   result.BlockedEnvironmentVisible,
 		"inherited descriptor": result.DescriptorLeaked,
 		"host Unix socket":     result.HostSocketReachable,
+		"unrelated host write": result.ExternalWriteSucceeded,
 	} {
 		if actual {
 			t.Fatalf("native containment exposed %s", name)
@@ -186,11 +194,8 @@ func assertPromotedArtifactNativeContainment(t *testing.T) {
 		t.Fatal("native containment did not permit outbound IP")
 	}
 	assertMarkerExists(t, filepath.Join(workspace, "workspace-write"))
-	assertMarkerExists(t, filepath.Join(workspace, "descendant-ready"))
-	time.Sleep(750 * time.Millisecond)
-	if _, err := os.Stat(filepath.Join(workspace, "descendant-survived")); !errors.Is(err, os.ErrNotExist) {
-		t.Fatal("native containment did not clean a descendant before Session removal")
-	}
+	assertMarkerAbsent(t, config.ExternalWritePath, "native containment wrote outside its allowed roots")
+	assertDescendantStopsAfterCandidateReturn(t, workspace)
 	assertNoSessions(t, home)
 }
 
@@ -254,35 +259,27 @@ func assertPromotedArtifactMissingBackendFailsClosed(t *testing.T) {
 	assertNoSessions(t, home)
 }
 
-func assertPromotedArtifactInvalidNativeInputFailsClosed(t *testing.T) {
+func assertPromotedArtifactInvalidNativePolicyFailsClosed(t *testing.T) {
 	binary := promotedBinary(t)
 	home, path := prepareRuntimeHome(t)
 	fixtureRoot := realTemporaryDirectory(t)
 	workspace := filepath.Join(fixtureRoot, "workspace")
-	tools := filepath.Join(fixtureRoot, "tools")
-	for _, directory := range []string{workspace, tools} {
-		if err := os.Mkdir(directory, 0o700); err != nil {
-			t.Fatal(err)
-		}
+	if err := os.Mkdir(workspace, 0o700); err != nil {
+		t.Fatal(err)
 	}
-	installPromotedArtifactFakeDevin(t, tools)
-	privatePath := filepath.Join(fixtureRoot, "private-policy-input")
-	writeFakeDevinConfiguration(t, workspace, fakeDevinConfiguration{Mode: "containment", PrivatePath: privatePath})
+	tools := installPromotedArtifactPolicyRejectedDevin(t, fixtureRoot)
+	writeFakeDevinConfiguration(t, workspace, fakeDevinConfiguration{Mode: "containment"})
 
 	command := exec.Command(binary, "devin", "--profile", "reviews")
 	command.Dir = workspace
-	command.Env = nativeCandidateEnvironment(home, tools+string(os.PathListSeparator)+path, map[string]string{
-		"TERM": "unsafe\nterminal-value",
-	})
+	command.Env = nativeCandidateEnvironment(home, tools+string(os.PathListSeparator)+path, nil)
 	output, err := command.CombinedOutput()
 	if err == nil {
-		t.Fatal("candidate accepted invalid native launch input")
+		t.Fatal("candidate accepted an invalid native policy")
 	}
-	assertSafeCandidateFailure(t, output, "invalid_environment", privatePath, "unsafe", "terminal-value")
+	assertSafeCandidateFailure(t, output, "policy_rejected", fixtureRoot)
 	for _, marker := range []string{"preflight-skills", "preflight-authentication", "interactive-started"} {
-		if _, err := os.Stat(filepath.Join(workspace, marker)); !errors.Is(err, os.ErrNotExist) {
-			t.Fatal("invalid native launch input started a target marker")
-		}
+		assertMarkerAbsent(t, filepath.Join(workspace, marker), "invalid native policy started a target marker")
 	}
 	assertNoSessions(t, home)
 }
@@ -294,6 +291,7 @@ type fakeDevinConfiguration struct {
 	OutboundAddress     string `json:"outboundAddress,omitempty"`
 	EnvironmentSentinel string `json:"environmentSentinel,omitempty"`
 	DescriptorSentinel  string `json:"descriptorSentinel,omitempty"`
+	ExternalWritePath   string `json:"externalWritePath,omitempty"`
 	PrivatePath         string `json:"privatePath,omitempty"`
 	PrivateOutput       string `json:"privateOutput,omitempty"`
 }
@@ -311,6 +309,7 @@ type fakeDevinResult struct {
 	DescriptorLeaked          bool `json:"descriptorLeaked"`
 	HostSocketReachable       bool `json:"hostSocketReachable"`
 	OutboundIP                bool `json:"outboundIP"`
+	ExternalWriteSucceeded    bool `json:"externalWriteSucceeded"`
 	DescendantStarted         bool `json:"descendantStarted"`
 }
 
@@ -323,6 +322,46 @@ func installPromotedArtifactFakeDevin(t *testing.T, tools string) {
 	if err := os.Symlink(binary, filepath.Join(tools, "devin")); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func installPromotedArtifactDeepFakeDevin(t *testing.T, root string, maximumPathLength int) string {
+	t.Helper()
+	tools := root
+	for {
+		next := filepath.Join(tools, "d")
+		if len(filepath.Join(next, "devin")) > maximumPathLength {
+			break
+		}
+		if err := os.Mkdir(next, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		tools = next
+	}
+	if tools == root {
+		t.Fatal("could not construct an oversized native policy fixture")
+	}
+
+	binary, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, err := os.Open(binary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = source.Close() })
+	destination, err := os.OpenFile(filepath.Join(tools, "devin"), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o700)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.Copy(destination, source); err != nil {
+		_ = destination.Close()
+		t.Fatal(err)
+	}
+	if err := destination.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return tools
 }
 
 func writeFakeDevinConfiguration(t *testing.T, workspace string, configuration fakeDevinConfiguration) {
@@ -429,6 +468,7 @@ func runFakeDevinInteractive() {
 		DescriptorLeaked:          fakeDevinDescriptorContains(configuration.DescriptorSentinel),
 		HostSocketReachable:       fakeDevinCanDial("unix", configuration.HostSocket),
 		OutboundIP:                fakeDevinCanDial("tcp", configuration.OutboundAddress),
+		ExternalWriteSucceeded:    writeFakeDevinMarker(configuration.ExternalWritePath),
 	}
 	result.DescendantStarted = startFakeDevinDescendant()
 	writeFakeDevinMarker(filepath.Join(workspace, "interactive-started"))
@@ -469,8 +509,13 @@ func runFakeDevinDescendant() {
 	if !writeFakeDevinMarker(filepath.Join(workspace, "descendant-ready")) {
 		os.Exit(76)
 	}
-	time.Sleep(500 * time.Millisecond)
-	_ = writeFakeDevinMarker(filepath.Join(workspace, "descendant-survived"))
+	if !waitForFakeDevinMarker(filepath.Join(workspace, "descendant-release"), 2*time.Second) {
+		return
+	}
+	if !writeFakeDevinMarker(filepath.Join(workspace, "descendant-survived")) {
+		return
+	}
+	_ = writeFakeDevinMarker(filepath.Join(workspace, "descendant-acknowledged"))
 }
 
 func startFakeDevinDescendant() bool {
@@ -480,14 +525,18 @@ func startFakeDevinDescendant() bool {
 	if err := command.Start(); err != nil {
 		return false
 	}
-	deadline := time.Now().Add(2 * time.Second)
+	return waitForFakeDevinMarker(filepath.Join(mustGetwd(), "descendant-ready"), 2*time.Second)
+}
+
+func waitForFakeDevinMarker(path string, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		if _, err := os.Stat(filepath.Join(mustGetwd(), "descendant-ready")); err == nil {
+		if fakeDevinMarkerExists(path) {
 			return true
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	return false
+	return fakeDevinMarkerExists(path)
 }
 
 func fakeDevinAllowedEnvironment() bool {
@@ -533,7 +582,7 @@ func fakeDevinCanDial(network, address string) bool {
 }
 
 func writeFakeDevinMarker(path string) bool {
-	return os.WriteFile(path, []byte("ok\n"), 0o600) == nil
+	return path != "" && os.WriteFile(path, []byte("ok\n"), 0o600) == nil
 }
 
 func fakeDevinMarkerExists(path string) bool {
@@ -607,4 +656,30 @@ func assertMarkerExists(t *testing.T, path string) {
 	if _, err := os.Stat(path); err != nil {
 		t.Fatal("contained target did not create its allowed marker")
 	}
+}
+
+func assertMarkerAbsent(t *testing.T, path, message string) {
+	t.Helper()
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal(message)
+	}
+}
+
+func assertDescendantStopsAfterCandidateReturn(t *testing.T, workspace string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(workspace, "descendant-release"), []byte("release\n"), 0o600); err != nil {
+		t.Fatal("could not release the descendant probe")
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if fakeDevinMarkerExists(filepath.Join(workspace, "descendant-survived")) {
+			t.Fatal("native containment did not clean a descendant before Session removal")
+		}
+		if fakeDevinMarkerExists(filepath.Join(workspace, "descendant-acknowledged")) {
+			t.Fatal("native containment left a descendant alive after candidate return")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	assertMarkerAbsent(t, filepath.Join(workspace, "descendant-survived"), "native containment did not clean a descendant before Session removal")
+	assertMarkerAbsent(t, filepath.Join(workspace, "descendant-acknowledged"), "native containment left a descendant alive after candidate return")
 }

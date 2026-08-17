@@ -278,11 +278,13 @@ func TestNativeCandidateGateKeepsFourTargetEvidenceSanitizedAndImmutable(t *test
 		"filesystem environment descriptors sockets IP preflight and descendants",
 		"assertPromotedArtifactNativePreflightFailureIsSafe",
 		"assertPromotedArtifactMissingBackendFailsClosed",
-		"assertPromotedArtifactInvalidNativeInputFailsClosed",
+		"assertPromotedArtifactInvalidNativePolicyFailsClosed",
 		"assertSafeCandidateFailure",
 		"DescendantStarted",
 		"HostSocketReachable",
 		"DescriptorLeaked",
+		"ExternalWriteSucceeded",
+		"assertDescendantStopsAfterCandidateReturn",
 	} {
 		if !strings.Contains(string(acceptance), required) {
 			t.Errorf("native installed-candidate acceptance is missing %q", required)
@@ -304,6 +306,25 @@ func TestNativeCandidateGateKeepsFourTargetEvidenceSanitizedAndImmutable(t *test
 			if !strings.Contains(strings.ToLower(string(contents)), strings.ToLower(required)) {
 				t.Errorf("%s does not document native-candidate evidence %q", document, required)
 			}
+		}
+	}
+}
+
+func TestAuthenticatedReleaseSmokeRetainsRiskAndSafetyContract(t *testing.T) {
+	contents, err := os.ReadFile(filepath.Join("..", "docs", "authenticated-release-smoke.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(contents)
+	for _, required := range []string{
+		"sandbox policy",
+		"ACS_REAL_DEVIN_INTEGRATION=I_ACKNOWLEDGE_LOCAL_CREDENTIAL_ACCESS",
+		"Do not capture terminal output or account details.",
+		"supplemental to that native candidate gate",
+		"never waives, replaces, or weakens",
+	} {
+		if !strings.Contains(text, required) {
+			t.Errorf("authenticated release smoke omits %q", required)
 		}
 	}
 }

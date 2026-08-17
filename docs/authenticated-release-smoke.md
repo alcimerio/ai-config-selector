@@ -6,8 +6,9 @@ LTS for darwin/arm64, darwin/amd64, linux/amd64, and linux/arm64.
 
 Run this smoke on the maintainer's macOS 26 Apple Silicon host before the first
 release, or when a change affects authentication, the Devin Adapter, Profile
-selection, Session isolation, or interactive lifecycle behavior. Do not repeat
-it for unrelated releases. Do not provision another host solely for this check.
+selection, Session isolation, sandbox policy, or interactive lifecycle
+behavior. Do not repeat it for unrelated releases. Do not provision another
+host solely for this check.
 
 Only run it with the machine owner's explicit authorization. Never place Devin
 credentials in CI, workflow inputs, logs, artifacts, caches, issues, or the
