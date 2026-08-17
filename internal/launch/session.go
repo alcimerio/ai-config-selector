@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 )
 
 const (
@@ -15,6 +16,7 @@ const (
 	legacySessionLeaseFile = ".active.lock"
 	sessionLeaseSuffix     = ".lock"
 	sessionLeasesSuffix    = ".leases"
+	sessionCleanupWaitTime = 5 * time.Second
 )
 
 // SessionLease owns one ephemeral Session directory until Remove is called.
@@ -144,14 +146,21 @@ func RetainSessionUntilProcessDone(process Process, session *SessionLease) (Proc
 	if notifier, ok := process.(ProcessCleanup); ok {
 		cleanupDone = notifier.CleanupDone()
 	}
-	return &sessionProcess{process: process, cleanupDone: cleanupDone, release: release}, nil
+	return &sessionProcess{
+		process: process, cleanupDone: cleanupDone, release: release, releaseDone: make(chan struct{}),
+		cleanupTimeout: func() <-chan time.Time { return time.After(sessionCleanupWaitTime) },
+	}, nil
 }
 
 type sessionProcess struct {
-	process     Process
-	cleanupDone <-chan struct{}
-	release     func() error
-	releaseOnce sync.Once
+	process                 Process
+	cleanupDone             <-chan struct{}
+	release                 func() error
+	releaseOnce             sync.Once
+	releaseAfterCleanupOnce sync.Once
+	releaseDone             chan struct{}
+	releaseErr              error
+	cleanupTimeout          func() <-chan time.Time
 }
 
 func (process *sessionProcess) Start() error {
@@ -174,6 +183,17 @@ func (process *sessionProcess) CleanupDone() <-chan struct{} {
 	return process.cleanupDone
 }
 
+// AwaitRetainedSessionCleanup waits a bounded amount for cleanup of a Session
+// retained for a process. Callers must use it before reporting an ordinary
+// target exit, because a cleanup failure takes precedence over that exit.
+func AwaitRetainedSessionCleanup(process Process) error {
+	retained, ok := process.(*sessionProcess)
+	if !ok || retained.cleanupDone == nil {
+		return nil
+	}
+	return retained.awaitCleanup()
+}
+
 func (process *sessionProcess) releaseAfterCleanup() error {
 	if process.cleanupDone == nil {
 		return process.releaseNow()
@@ -182,20 +202,39 @@ func (process *sessionProcess) releaseAfterCleanup() error {
 	case <-process.cleanupDone:
 		return process.releaseNow()
 	default:
-		process.releaseOnce.Do(func() {
+		process.releaseAfterCleanupOnce.Do(func() {
 			go func() {
 				<-process.cleanupDone
-				_ = process.release()
+				_ = process.releaseNow()
 			}()
 		})
 		return nil
 	}
 }
 
+func (process *sessionProcess) awaitCleanup() error {
+	timeout := process.cleanupTimeout
+	if timeout == nil {
+		timeout = func() <-chan time.Time { return time.After(sessionCleanupWaitTime) }
+	}
+	select {
+	case <-process.cleanupDone:
+		return process.releaseNow()
+	case <-timeout():
+		// Keep the Session retained after a bounded wait. The asynchronous
+		// release still runs once cleanup is eventually proven complete.
+		_ = process.releaseAfterCleanup()
+		return sandboxError(SandboxProcessWaitFailed, nil)
+	}
+}
+
 func (process *sessionProcess) releaseNow() error {
-	var err error
-	process.releaseOnce.Do(func() { err = process.release() })
-	return err
+	process.releaseOnce.Do(func() {
+		process.releaseErr = process.release()
+		close(process.releaseDone)
+	})
+	<-process.releaseDone
+	return process.releaseErr
 }
 
 func removeAbandonedSessions(sessionsDirectory string) error {

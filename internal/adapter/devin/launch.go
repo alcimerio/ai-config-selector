@@ -98,8 +98,15 @@ func (a *Adapter) Launch(
 		if preflightContext.Err() != nil {
 			return 1, errors.New("Devin launch interrupted before the interactive process started")
 		}
+		var sandboxFailure *launch.SandboxError
+		if errors.As(err, &sandboxFailure) {
+			return 1, sanitizeLaunchError(err)
+		}
 		var exitError *exec.ExitError
 		if errors.As(err, &exitError) {
+			if cleanupErr := launch.AwaitRetainedSessionCleanup(process); cleanupErr != nil {
+				return 1, sanitizeLaunchError(cleanupErr)
+			}
 			if status, ok := exitError.Sys().(syscall.WaitStatus); ok && status.Signaled() {
 				return 128 + int(status.Signal()), &DevinExitError{Code: 128 + int(status.Signal())}
 			}
