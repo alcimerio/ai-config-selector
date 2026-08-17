@@ -14,7 +14,39 @@ import (
 // PlanLaunch describes the selected global Skill Bundles and repository-local
 // Skill Bundles Devin may inherit without creating a Session.
 func (a *Adapter) PlanLaunch(ctx context.Context, workingDirectory string, resolved category.ResolvedProfile) (launch.Plan, error) {
-	return resolved.Plan(ctx, workingDirectory)
+	plan, err := resolved.Plan(ctx, workingDirectory)
+	if err != nil {
+		return launch.Plan{}, err
+	}
+	readiness, err := a.sandbox.Readiness(ctx)
+	if err != nil {
+		return launch.Plan{}, fmt.Errorf("inspect required process sandbox readiness: %w", err)
+	}
+	plan.Sections = append(plan.Sections, sandboxReadinessSection(readiness))
+	return plan, nil
+}
+
+func sandboxReadinessSection(readiness launch.SandboxReadiness) launch.PlanSection {
+	items := []launch.PlanItem{
+		{Label: "required sandbox mode: " + readiness.RequiredMode},
+		{Label: "selected native backend: " + readiness.Backend},
+	}
+	platformResult := "unsupported"
+	if readiness.Supported {
+		platformResult = "supported"
+	}
+	items = append(items, launch.PlanItem{Label: "supported platform: " + platformResult + " (" + readiness.Platform + ")"})
+	backendResult := "not ready"
+	if readiness.Ready {
+		backendResult = "ready"
+	} else if readiness.Failure != nil {
+		backendResult += " (" + readiness.Failure.Error() + ")"
+	}
+	items = append(items,
+		launch.PlanItem{Label: "backend readiness: " + backendResult},
+		launch.PlanItem{Label: "ACS will not start Devin without the required sandbox."},
+	)
+	return launch.PlanSection{Title: "Sandbox readiness:", Items: items}
 }
 
 func (a *Adapter) planSkills(ctx context.Context, workingDirectory string, selected []skills.SkillBundle, plan *launch.Plan) error {

@@ -16,6 +16,12 @@ import (
 
 type directSandbox struct{}
 
+func (directSandbox) Readiness(context.Context) (launch.SandboxReadiness, error) {
+	return launch.SandboxReadiness{
+		RequiredMode: "native", Backend: "test", Platform: "test platform", Supported: true, Ready: true,
+	}, nil
+}
+
 func (directSandbox) Check(_ context.Context, request launch.SandboxCheck) error {
 	if request.Workspace == "" || request.Executable == "" || request.SessionsDirectory == "" {
 		return &launch.SandboxError{Category: launch.SandboxUnsafePath}

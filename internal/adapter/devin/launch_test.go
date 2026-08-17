@@ -81,6 +81,195 @@ exit 23
 	}
 }
 
+func TestLaunchCleanupFailureSupersedesTargetExitAndRedactsSession(t *testing.T) {
+	fixture := newLaunchTestFixture(t)
+	sessionRootPath := filepath.Join(t.TempDir(), "session-root")
+	t.Setenv("FAKE_DEVIN_SESSION_ROOT", sessionRootPath)
+	var stderr bytes.Buffer
+	application := fixture.application(
+		t,
+		writeFakeDevin(t, successfulDevinScript(`mkdir "$HOME/cleanup-block"
+printf 'SUPER_SECRET_SESSION_CONTENT\n' > "$HOME/cleanup-block/credential"
+chmod 500 "$HOME/cleanup-block"
+printf '%s\n' "${HOME%/home}" > "$FAKE_DEVIN_SESSION_ROOT"
+exit 23
+`)),
+		t.TempDir(),
+		strings.NewReader(""),
+		&bytes.Buffer{},
+		&stderr,
+	)
+
+	exitCode := application.Run(context.Background(), []string{"devin", "--profile", "reviews"})
+	sessionRootBytes, err := os.ReadFile(sessionRootPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionRoot := strings.TrimSpace(string(sessionRootBytes))
+	t.Cleanup(func() {
+		_ = os.Chmod(filepath.Join(sessionRoot, "home", "cleanup-block"), 0o700)
+		_ = os.RemoveAll(sessionRoot)
+	})
+	if _, err := os.Stat(sessionRoot); err != nil {
+		t.Fatalf("cleanup failure did not leave the Session available for recovery: %v", err)
+	}
+	if exitCode != 1 {
+		t.Fatalf("exit code = %d, want cleanup failure 1; stderr: %s", exitCode, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), string(launch.SandboxSetupFailed)) {
+		t.Fatalf("cleanup failure did not report a stable safe category: %s", stderr.String())
+	}
+	for _, private := range []string{"SUPER_SECRET_SESSION_CONTENT", sessionRoot, filepath.Join(sessionRoot, "home"), DevinExitCategory, "status 23"} {
+		if strings.Contains(stderr.String(), private) {
+			t.Fatalf("cleanup diagnostic leaked %q: %s", private, stderr.String())
+		}
+	}
+}
+
+func TestLaunchWaitsForRetainedCleanupFailureBeforeReportingTargetExit(t *testing.T) {
+	fixture := newLaunchTestFixture(t)
+	deferred := &deferredCleanupSandbox{
+		delegate: directSandbox{}, cleanupDone: make(chan struct{}), waitReturned: make(chan struct{}),
+	}
+	fixture.sandbox = deferred
+	application := fixture.application(
+		t,
+		writeFakeDevin(t, successfulDevinScript(`printf 'ASYNC_CREDENTIAL\n' > "$HOME/credential"
+printf 'ASYNC_SESSION_CONTENT\n' > "$HOME/content"
+exit 23
+`)),
+		t.TempDir(),
+		strings.NewReader(""),
+		&bytes.Buffer{},
+		&bytes.Buffer{},
+	)
+
+	type launchResult struct {
+		exitCode int
+		err      error
+	}
+	finished := make(chan launchResult, 1)
+	go func() {
+		exitCode, err := application.adapter.Launch(
+			context.Background(), application.sessionsDirectory, application.workingDirectory,
+			application.resolved, application.terminal,
+		)
+		finished <- launchResult{exitCode: exitCode, err: err}
+	}()
+
+	select {
+	case <-deferred.waitReturned:
+	case <-time.After(time.Second):
+		t.Fatal("fake Devin did not report its target exit")
+	}
+	select {
+	case result := <-finished:
+		t.Fatalf("launch returned before retained cleanup completed: (%d, %v)", result.exitCode, result.err)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	if err := os.Chmod(application.sessionsDirectory, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(application.sessionsDirectory, 0o700) })
+	close(deferred.cleanupDone)
+
+	var result launchResult
+	select {
+	case result = <-finished:
+	case <-time.After(time.Second):
+		t.Fatal("launch did not return after retained cleanup completed")
+	}
+	if result.exitCode != 1 {
+		t.Fatalf("launch exit code = %d, want safe non-target exit 1", result.exitCode)
+	}
+	var targetExit *DevinExitError
+	if errors.As(result.err, &targetExit) {
+		t.Fatalf("cleanup failure retained DevinExitError in returned graph: %v", result.err)
+	}
+	var sandboxErr *launch.SandboxError
+	if !errors.As(result.err, &sandboxErr) || sandboxErr.Category != launch.SandboxSetupFailed {
+		t.Fatalf("cleanup failure = %v, want safe setup failure", result.err)
+	}
+	if deferred.sessionRoot == "" {
+		t.Fatal("deferred cleanup did not observe the Session")
+	}
+	for _, private := range []string{
+		deferred.sessionRoot,
+		filepath.Join(deferred.sessionRoot, "home"),
+		"ASYNC_CREDENTIAL",
+		"ASYNC_SESSION_CONTENT",
+		"ASYNC_BACKEND_OUTPUT",
+		"ASYNC_ENVIRONMENT_VALUE",
+		DevinExitCategory,
+		"23",
+	} {
+		if strings.Contains(result.err.Error(), private) {
+			t.Fatalf("cleanup failure leaked %q: %v", private, result.err)
+		}
+	}
+}
+
+func TestLaunchPreservesTargetExitAfterRetainedCleanupSucceeds(t *testing.T) {
+	fixture := newLaunchTestFixture(t)
+	deferred := &deferredCleanupSandbox{
+		delegate: directSandbox{}, cleanupDone: make(chan struct{}), waitReturned: make(chan struct{}),
+	}
+	fixture.sandbox = deferred
+	application := fixture.application(
+		t,
+		writeFakeDevin(t, successfulDevinScript("exit 23\n")),
+		t.TempDir(),
+		strings.NewReader(""),
+		&bytes.Buffer{},
+		&bytes.Buffer{},
+	)
+
+	type launchResult struct {
+		exitCode int
+		err      error
+	}
+	finished := make(chan launchResult, 1)
+	go func() {
+		exitCode, err := application.adapter.Launch(
+			context.Background(), application.sessionsDirectory, application.workingDirectory,
+			application.resolved, application.terminal,
+		)
+		finished <- launchResult{exitCode: exitCode, err: err}
+	}()
+
+	select {
+	case <-deferred.waitReturned:
+	case <-time.After(time.Second):
+		t.Fatal("fake Devin did not report its target exit")
+	}
+	select {
+	case result := <-finished:
+		t.Fatalf("launch returned before retained cleanup completed: (%d, %v)", result.exitCode, result.err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(deferred.cleanupDone)
+
+	select {
+	case result := <-finished:
+		if result.exitCode != 23 {
+			t.Fatalf("launch exit code = %d, want target exit 23", result.exitCode)
+		}
+		var targetExit *DevinExitError
+		if !errors.As(result.err, &targetExit) || targetExit.ExitCode() != 23 {
+			t.Fatalf("launch error = %v, want target exit 23", result.err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("launch did not return after retained cleanup completed")
+	}
+	if deferred.sessionRoot == "" {
+		t.Fatal("deferred cleanup did not observe the Session")
+	}
+	if _, err := os.Stat(deferred.sessionRoot); !os.IsNotExist(err) {
+		t.Fatalf("successful retained cleanup left Session behind: %v", err)
+	}
+}
+
 func TestLaunchRejectsUnavailableSandboxBeforeCreatingSession(t *testing.T) {
 	fixture := newLaunchTestFixture(t)
 	fixture.sandbox = failingSandbox{checkErr: &launch.SandboxError{Category: launch.SandboxBackendUnavailable}}
@@ -572,6 +761,10 @@ func (application adapterLaunchApplication) Run(ctx context.Context, _ []string)
 		application.resolved, application.terminal,
 	)
 	if err != nil {
+		var targetExit *DevinExitError
+		if errors.As(err, &targetExit) {
+			return targetExit.ExitCode()
+		}
 		fmt.Fprintln(application.terminal.ErrorOutput, err)
 		return 1
 	}
@@ -581,6 +774,10 @@ func (application adapterLaunchApplication) Run(ctx context.Context, _ []string)
 type recordingSandbox struct {
 	delegate  launch.ProcessSandbox
 	arguments [][]string
+}
+
+func (sandbox *recordingSandbox) Readiness(ctx context.Context) (launch.SandboxReadiness, error) {
+	return sandbox.delegate.Readiness(ctx)
 }
 
 func (sandbox *recordingSandbox) Check(ctx context.Context, request launch.SandboxCheck) error {
@@ -597,6 +794,10 @@ type failingSandbox struct {
 	prepareErr error
 }
 
+func (failingSandbox) Readiness(context.Context) (launch.SandboxReadiness, error) {
+	return launch.SandboxReadiness{RequiredMode: "native", Backend: "test", Platform: "test platform", Supported: true, Ready: true}, nil
+}
+
 func (sandbox failingSandbox) Check(context.Context, launch.SandboxCheck) error {
 	return sandbox.checkErr
 }
@@ -609,6 +810,10 @@ type startupQuarantineSandbox struct {
 	delegate    launch.ProcessSandbox
 	cleanupDone chan struct{}
 	sessionRoot string
+}
+
+func (sandbox *startupQuarantineSandbox) Readiness(ctx context.Context) (launch.SandboxReadiness, error) {
+	return sandbox.delegate.Readiness(ctx)
 }
 
 func (sandbox *startupQuarantineSandbox) Check(ctx context.Context, request launch.SandboxCheck) error {
@@ -635,6 +840,55 @@ func (startupQuarantineProcess) Signal(os.Signal) error {
 	return nil
 }
 func (process startupQuarantineProcess) CleanupDone() <-chan struct{} { return process.cleanupDone }
+
+type deferredCleanupSandbox struct {
+	delegate     launch.ProcessSandbox
+	cleanupDone  chan struct{}
+	waitReturned chan struct{}
+	sessionRoot  string
+}
+
+func (sandbox *deferredCleanupSandbox) Readiness(ctx context.Context) (launch.SandboxReadiness, error) {
+	return sandbox.delegate.Readiness(ctx)
+}
+
+func (sandbox *deferredCleanupSandbox) Check(ctx context.Context, request launch.SandboxCheck) error {
+	return sandbox.delegate.Check(ctx, request)
+}
+
+func (sandbox *deferredCleanupSandbox) Prepare(ctx context.Context, request launch.ProcessRequest) (launch.Process, error) {
+	if len(request.Arguments) != 0 {
+		return sandbox.delegate.Prepare(ctx, request)
+	}
+	process, err := sandbox.delegate.Prepare(ctx, request)
+	if err != nil {
+		return nil, err
+	}
+	sandbox.sessionRoot = request.SessionDirectory
+	return &deferredCleanupProcess{
+		process: process, cleanupDone: sandbox.cleanupDone, waitReturned: sandbox.waitReturned,
+	}, nil
+}
+
+type deferredCleanupProcess struct {
+	process      launch.Process
+	cleanupDone  <-chan struct{}
+	waitReturned chan struct{}
+}
+
+func (process *deferredCleanupProcess) Start() error { return process.process.Start() }
+
+func (process *deferredCleanupProcess) Wait() error {
+	err := process.process.Wait()
+	close(process.waitReturned)
+	return errors.Join(err, errors.New("ASYNC_BACKEND_OUTPUT ASYNC_ENVIRONMENT_VALUE"))
+}
+
+func (process *deferredCleanupProcess) Signal(signal os.Signal) error {
+	return process.process.Signal(signal)
+}
+
+func (process *deferredCleanupProcess) CleanupDone() <-chan struct{} { return process.cleanupDone }
 
 type startAttachRaceProcess struct {
 	preflightContext context.Context

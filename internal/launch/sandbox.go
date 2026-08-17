@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,6 +17,7 @@ import (
 )
 
 const safeProcessPath = "/usr/local/bin:/usr/bin:/bin"
+const requiredSandboxNotice = "ACS will not start Devin without the required sandbox"
 
 // SandboxErrorCategory is a stable, non-sensitive class of sandbox failure.
 type SandboxErrorCategory string
@@ -23,6 +25,8 @@ type SandboxErrorCategory string
 const (
 	SandboxUnsupportedPlatform SandboxErrorCategory = "unsupported_platform"
 	SandboxBackendUnavailable  SandboxErrorCategory = "backend_unavailable"
+	SandboxPolicyRejected      SandboxErrorCategory = "policy_rejected"
+	SandboxVerificationFailed  SandboxErrorCategory = "sandbox_verification_failed"
 	SandboxUnsafePath          SandboxErrorCategory = "unsafe_path"
 	SandboxInvalidEnvironment  SandboxErrorCategory = "invalid_environment"
 	SandboxInvalidDescriptor   SandboxErrorCategory = "invalid_descriptor"
@@ -45,6 +49,10 @@ func (e *SandboxError) Error() string {
 		message = "process sandbox unavailable: unsupported platform"
 	case SandboxBackendUnavailable:
 		message = "process sandbox unavailable: required system backend is unavailable"
+	case SandboxPolicyRejected:
+		message = "process sandbox policy was rejected"
+	case SandboxVerificationFailed:
+		message = "process sandbox verification failed"
 	case SandboxUnsafePath:
 		message = "process sandbox preparation failed: unsafe runtime path"
 	case SandboxInvalidEnvironment:
@@ -63,6 +71,7 @@ func (e *SandboxError) Error() string {
 	if e.remediation != "" {
 		message += "; " + e.remediation
 	}
+	message += "; " + requiredSandboxNotice
 	return string(e.Category) + ": " + message
 }
 
@@ -73,13 +82,13 @@ func sandboxError(category SandboxErrorCategory, _ error) error {
 func bubblewrapUnavailable() error {
 	return &SandboxError{
 		Category:    SandboxBackendUnavailable,
-		remediation: "install or repair the signed Ubuntu package with 'sudo apt-get install --reinstall bubblewrap'",
+		remediation: "review Ubuntu's configured signed apt sources, then install or repair Bubblewrap with 'sudo apt-get update && sudo apt-get install --reinstall bubblewrap'",
 	}
 }
 
 func bubblewrapCapabilityUnavailable() error {
 	return &SandboxError{
-		Category:    SandboxBackendUnavailable,
+		Category:    SandboxVerificationFailed,
 		remediation: "review and enable the targeted AppArmor 'bwrap-userns-restrict' profile for /usr/bin/bwrap",
 	}
 }
@@ -204,8 +213,21 @@ type ProcessCleanup interface {
 // ProcessSandbox is the shared launch boundary used by probes and interactive
 // targets alike.
 type ProcessSandbox interface {
+	Readiness(context.Context) (SandboxReadiness, error)
 	Check(context.Context, SandboxCheck) error
 	Prepare(context.Context, ProcessRequest) (Process, error)
+}
+
+// SandboxReadiness reports whether the selected native sandbox is available
+// for a prospective launch. It does not validate launch paths, create a
+// Session, or prepare a target process.
+type SandboxReadiness struct {
+	RequiredMode string
+	Backend      string
+	Platform     string
+	Supported    bool
+	Ready        bool
+	Failure      *SandboxError
 }
 
 type platformProbe func() (Platform, error)
@@ -244,13 +266,112 @@ func (sandbox *nativeProcessSandbox) selectedBackend(ctx context.Context) (sandb
 		return nil, sandboxError(SandboxBackendUnavailable, nil)
 	}
 	if err := backend.check(ctx); err != nil {
-		var classified *SandboxError
-		if errors.As(err, &classified) {
-			return nil, &SandboxError{Category: classified.Category, remediation: classified.remediation}
-		}
-		return nil, sandboxError(SandboxBackendUnavailable, err)
+		return nil, classifyBackendCheckError(err)
 	}
 	return backend, nil
+}
+
+// Readiness reports the exact supported-platform decision and selected native
+// backend while keeping backend diagnostics private. A failed readiness is a
+// reportable result, not a reason to create a Session or start Devin.
+func (sandbox *nativeProcessSandbox) Readiness(ctx context.Context) (SandboxReadiness, error) {
+	readiness := SandboxReadiness{RequiredMode: "native"}
+	platform, err := sandbox.platform()
+	if err != nil {
+		readiness.Backend = "None"
+		readiness.Platform = "Unknown platform"
+		readiness.Failure = newSandboxError(SandboxUnsupportedPlatform, "")
+		return readiness, nil
+	}
+	readiness.Backend = nativeBackendName(platform.OS)
+	readiness.Platform = describePlatform(platform)
+	if err := ValidatePlatform(platform); err != nil {
+		readiness.Failure = sandboxErrorForReadiness(err, SandboxUnsupportedPlatform)
+		return readiness, nil
+	}
+	readiness.Supported = true
+	backend := sandbox.backends[platform.OS]
+	if backend == nil {
+		readiness.Failure = newSandboxError(SandboxBackendUnavailable, "")
+		return readiness, nil
+	}
+	if err := backend.check(ctx); err != nil {
+		readiness.Failure = sandboxErrorForReadiness(classifyBackendCheckError(err), SandboxVerificationFailed)
+		return readiness, nil
+	}
+	readiness.Ready = true
+	return readiness, nil
+}
+
+func classifyBackendCheckError(err error) error {
+	var classified *SandboxError
+	if errors.As(err, &classified) {
+		return newSandboxError(classified.Category, classified.remediation)
+	}
+	return sandboxError(SandboxVerificationFailed, err)
+}
+
+func sandboxErrorForReadiness(err error, fallback SandboxErrorCategory) *SandboxError {
+	var classified *SandboxError
+	if errors.As(err, &classified) {
+		return newSandboxError(classified.Category, classified.remediation)
+	}
+	return newSandboxError(fallback, "")
+}
+
+func newSandboxError(category SandboxErrorCategory, remediation string) *SandboxError {
+	return &SandboxError{Category: category, remediation: remediation}
+}
+
+func nativeBackendName(operatingSystem string) string {
+	switch operatingSystem {
+	case "darwin":
+		return "Seatbelt"
+	case "linux":
+		return "Bubblewrap"
+	default:
+		return "None"
+	}
+}
+
+func describePlatform(platform Platform) string {
+	operatingSystem := safePlatformToken(platform.OS)
+	architecture := safePlatformToken(platform.Architecture)
+	switch platform.OS {
+	case "darwin":
+		return fmt.Sprintf("macOS %s on %s/%s", safePlatformToken(platform.Release), operatingSystem, architecture)
+	case "linux":
+		distribution := platformDistributionName(platform.Distribution)
+		release := safePlatformToken(platform.Release)
+		if strings.EqualFold(platform.Distribution, "ubuntu") && releaseLine(platform.Release, "24.04") {
+			release += " LTS"
+		}
+		return fmt.Sprintf("%s %s on %s/%s", distribution, release, operatingSystem, architecture)
+	default:
+		return fmt.Sprintf("%s on %s/%s", safePlatformToken(platform.Release), operatingSystem, architecture)
+	}
+}
+
+func platformDistributionName(distribution string) string {
+	value := safePlatformToken(distribution)
+	if value == "unknown" {
+		return "Unknown Linux"
+	}
+	return strings.ToUpper(value[:1]) + value[1:]
+}
+
+func safePlatformToken(value string) string {
+	if value == "" || len(value) > 64 {
+		return "unknown"
+	}
+	for _, character := range value {
+		if (character >= 'a' && character <= 'z') || (character >= 'A' && character <= 'Z') ||
+			(character >= '0' && character <= '9') || character == '.' || character == '-' || character == '_' {
+			continue
+		}
+		return "unknown"
+	}
+	return value
 }
 
 func (sandbox *nativeProcessSandbox) Check(ctx context.Context, request SandboxCheck) error {

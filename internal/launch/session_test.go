@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"syscall"
 	"testing"
+	"time"
 )
 
 func TestPartialCleanupFailureKeepsTheExternalSessionLeaseIdentityLocked(t *testing.T) {
@@ -84,4 +85,64 @@ func TestRecoveryRemovesTransientExternalLeaseForActiveLegacySession(t *testing.
 	if _, err := os.Stat(transientGuard); !os.IsNotExist(err) {
 		t.Fatalf("active legacy recovery left an external lease artifact: %v", err)
 	}
+}
+
+func TestAwaitRetainedSessionCleanupBoundsPendingCleanupAndKeepsLease(t *testing.T) {
+	sessionsDirectory := filepath.Join(t.TempDir(), "sessions")
+	session, err := CreateSession(sessionsDirectory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cleanupDone := make(chan struct{})
+	retained, err := RetainSessionUntilProcessDone(pendingSessionCleanupProcess{cleanupDone: cleanupDone}, session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	process := retained.(*sessionProcess)
+	timeout := make(chan time.Time, 1)
+	process.cleanupTimeout = func() <-chan time.Time { return timeout }
+
+	result := make(chan error, 1)
+	go func() { result <- AwaitRetainedSessionCleanup(retained) }()
+	timeout <- time.Now()
+	var sandboxErr *SandboxError
+	select {
+	case err := <-result:
+		if !errors.As(err, &sandboxErr) || sandboxErr.Category != SandboxProcessWaitFailed {
+			t.Fatalf("bounded cleanup wait = %v, want safe process wait failure", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("cleanup wait did not respect its bounded timeout")
+	}
+
+	if err := session.Remove(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(session.RootDir); err != nil {
+		t.Fatalf("bounded cleanup wait released pending Session: %v", err)
+	}
+	close(cleanupDone)
+	deadline := time.Now().Add(time.Second)
+	for {
+		if _, err := os.Stat(session.RootDir); os.IsNotExist(err) {
+			return
+		} else if err != nil {
+			t.Fatal(err)
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("Session remained after deferred cleanup completed")
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+type pendingSessionCleanupProcess struct {
+	cleanupDone <-chan struct{}
+}
+
+func (pendingSessionCleanupProcess) Start() error           { return nil }
+func (pendingSessionCleanupProcess) Wait() error            { return nil }
+func (pendingSessionCleanupProcess) Signal(os.Signal) error { return nil }
+func (process pendingSessionCleanupProcess) CleanupDone() <-chan struct{} {
+	return process.cleanupDone
 }

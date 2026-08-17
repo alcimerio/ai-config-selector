@@ -38,6 +38,11 @@ type ProfileLauncher interface {
 	Launch(context.Context, string, string, category.ResolvedProfile, launch.Terminal) (int, error)
 }
 
+type exitCodeError interface {
+	error
+	ExitCode() int
+}
+
 type App struct {
 	Version           string
 	Categories        *category.Registry
@@ -85,7 +90,7 @@ func (app App) Run(ctx context.Context, args []string) int {
 	if len(args) == 3 && args[0] == "devin" && args[1] == "--profile" && args[2] != "" {
 		return app.launchProfile(ctx, args[2])
 	}
-	return app.fail("usage: acs devin create-profile --name <name> | acs devin --profile <name> [--dry-run] | acs version")
+	return app.fail("usage: acs devin create-profile --name <name> | acs devin --profile <name> [--dry-run] | acs version; ACS will not start Devin without the required sandbox")
 }
 
 func (app App) createProfile(ctx context.Context, name string) int {
@@ -194,6 +199,10 @@ func (app App) launchProfile(ctx context.Context, name string) int {
 		launch.Terminal{Input: app.Input, Output: app.Output, ErrorOutput: app.ErrorOutput},
 	)
 	if err != nil {
+		var targetExit exitCodeError
+		if errors.As(err, &targetExit) {
+			return targetExit.ExitCode()
+		}
 		return app.fail("launch Profile %q: %v", name, err)
 	}
 	return exitCode

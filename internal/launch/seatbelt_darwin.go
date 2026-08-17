@@ -32,14 +32,16 @@ const (
 )
 
 type seatbeltPolicyBuilder func(validatedProcessRequest) (string, []string, error)
+type seatbeltVerifier func(context.Context, string) error
 
 type seatbeltBackend struct {
 	executable string
 	policy     seatbeltPolicyBuilder
+	verify     seatbeltVerifier
 }
 
 func newSeatbeltBackend(executable string) *seatbeltBackend {
-	return &seatbeltBackend{executable: executable, policy: buildSeatbeltPolicy}
+	return &seatbeltBackend{executable: executable, policy: buildSeatbeltPolicy, verify: verifySeatbeltBackend}
 }
 
 func (backend *seatbeltBackend) check(ctx context.Context) error {
@@ -55,20 +57,24 @@ func (backend *seatbeltBackend) check(ctx context.Context) error {
 	if !ok || stat.Uid != 0 {
 		return sandboxError(SandboxBackendUnavailable, nil)
 	}
+	if err := backend.verify(ctx, backend.executable); err != nil {
+		return sandboxError(SandboxVerificationFailed, err)
+	}
+	return nil
+}
+
+func verifySeatbeltBackend(ctx context.Context, executable string) error {
 	policy := `(version 1)
 (deny default)
 (allow process-exec)
 (allow file-read* (literal "/") (literal "/usr") (literal "/usr/bin/true"))`
-	command := exec.CommandContext(ctx, backend.executable, "-p", policy, "--", "/usr/bin/true")
+	command := exec.CommandContext(ctx, executable, "-p", policy, "--", "/usr/bin/true")
 	command.Env = []string{"PATH=" + safeProcessPath}
 	command.Stdin = nil
 	command.Stdout = nil
 	command.Stderr = nil
 	command.ExtraFiles = nil
-	if err := command.Run(); err != nil {
-		return sandboxError(SandboxBackendUnavailable, err)
-	}
-	return nil
+	return command.Run()
 }
 
 func (backend *seatbeltBackend) prepare(ctx context.Context, request validatedProcessRequest) (Process, error) {
@@ -86,7 +92,7 @@ func (backend *seatbeltBackend) prepare(ctx context.Context, request validatedPr
 	}
 	definitions = append(definitions, "-DSUPERVISOR="+supervisor)
 	if err := backend.validateGeneratedPolicy(ctx, request, policy, definitions); err != nil {
-		return nil, sandboxError(SandboxSetupFailed, err)
+		return nil, sandboxError(SandboxPolicyRejected, err)
 	}
 	arguments := make([]string, 0, 7+len(definitions)+len(request.arguments))
 	arguments = append(arguments, "-p", policy)

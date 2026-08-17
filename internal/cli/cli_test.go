@@ -348,6 +348,45 @@ func TestLaunchRejectsDevinPassThroughOptions(t *testing.T) {
 	}
 }
 
+func TestLaunchRejectsEverySandboxBypassArgumentBeforeCallingTheLauncher(t *testing.T) {
+	existingHome := t.TempDir()
+	adapter, err := devin.New(devin.Config{BinaryPath: "devin", ExistingHomeDir: existingHome})
+	if err != nil {
+		t.Fatal(err)
+	}
+	profiles := profile.NewStore(filepath.Join(existingHome, ".acs"), adapter.Categories())
+	if _, err := profiles.Create(devin.NewSkillsProfile("reviews", nil)); err != nil {
+		t.Fatal(err)
+	}
+	for _, bypass := range [][]string{
+		{"--no-sandbox"},
+		{"--sandbox=none"},
+		{"--sandbox", "none"},
+		{"--backend=direct"},
+		{"--unsafe-unsandboxed"},
+	} {
+		t.Run(strings.Join(bypass, " "), func(t *testing.T) {
+			launcher := &recordingProfileLauncher{}
+			var stderr bytes.Buffer
+			arguments := append([]string{"devin", "--profile", "reviews"}, bypass...)
+			application := cli.App{
+				Categories: adapter.Categories(), Launcher: launcher, Profiles: profiles,
+				SessionsDirectory: filepath.Join(existingHome, ".acs", "sessions"), WorkingDirectory: t.TempDir(),
+				Input: strings.NewReader(""), Output: &bytes.Buffer{}, ErrorOutput: &stderr,
+			}
+			if exitCode := application.Run(context.Background(), arguments); exitCode == 0 {
+				t.Fatalf("launch accepted sandbox bypass argument %q", bypass)
+			}
+			if launcher.calls != 0 {
+				t.Fatalf("launch called the launcher for sandbox bypass argument %q", bypass)
+			}
+			if !strings.Contains(stderr.String(), "ACS will not start Devin without the required sandbox") {
+				t.Fatalf("usage does not explain the fail-closed sandbox boundary: %q", stderr.String())
+			}
+		})
+	}
+}
+
 func TestLaunchRejectsProfileForAnotherTargetBeforeCreatingSession(t *testing.T) {
 	existingHome := t.TempDir()
 	acsHome := filepath.Join(existingHome, ".acs")

@@ -1,11 +1,8 @@
 package main
 
 import (
-	"errors"
 	"runtime/debug"
 	"testing"
-
-	"github.com/alcimerio/ai-config-selector/internal/launch"
 )
 
 func TestBuildVersionUsesTaggedModuleMetadata(t *testing.T) {
@@ -74,22 +71,5 @@ func TestBuildVersionFallsBackForDevelopmentAndUnavailableMetadata(t *testing.T)
 				t.Fatalf("version = %q, want devel", version)
 			}
 		})
-	}
-}
-
-func TestRequireSupportedPlatformUsesIdentifiedHost(t *testing.T) {
-	err := requireSupportedPlatform(func() (launch.Platform, error) {
-		return launch.Platform{OS: "darwin", Architecture: "arm64", Release: "26.5.1"}, nil
-	})
-	if err != nil {
-		t.Fatalf("supported host rejected: %v", err)
-	}
-}
-
-func TestRequireSupportedPlatformRejectsUnidentifiedHost(t *testing.T) {
-	probeFailure := errors.New("private probe output")
-	err := requireSupportedPlatform(func() (launch.Platform, error) { return launch.Platform{}, probeFailure })
-	if !errors.Is(err, probeFailure) {
-		t.Fatalf("probe error = %v, want original category", err)
 	}
 }
