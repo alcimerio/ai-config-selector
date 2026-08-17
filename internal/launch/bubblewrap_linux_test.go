@@ -1691,6 +1691,8 @@ func TestBubblewrapNativePreservesRawTerminalDescriptors(t *testing.T) {
 
 const bubblewrapNativePTYHarnessEnvironment = "ACS_BUBBLEWRAP_NATIVE_PTY_HARNESS"
 
+const bubblewrapNativePTYExitHarnessEnvironment = "ACS_BUBBLEWRAP_NATIVE_PTY_EXIT_HARNESS"
+
 func TestBubblewrapNativeRoutesTerminalSignalsOnlyToContainedTarget(t *testing.T) {
 	platform, err := CurrentPlatform()
 	if err != nil {
@@ -1761,6 +1763,51 @@ func TestBubblewrapNativeRoutesTerminalSignalsOnlyToContainedTarget(t *testing.T
 	}
 }
 
+func TestBubblewrapNativeTerminalSupervisorPreservesTargetExitStatus(t *testing.T) {
+	platform, err := CurrentPlatform()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidatePlatform(platform); err != nil {
+		t.Fatalf("native Bubblewrap test requires certified Ubuntu 24.04: %v", err)
+	}
+	for _, test := range []struct {
+		name       string
+		targetTest string
+		exitCode   int
+	}{
+		{name: "ordinary target exit", targetTest: "TestBubblewrapNativeExitHelper", exitCode: 23},
+		{name: "signaled target exit", targetTest: "TestBubblewrapNativeSignalExitHelper", exitCode: 128 + int(syscall.SIGTERM)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			master, terminal, err := pty.Open()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer master.Close()
+			defer terminal.Close()
+			command := exec.Command(os.Args[0], "-test.run=^TestBubblewrapNativePTYExitHarness$")
+			command.Env = append(os.Environ(),
+				bubblewrapNativePTYExitHarnessEnvironment+"=1",
+				"ACS_BUBBLEWRAP_NATIVE_PTY_ROOT="+root,
+				"ACS_BUBBLEWRAP_NATIVE_PTY_TARGET_TEST="+test.targetTest,
+				"ACS_BUBBLEWRAP_NATIVE_PTY_TARGET_EXIT_CODE="+strconv.Itoa(test.exitCode),
+			)
+			command.Stdin, command.Stdout, command.Stderr = terminal, terminal, terminal
+			command.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true, Ctty: 0}
+			if err := command.Start(); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = command.Process.Kill() })
+			if err := terminal.Close(); err != nil {
+				t.Fatal(err)
+			}
+			waitNativePTYHarness(t, command)
+		})
+	}
+}
+
 func TestBubblewrapNativePTYHarness(t *testing.T) {
 	if os.Getenv(bubblewrapNativePTYHarnessEnvironment) != "1" {
 		return
@@ -1791,7 +1838,7 @@ func TestBubblewrapNativePTYHarness(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitForBubblewrapMarker(t, paths.ready)
-	assertNativePTYForegroundTarget(t, os.Stdin, paths.ready)
+	assertNativePTYHarnessIsNotForeground(t, os.Stdin)
 	if err := process.Wait(); err != nil {
 		t.Fatal(err)
 	}
@@ -1801,6 +1848,37 @@ func TestBubblewrapNativePTYHarness(t *testing.T) {
 	if err := os.WriteFile(paths.harnessObserved, []byte(strconv.Itoa(harnessDeliveries)+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func TestBubblewrapNativePTYExitHarness(t *testing.T) {
+	if os.Getenv(bubblewrapNativePTYExitHarnessEnvironment) != "1" {
+		return
+	}
+	root := os.Getenv("ACS_BUBBLEWRAP_NATIVE_PTY_ROOT")
+	targetTest := os.Getenv("ACS_BUBBLEWRAP_NATIVE_PTY_TARGET_TEST")
+	exitCode, err := strconv.Atoi(os.Getenv("ACS_BUBBLEWRAP_NATIVE_PTY_TARGET_EXIT_CODE"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := bubblewrapNativePTYRequest(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Arguments = []string{"-test.run=^" + targetTest + "$"}
+	request.Terminal = Terminal{Input: os.Stdin, Output: os.Stdout, ErrorOutput: os.Stderr}
+	process, err := NewProcessSandbox().Prepare(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := process.Start(); err != nil {
+		t.Fatal(err)
+	}
+	err = process.Wait()
+	var exitError *exec.ExitError
+	if !errors.As(err, &exitError) || exitError.ExitCode() != exitCode {
+		t.Fatalf("terminal-supervised target exit = %v, want exit %d", err, exitCode)
+	}
+	assertNativePTYForegroundRestored(t, os.Stdin)
 }
 
 func TestBubblewrapNativePTYTarget(t *testing.T) {
@@ -1823,7 +1901,14 @@ func TestBubblewrapNativePTYTarget(t *testing.T) {
 			commands <- scanner.Text()
 		}
 	}()
-	if err := os.WriteFile(arguments[1], []byte(strconv.Itoa(syscall.Getpgrp())+"\n"), 0o600); err != nil {
+	foregroundGroup, err := unix.IoctlGetInt(int(os.Stdin.Fd()), unix.TIOCGPGRP)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if foregroundGroup != syscall.Getpgrp() {
+		t.Fatalf("terminal foreground group = %d, target group = %d; want the target to own its terminal", foregroundGroup, syscall.Getpgrp())
+	}
+	if err := os.WriteFile(arguments[1], []byte("ready\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	deliveries := 0
@@ -1924,22 +2009,14 @@ func nativePTYTargetArguments() []string {
 	return nil
 }
 
-func assertNativePTYForegroundTarget(t *testing.T, terminal *os.File, ready string) {
+func assertNativePTYHarnessIsNotForeground(t *testing.T, terminal *os.File) {
 	t.Helper()
-	contents, err := os.ReadFile(ready)
-	if err != nil {
-		t.Fatal(err)
-	}
-	targetGroup, err := strconv.Atoi(strings.TrimSpace(string(contents)))
-	if err != nil {
-		t.Fatal(err)
-	}
 	foregroundGroup, err := unix.IoctlGetInt(int(terminal.Fd()), unix.TIOCGPGRP)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if foregroundGroup != targetGroup || foregroundGroup == syscall.Getpgrp() {
-		t.Fatalf("terminal foreground group = %d, target = %d, harness = %d; want only the contained target", foregroundGroup, targetGroup, syscall.Getpgrp())
+	if foregroundGroup == syscall.Getpgrp() {
+		t.Fatalf("terminal foreground group = %d, harness group = %d; want the harness outside the foreground group", foregroundGroup, syscall.Getpgrp())
 	}
 }
 
@@ -2337,6 +2414,16 @@ func TestBubblewrapNativeExitHelper(t *testing.T) {
 		return
 	}
 	os.Exit(23)
+}
+
+func TestBubblewrapNativeSignalExitHelper(t *testing.T) {
+	if os.Getenv("HOME") == "" || !strings.Contains(os.Getenv("HOME"), "session-") {
+		return
+	}
+	if err := syscall.Kill(os.Getpid(), syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	t.Fatal("target survived SIGTERM")
 }
 
 func TestBubblewrapNativeCancellationHelper(t *testing.T) {

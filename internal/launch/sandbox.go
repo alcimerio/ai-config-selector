@@ -11,6 +11,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/charmbracelet/x/term"
 )
 
 const safeProcessPath = "/usr/local/bin:/usr/bin:/bin"
@@ -515,8 +517,7 @@ func validateTerminal(terminal Terminal) error {
 }
 
 func isTerminalFile(file *os.File) bool {
-	info, err := file.Stat()
-	return err == nil && info.Mode()&os.ModeCharDevice != 0
+	return term.IsTerminal(file.Fd())
 }
 
 func buildProcessEnvironment(sessionHome, temporaryDirectory string, host []string) ([]string, error) {
