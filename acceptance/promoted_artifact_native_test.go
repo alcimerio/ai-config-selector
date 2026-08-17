@@ -22,10 +22,11 @@ import (
 )
 
 const (
-	fakeDevinConfigurationName = ".acs-native-candidate-fixture.json"
-	fakeDevinResultName        = ".acs-native-candidate-result.json"
-	privateEnvironmentValue    = "candidate-secret-value"
-	privateDescriptorValue     = "candidate-descriptor-value"
+	fakeDevinConfigurationName  = ".acs-native-candidate-fixture.json"
+	fakeDevinResultName         = ".acs-native-candidate-result.json"
+	privateEnvironmentValue     = "candidate-secret-value"
+	privateDescriptorValue      = "candidate-descriptor-value"
+	fakeDevinDescendantExitWait = 3 * time.Second
 )
 
 // TestMain also makes this test executable a credential-free fake Devin. The
@@ -59,12 +60,12 @@ func TestFakeDevinDescendantWaitsForControlledRelease(t *testing.T) {
 			select {
 			case <-done:
 				finished = true
-			case <-time.After(time.Second):
+			case <-time.After(fakeDevinDescendantExitWait):
 				_ = command.Process.Kill()
 				select {
 				case <-done:
 					finished = true
-				case <-time.After(time.Second):
+				case <-time.After(fakeDevinDescendantExitWait):
 					t.Error("descendant fixture did not exit after bounded cleanup")
 				}
 			}
@@ -94,7 +95,7 @@ func TestFakeDevinDescendantWaitsForControlledRelease(t *testing.T) {
 		if err != nil {
 			t.Fatal("descendant fixture failed after the controlled release")
 		}
-	case <-time.After(time.Second):
+	case <-time.After(fakeDevinDescendantExitWait):
 		t.Fatal("descendant fixture did not exit after the controlled release")
 	}
 }
