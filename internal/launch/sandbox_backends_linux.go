@@ -151,6 +151,26 @@ func (bubblewrapBackend) prepare(ctx context.Context, request validatedProcessRe
 		"--tmpfs", "/run",
 		"--remount-ro", "/run",
 	}, bubblewrapArguments(request)...)
+	terminal, foregroundGroup := bubblewrapForegroundTerminal(request.terminal)
+	if terminal != nil {
+		supervisor, supervisorErr := bubblewrapTargetSupervisorRequest(request)
+		if supervisorErr != nil {
+			_ = informationReader.Close()
+			_ = informationWriter.Close()
+			_ = releaseReader.Close()
+			_ = releaseWriter.Close()
+			return nil, supervisorErr
+		}
+		arguments = append([]string{
+			"--as-pid-1",
+			"--info-fd", strconv.Itoa(bubblewrapInfoDescriptor),
+			"--userns-block-fd", strconv.Itoa(bubblewrapReleaseDescriptor),
+			"--dir", "/run",
+			"--file", strconv.Itoa(bubblewrapReleaseDescriptor), "/run/.acs-userns-handshake",
+			"--tmpfs", "/run",
+			"--remount-ro", "/run",
+		}, bubblewrapArguments(supervisor)...)
+	}
 	command, err := newBubblewrapCommand(ctx, arguments, informationWriter, releaseReader)
 	if err != nil {
 		_ = informationReader.Close()
@@ -163,12 +183,7 @@ func (bubblewrapBackend) prepare(ctx context.Context, request validatedProcessRe
 	command.Stdin = request.terminal.Input
 	command.Stdout = request.terminal.Output
 	command.Stderr = request.terminal.ErrorOutput
-	terminal, foregroundGroup := bubblewrapForegroundTerminal(request.terminal)
 	command.SysProcAttr = &syscall.SysProcAttr{Pdeathsig: syscall.SIGKILL, Setpgid: true}
-	if terminal != nil {
-		command.SysProcAttr.Foreground = true
-		command.SysProcAttr.Ctty = int(terminal.Fd())
-	}
 	process := &bubblewrapProcess{
 		ctx:               ctx,
 		command:           command,
@@ -181,8 +196,29 @@ func (bubblewrapBackend) prepare(ctx context.Context, request validatedProcessRe
 		targetDescriptor:  -1,
 		cleanupDone:       make(chan struct{}),
 	}
+	if terminal != nil {
+		process.targetReady = bubblewrapSupervisorReady
+	}
 	command.Cancel = process.cancel
 	return process, nil
+}
+
+func bubblewrapTargetSupervisorRequest(request validatedProcessRequest) (validatedProcessRequest, error) {
+	supervisor, err := os.Executable()
+	if err != nil {
+		return validatedProcessRequest{}, err
+	}
+	supervisor, err = filepath.EvalSymlinks(supervisor)
+	if err != nil {
+		return validatedProcessRequest{}, err
+	}
+	prepared := request
+	prepared.executable = supervisor
+	if supervisor != request.executable {
+		prepared.runtimeInputs = append(append([]string(nil), request.runtimeInputs...), request.executable)
+	}
+	prepared.arguments = append([]string{bubblewrapTargetSupervisorFlag, request.executable}, request.arguments...)
+	return prepared, nil
 }
 
 type bubblewrapProcess struct {
@@ -644,6 +680,14 @@ func bubblewrapTargetReady(pid, descriptor int) (bool, error) {
 		return false, err
 	}
 	return !runsBubblewrap, nil
+}
+
+func bubblewrapSupervisorReady(pid, descriptor int) (bool, error) {
+	runsBubblewrap, err := stableBubblewrapTarget(pid, descriptor)
+	if err != nil || runsBubblewrap {
+		return false, err
+	}
+	return linuxProcessCatchesSignal(pid, syscall.SIGTERM)
 }
 
 func stableBubblewrapTarget(pid, descriptor int) (bool, error) {

@@ -507,11 +507,16 @@ func validateTerminal(terminal Terminal) error {
 		{value: terminal.ErrorOutput, expected: uintptr(os.Stderr.Fd())},
 	} {
 		file, isFile := endpoint.value.(*os.File)
-		if isFile && file.Fd() != endpoint.expected {
+		if isFile && file.Fd() != endpoint.expected && !isTerminalFile(file) {
 			return sandboxError(SandboxInvalidDescriptor, nil)
 		}
 	}
 	return nil
+}
+
+func isTerminalFile(file *os.File) bool {
+	info, err := file.Stat()
+	return err == nil && info.Mode()&os.ModeCharDevice != 0
 }
 
 func buildProcessEnvironment(sessionHome, temporaryDirectory string, host []string) ([]string, error) {

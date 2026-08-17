@@ -22,6 +22,9 @@ func main() {
 	handled, err := launch.RunBubblewrapHelper(os.Args[1:])
 	if handled {
 		if err != nil {
+			if exitCode, isTargetExit := launch.BubblewrapHelperExitCode(err); isTargetExit {
+				os.Exit(exitCode)
+			}
 			fmt.Fprintln(os.Stderr, "acs: sandbox helper failed")
 			os.Exit(1)
 		}

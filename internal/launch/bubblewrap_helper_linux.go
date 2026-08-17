@@ -19,7 +19,13 @@ const bubblewrapHelperFlag = "--acs-bubblewrap-helper"
 const maximumBubblewrapHelperDescriptors = 2
 
 func RunBubblewrapHelper(arguments []string) (bool, error) {
-	if len(arguments) == 0 || arguments[0] != bubblewrapHelperFlag {
+	if len(arguments) == 0 {
+		return false, nil
+	}
+	if arguments[0] == bubblewrapTargetSupervisorFlag {
+		return true, runBubblewrapTargetSupervisor(arguments[1:])
+	}
+	if arguments[0] != bubblewrapHelperFlag {
 		return false, nil
 	}
 	if len(arguments) < 3 {

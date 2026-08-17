@@ -11,6 +11,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/creack/pty"
 )
 
 func TestValidatePlatformCoversSupportedMatrix(t *testing.T) {
@@ -251,6 +253,19 @@ func TestValidateTerminalRejectsExtraFileDescriptor(t *testing.T) {
 	assertSandboxCategory(t, err, SandboxInvalidDescriptor)
 	if err := validateTerminal(Terminal{Input: os.Stdin, Output: os.Stdout, ErrorOutput: os.Stderr}); err != nil {
 		t.Fatalf("standard terminal descriptors rejected: %v", err)
+	}
+}
+
+func TestValidateTerminalAcceptsPseudoTerminalInput(t *testing.T) {
+	master, terminal, err := pty.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer master.Close()
+	defer terminal.Close()
+
+	if err := validateTerminal(Terminal{Input: terminal, Output: &strings.Builder{}, ErrorOutput: &strings.Builder{}}); err != nil {
+		t.Fatalf("pseudo-terminal input rejected: %v", err)
 	}
 }
 

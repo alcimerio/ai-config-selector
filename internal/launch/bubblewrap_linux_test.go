@@ -32,6 +32,9 @@ func TestMain(m *testing.M) {
 	handled, err := RunBubblewrapHelper(os.Args[1:])
 	if handled {
 		if err != nil {
+			if exitCode, isTargetExit := BubblewrapHelperExitCode(err); isTargetExit {
+				os.Exit(exitCode)
+			}
 			fmt.Fprintln(os.Stderr, "launch: Bubblewrap helper failed")
 			os.Exit(1)
 		}
@@ -300,6 +303,28 @@ func TestBubblewrapHelperArgumentsDoNotDependOnExecutableName(t *testing.T) {
 				t.Fatalf("helper arguments for %q = %q, want %q", executable, got, want)
 			}
 		})
+	}
+}
+
+func TestBubblewrapTargetSupervisorRequestMountsOriginalTarget(t *testing.T) {
+	request := validatedProcessRequest{
+		executable:    "/opt/devin/bin/devin",
+		runtimeInputs: []string{"/opt/devin/runtime"},
+		arguments:     []string{"skills", "list", "--json"},
+	}
+	prepared, err := bubblewrapTargetSupervisorRequest(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prepared.executable == request.executable {
+		t.Fatal("target supervisor did not replace the Bubblewrap executable")
+	}
+	if !slices.Contains(prepared.runtimeInputs, request.executable) {
+		t.Fatalf("target supervisor runtime inputs = %q, want original target %q", prepared.runtimeInputs, request.executable)
+	}
+	want := []string{bubblewrapTargetSupervisorFlag, request.executable, "skills", "list", "--json"}
+	if !reflect.DeepEqual(prepared.arguments, want) {
+		t.Fatalf("target supervisor arguments = %q, want %q", prepared.arguments, want)
 	}
 }
 
