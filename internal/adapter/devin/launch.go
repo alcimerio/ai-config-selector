@@ -42,8 +42,14 @@ func (a *Adapter) Launch(
 	sessionRoot := sessionLease.RootDir
 	defer func() {
 		if err := sessionLease.Remove(); err != nil {
-			cleanupFailure := err
-			if resultErr != nil {
+			cleanupFailure := sanitizeLaunchError(err)
+			var targetExit *DevinExitError
+			if errors.As(resultErr, &targetExit) {
+				// A cleanup failure means ACS may have left sensitive Session
+				// state behind. Do not join it with DevinExitError: callers use
+				// that interface to preserve ordinary target exit codes.
+				resultErr = cleanupFailure
+			} else if resultErr != nil {
 				resultErr = errors.Join(resultErr, cleanupFailure)
 			} else {
 				resultErr = cleanupFailure

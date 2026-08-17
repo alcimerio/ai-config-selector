@@ -81,6 +81,51 @@ exit 23
 	}
 }
 
+func TestLaunchCleanupFailureSupersedesTargetExitAndRedactsSession(t *testing.T) {
+	fixture := newLaunchTestFixture(t)
+	sessionRootPath := filepath.Join(t.TempDir(), "session-root")
+	t.Setenv("FAKE_DEVIN_SESSION_ROOT", sessionRootPath)
+	var stderr bytes.Buffer
+	application := fixture.application(
+		t,
+		writeFakeDevin(t, successfulDevinScript(`mkdir "$HOME/cleanup-block"
+printf 'SUPER_SECRET_SESSION_CONTENT\n' > "$HOME/cleanup-block/credential"
+chmod 500 "$HOME/cleanup-block"
+printf '%s\n' "${HOME%/home}" > "$FAKE_DEVIN_SESSION_ROOT"
+exit 23
+`)),
+		t.TempDir(),
+		strings.NewReader(""),
+		&bytes.Buffer{},
+		&stderr,
+	)
+
+	exitCode := application.Run(context.Background(), []string{"devin", "--profile", "reviews"})
+	sessionRootBytes, err := os.ReadFile(sessionRootPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionRoot := strings.TrimSpace(string(sessionRootBytes))
+	t.Cleanup(func() {
+		_ = os.Chmod(filepath.Join(sessionRoot, "home", "cleanup-block"), 0o700)
+		_ = os.RemoveAll(sessionRoot)
+	})
+	if _, err := os.Stat(sessionRoot); err != nil {
+		t.Fatalf("cleanup failure did not leave the Session available for recovery: %v", err)
+	}
+	if exitCode != 1 {
+		t.Fatalf("exit code = %d, want cleanup failure 1; stderr: %s", exitCode, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), string(launch.SandboxSetupFailed)) {
+		t.Fatalf("cleanup failure did not report a stable safe category: %s", stderr.String())
+	}
+	for _, private := range []string{"SUPER_SECRET_SESSION_CONTENT", sessionRoot, filepath.Join(sessionRoot, "home"), DevinExitCategory, "status 23"} {
+		if strings.Contains(stderr.String(), private) {
+			t.Fatalf("cleanup diagnostic leaked %q: %s", private, stderr.String())
+		}
+	}
+}
+
 func TestLaunchRejectsUnavailableSandboxBeforeCreatingSession(t *testing.T) {
 	fixture := newLaunchTestFixture(t)
 	fixture.sandbox = failingSandbox{checkErr: &launch.SandboxError{Category: launch.SandboxBackendUnavailable}}
