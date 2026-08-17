@@ -1501,14 +1501,17 @@ func TestSeatbeltNativeRoutesTerminalSignalsOnlyToContainedTarget(t *testing.T) 
 			if _, err := master.Write([]byte("snapshot\n")); err != nil {
 				t.Fatal(err)
 			}
-			waitForSeatbeltPTYMarker(t, paths.observed)
-			if count, err := os.ReadFile(paths.observed); err != nil || string(count) != "1\n" {
-				t.Fatalf("terminal %s deliveries = %q, %v; want exactly one", test.signal, count, err)
-			}
+			waitForSeatbeltPTYMarker(t, paths.snapshot)
 			if _, err := master.Write([]byte("release\n")); err != nil {
 				t.Fatal(err)
 			}
 			waitSeatbeltNativePTYHarness(t, command)
+			if count, err := os.ReadFile(paths.observed); err != nil || string(count) != "1\n" {
+				t.Fatalf("terminal %s deliveries after release = %q, %v; want exactly one", test.signal, count, err)
+			}
+			if count, err := os.ReadFile(paths.harnessObserved); err != nil || string(count) != "0\n" {
+				t.Fatalf("harness %s deliveries = %q, %v; want none", test.signal, count, err)
+			}
 		})
 	}
 }
@@ -1529,9 +1532,12 @@ func TestSeatbeltNativePTYHarness(t *testing.T) {
 	}
 	request.arguments = []string{
 		"-test.run=^TestSeatbeltNativePTYTarget$", "--", strconv.Itoa(signalNumber),
-		paths.ready, paths.received, paths.observed,
+		paths.ready, paths.received, paths.snapshot, paths.observed,
 	}
 	request.terminal = Terminal{Input: os.Stdin, Output: os.Stdout, ErrorOutput: os.Stderr}
+	harnessSignals := make(chan os.Signal, 8)
+	signal.Notify(harnessSignals, syscall.Signal(signalNumber))
+	defer signal.Stop(harnessSignals)
 	process, err := newSeatbeltBackend(seatbeltExecutable).prepare(context.Background(), request)
 	if err != nil {
 		t.Fatal(err)
@@ -1545,6 +1551,11 @@ func TestSeatbeltNativePTYHarness(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertSeatbeltPTYForegroundRestored(t, os.Stdin)
+	signal.Stop(harnessSignals)
+	harnessDeliveries := drainSeatbeltPTYSignals(t, harnessSignals, syscall.Signal(signalNumber))
+	if err := os.WriteFile(paths.harnessObserved, []byte(strconv.Itoa(harnessDeliveries)+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestSeatbeltNativePTYTarget(t *testing.T) {
@@ -1585,13 +1596,18 @@ func TestSeatbeltNativePTYTarget(t *testing.T) {
 		case command := <-commands:
 			switch command {
 			case "snapshot":
-				if err := os.WriteFile(arguments[3], []byte(strconv.Itoa(deliveries)+"\n"), 0o600); err != nil {
+				if err := os.WriteFile(arguments[3], []byte("snapshot\n"), 0o600); err != nil {
 					t.Fatal(err)
 				}
 				observed = true
 			case "release":
 				if !observed {
 					t.Fatal("terminal signal delivery was released before observation")
+				}
+				signal.Stop(signals)
+				deliveries += drainSeatbeltPTYSignals(t, signals, want)
+				if err := os.WriteFile(arguments[4], []byte(strconv.Itoa(deliveries)+"\n"), 0o600); err != nil {
+					t.Fatal(err)
 				}
 				return
 			default:
@@ -1601,15 +1617,32 @@ func TestSeatbeltNativePTYTarget(t *testing.T) {
 	}
 }
 
+func drainSeatbeltPTYSignals(t *testing.T, signals <-chan os.Signal, want syscall.Signal) int {
+	t.Helper()
+	deliveries := 0
+	for {
+		select {
+		case received := <-signals:
+			if received != want {
+				t.Fatalf("received terminal signal %v, want %v", received, want)
+			}
+			deliveries++
+		default:
+			return deliveries
+		}
+	}
+}
+
 type seatbeltPTYPaths struct {
-	ready, received, observed string
+	ready, received, snapshot, observed, harnessObserved string
 }
 
 func seatbeltNativePTYPaths(root string) seatbeltPTYPaths {
 	base := filepath.Join(root, "sessions", "session-one")
 	return seatbeltPTYPaths{
 		ready: filepath.Join(base, "terminal-signal-ready"), received: filepath.Join(base, "terminal-signal-received"),
-		observed: filepath.Join(base, "terminal-signal-observed"),
+		snapshot: filepath.Join(base, "terminal-signal-snapshot"), observed: filepath.Join(base, "terminal-signal-observed"),
+		harnessObserved: filepath.Join(base, "harness-terminal-signal-observed"),
 	}
 }
 
@@ -1645,7 +1678,7 @@ func seatbeltPTYTargetArguments() []string {
 	for index, argument := range os.Args {
 		if argument == "--" {
 			arguments := os.Args[index+1:]
-			if len(arguments) == 4 {
+			if len(arguments) == 5 {
 				return arguments
 			}
 			break
