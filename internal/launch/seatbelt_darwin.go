@@ -82,6 +82,9 @@ func (backend *seatbeltBackend) prepare(ctx context.Context, request validatedPr
 	if err != nil {
 		return nil, sandboxError(SandboxSetupFailed, err)
 	}
+	if nativePolicyRequestTooLarge(policy, definitions) {
+		return nil, sandboxError(SandboxPolicyRejected, nil)
+	}
 	supervisor, err := os.Executable()
 	if err != nil {
 		return nil, sandboxError(SandboxSetupFailed, err)

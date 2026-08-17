@@ -522,6 +522,16 @@ func TestPreparedProcessPreservesChildExitStatus(t *testing.T) {
 	}
 }
 
+func TestNativePolicyRequestRejectsOversizedArguments(t *testing.T) {
+	if nativePolicyRequestTooLarge("policy", []string{"short"}) {
+		t.Fatal("short native policy request was rejected")
+	}
+	overlong := strings.Repeat("x", maximumNativePolicyRequestBytes)
+	if !nativePolicyRequestTooLarge("policy", []string{overlong}) {
+		t.Fatal("oversized native policy request was accepted")
+	}
+}
+
 func TestCurrentPlatformMatchesRuntimeFamily(t *testing.T) {
 	platform, err := CurrentPlatform()
 	if err != nil {
