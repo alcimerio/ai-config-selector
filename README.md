@@ -216,11 +216,12 @@ package with:
 sudo apt-get update && sudo apt-get install --reinstall bubblewrap
 ```
 
-ACS neither bundles Bubblewrap nor downloads it at runtime. If host AppArmor
-policy blocks unprivileged user namespaces, ACS reports
+ACS neither bundles Bubblewrap nor downloads it at runtime.
+If host AppArmor policy blocks unprivileged user namespaces, ACS reports
 `sandbox_verification_failed`; administrators must review and enable an
-appropriate targeted Bubblewrap profile. ACS does not disable the global
-AppArmor restriction or run without containment.
+appropriate targeted Bubblewrap profile. ACS
+does not disable the global AppArmor restriction or run without
+containment.
 
 The Bubblewrap namespace exposes the workspace and Session as writable,
 including Session-local temporary storage. Named runtime inputs and the
