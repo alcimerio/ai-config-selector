@@ -18,7 +18,6 @@ import (
 
 const safeProcessPath = "/usr/local/bin:/usr/bin:/bin"
 const requiredSandboxNotice = "ACS will not start Devin without the required sandbox"
-const maximumNativePolicyRequestBytes = 128 * 1024
 
 // SandboxErrorCategory is a stable, non-sensitive class of sandbox failure.
 type SandboxErrorCategory string
@@ -686,18 +685,4 @@ func safeEnvironmentValue(value string) bool {
 		return false
 	}
 	return true
-}
-
-// nativePolicyRequestTooLarge bounds the platform-native request before it can
-// turn a deep but otherwise valid host path into an opaque exec failure. Both
-// backends report this as a rejected policy before any target can start.
-func nativePolicyRequestTooLarge(policy string, arguments []string) bool {
-	size := len(policy)
-	for _, argument := range arguments {
-		size += len(argument) + 1
-		if size > maximumNativePolicyRequestBytes {
-			return true
-		}
-	}
-	return false
 }

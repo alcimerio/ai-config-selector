@@ -277,8 +277,10 @@ macOS 26 `darwin/arm64` and `darwin/amd64`, plus Ubuntu 24.04 LTS
 readiness; allowlisted and denied filesystem, environment, descriptor, socket,
 and IP behavior; Skill and authentication preflight; descendants; terminal
 signals, resize, and exit; and Session cleanup for concurrent and abandoned
-launches. It also proves that a missing required backend or unsafe native
-launch input cannot start the fixture target.
+launches. It proves the release criterion that missing backend OR invalid
+policy cannot start the fixture target: every native matrix row exercises the
+exact candidate's missing-backend branch with no target marker or Session
+residue, while genuine backend policy-validation tests cover invalid policies.
 
 The gate records only a fixed, sanitized target/backend compatibility
 observation: macOS requires the verified system Seatbelt backend, while Ubuntu

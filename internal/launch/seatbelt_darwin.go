@@ -91,9 +91,6 @@ func (backend *seatbeltBackend) prepare(ctx context.Context, request validatedPr
 		return nil, sandboxError(SandboxSetupFailed, err)
 	}
 	definitions = append(definitions, "-DSUPERVISOR="+supervisor)
-	if nativePolicyRequestTooLarge(policy, definitions) {
-		return nil, sandboxError(SandboxPolicyRejected, nil)
-	}
 	if err := backend.validateGeneratedPolicy(ctx, request, policy, definitions); err != nil {
 		return nil, sandboxError(SandboxPolicyRejected, err)
 	}

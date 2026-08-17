@@ -171,13 +171,6 @@ func (bubblewrapBackend) prepare(ctx context.Context, request validatedProcessRe
 			"--remount-ro", "/run",
 		}, bubblewrapArguments(supervisor)...)
 	}
-	if nativePolicyRequestTooLarge("", arguments) {
-		_ = informationReader.Close()
-		_ = informationWriter.Close()
-		_ = releaseReader.Close()
-		_ = releaseWriter.Close()
-		return nil, sandboxError(SandboxPolicyRejected, nil)
-	}
 	command, err := newBubblewrapCommand(ctx, arguments, informationWriter, releaseReader)
 	if err != nil {
 		_ = informationReader.Close()

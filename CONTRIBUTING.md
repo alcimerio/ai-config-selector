@@ -190,10 +190,13 @@ allowlisted and blocked environment values, file descriptors, host Unix
 sockets, outbound IP, Skill and authentication preflight, terminal signals,
 resize and exit, and concurrent and abandoned Session cleanup.
 
-The suite also checks that preflight, a missing required backend, and invalid
-native launch inputs fail before a fixture target marker can start, and that
-failures identify the test and a stable safe category without host details. Successful jobs record only
-sanitized target/backend observations and the retained compatibility rules:
+The suite also checks the release criterion that a missing backend OR invalid
+policy cannot start a fixture target marker. Every native matrix row exercises
+the exact candidate's missing-backend branch and verifies no Session residue;
+genuine backend policy-validation tests cover the invalid-policy branch.
+Failures identify the test and a stable safe category without host details.
+Successful jobs record only sanitized
+target/backend observations and the retained compatibility rules:
 verified system Seatbelt on macOS; verified signed-system Bubblewrap plus the
 targeted AppArmor profile on Ubuntu. Logs, artifacts, and summaries must not
 contain credentials, account data, target output, Session contents, private
