@@ -26,10 +26,10 @@ func TestPromotedArtifactReportsItsVersionAndCreatesAnEmptyProfileThroughAPTY(t 
 	version.Env = promotedEnvironment(home, os.Getenv("PATH"))
 	versionOutput, err := version.CombinedOutput()
 	if err != nil {
-		t.Fatalf("installed acs version failed: %v; output=%q", err, versionOutput)
+		t.Fatalf("installed acs version failed: %v", err)
 	}
 	if got, want := string(versionOutput), "acs "+promotedVersion(t)+"\n"; got != want {
-		t.Fatalf("installed acs version output = %q, want %q", got, want)
+		t.Fatal("installed acs version output did not match the supplied candidate")
 	}
 
 	result := runPromotedPTY(t, binary, home, "promoted-empty", func(t *testing.T, terminal io.Writer, capture *safeCapture) {
@@ -39,10 +39,10 @@ func TestPromotedArtifactReportsItsVersionAndCreatesAnEmptyProfileThroughAPTY(t 
 		writePTY(t, terminal, "y")
 	})
 	if result.exitCode != 0 {
-		t.Fatalf("empty Profile creation exited %d:\n%q", result.exitCode, result.output)
+		t.Fatalf("empty Profile creation exited %d", result.exitCode)
 	}
 	if strings.Count(result.output, "\x1b[?1049h") != 1 || strings.Count(result.output, "\x1b[?1049l") != 1 {
-		t.Fatalf("installed builder did not enter and exit alternate screen exactly once: %q", result.output)
+		t.Fatal("installed builder did not enter and exit alternate screen exactly once")
 	}
 
 	profilePath := filepath.Join(home, ".acs", "profiles", "promoted-empty.json")
@@ -52,7 +52,7 @@ func TestPromotedArtifactReportsItsVersionAndCreatesAnEmptyProfileThroughAPTY(t 
 	}
 	for _, fragment := range []string{`"version": 2`, `"name": "promoted-empty"`, `"target": "devin"`, `"skills"`, `"selection": []`} {
 		if !bytes.Contains(contents, []byte(fragment)) {
-			t.Errorf("created Profile omits %s: %q", fragment, contents)
+			t.Errorf("created Profile omits %s", fragment)
 		}
 	}
 	assertPermissions(t, profilePath, 0o600)
@@ -144,14 +144,14 @@ exit 23
 	err := launch.Run()
 	exitError, ok := err.(*exec.ExitError)
 	if !ok || exitError.ExitCode() != 1 {
-		t.Fatalf("promoted launch error = %v, want exit 1; stdout=%q stderr=%q", err, stdout.String(), stderr.String())
+		t.Fatalf("promoted launch error = %v, want exit 1", err)
 	}
 	if stdout.Len() != 0 {
-		t.Fatalf("backend-unavailable launch wrote stdout: %q", stdout.String())
+		t.Fatal("backend-unavailable launch wrote stdout")
 	}
 	wantDiagnostic := "acs: launch Profile \"reviews\": backend_unavailable: process sandbox unavailable: required system backend is unavailable; ACS will not start Devin without the required sandbox\n"
 	if got := stderr.String(); got != wantDiagnostic {
-		t.Fatalf("backend-unavailable diagnostic = %q, want %q", got, wantDiagnostic)
+		t.Fatal("backend-unavailable diagnostic did not match the stable safe failure")
 	}
 	if _, err := os.Stat(targetMarker); !os.IsNotExist(err) {
 		t.Fatalf("fake Devin started without a sandbox backend: %v", err)
@@ -199,11 +199,11 @@ exit 23
 	dryRun.Dir = fixtureRoot
 	dryOutput, err := dryRun.CombinedOutput()
 	if err != nil {
-		t.Fatalf("promoted dry run failed: %v; output=%q", err, dryOutput)
+		t.Fatalf("promoted dry run failed: %v", err)
 	}
 	for _, want := range []string{"Dry run for Profile \"reviews\"", "review [devin-config]", "No Session was created and Devin was not started."} {
 		if !strings.Contains(string(dryOutput), want) {
-			t.Errorf("dry-run output omits %q: %q", want, dryOutput)
+			t.Errorf("dry-run output omits %q", want)
 		}
 	}
 	if _, err := os.Stat(eventsPath); !os.IsNotExist(err) {
@@ -222,13 +222,13 @@ exit 23
 	err = launch.Run()
 	exitError, ok := err.(*exec.ExitError)
 	if !ok || exitError.ExitCode() != 23 {
-		t.Fatalf("promoted launch error = %v, want child exit 23; stderr=%q", err, stderr.String())
+		t.Fatalf("promoted launch error = %v, want child exit 23", err)
 	}
 	if got, want := stdout.String(), "fake stdout:attached input\n"; got != want {
-		t.Errorf("attached stdout = %q, want %q", got, want)
+		t.Error("attached stdout did not preserve target output")
 	}
 	if got, want := stderr.String(), "fake stderr:attached input\n"; got != want {
-		t.Errorf("attached stderr = %q, want %q", got, want)
+		t.Error("attached stderr did not preserve target output")
 	}
 	events, err := os.ReadFile(eventsPath)
 	if err != nil {
@@ -236,11 +236,11 @@ exit 23
 	}
 	lines := strings.Split(strings.TrimSpace(string(events)), "\n")
 	if len(lines) != 3 || !strings.HasPrefix(lines[0], "preflight-skills:") || !strings.HasPrefix(lines[1], "preflight-auth:") || !strings.HasPrefix(lines[2], "launch:") {
-		t.Fatalf("fake Devin event order = %q", events)
+		t.Fatal("fake Devin did not record the expected preflight and launch order")
 	}
 	for _, line := range lines {
 		if !strings.Contains(line, filepath.Join(home, ".acs", "sessions")+string(filepath.Separator)+"session-") {
-			t.Errorf("fake Devin did not use an isolated Session home: %q", line)
+			t.Error("fake Devin did not use an isolated Session home")
 		}
 	}
 	assertNoSessions(t, home)
@@ -257,20 +257,20 @@ exit 23
 		failed.Dir = fixtureRoot
 		output, err := failed.CombinedOutput()
 		if err == nil {
-			t.Fatalf("promoted launch accepted failed authentication: %q", output)
+			t.Fatal("promoted launch accepted failed authentication")
 		}
 		if !strings.Contains(string(output), "authentication probe failed") {
-			t.Errorf("authentication failure is unclear: %q", output)
+			t.Error("authentication failure did not identify the expected stable category")
 		}
 		if strings.Contains(string(output), "DO_NOT_LEAK") {
-			t.Fatalf("authentication failure leaked subprocess output: %q", output)
+			t.Fatal("authentication failure leaked subprocess output")
 		}
 		events, readErr := os.ReadFile(eventsPath)
 		if readErr != nil {
 			t.Fatal(readErr)
 		}
 		if strings.Contains(string(events), "launch:") {
-			t.Fatalf("fake Devin launched after failed authentication: %q", events)
+			t.Fatal("fake Devin launched after failed authentication")
 		}
 		assertNoSessions(t, home)
 	})
@@ -318,14 +318,14 @@ while :; do sleep 1; done
 				}
 				exitCode := waitExitCode(t, command, 8*time.Second, &output)
 				if exitCode != test.wantExit {
-					t.Fatalf("signaled promoted artifact exit = %d, want %d: %q", exitCode, test.wantExit, output.String())
+					t.Fatalf("signaled promoted artifact exit = %d, want %d", exitCode, test.wantExit)
 				}
 				record, err := os.ReadFile(recordPath)
 				if err != nil {
 					t.Fatal(err)
 				}
 				if string(record) != test.wantRecord {
-					t.Errorf("forwarded signal record = %q, want %q", record, test.wantRecord)
+					t.Error("forwarded signal record did not match")
 				}
 				assertNoSessions(t, home)
 			})
@@ -380,11 +380,11 @@ exit 0
 		select {
 		case err := <-wait:
 			if err != nil {
-				t.Fatalf("resized promoted artifact failed: %v; output=%q", err, capture.String())
+				t.Fatalf("resized promoted artifact failed: %v", err)
 			}
 		case <-time.After(8 * time.Second):
 			_ = command.Process.Kill()
-			t.Fatalf("resized promoted artifact timed out: %q", capture.String())
+			t.Fatal("resized promoted artifact timed out")
 		}
 		if err := terminal.Close(); err != nil {
 			t.Fatal(err)
@@ -399,7 +399,7 @@ exit 0
 			t.Fatal(err)
 		}
 		if got, want := strings.TrimSpace(string(resize)), "40 120"; got != want {
-			t.Errorf("fake Devin terminal size = %q, want %q", got, want)
+			t.Error("fake Devin terminal size did not match")
 		}
 		assertNoSessions(t, home)
 	})
@@ -452,7 +452,7 @@ exit 0
 			t.Fatal(err)
 		}
 		if exitCode := waitExitCode(t, second, 8*time.Second, secondOutput); exitCode != 0 {
-			t.Fatalf("second concurrent launch exited %d: %q", exitCode, secondOutput.String())
+			t.Fatalf("second concurrent launch exited %d", exitCode)
 		}
 		if _, err := os.Stat(firstHome); err != nil {
 			t.Fatalf("second launch removed the active first Session: %v", err)
@@ -464,7 +464,7 @@ exit 0
 			t.Fatal(err)
 		}
 		if exitCode := waitExitCode(t, first, 8*time.Second, firstOutput); exitCode != 0 {
-			t.Fatalf("first concurrent launch exited %d: %q", exitCode, firstOutput.String())
+			t.Fatalf("first concurrent launch exited %d", exitCode)
 		}
 		assertNoSessions(t, home)
 	})
@@ -528,7 +528,7 @@ func waitExitCode(t *testing.T, command *exec.Cmd, timeout time.Duration, output
 		t.Fatalf("wait for promoted artifact: %v", err)
 	case <-time.After(timeout):
 		_ = command.Process.Kill()
-		t.Fatalf("promoted artifact timed out: %q", output.String())
+		t.Fatal("promoted artifact timed out")
 	}
 	return -1
 }
@@ -563,21 +563,21 @@ func assertNoSessions(t *testing.T, home string) {
 		t.Fatal(err)
 	}
 	if len(entries) != 0 {
-		t.Fatalf("promoted artifact left Session state: %v", entries)
+		t.Fatal("promoted artifact left Session state")
 	}
 }
 
 func assertCancelledPTY(t *testing.T, result ptyResult) {
 	t.Helper()
 	if result.exitCode != 130 {
-		t.Fatalf("Profile cancellation exited %d, want 130: %q", result.exitCode, result.output)
+		t.Fatalf("Profile cancellation exited %d, want 130", result.exitCode)
 	}
 	if strings.Count(result.output, "\x1b[?1049h") != 1 || strings.Count(result.output, "\x1b[?1049l") != 1 {
-		t.Fatalf("cancelled builder did not restore the alternate screen exactly once: %q", result.output)
+		t.Fatal("cancelled builder did not restore the alternate screen exactly once")
 	}
 	restoredAt := strings.Index(result.output, "\x1b[?1049l")
 	if summaryAt := strings.LastIndex(result.output, "Profile creation cancelled."); summaryAt < restoredAt {
-		t.Fatalf("cancellation summary preceded terminal restoration: %q", result.output)
+		t.Fatal("cancellation summary preceded terminal restoration")
 	}
 }
 
@@ -639,7 +639,7 @@ func runPromotedPTY(t *testing.T, binary, home, profileName string, interact fun
 	case waitErr = <-wait:
 	case <-time.After(10 * time.Second):
 		_ = command.Process.Kill()
-		t.Fatalf("installed Profile Builder timed out: %q", capture.String())
+		t.Fatal("installed Profile Builder timed out")
 	}
 	if err := terminal.Close(); err != nil {
 		t.Fatal(err)
@@ -708,7 +708,7 @@ func waitForOutput(t *testing.T, capture *safeCapture, marker string) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	t.Fatalf("PTY output did not contain %q: %q", marker, capture.String())
+	t.Fatalf("PTY output did not contain %q", marker)
 }
 
 func writePTY(t *testing.T, terminal io.Writer, inputs ...string) {

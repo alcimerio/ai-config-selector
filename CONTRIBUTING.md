@@ -178,6 +178,30 @@ the system Bubblewrap backend. Ubuntu-native tests additionally prove
 filesystem, environment, descriptor, networking, descendant, and lifecycle
 containment.
 
+### Native candidate gate
+
+The required native candidate gate is the release evidence for the four
+Supported Release Targets: macOS 26 `darwin/arm64` and `darwin/amd64`, plus
+Ubuntu 24.04 LTS `linux/amd64` and `linux/arm64`. Each job installs the exact
+candidate artifact supplied by the single build job and never rebuilds a
+candidate binary. Its black-box fixture suite covers backend readiness,
+filesystem allow and deny behavior (including symlink escapes), descendants,
+allowlisted and blocked environment values, file descriptors, host Unix
+sockets, outbound IP, Skill and authentication preflight, terminal signals,
+resize and exit, and concurrent and abandoned Session cleanup.
+
+The suite also checks the release criterion that a missing backend OR invalid
+policy cannot start a fixture target marker. Every native matrix row exercises
+the exact candidate's missing-backend branch and verifies no Session residue;
+genuine backend policy-validation tests cover the invalid-policy branch.
+Failures identify the test and a stable safe category without host details.
+Successful jobs record only sanitized
+target/backend observations and the retained compatibility rules:
+verified system Seatbelt on macOS; verified signed-system Bubblewrap plus the
+targeted AppArmor profile on Ubuntu. Logs, artifacts, and summaries must not
+contain credentials, account data, target output, Session contents, private
+paths, generated policies, environment values, or terminal control characters.
+
 After building a clean candidate locally, run the validator on a matching
 native host with a fresh absolute install directory:
 
@@ -211,6 +235,10 @@ on the maintainer's macOS 26 arm64 host before the first release, or when a
 change touches authentication, the Devin Adapter, Profile selection, Session
 isolation, or interactive lifecycle behavior. It is a maintainer confidence
 check, does not use CI credentials, and is not attached to the tag or workflow.
+The exact `ACS_REAL_DEVIN_INTEGRATION=I_ACKNOWLEDGE_LOCAL_CREDENTIAL_ACCESS`
+value is the maintainer's explicit acknowledgement for the integration probe;
+the private smoke remains supplemental and never substitutes for the native
+candidate gate.
 
 The release tag is an annotated canonical SemVer tag. The tag points to the
 exact source commit and carries a short human-readable annotation. The source
