@@ -1226,9 +1226,6 @@ func TestSeatbeltConvergesAcrossForkingAndZombieDescendants(t *testing.T) {
 	for _, mode := range []string{"fork-churn-parent", "zombie-parent"} {
 		t.Run(mode, func(t *testing.T) {
 			request := seatbeltTestRequest(t)
-			request.environment = append(request.environment, seatbeltTestDiagnosticsEnvironment+"=1")
-			var diagnostics bytes.Buffer
-			request.terminal = Terminal{Output: &diagnostics, ErrorOutput: &diagnostics}
 			ready := filepath.Join(request.workspace, mode+"-ready")
 			marker := filepath.Join(request.workspace, mode+"-survived")
 			request.arguments = []string{"-test.run=TestSeatbeltHelperProcess", "--", mode, ready, marker}
@@ -1240,7 +1237,7 @@ func TestSeatbeltConvergesAcrossForkingAndZombieDescendants(t *testing.T) {
 				t.Fatal(err)
 			}
 			if err := process.Wait(); err != nil {
-				t.Fatalf("%v\n%s", err, diagnostics.String())
+				t.Fatal(err)
 			}
 			time.Sleep(500 * time.Millisecond)
 			if _, err := os.Stat(marker); !errors.Is(err, os.ErrNotExist) {

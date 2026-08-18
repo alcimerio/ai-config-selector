@@ -23,20 +23,19 @@ import (
 )
 
 const (
-	seatbeltHelperArgument             = "--acs-internal-seatbelt-supervisor-v1"
-	seatbeltHelperEnvironment          = "ACS_INTERNAL_SEATBELT_SUPERVISOR_FD"
-	seatbeltStatusProxyArgument        = "--acs-internal-seatbelt-status-proxy-v1"
-	seatbeltStatusProxyEnvironmentKey  = "ACS_INTERNAL_SEATBELT_STATUS_PROXY_FD"
-	seatbeltStatusProxyControlFD       = 4
-	seatbeltProofMagic                 = "ACS-SEATBELT-CLEANUP"
-	seatbeltProofVersion               = 1
-	seatbeltChallengeSize              = 32
-	seatbeltCleanupDeadline            = 2 * time.Second
-	seatbeltDescriptorSealAttempts     = 8
-	seatbeltTestDiagnosticsEnvironment = "ACS_SEATBELT_TEST_DIAGNOSTICS"
-	seatbeltStatusPacketSize           = 2
-	seatbeltStatusExit                 = 'E'
-	seatbeltStatusSignal               = 'S'
+	seatbeltHelperArgument            = "--acs-internal-seatbelt-supervisor-v1"
+	seatbeltHelperEnvironment         = "ACS_INTERNAL_SEATBELT_SUPERVISOR_FD"
+	seatbeltStatusProxyArgument       = "--acs-internal-seatbelt-status-proxy-v1"
+	seatbeltStatusProxyEnvironmentKey = "ACS_INTERNAL_SEATBELT_STATUS_PROXY_FD"
+	seatbeltStatusProxyControlFD      = 4
+	seatbeltProofMagic                = "ACS-SEATBELT-CLEANUP"
+	seatbeltProofVersion              = 1
+	seatbeltChallengeSize             = 32
+	seatbeltCleanupDeadline           = 2 * time.Second
+	seatbeltDescriptorSealAttempts    = 8
+	seatbeltStatusPacketSize          = 2
+	seatbeltStatusExit                = 'E'
+	seatbeltStatusSignal              = 'S'
 )
 
 type seatbeltCleanupProof struct {
@@ -191,11 +190,9 @@ func runSeatbeltSupervisorWithDescriptorSealer(controlFD int, target string, arg
 		_ = setSeatbeltForegroundProcessGroup(os.Stdin, foregroundGroup)
 	}
 	if err := identities.failure(); err != nil {
-		seatbeltTestDiagnostic("observer", err)
 		return 125
 	}
 	if err := settleSeatbeltInstance(api, identities, os.Getpid(), targetPID, time.Now().Add(seatbeltCleanupDeadline)); err != nil {
-		seatbeltTestDiagnostic("settlement", err)
 		return 125
 	}
 
@@ -233,13 +230,6 @@ func runSeatbeltSupervisorWithDescriptorSealer(controlFD int, target string, arg
 		return proof.TargetExitCode
 	}
 	return 125
-}
-
-func seatbeltTestDiagnostic(stage string, err error) {
-	if os.Getenv(seatbeltTestDiagnosticsEnvironment) != "1" {
-		return
-	}
-	_, _ = os.Stderr.WriteString("seatbelt-test-diagnostic: " + stage + ": " + err.Error() + "\n")
 }
 
 func seatbeltNoTargetFailure(control *os.File, challenge []byte) int {
