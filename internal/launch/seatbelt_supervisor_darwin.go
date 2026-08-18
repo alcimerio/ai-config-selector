@@ -699,7 +699,10 @@ func sameSeatbeltProcessIdentity(api seatbeltProcessEnumerator, pid int, before 
 		if errors.Is(syscall.Kill(pid, 0), syscall.ESRCH) {
 			return false, nil
 		}
-		return false, errors.New("revalidate process identity: enumeration failed")
+		// proc_pidinfo can fail while a still-addressable process is becoming a
+		// zombie. Do not signal an identity that could not be revalidated, and
+		// let the bounded settling loop obtain a fresh process-table snapshot.
+		return false, errSeatbeltProcessSnapshotUnstable
 	}
 	return before.StartSecond == after.StartSecond && before.StartMicrosecond == after.StartMicrosecond, nil
 }
