@@ -5,14 +5,14 @@ Choose a Profile when you launch a supported CLI to control which capabilities
 it receives without changing its real global installation.
 
 ACS separates shared Profile behavior from target-specific CLI adapters. The
-`v0.2.0` preserves one adapter, Devin, and one Profile Component Category,
-Skills, while adding downloadable binaries for the supported macOS and Ubuntu
-targets. Until the v0.2.0 release checklist is complete and the immutable
-Release is public, v0.1.0 remains the latest supported release.
+`v0.3.0` preserves one adapter, Devin, and one Profile Component Category,
+Skills, while adding fail-closed native process isolation for the supported
+macOS and Ubuntu targets. Until the v0.3.0 release checklist is complete and
+the immutable Release is public, v0.2.0 remains the latest supported release.
 
 ## Supported scope
 
-The v0.2.0 support contract defines these Supported Platforms:
+The v0.3.0 support contract defines these Supported Platforms:
 
 - macOS 26;
 - Ubuntu 24.04 LTS;
@@ -34,15 +34,15 @@ On every Supported Platform, ACS supports:
 
 The Profile Builder requires confirmation before it creates an empty Profile.
 Windows, WSL, other Linux distributions, and other operating-system or
-architecture pairs are not supported by v0.2.0.
+architecture pairs are not supported by v0.3.0.
 
 ## Install
 
-After the v0.2.0 GitHub Release is public, use its release-specific installer.
+After the v0.3.0 GitHub Release is public, use its release-specific installer.
 Download the installer as a file, inspect it, and only then run the local copy:
 
 ```sh
-release_version=v0.2.0
+release_version=v0.3.0
 release_url="https://github.com/alcimerio/ai-config-selector/releases/download/$release_version"
 curl --fail --location --proto '=https' --tlsv1.2 \
   --output install.sh "$release_url/install.sh"
@@ -54,7 +54,7 @@ sh ./install.sh
 For the default destination, the last command must print exactly:
 
 ```text
-acs v0.2.0
+acs v0.3.0
 ```
 
 The installer selects only a Supported Release Target, downloads that target's
@@ -85,7 +85,7 @@ Set `archive` to the file for your Supported Release Target, then download it
 and the manifest from the same release-specific URL. On macOS:
 
 ```sh
-archive=acs_0.2.0_darwin_arm64.tar.gz
+archive=acs_0.3.0_darwin_arm64.tar.gz
 curl --fail --location --proto '=https' --tlsv1.2 --output "$archive" "$release_url/$archive"
 curl --fail --location --proto '=https' --tlsv1.2 --output SHA256SUMS "$release_url/SHA256SUMS"
 awk -v selected="$archive" '$2 == selected { print }' SHA256SUMS | shasum -a 256 --check -
@@ -198,7 +198,9 @@ acs devin --profile backend-review
 On macOS 26, this command runs every Devin preflight, interactive process, and
 descendant inside Seatbelt. ACS verifies the root-owned system
 `/usr/bin/sandbox-exec`, builds a default-deny policy from validated runtime
-paths, and applies that policy to the complete process tree.
+paths, and applies that policy to the complete process tree. On Ubuntu 24.04,
+ACS selects Bubblewrap; host and backend select the implementation, not a
+Profile, environment variable, or CLI flag.
 
 On Ubuntu 24.04, this command runs every Devin probe and the interactive
 process through `/usr/bin/bwrap`. ACS requires the root-owned, non-writable
@@ -229,7 +231,8 @@ minimal operating-system runtime are read-only. The host home and host Unix
 sockets are absent. Devin retains outbound IP networking, but ACS does not
 mount host SSH, Docker, proxy, or agent sockets. There is no unsandboxed
 fallback on either platform. ACS will not start Devin without the required
-sandbox.
+sandbox. ACS is not an egress firewall: it does not filter, approve, or log
+outbound IP destinations.
 
 ### Launch failure categories
 
@@ -265,6 +268,12 @@ Session after launch setup fails, or only after the sandboxed process tree has
 exited or been terminated and containment is settled. A failure before the
 Session lease does not create Session data.
 
+The target receives the invoking terminal's standard input, output, and error;
+ACS forwards supported terminal signals and terminal resize while preserving the
+target exit status. A descendant cannot outlive the successful launch cleanup
+before its Session is removed. Cleanup that cannot establish containment proof
+keeps the Session quarantined instead of treating it as safely removed.
+
 Repository-local Skills remain under Devin's control. ACS reports them during
 a dry run but does not copy, filter, or isolate them.
 
@@ -293,6 +302,26 @@ terminal control characters.
 The optional authenticated smoke remains a maintainer confidence check. It is
 supplemental to, and cannot replace, the credential-free native candidate gate.
 
+### Evidence map for v0.3.0 protections
+
+The public containment statements above are release claims only when the
+four-target native gate for [issue #62](https://github.com/alcimerio/ai-config-selector/issues/62)
+passes. The gate runs the exact downloadable candidate rather than a source
+build; a local `go build` or `go install` is not release evidence.
+
+| Protection or boundary | Native evidence |
+| --- | --- |
+| Certified host/backend selection, no target on a missing backend, and safe failure categories | [native candidate contract](acceptance/promoted_artifact_native_test.go) and the [four-target release matrix](.github/workflows/release.yml) |
+| Writable workspace, Session, and Session temporary paths; denied host reads, external writes, and symlink escapes | [native candidate containment assertions](acceptance/promoted_artifact_native_test.go) |
+| Environment allowlist, no leaked file descriptors, and no host Unix sockets | [native candidate containment assertions](acceptance/promoted_artifact_native_test.go) |
+| Outbound IP remains available; ACS is not an egress firewall | [native candidate containment assertions](acceptance/promoted_artifact_native_test.go) and this [limitation record](#known-limitations) |
+| Preflight, terminal signal/resize/exit behavior, descendants, concurrent leases, and Session cleanup | [promoted-artifact lifecycle assertions](acceptance/promoted_artifact_test.go) and [native containment assertions](acceptance/promoted_artifact_native_test.go) |
+| Signed-system Bubblewrap and targeted AppArmor setup on Ubuntu | [release workflow prerequisite](.github/workflows/release.yml) and [Ubuntu compatibility record](#launch-devin) |
+
+The historical broad Seatbelt prototype is feasibility history only. It is not
+evidence for a broader production policy; macOS v0.3.0 claims are limited to
+the verified-system backend and the exact native candidate evidence above.
+
 ## Profiles and compatibility
 
 ACS follows semantic versioning, but releases before `v1.0.0` may change CLI
@@ -308,7 +337,7 @@ version-2 envelope without bumping the envelope version. Each category owns
 and evolves its independent `schemaVersion`. ACS rejects unsupported schemas
 and unknown categories.
 
-v0.2.0 preserves the v0.1.0 Profile envelopes, category schemas, public
+v0.3.0 preserves the v0.1.0 Profile envelopes, category schemas, public
 commands, accepted messages, file permissions, and atomic Profile persistence.
 It also preserves Profile Builder behavior, Devin Adapter discovery and
 preflight behavior, launch and signal handling, ACS Home at `~/.acs`, and the
@@ -316,10 +345,14 @@ intended per-launch Session creation and cleanup contract. That contained
 Session lifecycle is available through Seatbelt on macOS and Bubblewrap on
 Ubuntu.
 Existing v0.1.0 Profiles do not require migration.
+Existing Profile files and selections remain compatible, but that compatibility
+does not select or waive containment: each launch now requires a certified
+host and a ready native backend. A Profile cannot request an unsandboxed
+fallback.
 
 ## Known limitations
 
-- v0.2.0 macOS binaries are unsigned and unnotarized. Gatekeeper may block or
+- v0.3.0 macOS binaries are unsigned and unnotarized. Gatekeeper may block or
   warn about them because they do not carry an Apple Developer ID signature or
   notarization ticket. Checksums and GitHub attestations do not change that
   trust decision or represent Apple malware review. Do not weaken host security
@@ -332,7 +365,14 @@ Existing v0.1.0 Profiles do not require migration.
 - Interactive launches require a certified native backend. Bubblewrap is
   active on Ubuntu 24.04 and Seatbelt is active on macOS 26. The synthetic
   home complements the OS sandbox and is not a substitute for native
-  enforcement.
+  enforcement. There is no unsandboxed fallback.
+- ACS permits outbound IP networking and is not an egress firewall. It blocks
+  the tested host Unix-socket mounts, not arbitrary network destinations.
+- The signed-system Bubblewrap check does not protect against a compromised
+  administrator that controls both `/usr/bin/bwrap` and dpkg state; see the
+  Ubuntu remediation and compatibility record in [Launch Devin](#launch-devin).
+- Source builds and the optional authenticated smoke are development or
+  maintainer confidence inputs, not immutable-release evidence.
 - ACS does not manage MCP servers, hooks, instructions, agents, or arbitrary
   target settings.
 - ACS has no package-manager distribution, automatic updates, or uninstaller.

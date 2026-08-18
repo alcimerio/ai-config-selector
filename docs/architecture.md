@@ -46,7 +46,7 @@ tests the pinned installer without changing Profile, Adapter, Session, or CLI
 runtime contracts.
 
 The distribution model uses two exact terms. A **Supported Platform** is an
-operating-system family and version: macOS 26 or Ubuntu 24.04 LTS for v0.2.0. A
+operating-system family and version: macOS 26 or Ubuntu 24.04 LTS for v0.3.0. A
 **Supported Release Target** is a supported operating-system and architecture
 pair: `darwin/arm64`, `darwin/amd64`, `linux/amd64`, or `linux/arm64`. The
 downloadable binary for one of those targets is a Supported Release binary only
@@ -131,6 +131,10 @@ flowchart LR
         Session[Ephemeral Session<br/>selected bundles + target state]
     end
 
+    subgraph ProcessSandbox[Process Sandbox — process isolation]
+        Sandbox[Certified host + native backend<br/>validated paths · environment · descriptors · lifecycle]
+    end
+
     Repository[Repository-local capabilities<br/>target-native discovery]
     Target[Target AI coding CLI]
 
@@ -140,8 +144,9 @@ flowchart LR
     Adapter -->|read| Global
     Adapter -->|materialize| Session
     Allowed -->|allowlisted copy| Session
-    Session -.->|HOME + XDG| Target
-    Adapter -->|preflight / start| Target
+    Session -.->|Session-scoped HOME + XDG| Sandbox
+    Adapter -->|preflight / start| Sandbox
+    Sandbox -->|contained processes| Target
     Repository -.->|inherited discovery| Target
 ```
 
@@ -150,9 +155,29 @@ planning, and launch interfaces. It does not import Skills types or switch on
 category IDs. A CLI Adapter assembles its fixed Registry and implements
 target-specific editing and process behavior. Profile storage delegates schema
 normalization to that Registry and does not depend on target paths.
-The Session boundary in the diagram represents configuration isolation. The
-separate Process Sandbox boundary prepares every target process and owns native
-backend selection and containment policy.
+The Session boundary in the diagram represents configuration isolation only.
+The separate Process Sandbox boundary prepares every target process and owns
+certified-host validation, native-backend selection, containment policy, and
+process lifecycle. A Profile supplies capability choices; it cannot select a
+backend, pass a policy, or request an unsandboxed launch.
+
+### v0.3.0 native-evidence map
+
+The public process-isolation claims in this document are scoped to the
+four-target native candidate gate from [issue #62](https://github.com/alcimerio/ai-config-selector/issues/62).
+The maintained [release workflow](../.github/workflows/release.yml) installs
+and tests one supplied candidate on macOS 26 `darwin/arm64` and `darwin/amd64`,
+plus Ubuntu 24.04 LTS `linux/amd64` and `linux/arm64`; it does not rebuild a
+candidate in the native jobs. Source builds are not release evidence.
+
+| Public claim | Exact evidence or record |
+| --- | --- |
+| Certified backend selection and no unsandboxed fallback | [candidate contract](../acceptance/promoted_artifact_native_test.go), [sandbox assembly test](../internal/adapter/devin/adapter_test.go) |
+| Allowed workspace/Session paths; denied host paths and symlink escape | [candidate containment test](../acceptance/promoted_artifact_native_test.go) |
+| Environment allowlist, terminal descriptors, host Unix sockets, and outbound IP behavior | [candidate containment test](../acceptance/promoted_artifact_native_test.go) |
+| Preflight, signals, resize, descendants, concurrent leases, and cleanup | [candidate lifecycle test](../acceptance/promoted_artifact_test.go) and [candidate containment test](../acceptance/promoted_artifact_native_test.go) |
+| Bubblewrap package/AppArmor prerequisite | [Ubuntu workflow setup](../.github/workflows/release.yml) and the [Ubuntu compatibility record](#current-limitations) |
+| Egress, administrator, repository-local-Skill, and source-build exceptions | [current limitations](#current-limitations) |
 
 ## Profile lifecycle
 
@@ -356,7 +381,7 @@ immutable Release attestation are complementary evidence. None provides source
 safety, malware absence, Apple Developer ID identity, notarization, Apple
 malware review, or Gatekeeper trust.
 
-v0.2.0 macOS binaries are unsigned and unnotarized. Gatekeeper behavior can
+v0.3.0 macOS binaries are unsigned and unnotarized. Gatekeeper behavior can
 vary with quarantine provenance, prior user decisions, host policy, and device
 management. The supported flow never disables Gatekeeper or removes quarantine;
 any permitted trust decision remains explicit and user-controlled.
@@ -374,6 +399,12 @@ launch uses that boundary. ACS fails closed before leasing a Session when the
 host, executable, workspace, runtime inputs, or required native backend cannot
 be validated; a later preparation failure removes the unused Session.
 
+Backend selection is fixed by the certified host: macOS 26 `darwin/arm64` and
+`darwin/amd64` select the verified system Seatbelt executable, while Ubuntu
+24.04 LTS `linux/amd64` and `linux/arm64` select verified system Bubblewrap.
+Other hosts are rejected. Neither Profile data nor a public CLI/configuration
+input selects a backend or weakens this decision.
+
 The shared layer passes only Session-scoped HOME, XDG, and temporary paths, a
 fixed safe PATH, and validated terminal and locale values. It has no public
 backend selector, policy input, environment passthrough, or sandbox bypass.
@@ -387,6 +418,14 @@ diagnostic suppresses generated policy text, private paths, credentials,
 account values, environment entries, raw backend or Devin output, and terminal
 control characters. ACS has no argument, Profile, configuration, or backend
 selection input that can request an unsandboxed launch.
+
+The process environment is rebuilt, not inherited: `HOME`, `XDG_CONFIG_HOME`,
+`XDG_DATA_HOME`, `XDG_CACHE_HOME`, `XDG_STATE_HOME`, `TMPDIR`, and a fixed
+`PATH` point at the Session or safe runtime. Only validated `TERM`,
+`COLORTERM`, `LANG`, `LC_ALL`, and `LC_CTYPE` values may be retained. Other
+host environment values are excluded. The target receives only its standard
+terminal descriptors; backend-only control descriptors are close-on-exec and
+do not reach Devin.
 The Darwin backend verifies the root-owned system `sandbox-exec`, builds a
 default-deny Seatbelt policy from validated parameters, and confines the
 workspace, Session, named runtime reads, IP networking, resolver socket, and
@@ -408,6 +447,10 @@ internal ACS supervisor and its target in a dedicated Seatbelt instance. The
 target receives only standard input, output, and error; the supervisor alone
 retains a close-on-exec control socket used for signal forwarding and an
 outer-ACS cleanup challenge.
+
+A broad Seatbelt prototype used during feasibility work is historical only.
+It does not describe a broader production policy: v0.3.0 macOS claims remain
+limited to the verified system backend and the native-evidence map above.
 
 After the target leader exits, the supervisor uses the public libproc
 `proc_listallpids` and `proc_pidinfo` APIs to find same-instance processes.
@@ -448,7 +491,8 @@ empty-root mount namespace with writable workspace and Session mounts,
 read-only named runtime inputs and system runtime, Session-local temporary
 storage, and no host-home or host-socket mounts. IPC, PID, UTS, cgroup, and user
 namespaces contain descendants while the host IP network namespace preserves ordinary
-outbound networking. The backend clears the environment before applying the
+outbound networking. ACS is not an egress firewall: it does not filter or
+approve IP destinations. The backend clears the environment before applying the
 shared allowlist, and the target inherits only the three shared terminal
 descriptors. Bubblewrap setup temporarily inherits two private pipe
 descriptors for the child-identity and user-namespace release handshake; ACS
@@ -679,6 +723,14 @@ Skills guards fuzzy search and navigation responsiveness.
 - Profiles cannot be edited, deleted, imported, or exported through the CLI.
 - ACS does not filter repository-local Skills.
 - On Ubuntu, Bubblewrap provides filesystem and process isolation, while
-  outbound networking remains allowed and ACS does not filter that traffic.
+  outbound networking remains allowed; ACS is not an egress firewall and does
+  not filter that traffic.
 - On macOS, Seatbelt provides filesystem and process isolation while allowing
   the required IP networking and resolver socket access.
+- Existing Profile files and selections remain compatible, but launch now also
+  requires the certified host and ready native backend; a Profile cannot opt
+  into an unsandboxed compatibility mode.
+- Bubblewrap's signed-system package and dpkg verification are not a defense
+  against an administrator who controls the executable and package database.
+- Source builds and the optional real-Devin smoke are not release evidence;
+  only the supplied-candidate native matrix supports the release claim.
