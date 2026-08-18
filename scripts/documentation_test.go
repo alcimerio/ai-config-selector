@@ -139,6 +139,71 @@ func TestV030DefaultInstallVerificationDoesNotAssumePATH(t *testing.T) {
 	}
 }
 
+func TestV030ReadmeArchiveVerificationUsesExactV030Asset(t *testing.T) {
+	contents, err := os.ReadFile(filepath.Join("..", "README.md"))
+	if err != nil {
+		t.Fatalf("read README.md: %v", err)
+	}
+
+	const releaseVersion = "v0.3.0"
+	wantArchive := "acs_" + strings.TrimPrefix(releaseVersion, "v") + "_darwin_arm64.tar.gz"
+	text := string(contents)
+	for _, required := range []string{
+		"release_version=" + releaseVersion,
+		"archive=" + wantArchive,
+		`"$release_url/$archive"`,
+	} {
+		if !strings.Contains(text, required) {
+			t.Errorf("README.md archive verification does not bind %s to %q", releaseVersion, required)
+		}
+	}
+	if strings.Contains(text, "acs_0.2.0_darwin_arm64.tar.gz") {
+		t.Fatal("README.md archive verification retains the v0.2.0 darwin/arm64 asset")
+	}
+}
+
+func TestV030ChecklistSeparatesTagAuthorizationFromPostTagEvidence(t *testing.T) {
+	contents, err := os.ReadFile(filepath.Join("..", "docs", "releases", "v0.3.0-checklist.md"))
+	if err != nil {
+		t.Fatalf("read v0.3.0 checklist: %v", err)
+	}
+	text := string(contents)
+	normalizedText := strings.Join(strings.Fields(text), " ")
+	preTag := "## Pre-tag authorization evidence — blocks tag creation and push"
+	localTag := "## Local tag preparation and push authorization — blocks push only"
+	tagTriggered := "## Tag-triggered workflow evidence — necessarily pending before push"
+	postPublication := "## Public-release evidence — necessarily pending until publication"
+	followUp := "## Auditable post-publication follow-up branch and PR"
+	for _, required := range []string{
+		preTag,
+		localTag,
+		tagTriggered,
+		postPublication,
+		followUp,
+		"Pre-tag review of [issue #62]",
+		"docs/v0.3.0-publication-evidence",
+	} {
+		if !strings.Contains(text, required) {
+			t.Errorf("v0.3.0 checklist omits non-circular release evidence guard %q", required)
+		}
+	}
+	for _, required := range []string{
+		"does not complete any v0.3.0 tag-run row",
+		"do not block local tag creation or the authorized tag push",
+		"workflow URLs, target outcomes, public asset hashes, provenance results, and immutable Release identity",
+	} {
+		if !strings.Contains(normalizedText, required) {
+			t.Errorf("v0.3.0 checklist omits non-circular release evidence guard %q", required)
+		}
+	}
+	if !(strings.Index(text, preTag) < strings.Index(text, localTag) &&
+		strings.Index(text, localTag) < strings.Index(text, tagTriggered) &&
+		strings.Index(text, tagTriggered) < strings.Index(text, postPublication) &&
+		strings.Index(text, postPublication) < strings.Index(text, followUp)) {
+		t.Fatal("v0.3.0 checklist does not order pre-tag, tag-triggered, publication, and follow-up evidence")
+	}
+}
+
 func TestHistoricalV020ReleaseRecordsRemainAvailable(t *testing.T) {
 	for _, document := range []string{"docs/releases/v0.2.0.md", "docs/releases/v0.2.0-checklist.md"} {
 		contents, err := os.ReadFile(filepath.Join("..", document))

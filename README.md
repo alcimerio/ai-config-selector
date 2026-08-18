@@ -85,7 +85,7 @@ Set `archive` to the file for your Supported Release Target, then download it
 and the manifest from the same release-specific URL. On macOS:
 
 ```sh
-archive=acs_0.2.0_darwin_arm64.tar.gz
+archive=acs_0.3.0_darwin_arm64.tar.gz
 curl --fail --location --proto '=https' --tlsv1.2 --output "$archive" "$release_url/$archive"
 curl --fail --location --proto '=https' --tlsv1.2 --output SHA256SUMS "$release_url/SHA256SUMS"
 awk -v selected="$archive" '$2 == selected { print }' SHA256SUMS | shasum -a 256 --check -
