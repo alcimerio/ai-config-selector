@@ -116,19 +116,43 @@ func (backend *seatbeltBackend) prepare(ctx context.Context, request validatedPr
 		}
 		return nil, sandboxError(SandboxSetupFailed, nil)
 	}
-	challenge := make([]byte, seatbeltChallengeSize)
-	if _, err := rand.Read(challenge); err != nil {
+	statusSockets, err := unix.Socketpair(unix.AF_UNIX, unix.SOCK_STREAM, 0)
+	if err != nil {
 		_ = control.Close()
 		_ = helperControl.Close()
 		return nil, sandboxError(SandboxSetupFailed, err)
 	}
-	command := exec.CommandContext(ctx, backend.executable, arguments...)
+	unix.CloseOnExec(statusSockets[0])
+	unix.CloseOnExec(statusSockets[1])
+	statusControl := os.NewFile(uintptr(statusSockets[0]), "acs-seatbelt-status-control")
+	proxyStatus := os.NewFile(uintptr(statusSockets[1]), "acs-seatbelt-proxy-status")
+	if statusControl == nil || proxyStatus == nil {
+		if statusControl != nil {
+			_ = statusControl.Close()
+		}
+		if proxyStatus != nil {
+			_ = proxyStatus.Close()
+		}
+		_ = control.Close()
+		_ = helperControl.Close()
+		return nil, sandboxError(SandboxSetupFailed, nil)
+	}
+	challenge := make([]byte, seatbeltChallengeSize)
+	if _, err := rand.Read(challenge); err != nil {
+		_ = control.Close()
+		_ = helperControl.Close()
+		_ = statusControl.Close()
+		_ = proxyStatus.Close()
+		return nil, sandboxError(SandboxSetupFailed, err)
+	}
+	proxyArguments := append([]string{seatbeltStatusProxyArgument, "--", backend.executable}, arguments...)
+	command := exec.CommandContext(ctx, supervisor, proxyArguments...)
 	command.Dir = request.workspace
-	command.Env = append(append([]string(nil), request.environment...), seatbeltHelperEnvironment+"=3")
+	command.Env = seatbeltStatusProxyEnvironment(request.environment)
 	command.Stdin = request.terminal.Input
 	command.Stdout = request.terminal.Output
 	command.Stderr = request.terminal.ErrorOutput
-	command.ExtraFiles = []*os.File{helperControl}
+	command.ExtraFiles = []*os.File{proxyStatus, helperControl}
 	terminal, foregroundGroup := seatbeltForegroundTerminal(request.terminal)
 	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if terminal != nil {
@@ -138,7 +162,8 @@ func (backend *seatbeltBackend) prepare(ctx context.Context, request validatedPr
 	process := &seatbeltProcess{
 		ctx: ctx, command: command, terminal: terminal, foregroundGroup: foregroundGroup,
 		cleanupDone: make(chan struct{}), supervised: true, control: control,
-		helperControl: helperControl, challenge: challenge,
+		helperControl: helperControl, statusControl: statusControl, proxyStatus: proxyStatus,
+		challenge: challenge,
 	}
 	command.Cancel = process.cancel
 	command.WaitDelay = time.Second
@@ -189,8 +214,11 @@ type seatbeltProcess struct {
 	supervised                bool
 	control                   *os.File
 	helperControl             *os.File
+	statusControl             *os.File
+	proxyStatus               *os.File
 	challenge                 []byte
 	controlMutex              sync.Mutex
+	statusControlMutex        sync.Mutex
 	proofTimeout              func() <-chan time.Time
 }
 
@@ -211,9 +239,14 @@ func (process *seatbeltProcess) Start() error {
 		_ = process.helperControl.Close()
 		process.helperControl = nil
 	}
+	if process.proxyStatus != nil {
+		_ = process.proxyStatus.Close()
+		process.proxyStatus = nil
+	}
 	if err == nil && process.supervised {
 		if writeErr := process.writeControl(process.challenge); writeErr != nil {
 			process.closeControl()
+			process.closeStatusControl()
 			process.quarantineUnprovenCleanup()
 			process.reapStartedSupervisor()
 			return errors.Join(sandboxError(SandboxProcessStartFailed, writeErr), process.restoreForegroundTerminal())
@@ -223,6 +256,7 @@ func (process *seatbeltProcess) Start() error {
 		return nil
 	}
 	process.closeControl()
+	process.closeStatusControl()
 	process.markCleanupDone()
 	return errors.Join(err, process.restoreForegroundTerminal())
 }
@@ -254,12 +288,18 @@ func (process *seatbeltProcess) Wait() error {
 }
 
 func (process *seatbeltProcess) waitForSupervisorProof() error {
-	waitErr := process.command.Wait()
-	terminalErr := process.restoreForegroundTerminal()
+	waitDone := make(chan error, 1)
+	go func() { waitDone <- process.command.Wait() }()
 	proof, proofErr := process.readCleanupProof()
 	if proofErr == nil {
 		proofErr = validateSeatbeltCleanupProof(proof, process.challenge)
 	}
+	if proofErr == nil {
+		proofErr = process.writeTargetStatus(proof)
+	}
+	process.closeStatusControl()
+	waitErr := <-waitDone
+	terminalErr := process.restoreForegroundTerminal()
 	if proofErr == nil {
 		proofErr = matchSeatbeltProofStatus(proof, waitErr)
 	}
@@ -435,6 +475,34 @@ func (process *seatbeltProcess) closeControl() {
 	defer process.controlMutex.Unlock()
 	if process.control != nil {
 		_ = process.control.Close()
+	}
+}
+
+func (process *seatbeltProcess) writeTargetStatus(data []byte) error {
+	status, err := seatbeltTargetStatus(data)
+	if err != nil {
+		return err
+	}
+	process.statusControlMutex.Lock()
+	defer process.statusControlMutex.Unlock()
+	if process.statusControl == nil {
+		return os.ErrProcessDone
+	}
+	for len(status) > 0 {
+		written, err := process.statusControl.Write(status)
+		if err != nil {
+			return err
+		}
+		status = status[written:]
+	}
+	return nil
+}
+
+func (process *seatbeltProcess) closeStatusControl() {
+	process.statusControlMutex.Lock()
+	defer process.statusControlMutex.Unlock()
+	if process.statusControl != nil {
+		_ = process.statusControl.Close()
 	}
 }
 

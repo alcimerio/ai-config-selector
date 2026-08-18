@@ -46,7 +46,7 @@ tests the pinned installer without changing Profile, Adapter, Session, or CLI
 runtime contracts.
 
 The distribution model uses two exact terms. A **Supported Platform** is an
-operating-system family and version: macOS 26 or Ubuntu 24.04 LTS for v0.3.0. A
+operating-system family and version: macOS 26 or Ubuntu 24.04 LTS for v0.3.1. A
 **Supported Release Target** is a supported operating-system and architecture
 pair: `darwin/arm64`, `darwin/amd64`, `linux/amd64`, or `linux/arm64`. The
 downloadable binary for one of those targets is a Supported Release binary only
@@ -161,7 +161,7 @@ certified-host validation, native-backend selection, containment policy, and
 process lifecycle. A Profile supplies capability choices; it cannot select a
 backend, pass a policy, or request an unsandboxed launch.
 
-### v0.3.0 native-evidence map
+### v0.3.1 native-evidence map
 
 The public process-isolation claims in this document are scoped to the
 four-target native candidate gate from [issue #62](https://github.com/alcimerio/ai-config-selector/issues/62).
@@ -381,7 +381,7 @@ immutable Release attestation are complementary evidence. None provides source
 safety, malware absence, Apple Developer ID identity, notarization, Apple
 malware review, or Gatekeeper trust.
 
-v0.3.0 macOS binaries are unsigned and unnotarized. Gatekeeper behavior can
+v0.3.1 macOS binaries are unsigned and unnotarized. Gatekeeper behavior can
 vary with quarantine provenance, prior user decisions, host policy, and device
 management. The supported flow never disables Gatekeeper or removes quarantine;
 any permitted trust decision remains explicit and user-controlled.
@@ -449,7 +449,7 @@ retains a close-on-exec control socket used for signal forwarding and an
 outer-ACS cleanup challenge.
 
 A broad Seatbelt prototype used during feasibility work is historical only.
-It does not describe a broader production policy: v0.3.0 macOS claims remain
+It does not describe a broader production policy: v0.3.1 macOS claims remain
 limited to the verified system backend and the native-evidence map above.
 
 After the target leader exits, the supervisor uses the public libproc

@@ -16,6 +16,7 @@ import (
 const (
 	seatbeltProcPIDListFDs   = 1
 	seatbeltProcPIDTBSDInfo  = 3
+	seatbeltProcStatusIdle   = 1
 	seatbeltProcStatusStop   = 4
 	seatbeltProcStatusZombie = 5
 )

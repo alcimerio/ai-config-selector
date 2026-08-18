@@ -23,13 +23,19 @@ import (
 )
 
 const (
-	seatbeltHelperArgument         = "--acs-internal-seatbelt-supervisor-v1"
-	seatbeltHelperEnvironment      = "ACS_INTERNAL_SEATBELT_SUPERVISOR_FD"
-	seatbeltProofMagic             = "ACS-SEATBELT-CLEANUP"
-	seatbeltProofVersion           = 1
-	seatbeltChallengeSize          = 32
-	seatbeltCleanupDeadline        = 2 * time.Second
-	seatbeltDescriptorSealAttempts = 8
+	seatbeltHelperArgument            = "--acs-internal-seatbelt-supervisor-v1"
+	seatbeltHelperEnvironment         = "ACS_INTERNAL_SEATBELT_SUPERVISOR_FD"
+	seatbeltStatusProxyArgument       = "--acs-internal-seatbelt-status-proxy-v1"
+	seatbeltStatusProxyEnvironmentKey = "ACS_INTERNAL_SEATBELT_STATUS_PROXY_FD"
+	seatbeltStatusProxyControlFD      = 4
+	seatbeltProofMagic                = "ACS-SEATBELT-CLEANUP"
+	seatbeltProofVersion              = 1
+	seatbeltChallengeSize             = 32
+	seatbeltCleanupDeadline           = 2 * time.Second
+	seatbeltDescriptorSealAttempts    = 8
+	seatbeltStatusPacketSize          = 2
+	seatbeltStatusExit                = 'E'
+	seatbeltStatusSignal              = 'S'
 )
 
 type seatbeltCleanupProof struct {
@@ -44,6 +50,13 @@ type seatbeltCleanupProof struct {
 }
 
 func init() {
+	if len(os.Args) >= 4 && os.Args[1] == seatbeltStatusProxyArgument && os.Args[2] == "--" {
+		statusFD, err := strconv.Atoi(os.Getenv(seatbeltStatusProxyEnvironmentKey))
+		if err != nil || statusFD != 3 {
+			os.Exit(125)
+		}
+		os.Exit(runSeatbeltStatusProxy(statusFD, seatbeltStatusProxyControlFD, os.Args[3], os.Args[4:]))
+	}
 	if len(os.Args) < 4 || os.Args[1] != seatbeltHelperArgument || os.Args[2] != "--" {
 		return
 	}
@@ -52,6 +65,69 @@ func init() {
 		os.Exit(125)
 	}
 	os.Exit(runSeatbeltSupervisor(fd, os.Args[3], os.Args[4:]))
+}
+
+// runSeatbeltStatusProxy is the direct child of ACS. sandbox-exec does not
+// consistently preserve a signaled descendant's wait status on macOS 26, so
+// the parent approves an authenticated target result only after the contained
+// supervisor has proved cleanup. The proxy then exits with that exact result.
+func runSeatbeltStatusProxy(statusFD, controlFD int, executable string, arguments []string) int {
+	if executable == "" || statusFD < 3 || controlFD < 3 || statusFD == controlFD {
+		return 125
+	}
+	unix.CloseOnExec(statusFD)
+	unix.CloseOnExec(controlFD)
+	status := os.NewFile(uintptr(statusFD), "acs-seatbelt-status-control")
+	control := os.NewFile(uintptr(controlFD), "acs-seatbelt-helper-control")
+	if status == nil || control == nil {
+		if status != nil {
+			_ = status.Close()
+		}
+		if control != nil {
+			_ = control.Close()
+		}
+		return 125
+	}
+	defer status.Close()
+	defer control.Close()
+
+	command := exec.Command(executable, arguments...)
+	command.Env = seatbeltSupervisorEnvironment(os.Environ())
+	command.Stdin = os.Stdin
+	command.Stdout = os.Stdout
+	command.Stderr = os.Stderr
+	command.ExtraFiles = []*os.File{control}
+	if err := command.Start(); err != nil {
+		return 125
+	}
+	_ = control.Close()
+	_ = command.Wait()
+
+	packet := make([]byte, seatbeltStatusPacketSize)
+	if _, err := io.ReadFull(status, packet); err != nil {
+		return 125
+	}
+	return seatbeltStatusProxyExit(packet)
+}
+
+func seatbeltStatusProxyExit(packet []byte) int {
+	if len(packet) != seatbeltStatusPacketSize {
+		return 125
+	}
+	switch packet[0] {
+	case seatbeltStatusExit:
+		return int(packet[1])
+	case seatbeltStatusSignal:
+		if packet[1] == 0 || packet[1] > 127 {
+			return 125
+		}
+		deathSignal := syscall.Signal(packet[1])
+		signal.Reset(deathSignal)
+		_ = syscall.Kill(os.Getpid(), deathSignal)
+		return 128 + int(packet[1])
+	default:
+		return 125
+	}
 }
 
 func runSeatbeltSupervisor(controlFD int, target string, arguments []string) int {
@@ -278,14 +354,45 @@ func verifySeatbeltDescriptorSnapshot(descriptors []int) (bool, error) {
 }
 
 func seatbeltTargetEnvironment(environment []string) []string {
+	return seatbeltEnvironmentWithoutReservedDescriptors(environment)
+}
+
+func seatbeltStatusProxyEnvironment(environment []string) []string {
+	clean := seatbeltEnvironmentWithoutReservedDescriptors(environment)
+	return append(clean, seatbeltStatusProxyEnvironmentKey+"=3")
+}
+
+func seatbeltSupervisorEnvironment(environment []string) []string {
+	clean := seatbeltEnvironmentWithoutReservedDescriptors(environment)
+	return append(clean, seatbeltHelperEnvironment+"=3")
+}
+
+func seatbeltEnvironmentWithoutReservedDescriptors(environment []string) []string {
 	clean := make([]string, 0, len(environment))
-	prefix := seatbeltHelperEnvironment + "="
 	for _, value := range environment {
-		if !strings.HasPrefix(value, prefix) {
+		if !strings.HasPrefix(value, seatbeltHelperEnvironment+"=") &&
+			!strings.HasPrefix(value, seatbeltStatusProxyEnvironmentKey+"=") {
 			clean = append(clean, value)
 		}
 	}
 	return clean
+}
+
+func seatbeltTargetStatus(data []byte) ([]byte, error) {
+	var proof seatbeltCleanupProof
+	if err := json.Unmarshal(data, &proof); err != nil {
+		return nil, errors.New("decode Seatbelt target status proof")
+	}
+	if proof.NoTargetStarted {
+		return []byte{seatbeltStatusExit, 125}, nil
+	}
+	if proof.TargetExited {
+		return []byte{seatbeltStatusExit, byte(proof.TargetExitCode)}, nil
+	}
+	if proof.TargetSignal != 0 {
+		return []byte{seatbeltStatusSignal, byte(proof.TargetSignal)}, nil
+	}
+	return nil, errors.New("Seatbelt target status is unavailable")
 }
 
 func seatbeltHelperTerminal() (int, int) {
@@ -317,6 +424,12 @@ type seatbeltProcessEnumerator interface {
 	allPIDs() ([]int, error)
 	info(int) (seatbeltBSDInfo, error)
 }
+
+// errSeatbeltProcessSnapshotUnstable marks a single process-table entry that
+// changed while proc_pidinfo was reading it. A transient entry cannot prove
+// cleanup, but it must not permanently poison the observer: the settling pass
+// rechecks it until it is either stable or the fixed cleanup deadline expires.
+var errSeatbeltProcessSnapshotUnstable = errors.New("Seatbelt process snapshot is unstable")
 
 type seatbeltIdentity struct {
 	second      uint64
@@ -378,7 +491,7 @@ func observeSeatbeltTargets(api seatbeltProcessEnumerator, self int, ledger *sea
 	ticker := time.NewTicker(5 * time.Millisecond)
 	defer ticker.Stop()
 	for {
-		if err := recordSeatbeltTargets(api, self, ledger); err != nil {
+		if err := recordSeatbeltTargets(api, self, ledger); err != nil && !errors.Is(err, errSeatbeltProcessSnapshotUnstable) {
 			ledger.fail(err)
 			return
 		}
@@ -402,13 +515,19 @@ func recordSeatbeltTargets(api seatbeltProcessEnumerator, self int, ledger *seat
 		}
 		info, err := api.info(pid)
 		if err != nil {
-			if !errors.Is(err, syscall.ESRCH) && ledger.containsPID(pid) {
+			if errors.Is(err, syscall.ESRCH) || errors.Is(syscall.Kill(pid, 0), syscall.ESRCH) {
+				continue
+			}
+			if errors.Is(syscall.Kill(pid, 0), syscall.EPERM) && ledger.containsPID(pid) {
 				return errors.New("tracked target enumeration is ambiguous")
 			}
-			continue
+			return errSeatbeltProcessSnapshotUnstable
 		}
 		if info.Status == seatbeltProcStatusZombie {
 			continue
+		}
+		if !seatbeltProcessSnapshotMatchesPID(pid, info) {
+			return errSeatbeltProcessSnapshotUnstable
 		}
 		probeErr := syscall.Kill(pid, 0)
 		if probeErr == nil {
@@ -432,7 +551,11 @@ func settleSeatbeltInstance(api seatbeltProcessEnumerator, ledger *seatbeltIdent
 			return errors.New("Seatbelt quiescence did not converge")
 		}
 		changed, err := stopSeatbeltPass(api, ledger, self, leader)
-		if err != nil {
+		if errors.Is(err, errSeatbeltProcessSnapshotUnstable) {
+			// A changing snapshot is not a zero-target observation. Force the
+			// existing bounded settling cadence to obtain a fresh snapshot.
+			changed = 1
+		} else if err != nil {
 			return err
 		}
 		if changed == 0 {
@@ -447,7 +570,11 @@ func settleSeatbeltInstance(api seatbeltProcessEnumerator, ledger *seatbeltIdent
 			return errors.New("Seatbelt termination did not converge")
 		}
 		live, err := killSeatbeltPass(api, ledger, self, leader)
-		if err != nil {
+		if errors.Is(err, errSeatbeltProcessSnapshotUnstable) {
+			// Do not declare cleanup complete until a later pass has a stable
+			// process-table view.
+			live = 1
+		} else if err != nil {
 			return err
 		}
 		if live == 0 {
@@ -511,16 +638,22 @@ func visitLiveSeatbeltTargets(api seatbeltProcessEnumerator, ledger *seatbeltIde
 				continue
 			}
 			probeErr := syscall.Kill(pid, 0)
-			if errors.Is(probeErr, syscall.ESRCH) || errors.Is(probeErr, syscall.EPERM) {
-				if (pid == leader || ledger.containsPID(pid)) && !errors.Is(probeErr, syscall.ESRCH) {
+			if errors.Is(probeErr, syscall.ESRCH) {
+				continue
+			}
+			if errors.Is(probeErr, syscall.EPERM) {
+				if pid == leader || ledger.containsPID(pid) {
 					return errors.New("target credential identity is ambiguous")
 				}
 				continue
 			}
-			return errors.New("inspect live process: enumeration failed")
+			return errSeatbeltProcessSnapshotUnstable
 		}
 		if info.Status == seatbeltProcStatusZombie {
 			continue
+		}
+		if !seatbeltProcessSnapshotMatchesPID(pid, info) {
+			return errSeatbeltProcessSnapshotUnstable
 		}
 		if err := syscall.Kill(pid, 0); err != nil {
 			if errors.Is(err, syscall.EPERM) && (pid == leader || ledger.contains(pid, info)) {
@@ -537,6 +670,13 @@ func visitLiveSeatbeltTargets(api seatbeltProcessEnumerator, ledger *seatbeltIde
 		}
 	}
 	return nil
+}
+
+func seatbeltProcessSnapshotMatchesPID(pid int, info seatbeltBSDInfo) bool {
+	// SIDL is a kernel transition state. proc_pidinfo may retain the PID while
+	// credentials have already been cleared on the path to a zombie; it cannot
+	// authorize a target operation or prove that the target is gone.
+	return info.PID == uint32(pid) && info.Status != 0 && info.Status != seatbeltProcStatusIdle
 }
 
 func seatbeltCredentialsMatch(info seatbeltBSDInfo, uid, gid uint32) bool {
