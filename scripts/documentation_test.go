@@ -532,8 +532,16 @@ func TestWorkflowsRunningNativeTestsProvisionTrustedUbuntuBubblewrap(t *testing.
 		}
 		text := string(contents)
 		for _, setup := range []string{
-			"sudo apt-get update",
-			"sudo apt-get install --yes --no-install-recommends apparmor apparmor-utils bubblewrap",
+			"Acquire::Retries=2",
+			"Acquire::http::Timeout=15",
+			"Acquire::https::Timeout=15",
+			`case "$(/usr/bin/dpkg --print-architecture)" in`,
+			"amd64) ubuntu_archive='https://archive.ubuntu.com/ubuntu/' ;;",
+			"arm64) ubuntu_archive='https://ports.ubuntu.com/ubuntu-ports/' ;;",
+			"*) echo 'Unsupported Ubuntu package architecture' >&2; exit 1 ;;",
+			"https://archive.ubuntu.com/ubuntu/",
+			"timeout 60s sudo apt-get \"${apt_options[@]}\" install --yes --no-install-recommends apparmor apparmor-utils bubblewrap",
+			"--retry 3 --retry-all-errors --connect-timeout 10 --max-time 60",
 			"https://gitlab.com/apparmor/apparmor/-/raw/v4.0.3/profiles/apparmor/profiles/extras/bwrap-userns-restrict",
 			"a964037f6cf0df1099f14226b037eaedde6237c86e715188e93eb460b30be859",
 			"sha256sum --check --status",
@@ -555,6 +563,9 @@ func TestWorkflowsRunningNativeTestsProvisionTrustedUbuntuBubblewrap(t *testing.
 				t.Errorf("%s contains Ubuntu Bubblewrap setup %q %d times, want 1", workflow.name, setup, got)
 			}
 		}
+		if got := strings.Count(text, "timeout 60s sudo apt-get \"${apt_options[@]}\" update"); got != 2 {
+			t.Errorf("%s contains %d bounded Ubuntu package index attempts, want 2", workflow.name, got)
+		}
 		for _, unsafe := range []string{
 			"kernel.apparmor_restrict_unprivileged_userns=0",
 			"apparmor_parser -R",
@@ -567,7 +578,7 @@ func TestWorkflowsRunningNativeTestsProvisionTrustedUbuntuBubblewrap(t *testing.
 		if workflow.platformGuard != "" && strings.Count(text, workflow.platformGuard) != 1 {
 			t.Errorf("%s does not restrict Ubuntu Bubblewrap setup to its Linux matrix entries", workflow.name)
 		}
-		if strings.Index(text, "sudo apt-get install --yes --no-install-recommends apparmor apparmor-utils bubblewrap") > strings.Index(text, "go test ./...") {
+		if strings.Index(text, "install --yes --no-install-recommends apparmor apparmor-utils bubblewrap") > strings.Index(text, "go test ./...") {
 			t.Errorf("%s installs Bubblewrap after native tests", workflow.name)
 		}
 		if strings.Index(text, "--unshare-user --unshare-ipc --unshare-pid --unshare-uts --unshare-cgroup") < strings.Index(text, "/usr/sbin/apparmor_parser --replace") {
