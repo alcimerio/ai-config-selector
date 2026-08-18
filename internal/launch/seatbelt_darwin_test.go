@@ -812,6 +812,21 @@ func TestSeatbeltTransientZombieSnapshotDoesNotPoisonCleanupProof(t *testing.T) 
 	}
 }
 
+func TestSeatbeltRevalidationTreatsLiveEnumerationFailureAsUnstable(t *testing.T) {
+	pid := os.Getpid()
+	matched, err := sameSeatbeltProcessIdentity(
+		seatbeltTestEnumerator{},
+		pid,
+		seatbeltBSDInfo{PID: uint32(pid), StartSecond: 1, StartMicrosecond: 2},
+	)
+	if matched {
+		t.Fatal("unreadable process identity unexpectedly matched")
+	}
+	if !errors.Is(err, errSeatbeltProcessSnapshotUnstable) {
+		t.Fatalf("revalidation error = %v, want transient snapshot", err)
+	}
+}
+
 func TestSeatbeltDescriptorSealingRetriesTransientEBADF(t *testing.T) {
 	sentinel, err := os.CreateTemp(t.TempDir(), "seatbelt-retry-descriptor")
 	if err != nil {
