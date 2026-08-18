@@ -7,14 +7,14 @@ import (
 	"testing"
 )
 
-func TestV030DocumentationUsesOneSupportAndInstallationContract(t *testing.T) {
+func TestV031DocumentationUsesOneSupportAndInstallationContract(t *testing.T) {
 	repository := filepath.Clean("..")
 	documents := []string{
 		"README.md",
 		"CONTRIBUTING.md",
 		"docs/architecture.md",
-		"docs/releases/v0.3.0.md",
-		"docs/releases/v0.3.0-checklist.md",
+		"docs/releases/v0.3.1.md",
+		"docs/releases/v0.3.1-checklist.md",
 	}
 	required := []string{
 		"macOS 26",
@@ -44,7 +44,7 @@ func TestV030DocumentationUsesOneSupportAndInstallationContract(t *testing.T) {
 	}
 }
 
-func TestReadmeTracksPublicLatestReleaseAndV030NativeProcessIsolation(t *testing.T) {
+func TestReadmeTracksPublicLatestReleaseAndV031NativeProcessIsolation(t *testing.T) {
 	contents, err := os.ReadFile(filepath.Join("..", "README.md"))
 	if err != nil {
 		t.Fatalf("read README.md: %v", err)
@@ -72,14 +72,14 @@ func TestReadmeTracksPublicLatestReleaseAndV030NativeProcessIsolation(t *testing
 	}
 }
 
-func TestV030ReleaseNotesMatchTagWorkflowPath(t *testing.T) {
-	notes := filepath.Join("..", "docs", "releases", "v0.3.0.md")
+func TestV031ReleaseNotesMatchTagWorkflowPath(t *testing.T) {
+	notes := filepath.Join("..", "docs", "releases", "v0.3.1.md")
 	info, err := os.Stat(notes)
 	if err != nil {
 		t.Fatalf("stat release notes: %v", err)
 	}
 	if info.Size() == 0 {
-		t.Fatal("v0.3.0 release notes are empty")
+		t.Fatal("v0.3.1 release notes are empty")
 	}
 
 	workflow, err := os.ReadFile(filepath.Join("..", ".github", "workflows", "release.yml"))
@@ -91,7 +91,7 @@ func TestV030ReleaseNotesMatchTagWorkflowPath(t *testing.T) {
 	}
 }
 
-func TestV030ReleaseUsesSoloMaintainerAuthorizationBoundary(t *testing.T) {
+func TestV031ReleaseUsesSoloMaintainerAuthorizationBoundary(t *testing.T) {
 	workflow, err := os.ReadFile(filepath.Join("..", ".github", "workflows", "release.yml"))
 	if err != nil {
 		t.Fatalf("read release workflow: %v", err)
@@ -123,8 +123,8 @@ func TestV030ReleaseUsesSoloMaintainerAuthorizationBoundary(t *testing.T) {
 		t.Fatalf("read CONTRIBUTING.md: %v", err)
 	}
 	for _, required := range []string{
-		"scripts/prepare-release-tag.sh v0.3.0",
-		"git push origin refs/tags/v0.3.0",
+		"scripts/prepare-release-tag.sh v0.3.1",
+		"git push origin refs/tags/v0.3.1",
 		"with no\nrequired reviewers",
 	} {
 		if !strings.Contains(string(contributors), required) {
@@ -135,7 +135,7 @@ func TestV030ReleaseUsesSoloMaintainerAuthorizationBoundary(t *testing.T) {
 		"CONTRIBUTING.md",
 		"docs/architecture.md",
 		"docs/authenticated-release-smoke.md",
-		"docs/releases/v0.3.0-checklist.md",
+		"docs/releases/v0.3.1-checklist.md",
 		".github/workflows/release.yml",
 	} {
 		contents, err := os.ReadFile(filepath.Join("..", document))
@@ -155,8 +155,8 @@ func TestV030ReleaseUsesSoloMaintainerAuthorizationBoundary(t *testing.T) {
 	}
 }
 
-func TestV030DefaultInstallVerificationDoesNotAssumePATH(t *testing.T) {
-	for _, document := range []string{"README.md", "docs/releases/v0.3.0.md"} {
+func TestV031DefaultInstallVerificationDoesNotAssumePATH(t *testing.T) {
+	for _, document := range []string{"README.md", "docs/releases/v0.3.1.md"} {
 		contents, err := os.ReadFile(filepath.Join("..", document))
 		if err != nil {
 			t.Fatalf("read %s: %v", document, err)
@@ -167,13 +167,13 @@ func TestV030DefaultInstallVerificationDoesNotAssumePATH(t *testing.T) {
 	}
 }
 
-func TestV030ReadmeArchiveVerificationUsesExactV030Asset(t *testing.T) {
+func TestV031ReadmeArchiveVerificationUsesExactV031Asset(t *testing.T) {
 	contents, err := os.ReadFile(filepath.Join("..", "README.md"))
 	if err != nil {
 		t.Fatalf("read README.md: %v", err)
 	}
 
-	const releaseVersion = "v0.3.0"
+	const releaseVersion = "v0.3.1"
 	wantArchive := "acs_" + strings.TrimPrefix(releaseVersion, "v") + "_darwin_arm64.tar.gz"
 	text := string(contents)
 	for _, required := range []string{
@@ -188,12 +188,15 @@ func TestV030ReadmeArchiveVerificationUsesExactV030Asset(t *testing.T) {
 	if strings.Contains(text, "acs_0.2.0_darwin_arm64.tar.gz") {
 		t.Fatal("README.md archive verification retains the v0.2.0 darwin/arm64 asset")
 	}
+	if strings.Contains(text, "acs_0.3.0_darwin_arm64.tar.gz") {
+		t.Fatal("README.md archive verification retains the unpublished v0.3.0 darwin/arm64 asset")
+	}
 }
 
-func TestV030ChecklistSeparatesTagAuthorizationFromPostTagEvidence(t *testing.T) {
-	contents, err := os.ReadFile(filepath.Join("..", "docs", "releases", "v0.3.0-checklist.md"))
+func TestV031ChecklistSeparatesTagAuthorizationFromPostTagEvidence(t *testing.T) {
+	contents, err := os.ReadFile(filepath.Join("..", "docs", "releases", "v0.3.1-checklist.md"))
 	if err != nil {
-		t.Fatalf("read v0.3.0 checklist: %v", err)
+		t.Fatalf("read v0.3.1 checklist: %v", err)
 	}
 	text := string(contents)
 	normalizedText := strings.Join(strings.Fields(text), " ")
@@ -209,31 +212,56 @@ func TestV030ChecklistSeparatesTagAuthorizationFromPostTagEvidence(t *testing.T)
 		postPublication,
 		followUp,
 		"Pre-tag review of [issue #62]",
-		"docs/v0.3.0-publication-evidence",
+		"docs/v0.3.1-publication-evidence",
 	} {
 		if !strings.Contains(text, required) {
-			t.Errorf("v0.3.0 checklist omits non-circular release evidence guard %q", required)
+			t.Errorf("v0.3.1 checklist omits non-circular release evidence guard %q", required)
 		}
 	}
 	for _, required := range []string{
-		"does not complete any v0.3.0 tag-run row",
+		"does not complete any v0.3.1 tag-run row",
 		"do not block local tag creation or the authorized tag push",
 		"workflow URLs, target outcomes, public asset hashes, provenance results, and immutable Release identity",
 	} {
 		if !strings.Contains(normalizedText, required) {
-			t.Errorf("v0.3.0 checklist omits non-circular release evidence guard %q", required)
+			t.Errorf("v0.3.1 checklist omits non-circular release evidence guard %q", required)
 		}
 	}
 	if !(strings.Index(text, preTag) < strings.Index(text, localTag) &&
 		strings.Index(text, localTag) < strings.Index(text, tagTriggered) &&
 		strings.Index(text, tagTriggered) < strings.Index(text, postPublication) &&
 		strings.Index(text, postPublication) < strings.Index(text, followUp)) {
-		t.Fatal("v0.3.0 checklist does not order pre-tag, tag-triggered, publication, and follow-up evidence")
+		t.Fatal("v0.3.1 checklist does not order pre-tag, tag-triggered, publication, and follow-up evidence")
 	}
 }
 
-func TestHistoricalV020ReleaseRecordsRemainAvailable(t *testing.T) {
-	for _, document := range []string{"docs/releases/v0.2.0.md", "docs/releases/v0.2.0-checklist.md"} {
+func TestV031ChecklistPreservesUnpublishedV030TagRecord(t *testing.T) {
+	contents, err := os.ReadFile(filepath.Join("..", "docs", "releases", "v0.3.1-checklist.md"))
+	if err != nil {
+		t.Fatalf("read v0.3.1 checklist: %v", err)
+	}
+	text := string(contents)
+	normalizedText := strings.Join(strings.Fields(text), " ")
+	for _, required := range []string{
+		"never moved, deleted, or reused",
+		"[v0.3.0 checklist](v0.3.0-checklist.md)",
+	} {
+		if !strings.Contains(text, required) {
+			t.Errorf("v0.3.1 checklist does not preserve the unpublished v0.3.0 tag record %q", required)
+		}
+	}
+	if !strings.Contains(normalizedText, "was never published") {
+		t.Error("v0.3.1 checklist does not state that the v0.3.0 candidate was never published")
+	}
+}
+
+func TestHistoricalReleaseRecordsRemainAvailable(t *testing.T) {
+	for _, document := range []string{
+		"docs/releases/v0.2.0.md",
+		"docs/releases/v0.2.0-checklist.md",
+		"docs/releases/v0.3.0.md",
+		"docs/releases/v0.3.0-checklist.md",
+	} {
 		contents, err := os.ReadFile(filepath.Join("..", document))
 		if err != nil {
 			t.Fatalf("read %s: %v", document, err)
@@ -673,14 +701,14 @@ func TestContributorRaceGateDocumentsNarrowNativeExceptions(t *testing.T) {
 	}
 }
 
-func TestV030DocumentationBindsProtectionClaimsToNativeEvidence(t *testing.T) {
+func TestV031DocumentationBindsProtectionClaimsToNativeEvidence(t *testing.T) {
 	repository := filepath.Clean("..")
 	documents := []string{
 		"README.md",
 		"CONTRIBUTING.md",
 		"docs/architecture.md",
-		"docs/releases/v0.3.0.md",
-		"docs/releases/v0.3.0-checklist.md",
+		"docs/releases/v0.3.1.md",
+		"docs/releases/v0.3.1-checklist.md",
 	}
 	required := []string{
 		"https://github.com/alcimerio/ai-config-selector/issues/62",
@@ -714,6 +742,9 @@ func TestV030DocumentationBindsProtectionClaimsToNativeEvidence(t *testing.T) {
 		if strings.Contains(string(contents), "v0.2.0") {
 			t.Errorf("current release document %s retains stale v0.2.0 wording", document)
 		}
+		if strings.Contains(string(contents), "v0.3.0") {
+			t.Errorf("current release document %s retains stale unpublished v0.3.0 wording", document)
+		}
 	}
 
 	readme, err := os.ReadFile(filepath.Join(repository, "README.md"))
@@ -732,14 +763,17 @@ func TestV030DocumentationBindsProtectionClaimsToNativeEvidence(t *testing.T) {
 	}
 }
 
-func TestDevelopmentWorkflowsBuildTheV030Candidate(t *testing.T) {
+func TestDevelopmentWorkflowsBuildTheV031Candidate(t *testing.T) {
 	for _, workflow := range []string{"ci.yml", "macos.yml", "promoted-artifacts.yml"} {
 		contents, err := os.ReadFile(filepath.Join("..", ".github", "workflows", workflow))
 		if err != nil {
 			t.Fatalf("read %s: %v", workflow, err)
 		}
-		if !strings.Contains(string(contents), "v0.3.0") {
-			t.Errorf("%s does not build the v0.3.0 candidate", workflow)
+		if !strings.Contains(string(contents), "v0.3.1") {
+			t.Errorf("%s does not build the v0.3.1 candidate", workflow)
+		}
+		if strings.Contains(string(contents), "v0.3.0") {
+			t.Errorf("%s retains stale unpublished v0.3.0 candidate validation", workflow)
 		}
 		if strings.Contains(string(contents), "v0.2.0") {
 			t.Errorf("%s retains stale v0.2.0 candidate validation", workflow)
