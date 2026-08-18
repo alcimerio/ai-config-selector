@@ -692,9 +692,12 @@ func TestSeatbeltControlWriteFailureReapsStartedSupervisorButKeepsSessionQuarant
 	}
 }
 
-func TestSeatbeltCleanupProofTimeoutFailsClosed(t *testing.T) {
+func TestSeatbeltCancellationCleanupProofTimeoutFailsClosed(t *testing.T) {
 	parent, peer := seatbeltTestSocketPair(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
 	process := newSeatbeltLifecycleTestProcess(exec.Command("/usr/bin/true"))
+	process.ctx = ctx
 	process.supervised = true
 	process.control = parent
 	process.challenge = bytes.Repeat([]byte{0xa5}, seatbeltChallengeSize)
@@ -717,6 +720,54 @@ func TestSeatbeltCleanupProofTimeoutFailsClosed(t *testing.T) {
 	case <-process.CleanupDone():
 		t.Fatal("cleanup proof timeout released quarantine")
 	default:
+	}
+}
+
+func TestSeatbeltNormalWaitDoesNotApplyCancellationProofTimeout(t *testing.T) {
+	control, supervisorControl := seatbeltTestSocketPair(t)
+	statusControl, proxyStatus := seatbeltTestSocketPair(t)
+	challenge := bytes.Repeat([]byte{0xb6}, seatbeltChallengeSize)
+	process := newSeatbeltLifecycleTestProcess(exec.Command("/bin/sleep", "0.05"))
+	process.ctx = context.Background()
+	process.supervised = true
+	process.control = control
+	process.statusControl = statusControl
+	process.challenge = challenge
+	timedOut := make(chan time.Time)
+	close(timedOut)
+	process.proofTimeout = func() <-chan time.Time { return timedOut }
+
+	go func() {
+		gotChallenge := make([]byte, seatbeltChallengeSize)
+		if _, err := io.ReadFull(supervisorControl, gotChallenge); err != nil {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+		_ = json.NewEncoder(supervisorControl).Encode(seatbeltCleanupProof{
+			Magic: seatbeltProofMagic, Version: seatbeltProofVersion,
+			Challenge: hex.EncodeToString(gotChallenge), ZeroLiveTargets: true,
+			TargetExited: true,
+		})
+		_ = supervisorControl.Close()
+	}()
+
+	if err := process.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if err := process.Wait(); err != nil {
+		t.Fatalf("normal Wait applied the cancellation proof timeout: %v", err)
+	}
+	status := make([]byte, seatbeltStatusPacketSize)
+	if _, err := io.ReadFull(proxyStatus, status); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(status, []byte{seatbeltStatusExit, 0}) {
+		t.Fatalf("target status = %v, want successful exit", status)
+	}
+	select {
+	case <-process.CleanupDone():
+	default:
+		t.Fatal("valid delayed cleanup proof did not complete cleanup")
 	}
 }
 

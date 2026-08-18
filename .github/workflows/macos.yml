@@ -40,4 +40,4 @@ jobs:
         run: go build -o /tmp/acs ./cmd/acs
 
       - name: Build and verify Release candidate
-        run: scripts/release-candidate.sh v0.3.1
+        run: scripts/release-candidate.sh v0.3.2

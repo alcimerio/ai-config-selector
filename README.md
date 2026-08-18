@@ -5,14 +5,14 @@ Choose a Profile when you launch a supported CLI to control which capabilities
 it receives without changing its real global installation.
 
 ACS separates shared Profile behavior from target-specific CLI adapters. The
-`v0.3.1` preserves one adapter, Devin, and one Profile Component Category,
+`v0.3.2` preserves one adapter, Devin, and one Profile Component Category,
 Skills, while adding fail-closed native process isolation for the supported
-macOS and Ubuntu targets. Until the v0.3.1 release checklist is complete and
+macOS and Ubuntu targets. Until the v0.3.2 release checklist is complete and
 the immutable Release is public, v0.2.0 remains the latest supported release.
 
 ## Supported scope
 
-The v0.3.1 support contract defines these Supported Platforms:
+The v0.3.2 support contract defines these Supported Platforms:
 
 - macOS 26;
 - Ubuntu 24.04 LTS;
@@ -34,15 +34,15 @@ On every Supported Platform, ACS supports:
 
 The Profile Builder requires confirmation before it creates an empty Profile.
 Windows, WSL, other Linux distributions, and other operating-system or
-architecture pairs are not supported by v0.3.1.
+architecture pairs are not supported by v0.3.2.
 
 ## Install
 
-After the v0.3.1 GitHub Release is public, use its release-specific installer.
+After the v0.3.2 GitHub Release is public, use its release-specific installer.
 Download the installer as a file, inspect it, and only then run the local copy:
 
 ```sh
-release_version=v0.3.1
+release_version=v0.3.2
 release_url="https://github.com/alcimerio/ai-config-selector/releases/download/$release_version"
 curl --fail --location --proto '=https' --tlsv1.2 \
   --output install.sh "$release_url/install.sh"
@@ -54,7 +54,7 @@ sh ./install.sh
 For the default destination, the last command must print exactly:
 
 ```text
-acs v0.3.1
+acs v0.3.2
 ```
 
 The installer selects only a Supported Release Target, downloads that target's
@@ -85,7 +85,7 @@ Set `archive` to the file for your Supported Release Target, then download it
 and the manifest from the same release-specific URL. On macOS:
 
 ```sh
-archive=acs_0.3.1_darwin_arm64.tar.gz
+archive=acs_0.3.2_darwin_arm64.tar.gz
 curl --fail --location --proto '=https' --tlsv1.2 --output "$archive" "$release_url/$archive"
 curl --fail --location --proto '=https' --tlsv1.2 --output SHA256SUMS "$release_url/SHA256SUMS"
 awk -v selected="$archive" '$2 == selected { print }' SHA256SUMS | shasum -a 256 --check -
@@ -302,7 +302,7 @@ terminal control characters.
 The optional authenticated smoke remains a maintainer confidence check. It is
 supplemental to, and cannot replace, the credential-free native candidate gate.
 
-### Evidence map for v0.3.1 protections
+### Evidence map for v0.3.2 protections
 
 The public containment statements above are release claims only when the
 four-target native gate for [issue #62](https://github.com/alcimerio/ai-config-selector/issues/62)
@@ -319,7 +319,7 @@ build; a local `go build` or `go install` is not release evidence.
 | Signed-system Bubblewrap and targeted AppArmor setup on Ubuntu | [release workflow prerequisite](.github/workflows/release.yml) and [Ubuntu compatibility record](#launch-devin) |
 
 The historical broad Seatbelt prototype is feasibility history only. It is not
-evidence for a broader production policy; macOS v0.3.1 claims are limited to
+evidence for a broader production policy; macOS v0.3.2 claims are limited to
 the verified-system backend and the exact native candidate evidence above.
 
 ## Profiles and compatibility
@@ -337,7 +337,7 @@ version-2 envelope without bumping the envelope version. Each category owns
 and evolves its independent `schemaVersion`. ACS rejects unsupported schemas
 and unknown categories.
 
-v0.3.1 preserves the v0.1.0 Profile envelopes, category schemas, public
+v0.3.2 preserves the v0.1.0 Profile envelopes, category schemas, public
 commands, accepted messages, file permissions, and atomic Profile persistence.
 It also preserves Profile Builder behavior, Devin Adapter discovery and
 preflight behavior, launch and signal handling, ACS Home at `~/.acs`, and the
@@ -352,7 +352,7 @@ fallback.
 
 ## Known limitations
 
-- v0.3.1 macOS binaries are unsigned and unnotarized. Gatekeeper may block or
+- v0.3.2 macOS binaries are unsigned and unnotarized. Gatekeeper may block or
   warn about them because they do not carry an Apple Developer ID signature or
   notarization ticket. Checksums and GitHub attestations do not change that
   trust decision or represent Apple malware review. Do not weaken host security
