@@ -322,17 +322,33 @@ func (process *seatbeltProcess) readCleanupProof() ([]byte, error) {
 		data, readErr = io.ReadAll(io.LimitReader(process.control, 4097))
 		close(done)
 	}()
+	finish := func() ([]byte, error) {
+		_ = process.control.Close()
+		if len(data) > 4096 {
+			return nil, errors.New("Seatbelt cleanup proof exceeds its limit")
+		}
+		return data, readErr
+	}
+	var canceled <-chan struct{}
+	if process.ctx != nil {
+		canceled = process.ctx.Done()
+	}
+	if canceled == nil {
+		<-done
+		return finish()
+	}
+	select {
+	case <-done:
+		return finish()
+	case <-canceled:
+	}
 	timeout := process.proofTimeout
 	if timeout == nil {
 		timeout = func() <-chan time.Time { return time.After(seatbeltCancellationTimeout) }
 	}
 	select {
 	case <-done:
-		_ = process.control.Close()
-		if len(data) > 4096 {
-			return nil, errors.New("Seatbelt cleanup proof exceeds its limit")
-		}
-		return data, readErr
+		return finish()
 	case <-timeout():
 		_ = process.control.Close()
 		return nil, context.DeadlineExceeded

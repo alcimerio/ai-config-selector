@@ -38,7 +38,7 @@ Build the candidate from the exact clean source under review, then install it
 through the native validator:
 
 ```sh
-candidate_version=v0.3.1
+candidate_version=v0.3.2
 candidate_directory="$(cd dist/release-candidate && pwd -P)"
 install_root="$(mktemp -d)"
 install_root="$(cd "$install_root" && pwd -P)"
