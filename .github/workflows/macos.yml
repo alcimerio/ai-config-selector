@@ -41,11 +41,13 @@ jobs:
       - name: Stress zombie settlement
         run: |
           status=0
+          pids=()
           for shard in 1 2 3 4; do
             go test -count=50 ./internal/launch \
               -run '^TestSeatbeltConvergesAcrossForkingAndZombieDescendants/zombie-parent$' &
+            pids+=("$!")
           done
-          for pid in $(jobs -p); do
+          for pid in "${pids[@]}"; do
             wait "$pid" || status=1
           done
           exit "$status"
