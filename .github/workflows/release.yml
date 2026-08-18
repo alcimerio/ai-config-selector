@@ -110,13 +110,22 @@ jobs:
         if: matrix.os == 'linux'
         shell: bash
         run: |
-          sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends apparmor apparmor-utils bubblewrap
+          apt_options=(-o Acquire::Retries=2 -o Acquire::http::Timeout=15 -o Acquire::https::Timeout=15)
+          if ! timeout 60s sudo apt-get "${apt_options[@]}" update; then
+            case "$(/usr/bin/dpkg --print-architecture)" in
+              amd64) ubuntu_archive='https://archive.ubuntu.com/ubuntu/' ;;
+              arm64) ubuntu_archive='https://ports.ubuntu.com/ubuntu-ports/' ;;
+              *) echo 'Unsupported Ubuntu package architecture' >&2; exit 1 ;;
+            esac
+            printf '%s\n' "$ubuntu_archive" | sudo tee /etc/apt/apt-mirrors.txt >/dev/null
+            timeout 60s sudo apt-get "${apt_options[@]}" update
+          fi
+          timeout 60s sudo apt-get "${apt_options[@]}" install --yes --no-install-recommends apparmor apparmor-utils bubblewrap
           profile_source="$(mktemp)"
           verify_stdout="$(mktemp)"
           verify_stderr="$(mktemp)"
           trap 'rm -f "$profile_source" "$verify_stdout" "$verify_stderr"' EXIT
-          curl --fail --location --silent --show-error --output "$profile_source" \
+          curl --fail --location --silent --show-error --retry 3 --retry-all-errors --connect-timeout 10 --max-time 60 --output "$profile_source" \
             https://gitlab.com/apparmor/apparmor/-/raw/v4.0.3/profiles/apparmor/profiles/extras/bwrap-userns-restrict
           echo 'a964037f6cf0df1099f14226b037eaedde6237c86e715188e93eb460b30be859  '"$profile_source" | sha256sum --check --status
           sudo install --owner=root --group=root --mode=0644 "$profile_source" /etc/apparmor.d/bwrap-userns-restrict
