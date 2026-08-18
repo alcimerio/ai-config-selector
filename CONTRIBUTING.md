@@ -4,7 +4,7 @@ Thanks for contributing to AI Config Selector (ACS).
 
 ## Before you start
 
-The v0.2.0 release contract defines macOS 26 and Ubuntu 24.04 LTS as the
+The v0.3.0 release contract defines macOS 26 and Ubuntu 24.04 LTS as the
 Supported Platforms. Its Supported Release Targets are `darwin/arm64`,
 `darwin/amd64`, `linux/amd64`, and `linux/arm64`. Other Linux distributions,
 Windows, WSL, and other target pairs are outside that contract. ACS supports
@@ -57,6 +57,10 @@ credential-free.
   paths, subprocess output, or errors.
 - Update `docs/architecture.md` when a change alters observable behavior or a
   system boundary.
+- For every public process-isolation claim, link the v0.3.0 native evidence
+  from [issue #62](https://github.com/alcimerio/ai-config-selector/issues/62)
+  or an exact maintained test/workflow path. Link exceptions to a limitation or
+  compatibility record; do not use a local source build as release evidence.
 
 Format and verify the change before opening a pull request:
 
@@ -126,6 +130,13 @@ Local Ubuntu-native validation needs the same reviewed profile setup; a failed
 probe is an infrastructure failure, not evidence that the production sandbox
 can run without containment.
 
+For an Ubuntu host, install or repair Bubblewrap only from reviewed configured
+signed apt sources (`sudo apt-get update && sudo apt-get install --reinstall
+bubblewrap`). Do not download a replacement binary, disable AppArmor, or relax
+the global user-namespace setting to make a test pass. The profile is a narrow
+compatibility prerequisite for `/usr/bin/bwrap`, not permission to run ACS
+without its runtime verification.
+
 ## Release validation
 
 Release packaging uses GoReleaser OSS v2.17.1. The repository wrapper downloads
@@ -136,7 +147,7 @@ candidate artifact set with:
 
 ```bash
 scripts/goreleaser.sh check
-scripts/release-candidate.sh v0.2.0
+scripts/release-candidate.sh v0.3.0
 ```
 
 The candidate command disables CGO, builds only the supported Darwin and Linux
@@ -209,10 +220,10 @@ native host with a fresh absolute install directory:
 install_root="$(mktemp -d)"
 install_root="$(cd "$install_root" && pwd -P)"
 scripts/validate-promoted-artifact.sh \
-  v0.2.0 "$(go env GOOS)" "$(go env GOARCH)" \
+  v0.3.0 "$(go env GOOS)" "$(go env GOARCH)" \
   dist/release-candidate "$install_root/bin"
 ACS_PROMOTED_BINARY="$install_root/bin/acs" \
-  ACS_PROMOTED_VERSION=v0.2.0 \
+  ACS_PROMOTED_VERSION=v0.3.0 \
   ACS_PROMOTED_SANDBOX_BACKEND=available \
   go test ./acceptance -count=1
 ```
@@ -228,6 +239,26 @@ fails, the candidate is not promoted.
 These four native jobs are the required runtime release gate. They install and
 exercise the same candidate bytes that the workflow later attests and
 publishes. A failing or unavailable native job blocks the release.
+
+### v0.3.0 evidence and documentation contract
+
+The v0.3.0 public protection contract is tied to the credential-free native
+candidate evidence in [issue #62](https://github.com/alcimerio/ai-config-selector/issues/62),
+[acceptance/promoted_artifact_native_test.go](acceptance/promoted_artifact_native_test.go),
+[acceptance/promoted_artifact_test.go](acceptance/promoted_artifact_test.go),
+and [.github/workflows/release.yml](.github/workflows/release.yml). It covers
+the exact supplied candidate on macOS 26 `darwin/arm64` and `darwin/amd64`, and
+Ubuntu 24.04 LTS `linux/amd64` and `linux/arm64`—not an equivalent source build.
+
+When editing release documentation, retain explicit pointers for backend
+selection, allowed paths, environment exclusions, descriptors, host Unix
+sockets, outbound IP, preflight, terminal and descendant lifecycle, Session
+cleanup, and fail-closed no-target cases. The documented exception records are
+the [README limitations](README.md#known-limitations) and
+[architecture limitations](docs/architecture.md#current-limitations): ACS is
+not an egress firewall; repository-local Skills remain Devin-controlled; the
+Ubuntu package check does not defend against a compromised administrator; and
+the real-Devin smoke and source builds do not qualify a release.
 
 An authenticated smoke with real Devin is optional and risk-triggered. Run the
 [authenticated release-candidate smoke procedure](docs/authenticated-release-smoke.md)
@@ -248,16 +279,16 @@ prepare the local tag with:
 
 ```bash
 git fetch origin main
-scripts/prepare-release-tag.sh v0.2.0
+scripts/prepare-release-tag.sh v0.3.0
 ```
 
 The command rebuilds and validates the complete candidate, creates the
 human-readable annotated tag locally, re-reads its identity, and prints the
 tag-object SHA and peeled source commit. It never pushes. Inspect those exact
-identities before pushing only the printed tag ref. For v0.2.0, that command is:
+identities before pushing only the printed tag ref. For v0.3.0, that command is:
 
 ```bash
-git push origin refs/tags/v0.2.0
+git push origin refs/tags/v0.3.0
 ```
 
 Do not push a branch, another tag, or a rewritten tag as part of that approval.
@@ -307,7 +338,7 @@ version. Never move a published tag or replace a published asset.
 After publishing the immutable tag, repeat the public Supported Install Path on
 clean macOS 26 arm64 and Ubuntu 24.04 amd64 reference hosts. Download and
 inspect `install.sh`, exercise both its default and custom destinations, and
-require exact `acs v0.2.0` output. Independently verify the public archive with
+require exact `acs v0.3.0` output. Independently verify the public archive with
 `SHA256SUMS` and GitHub provenance, then repeat the Profile dry run,
 authenticated Devin launch, normal exit, Session isolation, and cleanup. The
 README contains the public commands; the checklist records only sanitized
@@ -319,13 +350,13 @@ proxy is part of the release audit:
 
 ```bash
 tagged_gobin="$(mktemp -d)"
-GOBIN="$tagged_gobin" go install github.com/alcimerio/ai-config-selector/cmd/acs@v0.2.0
+GOBIN="$tagged_gobin" go install github.com/alcimerio/ai-config-selector/cmd/acs@v0.3.0
 "$tagged_gobin/acs" version
 rm "$tagged_gobin/acs"
 rmdir "$tagged_gobin"
 ```
 
-The tagged installation must print `acs v0.2.0`. A local checkout without
+The tagged installation must print `acs v0.3.0`. A local checkout without
 qualifying release metadata prints `acs devel`. Do not move or reuse a
 published tag; publish a new version to correct a release defect.
 
