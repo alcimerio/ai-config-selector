@@ -6,9 +6,9 @@ it receives without changing its real global installation.
 
 ACS separates shared Profile behavior from target-specific CLI adapters. The
 `v0.3.0` preserves one adapter, Devin, and one Profile Component Category,
-Skills, while adding downloadable binaries for the supported macOS and Ubuntu
-targets. Until the v0.3.0 release checklist is complete and the immutable
-Release is public, v0.1.0 remains the latest supported release.
+Skills, while adding fail-closed native process isolation for the supported
+macOS and Ubuntu targets. Until the v0.3.0 release checklist is complete and
+the immutable Release is public, v0.2.0 remains the latest supported release.
 
 ## Supported scope
 

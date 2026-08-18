@@ -44,6 +44,34 @@ func TestV030DocumentationUsesOneSupportAndInstallationContract(t *testing.T) {
 	}
 }
 
+func TestReadmeTracksPublicLatestReleaseAndV030NativeProcessIsolation(t *testing.T) {
+	contents, err := os.ReadFile(filepath.Join("..", "README.md"))
+	if err != nil {
+		t.Fatalf("read README.md: %v", err)
+	}
+	text := string(contents)
+
+	for _, required := range []string{
+		"Skills, while adding fail-closed native process isolation for the supported\nmacOS and Ubuntu targets.",
+		"the immutable Release is public, v0.2.0 remains the latest supported release.",
+	} {
+		if !strings.Contains(text, required) {
+			t.Errorf("README.md does not state the current release contract %q", required)
+		}
+	}
+	for _, obsolete := range []string{
+		"Skills, while adding downloadable binaries for the supported macOS and Ubuntu\ntargets.",
+		"the immutable Release is public, v0.1.0 remains the latest supported release.",
+	} {
+		if strings.Contains(text, obsolete) {
+			t.Errorf("README.md retains obsolete release framing %q", obsolete)
+		}
+	}
+	if occurrences := strings.Count(text, "v0.2.0"); occurrences != 1 {
+		t.Errorf("README.md v0.2.0 references = %d, want 1 public latest-release reference", occurrences)
+	}
+}
+
 func TestV030ReleaseNotesMatchTagWorkflowPath(t *testing.T) {
 	notes := filepath.Join("..", "docs", "releases", "v0.3.0.md")
 	info, err := os.Stat(notes)
@@ -678,7 +706,7 @@ func TestV030DocumentationBindsProtectionClaimsToNativeEvidence(t *testing.T) {
 		}
 	}
 
-	for _, document := range []string{"README.md", "CONTRIBUTING.md", "docs/architecture.md", "docs/authenticated-release-smoke.md"} {
+	for _, document := range []string{"CONTRIBUTING.md", "docs/architecture.md", "docs/authenticated-release-smoke.md"} {
 		contents, err := os.ReadFile(filepath.Join(repository, document))
 		if err != nil {
 			t.Fatalf("read %s: %v", document, err)
