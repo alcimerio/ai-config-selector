@@ -376,6 +376,92 @@ func TestSeatbeltRejectsMalformedMissingAndSpoofedCleanupProof(t *testing.T) {
 	}
 }
 
+func TestSeatbeltWaitMapsAuthenticatedTargetStatusThroughProxy(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		proof seatbeltCleanupProof
+		check func(*testing.T, error)
+	}{
+		{
+			name:  "exit",
+			proof: seatbeltCleanupProof{TargetExited: true, TargetExitCode: 37},
+			check: func(t *testing.T, err error) {
+				t.Helper()
+				var exitError *exec.ExitError
+				if !errors.As(err, &exitError) {
+					t.Fatalf("Wait error = %v, want exit status 37", err)
+				}
+				status := exitError.Sys().(syscall.WaitStatus)
+				if !status.Exited() || status.ExitStatus() != 37 {
+					t.Fatalf("Wait status = %v, want exit 37", status)
+				}
+			},
+		},
+		{
+			name:  "signal",
+			proof: seatbeltCleanupProof{TargetSignal: int(syscall.SIGTERM)},
+			check: func(t *testing.T, err error) {
+				t.Helper()
+				var exitError *exec.ExitError
+				if !errors.As(err, &exitError) {
+					t.Fatalf("Wait error = %v, want SIGTERM", err)
+				}
+				status := exitError.Sys().(syscall.WaitStatus)
+				if !status.Signaled() || status.Signal() != syscall.SIGTERM {
+					t.Fatalf("Wait status = %v, want SIGTERM", status)
+				}
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			proofControl, supervisorControl := seatbeltTestSocketPair(t)
+			statusControl, proxyStatus := seatbeltTestSocketPair(t)
+			helperControl, helperPeer, err := os.Pipe()
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() {
+				_ = helperControl.Close()
+				_ = helperPeer.Close()
+			})
+			challenge := bytes.Repeat([]byte{0x94}, seatbeltChallengeSize)
+			// macOS 26 can collapse a signaled supervisor into sandbox-exec's
+			// generic 125 status. The proxy must use the authenticated proof,
+			// not this intentionally mismatched inner result.
+			command := exec.Command(os.Args[0], seatbeltStatusProxyArgument, "--", "/bin/sh", "-c", "exit 125")
+			command.Env = seatbeltStatusProxyEnvironment(os.Environ())
+			command.ExtraFiles = []*os.File{proxyStatus, helperControl}
+			process := &seatbeltProcess{
+				command: command, supervised: true, control: proofControl,
+				helperControl: helperControl, statusControl: statusControl, proxyStatus: proxyStatus,
+				challenge: append([]byte(nil), challenge...), cleanupDone: make(chan struct{}),
+			}
+			go func() {
+				got := make([]byte, len(challenge))
+				_, _ = io.ReadFull(supervisorControl, got)
+				proof := test.proof
+				proof.Magic = seatbeltProofMagic
+				proof.Version = seatbeltProofVersion
+				proof.Challenge = hex.EncodeToString(got)
+				proof.ZeroLiveTargets = true
+				encoded, _ := json.Marshal(proof)
+				_, _ = supervisorControl.Write(encoded)
+				_ = supervisorControl.Close()
+			}()
+			if err := process.Start(); err != nil {
+				t.Fatal(err)
+			}
+			waitErr := process.Wait()
+			test.check(t, waitErr)
+			select {
+			case <-process.CleanupDone():
+			default:
+				t.Fatal("authenticated proof did not complete cleanup")
+			}
+		})
+	}
+}
+
 func TestSeatbeltSupervisorProvesPreTargetStartFailure(t *testing.T) {
 	control, peer := seatbeltTestSocketPair(t)
 	supervisorFD, err := unix.Dup(int(peer.Fd()))
@@ -645,6 +731,36 @@ func TestSeatbeltEnumerationFailureAndNonconvergenceNeverProveCleanup(t *testing
 	}
 }
 
+func TestSeatbeltTransientZombieSnapshotDoesNotPoisonCleanupProof(t *testing.T) {
+	pid := os.Getpid()
+	secondSnapshot := make(chan struct{})
+	enumerator := &seatbeltTransientZombieEnumerator{pid: pid, secondSnapshot: secondSnapshot}
+	ledger := newSeatbeltIdentityLedger()
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go observeSeatbeltTargets(enumerator, -1, ledger, stop, done)
+	select {
+	case <-secondSnapshot:
+	case <-time.After(time.Second):
+		close(stop)
+		<-done
+		t.Fatal("observer did not retry transient zombie snapshot")
+	}
+	close(stop)
+	<-done
+	if err := ledger.failure(); err != nil {
+		t.Fatalf("transient zombie snapshot poisoned cleanup proof: %v", err)
+	}
+
+	unstable := seatbeltTestEnumerator{
+		pids:  []int{pid},
+		infos: map[int]seatbeltBSDInfo{pid: {PID: uint32(pid), Status: seatbeltProcStatusIdle}},
+	}
+	if err := settleSeatbeltInstance(unstable, newSeatbeltIdentityLedger(), -1, 0, time.Now().Add(3*seatbeltSettlementRetryDelay)); err == nil {
+		t.Fatal("persistent unstable snapshot unexpectedly proved cleanup")
+	}
+}
+
 func TestSeatbeltDescriptorSealingRetriesTransientEBADF(t *testing.T) {
 	sentinel, err := os.CreateTemp(t.TempDir(), "seatbelt-retry-descriptor")
 	if err != nil {
@@ -734,7 +850,7 @@ func (enumerator seatbeltTestDescriptorEnumerator) descriptors(pid int) ([]int, 
 func TestSeatbeltCredentialAmbiguityFailsClosed(t *testing.T) {
 	pid := os.Getpid()
 	info := seatbeltBSDInfo{
-		PID: uint32(pid), UID: uint32(os.Geteuid() + 1), RUID: uint32(os.Geteuid() + 1),
+		PID: uint32(pid), Status: seatbeltProcStatusStop, UID: uint32(os.Geteuid() + 1), RUID: uint32(os.Geteuid() + 1),
 		SVUID: uint32(os.Geteuid() + 1), GID: uint32(os.Getegid()),
 		RGID: uint32(os.Getegid()), SVGID: uint32(os.Getegid()),
 		StartSecond: 1, StartMicrosecond: 2,
@@ -2426,6 +2542,8 @@ func seatbeltTestSocketPair(t *testing.T) (*os.File, *os.File) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	unix.CloseOnExec(descriptors[0])
+	unix.CloseOnExec(descriptors[1])
 	parent := os.NewFile(uintptr(descriptors[0]), "seatbelt-test-parent")
 	peer := os.NewFile(uintptr(descriptors[1]), "seatbelt-test-peer")
 	t.Cleanup(func() {
@@ -2450,4 +2568,28 @@ func (enumerator seatbeltTestEnumerator) info(pid int) (seatbeltBSDInfo, error) 
 		return info, nil
 	}
 	return seatbeltBSDInfo{}, errors.New("unexpected process inspection")
+}
+
+type seatbeltTransientZombieEnumerator struct {
+	pid            int
+	secondSnapshot chan struct{}
+	calls          atomic.Int32
+	once           sync.Once
+}
+
+func (enumerator *seatbeltTransientZombieEnumerator) allPIDs() ([]int, error) {
+	return []int{enumerator.pid}, nil
+}
+
+func (enumerator *seatbeltTransientZombieEnumerator) info(pid int) (seatbeltBSDInfo, error) {
+	if pid != enumerator.pid {
+		return seatbeltBSDInfo{}, errors.New("unexpected process inspection")
+	}
+	if enumerator.calls.Add(1) == 1 {
+		// proc_pidinfo can expose the entry while its exit fields are being
+		// rewritten. It is neither a stable live process nor proof of death.
+		return seatbeltBSDInfo{PID: uint32(pid), Status: seatbeltProcStatusIdle}, nil
+	}
+	enumerator.once.Do(func() { close(enumerator.secondSnapshot) })
+	return seatbeltBSDInfo{PID: uint32(pid), Status: seatbeltProcStatusZombie}, nil
 }
