@@ -14,7 +14,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  ACS_CANDIDATE_VERSION: v0.3.2
+  ACS_CANDIDATE_VERSION: v0.3.3
 
 jobs:
   candidate:
