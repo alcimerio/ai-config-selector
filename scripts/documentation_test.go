@@ -191,6 +191,9 @@ func TestV033ReadmeArchiveVerificationUsesExactV033Asset(t *testing.T) {
 	if strings.Contains(text, "acs_0.3.0_darwin_arm64.tar.gz") {
 		t.Fatal("README.md archive verification retains the unpublished v0.3.0 darwin/arm64 asset")
 	}
+	if strings.Contains(text, "acs_0.3.2_darwin_arm64.tar.gz") {
+		t.Fatal("README.md archive verification retains the unpublished v0.3.2 darwin/arm64 asset")
+	}
 }
 
 func TestV033ChecklistSeparatesTagAuthorizationFromPostTagEvidence(t *testing.T) {
@@ -787,6 +790,9 @@ func TestV033DocumentationBindsProtectionClaimsToNativeEvidence(t *testing.T) {
 		if strings.Contains(string(contents), "v0.3.0") {
 			t.Errorf("current release document %s retains stale unpublished v0.3.0 wording", document)
 		}
+		if strings.Contains(string(contents), "v0.3.2") {
+			t.Errorf("current release document %s retains stale unpublished v0.3.2 wording", document)
+		}
 	}
 
 	readme, err := os.ReadFile(filepath.Join(repository, "README.md"))
@@ -816,6 +822,9 @@ func TestDevelopmentWorkflowsBuildTheV033Candidate(t *testing.T) {
 		}
 		if strings.Contains(string(contents), "v0.3.0") {
 			t.Errorf("%s retains stale unpublished v0.3.0 candidate validation", workflow)
+		}
+		if strings.Contains(string(contents), "v0.3.2") {
+			t.Errorf("%s retains stale unpublished v0.3.2 candidate validation", workflow)
 		}
 		if strings.Contains(string(contents), "v0.2.0") {
 			t.Errorf("%s retains stale v0.2.0 candidate validation", workflow)
