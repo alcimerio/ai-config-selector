@@ -459,8 +459,10 @@ PID plus process start time before destructive signals, kills the stopped set,
 and repeats until no non-zombie target remains. The Seatbelt
 `(target same-sandbox)` signal rule is the final authorization boundary, so a
 reused PID or an identical concurrent profile cannot authorize a cross-instance
-signal. Enumeration failure, changed or ambiguous credentials, and bounded
-nonconvergence produce no cleanup proof.
+signal. If an identity reread fails while a process remains addressable, the
+supervisor sends no signal and retries a fresh process-table snapshot within
+the settlement deadline. Persistent enumeration failure, changed or ambiguous
+credentials, and bounded nonconvergence produce no cleanup proof.
 
 The outer ACS releases the Session reference only after it receives a
 versioned proof containing its random challenge, a zero-live-target result,

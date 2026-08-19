@@ -191,6 +191,9 @@ func TestV033ReadmeArchiveVerificationUsesExactV033Asset(t *testing.T) {
 	if strings.Contains(text, "acs_0.3.0_darwin_arm64.tar.gz") {
 		t.Fatal("README.md archive verification retains the unpublished v0.3.0 darwin/arm64 asset")
 	}
+	if strings.Contains(text, "acs_0.3.1_darwin_arm64.tar.gz") {
+		t.Fatal("README.md archive verification retains the unpublished v0.3.1 darwin/arm64 asset")
+	}
 	if strings.Contains(text, "acs_0.3.2_darwin_arm64.tar.gz") {
 		t.Fatal("README.md archive verification retains the unpublished v0.3.2 darwin/arm64 asset")
 	}
@@ -224,7 +227,8 @@ func TestV033ChecklistSeparatesTagAuthorizationFromPostTagEvidence(t *testing.T)
 	for _, required := range []string{
 		"does not complete any v0.3.3 tag-run row",
 		"do not block local tag creation or the authorized tag push",
-		"workflow URLs, target outcomes, public asset hashes, provenance results, and immutable Release identity",
+		"public workflow/job URLs, target outcomes, public asset hashes, provenance results, and immutable Release identity",
+		"policy-App client configuration, and release-environment private-key secret presence",
 	} {
 		if !strings.Contains(normalizedText, required) {
 			t.Errorf("v0.3.3 checklist omits non-circular release evidence guard %q", required)
@@ -790,9 +794,20 @@ func TestV033DocumentationBindsProtectionClaimsToNativeEvidence(t *testing.T) {
 		if strings.Contains(string(contents), "v0.3.0") {
 			t.Errorf("current release document %s retains stale unpublished v0.3.0 wording", document)
 		}
+		if strings.Contains(string(contents), "v0.3.1") {
+			t.Errorf("current release document %s retains stale unpublished v0.3.1 wording", document)
+		}
 		if strings.Contains(string(contents), "v0.3.2") {
 			t.Errorf("current release document %s retains stale unpublished v0.3.2 wording", document)
 		}
+	}
+
+	smoke, err := os.ReadFile(filepath.Join(repository, "docs", "authenticated-release-smoke.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(smoke), "candidate_version=v0.3.3") {
+		t.Error("authenticated release smoke does not select the v0.3.3 candidate")
 	}
 
 	readme, err := os.ReadFile(filepath.Join(repository, "README.md"))
@@ -822,6 +837,9 @@ func TestDevelopmentWorkflowsBuildTheV033Candidate(t *testing.T) {
 		}
 		if strings.Contains(string(contents), "v0.3.0") {
 			t.Errorf("%s retains stale unpublished v0.3.0 candidate validation", workflow)
+		}
+		if strings.Contains(string(contents), "v0.3.1") {
+			t.Errorf("%s retains stale unpublished v0.3.1 candidate validation", workflow)
 		}
 		if strings.Contains(string(contents), "v0.3.2") {
 			t.Errorf("%s retains stale unpublished v0.3.2 candidate validation", workflow)
