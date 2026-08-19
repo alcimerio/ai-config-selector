@@ -437,11 +437,7 @@ exit 0
 		if err := first.Start(); err != nil {
 			t.Fatal(err)
 		}
-		waitForFile(t, readyPath)
-		firstHomeBytes, err := os.ReadFile(readyPath)
-		if err != nil {
-			t.Fatal(err)
-		}
+		firstHomeBytes := waitForFileContents(t, readyPath)
 		firstHome := strings.TrimSpace(string(firstHomeBytes))
 		if _, err := os.Stat(firstHome); err != nil {
 			t.Fatalf("first isolated Session is unavailable: %v", err)
@@ -511,6 +507,45 @@ func waitForFile(t *testing.T, path string) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("timed out waiting for fixture state")
+}
+
+func waitForFileContents(t *testing.T, path string) []byte {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		contents, err := os.ReadFile(path)
+		if err == nil {
+			if len(bytes.TrimSpace(contents)) > 0 {
+				return contents
+			}
+		} else if !os.IsNotExist(err) {
+			t.Fatal(err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for fixture contents")
+	return nil
+}
+
+func TestWaitForFileContentsIgnoresAnUncommittedReadyMarker(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "ready")
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	written := make(chan error, 1)
+	go func() {
+		time.Sleep(25 * time.Millisecond)
+		written <- os.WriteFile(path, []byte("/tmp/session-example\n"), 0o600)
+	}()
+
+	contents := waitForFileContents(t, path)
+	if err := <-written; err != nil {
+		t.Fatal(err)
+	}
+	if got, want := string(contents), "/tmp/session-example\n"; got != want {
+		t.Fatalf("ready contents = %q, want %q", got, want)
+	}
 }
 
 func waitExitCode(t *testing.T, command *exec.Cmd, timeout time.Duration, output *bytes.Buffer) int {
