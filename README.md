@@ -76,8 +76,11 @@ acs devin --profile backend-review
 
 The Devin path creates a synthetic home, materializes selected Skills, copies
 only `~/.local/share/devin/credentials.toml` when present, verifies the Skill
-catalog and authentication inside Seatbelt, and then starts Devin. There is no
-unsandboxed fallback.
+catalog and authentication inside Seatbelt, and then starts Devin with its
+workspace-trust prompt disabled. The trust decision is redundant inside ACS's
+required fail-closed sandbox and could not persist in the ephemeral synthetic
+home. This does not change Devin's permission mode. There is no unsandboxed
+fallback.
 
 ## Inspect the sandbox directly
 

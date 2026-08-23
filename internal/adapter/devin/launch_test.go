@@ -66,10 +66,10 @@ exit 23
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := string(events), "preflight-skills\npreflight-auth\nlaunch-args=0:\n"; got != want {
+	if got, want := string(events), "preflight-skills\npreflight-auth\nlaunch-args=2:--respect-workspace-trust false\n"; got != want {
 		t.Fatalf("Devin events = %q, want %q", got, want)
 	}
-	if got, want := recorder.arguments, [][]string{{"skills", "list", "--json"}, {"auth", "status"}, nil}; !reflect.DeepEqual(got, want) {
+	if got, want := recorder.arguments, [][]string{{"skills", "list", "--json"}, {"auth", "status"}, {"--respect-workspace-trust", "false"}}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("sandbox process arguments = %#v, want %#v", got, want)
 	}
 	entries, err := os.ReadDir(fixture.sessionsDirectory)
@@ -821,7 +821,7 @@ func (sandbox *startupQuarantineSandbox) Check(ctx context.Context, request laun
 }
 
 func (sandbox *startupQuarantineSandbox) Prepare(ctx context.Context, request launch.ProcessRequest) (launch.Process, error) {
-	if len(request.Arguments) != 0 {
+	if !isInteractiveDevinLaunch(request.Arguments) {
 		return sandbox.delegate.Prepare(ctx, request)
 	}
 	sandbox.sessionRoot = request.SessionDirectory
@@ -857,7 +857,7 @@ func (sandbox *deferredCleanupSandbox) Check(ctx context.Context, request launch
 }
 
 func (sandbox *deferredCleanupSandbox) Prepare(ctx context.Context, request launch.ProcessRequest) (launch.Process, error) {
-	if len(request.Arguments) != 0 {
+	if !isInteractiveDevinLaunch(request.Arguments) {
 		return sandbox.delegate.Prepare(ctx, request)
 	}
 	process, err := sandbox.delegate.Prepare(ctx, request)
@@ -868,6 +868,10 @@ func (sandbox *deferredCleanupSandbox) Prepare(ctx context.Context, request laun
 	return &deferredCleanupProcess{
 		process: process, cleanupDone: sandbox.cleanupDone, waitReturned: sandbox.waitReturned,
 	}, nil
+}
+
+func isInteractiveDevinLaunch(arguments []string) bool {
+	return reflect.DeepEqual(arguments, []string{"--respect-workspace-trust", "false"})
 }
 
 type deferredCleanupProcess struct {

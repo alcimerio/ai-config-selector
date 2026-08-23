@@ -17,8 +17,8 @@ import (
 )
 
 // Launch creates an ephemeral ACS Session, verifies the Devin Adapter
-// contract, and attaches Devin to the invoking terminal without adding Devin
-// command-line options.
+// contract, and attaches Devin to the invoking terminal while skipping Devin's
+// redundant workspace-trust prompt inside the required ACS sandbox.
 func (a *Adapter) Launch(
 	ctx context.Context,
 	sessionsDirectory string,
@@ -84,7 +84,9 @@ func (a *Adapter) Launch(
 		Workspace: createdSession.WorkingDirectory(), SessionsDirectory: sessionsDirectory,
 		SessionDirectory: createdSession.RootDirectory(), SessionHome: createdSession.HomeDirectory(),
 		TemporaryDirectory: createdSession.TemporaryDirectory(), Executable: a.binaryPath,
-		RuntimeInputs: a.runtimeInputs, Terminal: terminal,
+		RuntimeInputs: a.runtimeInputs,
+		Arguments:     []string{"--respect-workspace-trust", "false"},
+		Terminal:      terminal,
 	})
 	if err != nil {
 		return 1, sanitizeLaunchError(err)

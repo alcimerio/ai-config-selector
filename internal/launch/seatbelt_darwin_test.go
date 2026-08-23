@@ -50,6 +50,7 @@ func TestSeatbeltPolicyIsDefaultDenyAndUsesParametersForValidatedPaths(t *testin
 		`(remote ip)`, `(literal "/private/var/run/mDNSResponder")`,
 		`(literal "/var")`,
 		`(literal "/private/var/select/sh")`,
+		`(literal "/usr/share") (subpath "/usr/share/terminfo")`,
 		`(literal "/dev/tty")`, `(target same-sandbox)`,
 		"(allow mach-lookup\n  (global-name \"com.apple.SecurityServer\"))",
 		"(allow mach-lookup\n  (global-name \"com.apple.trustd.agent\"))",
@@ -64,6 +65,7 @@ func TestSeatbeltPolicyIsDefaultDenyAndUsesParametersForValidatedPaths(t *testin
 		request.runtimeInputs[0], "(allow file-read*)\n",
 		"(allow sysctl-read)\n", "(allow iokit", "(allow network*)",
 		"(subpath (param \"EXECUTABLE_ANCESTOR_",
+		`(subpath "/usr/share")`,
 		"com.apple.system.opendirectoryd.libinfo", "com.apple.SystemConfiguration.configd",
 		"com.apple.notificationcenter", "com.apple.logd",
 	} {
