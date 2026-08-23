@@ -53,7 +53,8 @@ func TestReadmeTracksPublicLatestReleaseAndV033NativeProcessIsolation(t *testing
 
 	for _, required := range []string{
 		"Skills, while adding fail-closed native process isolation for the supported\nmacOS and Ubuntu targets.",
-		"the immutable Release is public, v0.2.0 remains the latest supported release.",
+		"v0.3.3 is the latest supported release and the first\npublished ACS release with native process isolation.",
+		"Use the public v0.3.3 release-specific installer.",
 	} {
 		if !strings.Contains(text, required) {
 			t.Errorf("README.md does not state the current release contract %q", required)
@@ -62,13 +63,15 @@ func TestReadmeTracksPublicLatestReleaseAndV033NativeProcessIsolation(t *testing
 	for _, obsolete := range []string{
 		"Skills, while adding downloadable binaries for the supported macOS and Ubuntu\ntargets.",
 		"the immutable Release is public, v0.1.0 remains the latest supported release.",
+		"the immutable Release is public, v0.2.0 remains the latest supported release.",
+		"After the v0.3.3 GitHub Release is public",
 	} {
 		if strings.Contains(text, obsolete) {
 			t.Errorf("README.md retains obsolete release framing %q", obsolete)
 		}
 	}
-	if occurrences := strings.Count(text, "v0.2.0"); occurrences != 1 {
-		t.Errorf("README.md v0.2.0 references = %d, want 1 public latest-release reference", occurrences)
+	if occurrences := strings.Count(text, "v0.2.0"); occurrences != 0 {
+		t.Errorf("README.md v0.2.0 references = %d, want none after v0.3.3 publication", occurrences)
 	}
 }
 
@@ -206,11 +209,11 @@ func TestV033ChecklistSeparatesTagAuthorizationFromPostTagEvidence(t *testing.T)
 	}
 	text := string(contents)
 	normalizedText := strings.Join(strings.Fields(text), " ")
-	preTag := "## Pre-tag authorization evidence — blocks tag creation and push"
-	localTag := "## Local tag preparation and push authorization — blocks push only"
-	tagTriggered := "## Tag-triggered workflow evidence — necessarily pending before push"
-	postPublication := "## Public-release evidence — necessarily pending until publication"
-	followUp := "## Auditable post-publication follow-up branch and PR"
+	preTag := "## Pre-tag authorization evidence"
+	localTag := "## Local tag preparation and push authorization"
+	tagTriggered := "## Tag-triggered workflow evidence"
+	postPublication := "## Public-release evidence"
+	followUp := "## Auditable post-publication follow-up"
 	for _, required := range []string{
 		preTag,
 		localTag,
@@ -225,9 +228,9 @@ func TestV033ChecklistSeparatesTagAuthorizationFromPostTagEvidence(t *testing.T)
 		}
 	}
 	for _, required := range []string{
-		"does not complete any v0.3.3 tag-run row",
-		"do not block local tag creation or the authorized tag push",
-		"public workflow/job URLs, target outcomes, public asset hashes, provenance results, and immutable Release identity",
+		"did not complete any v0.3.3 tag-run row",
+		"did not authorize its own push",
+		"public workflow and job URLs, target outcomes, public asset hashes, provenance results, and immutable Release identity",
 		"policy-App client configuration, and release-environment private-key secret presence",
 	} {
 		if !strings.Contains(normalizedText, required) {
@@ -239,6 +242,20 @@ func TestV033ChecklistSeparatesTagAuthorizationFromPostTagEvidence(t *testing.T)
 		strings.Index(text, tagTriggered) < strings.Index(text, postPublication) &&
 		strings.Index(text, postPublication) < strings.Index(text, followUp)) {
 		t.Fatal("v0.3.3 checklist does not order pre-tag, tag-triggered, publication, and follow-up evidence")
+	}
+	if strings.Contains(text, "INCOMPLETE") {
+		t.Fatal("v0.3.3 checklist retains incomplete rows after publication evidence was recorded")
+	}
+	for _, required := range []string{
+		"https://github.com/alcimerio/ai-config-selector/actions/runs/32304406158",
+		"https://github.com/alcimerio/ai-config-selector/releases/tag/v0.3.3",
+		"be86b8fd279d42a69f048e3aa9dfbacbb62f8061",
+		"233ad4adc78fa4f326524ddd7a0cf2fde12aa2a0",
+		"Release database identifier: `373365098`",
+	} {
+		if !strings.Contains(text, required) {
+			t.Errorf("v0.3.3 checklist omits completed publication evidence %q", required)
+		}
 	}
 }
 

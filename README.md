@@ -7,8 +7,8 @@ it receives without changing its real global installation.
 ACS separates shared Profile behavior from target-specific CLI adapters. The
 `v0.3.3` preserves one adapter, Devin, and one Profile Component Category,
 Skills, while adding fail-closed native process isolation for the supported
-macOS and Ubuntu targets. Until the v0.3.3 release checklist is complete and
-the immutable Release is public, v0.2.0 remains the latest supported release.
+macOS and Ubuntu targets. v0.3.3 is the latest supported release and the first
+published ACS release with native process isolation.
 
 ## Supported scope
 
@@ -38,8 +38,8 @@ architecture pairs are not supported by v0.3.3.
 
 ## Install
 
-After the v0.3.3 GitHub Release is public, use its release-specific installer.
-Download the installer as a file, inspect it, and only then run the local copy:
+Use the public v0.3.3 release-specific installer. Download the installer as a
+file, inspect it, and only then run the local copy:
 
 ```sh
 release_version=v0.3.3
