@@ -721,6 +721,7 @@ func buildSeatbeltPolicy(request validatedProcessRequest) (string, []string, err
   (literal "/")
   (literal "/System") (subpath "/System/Library")
   (literal "/usr") (subpath "/usr/bin") (subpath "/usr/lib")
+  (literal "/usr/share") (subpath "/usr/share/terminfo")
   (literal "/bin") (subpath "/bin")
   (literal "/private") (literal "/private/var")
   (literal "/var")

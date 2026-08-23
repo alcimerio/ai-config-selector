@@ -50,8 +50,10 @@ root only after cleanup settles.
 
 `internal/adapter/devin` owns Devin discovery, Profile editing, its allowlisted
 credential, Skill catalog verification, authentication preflight, and Devin
-launch semantics. Credential copying happens after generic Session creation;
-it is not part of Profile materialization.
+launch semantics. Interactive launches pass `--respect-workspace-trust false`:
+the ephemeral Session cannot retain a workspace-trust decision, while the ACS
+Process Sandbox remains the mandatory boundary. Credential copying happens
+after generic Session creation; it is not part of Profile materialization.
 
 `internal/sandboxshell` owns the fixed `/bin/zsh -f` target. It creates a generic
 Session and never invokes the Devin executable, accesses a Devin credential, or
