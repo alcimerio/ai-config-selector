@@ -29,7 +29,7 @@ func TestPublisherFailsBeforeMutationWhenImmutableReleasesAreDisabled(t *testing
 func TestPublisherLeavesAnExactImmutableReleaseUnchanged(t *testing.T) {
 	candidate := publicationCandidate(t)
 	notes := publicationNotes(t)
-	release := publicationReleaseJSON(t, candidate, 6, false, true)
+	release := publicationReleaseJSON(t, candidate, 4, false, true)
 	tools, log := fakeReadOnlyGH(t, "true", "true", release)
 	output, err := publicationCommand(t, candidate, notes, tools, log).CombinedOutput()
 	if err != nil {
@@ -98,9 +98,9 @@ func TestPublisherCreatesOrResumesDraftBeforeOneFinalPublish(t *testing.T) {
 		wantPOST    int
 		wantUploads int
 	}{
-		{name: "absent Release", initial: "absent", assetCount: 0, wantPOST: 1, wantUploads: 6},
-		{name: "partial draft retry", initial: "partial", assetCount: 2, wantPOST: 0, wantUploads: 4},
-		{name: "complete draft retry", initial: "complete", assetCount: 6, wantPOST: 0, wantUploads: 0},
+		{name: "absent Release", initial: "absent", assetCount: 0, wantPOST: 1, wantUploads: 4},
+		{name: "partial draft retry", initial: "partial", assetCount: 2, wantPOST: 0, wantUploads: 2},
+		{name: "complete draft retry", initial: "complete", assetCount: 4, wantPOST: 0, wantUploads: 0},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			candidate := publicationCandidate(t)
@@ -180,8 +180,8 @@ func fakeTransitionGH(t *testing.T, candidate, initial string, initialAssets, re
 	count := writeFixture(t, directory, "count", "0\n")
 	zero := writeFixture(t, directory, "zero.json", publicationReleaseJSON(t, candidate, 0, true, false))
 	partial := writeFixture(t, directory, "partial.json", publicationReleaseJSON(t, candidate, initialAssets, true, false))
-	complete := writeFixture(t, directory, "complete.json", publicationReleaseJSON(t, candidate, 6, true, false))
-	published := writeFixture(t, directory, "published.json", publicationReleaseJSON(t, candidate, 6, false, true))
+	complete := writeFixture(t, directory, "complete.json", publicationReleaseJSON(t, candidate, 4, true, false))
+	published := writeFixture(t, directory, "published.json", publicationReleaseJSON(t, candidate, 4, false, true))
 	script := fakePolicyCases("true", "true", "true", publicationTagObject, publicationSource, "ahead") + `
   "--paginate")
     current=$(tr -d '\n' <"` + state + `")
@@ -293,7 +293,6 @@ func publicationReleaseJSON(t *testing.T, candidate string, assetCount int, draf
 	t.Helper()
 	names := []string{
 		"acs_0.2.0_darwin_arm64.tar.gz", "acs_0.2.0_darwin_amd64.tar.gz",
-		"acs_0.2.0_linux_amd64.tar.gz", "acs_0.2.0_linux_arm64.tar.gz",
 		"SHA256SUMS", "install.sh",
 	}
 	var assets strings.Builder

@@ -47,7 +47,7 @@ func TestCategoryRegistryNormalizesResolvesPlansAndMaterializesSkills(t *testing
 	if err != nil {
 		t.Fatalf("plan Profile: %v", err)
 	}
-	if len(plan.Sections) != 2 || len(plan.Sections[0].Items) != 1 || plan.Sections[0].Items[0].Details[0].Value != bundlePath {
+	if len(plan.Sections) != 1 || len(plan.Sections[0].Items) != 1 || plan.Sections[0].Items[0].Details[0].Value != bundlePath {
 		t.Fatalf("selected global Skill plan = %#v", plan.Sections)
 	}
 

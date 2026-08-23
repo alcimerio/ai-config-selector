@@ -1,4 +1,4 @@
-//go:build darwin || linux
+//go:build darwin
 
 package acceptance_test
 
@@ -120,9 +120,80 @@ func TestPromotedArtifactNativeContainmentContract(t *testing.T) {
 	}
 
 	t.Run("readiness is native and sanitized", assertPromotedArtifactNativeReadiness)
+	t.Run("sandbox shell is credential-free contained and cleaned", assertPromotedArtifactSandboxShell)
 	t.Run("filesystem environment descriptors sockets IP preflight and descendants", assertPromotedArtifactNativeContainment)
 	t.Run("preflight failure is categorized without target details", assertPromotedArtifactNativePreflightFailureIsSafe)
 	t.Run("missing backend OR invalid policy cannot start a marker", assertPromotedArtifactMissingBackendFailsClosed)
+}
+
+func assertPromotedArtifactSandboxShell(t *testing.T) {
+	binary := promotedBinary(t)
+	home, path := prepareRuntimeHome(t)
+	workspace := realTemporaryDirectory(t)
+	outside := realTemporaryDirectory(t)
+	outFile := filepath.Join(outside, "outside-secret")
+	if err := os.WriteFile(outFile, []byte("private\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	dryRun := exec.Command(binary, "sandbox", "--profile", "reviews", "--dry-run")
+	dryRun.Env = nativeCandidateEnvironment(home, path, nil)
+	dryRun.Dir = workspace
+	dryOutput, err := dryRun.CombinedOutput()
+	if err != nil {
+		t.Fatalf("installed candidate sandbox dry run failed: %v", err)
+	}
+	for _, marker := range []string{
+		`Dry run for Profile "reviews"`,
+		"selected native backend: Seatbelt",
+		"No Session was created and no sandbox shell was started.",
+	} {
+		if !strings.Contains(string(dryOutput), marker) {
+			t.Fatalf("sandbox dry run omitted %q: %s", marker, dryOutput)
+		}
+	}
+	assertNoSessions(t, home)
+
+	commands := "set -eu\n" +
+		"test -f \"$HOME/.config/devin/skills/review/SKILL.md\"\n" +
+		"test ! -e \"$HOME/.local/share/devin/credentials.toml\"\n" +
+		"printf allowed > ./sandbox-workspace-proof\n" +
+		"if cat " + strconv.Quote(outFile) + " >/dev/null 2>&1; then exit 71; fi\n" +
+		"sleep 30 &\n" +
+		"print -r -- $! > ./sandbox-descendant.pid\n" +
+		"print -r -- sandbox-shell-ok\n" +
+		"exit 0\n"
+	command := exec.Command(binary, "sandbox", "--profile", "reviews")
+	command.Env = nativeCandidateEnvironment(home, path, nil)
+	command.Dir = workspace
+	command.Stdin = strings.NewReader(commands)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("installed candidate sandbox shell failed: %v; output=%s", err, output)
+	}
+	if !strings.Contains(string(output), "sandbox-shell-ok") {
+		t.Fatalf("sandbox shell output = %q", output)
+	}
+	assertMarkerExists(t, filepath.Join(workspace, "sandbox-workspace-proof"))
+	pIDBytes, err := os.ReadFile(filepath.Join(workspace, "sandbox-descendant.pid"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pID, err := strconv.Atoi(strings.TrimSpace(string(pIDBytes)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if errors.Is(syscall.Kill(pID, 0), syscall.ESRCH) {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err := syscall.Kill(pID, 0); !errors.Is(err, syscall.ESRCH) {
+		t.Fatalf("sandbox shell descendant %d survived completion: %v", pID, err)
+	}
+	assertNoSessions(t, home)
 }
 
 func assertPromotedArtifactNativeReadiness(t *testing.T) {

@@ -18,6 +18,9 @@ func (a *Adapter) PlanLaunch(ctx context.Context, workingDirectory string, resol
 	if err != nil {
 		return launch.Plan{}, err
 	}
+	if err := a.planProjectSkills(ctx, workingDirectory, &plan); err != nil {
+		return launch.Plan{}, err
+	}
 	readiness, err := a.sandbox.Readiness(ctx)
 	if err != nil {
 		return launch.Plan{}, fmt.Errorf("inspect required process sandbox readiness: %w", err)
@@ -49,7 +52,7 @@ func sandboxReadinessSection(readiness launch.SandboxReadiness) launch.PlanSecti
 	return launch.PlanSection{Title: "Sandbox readiness:", Items: items}
 }
 
-func (a *Adapter) planSkills(ctx context.Context, workingDirectory string, selected []skills.SkillBundle, plan *launch.Plan) error {
+func (a *Adapter) planSelectedSkills(ctx context.Context, selected []skills.SkillBundle, plan *launch.Plan) error {
 	selectedSection := launch.PlanSection{
 		Title: "Selected global Skill Bundles managed by ACS:",
 		Items: make([]launch.PlanItem, 0, len(selected)),
@@ -71,6 +74,11 @@ func (a *Adapter) planSkills(ctx context.Context, workingDirectory string, selec
 		})
 	}
 
+	plan.Sections = append(plan.Sections, selectedSection)
+	return nil
+}
+
+func (a *Adapter) planProjectSkills(ctx context.Context, workingDirectory string, plan *launch.Plan) error {
 	projectSection := launch.PlanSection{
 		Title: "Project-local Skill Bundles inherited by Devin (not managed by ACS):",
 	}
@@ -101,6 +109,6 @@ func (a *Adapter) planSkills(ctx context.Context, workingDirectory string, selec
 			})
 		}
 	}
-	plan.Sections = append(plan.Sections, selectedSection, projectSection)
+	plan.Sections = append(plan.Sections, projectSection)
 	return nil
 }

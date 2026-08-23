@@ -16,7 +16,6 @@ builds:
       - -s -w -X main.releaseVersion=v{{ .Version }}
     goos:
       - darwin
-      - linux
     goarch:
       - amd64
       - arm64

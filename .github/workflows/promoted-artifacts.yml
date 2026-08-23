@@ -14,7 +14,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  ACS_CANDIDATE_VERSION: v0.3.3
+  ACS_CANDIDATE_VERSION: v0.4.0
 
 jobs:
   candidate:
@@ -63,16 +63,6 @@ jobs:
             os: darwin
             arch: amd64
             sandbox_backend: available
-          - target: linux/amd64
-            runner: ubuntu-24.04
-            os: linux
-            arch: amd64
-            sandbox_backend: available
-          - target: linux/arm64
-            runner: ubuntu-24.04-arm
-            os: linux
-            arch: arm64
-            sandbox_backend: available
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 20
 
@@ -87,47 +77,6 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-
-      - name: Install and verify Ubuntu Bubblewrap
-        if: matrix.os == 'linux'
-        shell: bash
-        run: |
-          apt_options=(-o Acquire::Retries=2 -o Acquire::http::Timeout=15 -o Acquire::https::Timeout=15)
-          if ! timeout 60s sudo apt-get "${apt_options[@]}" update; then
-            case "$(/usr/bin/dpkg --print-architecture)" in
-              amd64) ubuntu_archive='https://archive.ubuntu.com/ubuntu/' ;;
-              arm64) ubuntu_archive='https://ports.ubuntu.com/ubuntu-ports/' ;;
-              *) echo 'Unsupported Ubuntu package architecture' >&2; exit 1 ;;
-            esac
-            printf '%s\n' "$ubuntu_archive" | sudo tee /etc/apt/apt-mirrors.txt >/dev/null
-            timeout 60s sudo apt-get "${apt_options[@]}" update
-          fi
-          timeout 60s sudo apt-get "${apt_options[@]}" install --yes --no-install-recommends apparmor apparmor-utils bubblewrap
-          profile_source="$(mktemp)"
-          verify_stdout="$(mktemp)"
-          verify_stderr="$(mktemp)"
-          trap 'rm -f "$profile_source" "$verify_stdout" "$verify_stderr"' EXIT
-          curl --fail --location --silent --show-error --retry 3 --retry-all-errors --connect-timeout 10 --max-time 60 --output "$profile_source" \
-            https://gitlab.com/apparmor/apparmor/-/raw/v4.0.3/profiles/apparmor/profiles/extras/bwrap-userns-restrict
-          echo 'a964037f6cf0df1099f14226b037eaedde6237c86e715188e93eb460b30be859  '"$profile_source" | sha256sum --check --status
-          sudo install --owner=root --group=root --mode=0644 "$profile_source" /etc/apparmor.d/bwrap-userns-restrict
-          sudo /usr/sbin/apparmor_parser --replace /etc/apparmor.d/bwrap-userns-restrict
-          sudo /usr/sbin/aa-status --enabled
-          [[ -f /usr/bin/bwrap && ! -L /usr/bin/bwrap && -x /usr/bin/bwrap ]]
-          [[ "$(stat --format='%u:%a' /usr/bin/bwrap)" == "0:755" ]]
-          [[ "$(env -i LC_ALL=C PATH=/usr/sbin:/usr/bin:/sbin:/bin /usr/bin/dpkg-query --search /usr/bin/bwrap)" == "bubblewrap: /usr/bin/bwrap" ]]
-          package_record="$(env -i LC_ALL=C PATH=/usr/sbin:/usr/bin:/sbin:/bin /usr/bin/dpkg-query --show --showformat='${db:Status-Abbrev}\n${binary:Package}\n${source:Package}\n${Architecture}\n' bubblewrap)"
-          [[ "$package_record" == $'ii \nbubblewrap\nbubblewrap\n'"${{ matrix.arch }}" ]]
-          env -i LC_ALL=C PATH=/usr/sbin:/usr/bin:/sbin:/bin /usr/bin/dpkg --verify --verify-format=rpm bubblewrap >"$verify_stdout" 2>"$verify_stderr"
-          [[ ! -s "$verify_stdout" && ! -s "$verify_stderr" ]]
-          /usr/bin/bwrap \
-            --unshare-user --unshare-ipc --unshare-pid --unshare-uts --unshare-cgroup \
-            --die-with-parent --clearenv --proc /proc --dev /dev \
-            --dir /tmp \
-            --symlink usr/bin /bin --symlink usr/sbin /sbin \
-            --symlink usr/lib /lib --symlink usr/lib64 /lib64 \
-            --ro-bind /usr /usr --remount-ro / \
-            --setenv PATH /usr/bin:/bin --chdir /tmp -- /usr/bin/true
 
       - name: Download immutable candidate artifact set
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
@@ -161,17 +110,7 @@ jobs:
         run: go test ./...
 
       - name: Run supported native race tests
-        shell: bash
-        run: |
-          if [[ "${{ matrix.os }}" == "linux" ]]; then
-            # cancelreader's Linux shutdown races with its reader when an
-            # abrupt runtime-error or recovered-panic PTY subprocess is
-            # race-instrumented. The preceding native regression step still
-            # exercises both restoration cases.
-            go test -race ./... -skip '^TestProfileBuilderPTYRestoresTerminal/(runtime_error|recovered_panic)$'
-          else
-            go test -race ./...
-          fi
+        run: go test -race ./...
 
       - name: Exercise installed candidate as a black box
         env:
@@ -188,7 +127,7 @@ jobs:
             printf '%s\n' "- Target: \`${{ matrix.target }}\` on its required native runner."
             printf '%s\n' "- Backend observation: required native backend is \`${{ matrix.sandbox_backend }}\`."
             printf '%s\n' '- Candidate observation: the installed black-box containment and lifecycle suite passed.'
-            printf '%s\n' '- Compatibility rule: macOS uses the verified system Seatbelt backend; Ubuntu uses the verified signed-system Bubblewrap package and targeted AppArmor profile.'
+            printf '%s\n' '- Compatibility rule: v0.4.0 release artifacts are macOS-only and use the verified system Seatbelt backend.'
             printf '%s\n' '- The candidate itself is never rebuilt in this job.'
             printf '%s\n' '- No credentials, account data, target output, Session contents, private paths, generated policy, environment values, or control characters are recorded.'
           } >>"$GITHUB_STEP_SUMMARY"

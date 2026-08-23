@@ -86,8 +86,6 @@ func writePublicationCandidate(t *testing.T) (string, []fixtureAsset) {
 	names := []string{
 		"acs_0.2.0_darwin_arm64.tar.gz",
 		"acs_0.2.0_darwin_amd64.tar.gz",
-		"acs_0.2.0_linux_amd64.tar.gz",
-		"acs_0.2.0_linux_arm64.tar.gz",
 		"SHA256SUMS",
 		"install.sh",
 	}

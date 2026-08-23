@@ -13,6 +13,7 @@ import (
 	"github.com/alcimerio/ai-config-selector/internal/cli"
 	"github.com/alcimerio/ai-config-selector/internal/launch"
 	"github.com/alcimerio/ai-config-selector/internal/profile"
+	"github.com/alcimerio/ai-config-selector/internal/sandboxshell"
 )
 
 var releaseVersionPattern = regexp.MustCompile(`^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:\+incompatible)?$`)
@@ -48,6 +49,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "acs: resolve working directory: %v\n", err)
 		os.Exit(1)
 	}
+	shellLauncher := sandboxshell.New()
 
 	application := cli.App{
 		Version:           buildVersion(releaseVersion, debug.ReadBuildInfo),
@@ -55,6 +57,8 @@ func main() {
 		Builder:           adapter,
 		Planner:           adapter,
 		Launcher:          adapter,
+		SandboxPlanner:    shellLauncher,
+		SandboxLauncher:   shellLauncher,
 		Profiles:          profile.NewStore(filepath.Join(existingHome, ".acs"), adapter.Categories()),
 		SessionsDirectory: filepath.Join(existingHome, ".acs", "sessions"),
 		WorkingDirectory:  workingDirectory,

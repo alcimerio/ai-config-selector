@@ -53,6 +53,58 @@ func TestUsageIncludesTheVersionCommand(t *testing.T) {
 	}
 }
 
+func TestSandboxDryRunPlansResolvedProfileWithoutCreatingSession(t *testing.T) {
+	existingHome := t.TempDir()
+	acsHome := filepath.Join(existingHome, ".acs")
+	adapter, err := devin.New(devin.Config{BinaryPath: "devin", ExistingHomeDir: existingHome})
+	if err != nil {
+		t.Fatal(err)
+	}
+	profiles := profile.NewStore(acsHome, adapter.Categories())
+	if _, err := profiles.Create(devin.NewSkillsProfile("reviews", nil)); err != nil {
+		t.Fatal(err)
+	}
+	workingDirectory := t.TempDir()
+	projectBundle := filepath.Join(workingDirectory, ".agents", "skills", "project-review")
+	if err := os.MkdirAll(projectBundle, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(projectBundle, "SKILL.md"), []byte("# project only\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	application := cli.App{
+		Categories:        adapter.Categories(),
+		SandboxPlanner:    resolvedPlanner{},
+		Profiles:          profiles,
+		SessionsDirectory: filepath.Join(acsHome, "sessions"),
+		WorkingDirectory:  workingDirectory,
+		Output:            &stdout,
+		ErrorOutput:       &stderr,
+	}
+
+	exitCode := application.Run(context.Background(), []string{"sandbox", "--profile", "reviews", "--dry-run"})
+	if exitCode != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr: %s", exitCode, stderr.String())
+	}
+	for _, detail := range []string{
+		`Dry run for Profile "reviews"`,
+		"No Session was created and no sandbox shell was started.",
+	} {
+		if !strings.Contains(stdout.String(), detail) {
+			t.Errorf("sandbox dry-run output does not contain %q:\n%s", detail, stdout.String())
+		}
+	}
+	if strings.Contains(stdout.String(), "Project-local Skill Bundles inherited by Devin") || strings.Contains(stdout.String(), "project-review") {
+		t.Fatalf("sandbox dry run contains Devin-only project inheritance:\n%s", stdout.String())
+	}
+	if _, err := os.Stat(filepath.Join(acsHome, "sessions")); !os.IsNotExist(err) {
+		t.Fatalf("sandbox dry run created a Session directory: %v", err)
+	}
+}
+
 func TestDryRunReportsResolvedGlobalAndInheritedProjectSkillBundlesWithoutCreatingSession(t *testing.T) {
 	existingHome := t.TempDir()
 	acsHome := filepath.Join(existingHome, ".acs")
@@ -255,6 +307,46 @@ func TestLaunchDelegatesResolvedProfileAndTerminalToLauncher(t *testing.T) {
 	}
 	if launcher.terminal.Input != input || launcher.terminal.Output != &stdout || launcher.terminal.ErrorOutput != &stderr {
 		t.Fatal("launcher did not receive the CLI terminal streams")
+	}
+}
+
+func TestSandboxLaunchDelegatesResolvedProfileAndTerminalToSandboxLauncher(t *testing.T) {
+	existingHome := t.TempDir()
+	acsHome := filepath.Join(existingHome, ".acs")
+	adapter, err := devin.New(devin.Config{BinaryPath: "devin", ExistingHomeDir: existingHome})
+	if err != nil {
+		t.Fatal(err)
+	}
+	profiles := profile.NewStore(acsHome, adapter.Categories())
+	if _, err := profiles.Create(devin.NewSkillsProfile("reviews", nil)); err != nil {
+		t.Fatal(err)
+	}
+	workingDirectory := t.TempDir()
+	sessionsDirectory := filepath.Join(acsHome, "sessions")
+	input := strings.NewReader("terminal input\n")
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	launcher := &recordingProfileLauncher{exitCode: 23}
+	application := cli.App{
+		Categories: adapter.Categories(), SandboxLauncher: launcher, Profiles: profiles,
+		SessionsDirectory: sessionsDirectory, WorkingDirectory: workingDirectory,
+		Input: input, Output: &stdout, ErrorOutput: &stderr,
+	}
+
+	if exitCode := application.Run(context.Background(), []string{"sandbox", "--profile", "reviews"}); exitCode != 23 {
+		t.Fatalf("exit code = %d, want sandbox shell exit code 23", exitCode)
+	}
+	if launcher.calls != 1 {
+		t.Fatalf("sandbox launcher calls = %d, want 1", launcher.calls)
+	}
+	if launcher.sessionsDirectory != sessionsDirectory || launcher.workingDirectory != workingDirectory {
+		t.Fatalf("sandbox launcher paths = (%q, %q), want (%q, %q)", launcher.sessionsDirectory, launcher.workingDirectory, sessionsDirectory, workingDirectory)
+	}
+	if _, err := launcher.resolved.Plan(context.Background(), workingDirectory); err != nil {
+		t.Fatalf("sandbox launcher received unusable resolved Profile: %v", err)
+	}
+	if launcher.terminal.Input != input || launcher.terminal.Output != &stdout || launcher.terminal.ErrorOutput != &stderr {
+		t.Fatal("sandbox launcher did not receive the CLI terminal streams")
 	}
 }
 

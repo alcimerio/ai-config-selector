@@ -149,7 +149,7 @@ exit 23
 	if stdout.Len() != 0 {
 		t.Fatal("backend-unavailable launch wrote stdout")
 	}
-	wantDiagnostic := "acs: launch Profile \"reviews\": backend_unavailable: process sandbox unavailable: required system backend is unavailable; ACS will not start Devin without the required sandbox\n"
+	wantDiagnostic := "acs: launch Profile \"reviews\": backend_unavailable: process sandbox unavailable: required system backend is unavailable; ACS will not start the requested process without the required sandbox\n"
 	if got := stderr.String(); got != wantDiagnostic {
 		t.Fatal("backend-unavailable diagnostic did not match the stable safe failure")
 	}
