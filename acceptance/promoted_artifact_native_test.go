@@ -503,7 +503,7 @@ func runPromotedArtifactFakeDevin(arguments []string) bool {
 		runFakeDevinAuthentication()
 		return true
 	}
-	if len(arguments) == 0 {
+	if len(arguments) == 2 && arguments[0] == "--respect-workspace-trust" && arguments[1] == "false" {
 		runFakeDevinInteractive()
 		return true
 	}
