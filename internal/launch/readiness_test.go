@@ -11,9 +11,9 @@ func TestSandboxReadinessReportsSelectedBackendAndExactSupportedPlatformResult(t
 	backend := &capturingBackend{}
 	sandbox := newNativeProcessSandbox(
 		func() (Platform, error) {
-			return Platform{OS: "linux", Architecture: "arm64", Distribution: "ubuntu", Release: "24.04.3"}, nil
+			return Platform{OS: "darwin", Architecture: "arm64", Release: "26.3"}, nil
 		},
-		map[string]sandboxBackend{"linux": backend},
+		map[string]sandboxBackend{"darwin": backend},
 	)
 
 	readiness, err := sandbox.Readiness(context.Background())
@@ -23,10 +23,10 @@ func TestSandboxReadinessReportsSelectedBackendAndExactSupportedPlatformResult(t
 	if got, want := readiness.RequiredMode, "native"; got != want {
 		t.Errorf("required mode = %q, want %q", got, want)
 	}
-	if got, want := readiness.Backend, "Bubblewrap"; got != want {
+	if got, want := readiness.Backend, "Seatbelt"; got != want {
 		t.Errorf("backend = %q, want %q", got, want)
 	}
-	if got, want := readiness.Platform, "Ubuntu 24.04.3 LTS on linux/arm64"; got != want {
+	if got, want := readiness.Platform, "macOS 26.3 on darwin/arm64"; got != want {
 		t.Errorf("platform = %q, want %q", got, want)
 	}
 	if !readiness.Supported {

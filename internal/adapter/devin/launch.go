@@ -7,11 +7,13 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"sync"
 	"syscall"
 
 	"github.com/alcimerio/ai-config-selector/internal/category"
 	"github.com/alcimerio/ai-config-selector/internal/launch"
+	"github.com/alcimerio/ai-config-selector/internal/session"
 )
 
 // Launch creates an ephemeral ACS Session, verifies the Devin Adapter
@@ -35,13 +37,12 @@ func (a *Adapter) Launch(
 		return 1, err
 	}
 
-	sessionLease, err := launch.CreateSession(sessionsDirectory)
+	createdSession, err := session.Create(sessionsDirectory, workingDirectory, resolved)
 	if err != nil {
 		return 1, sanitizeLaunchError(err)
 	}
-	sessionRoot := sessionLease.RootDir
 	defer func() {
-		if err := sessionLease.Remove(); err != nil {
+		if err := createdSession.Remove(); err != nil {
 			cleanupFailure := sanitizeLaunchError(err)
 			var targetExit *DevinExitError
 			if errors.As(resultErr, &targetExit) {
@@ -57,21 +58,22 @@ func (a *Adapter) Launch(
 			exitCode = 1
 		}
 	}()
-	session, err := a.prepareResolvedSession(sessionRoot, workingDirectory, resolved)
-	if err != nil {
+	credentialSource := filepath.Join(a.existingHomeDir, filepath.FromSlash(credentialsRelativePath))
+	credentialDestination := filepath.Join(createdSession.HomeDirectory(), filepath.FromSlash(credentialsRelativePath))
+	if err := copyCredentialIfPresent(credentialSource, credentialDestination); err != nil {
 		return 1, sanitizeLaunchError(err)
 	}
-	session.lease = sessionLease
-	if err := resolved.Verify(preflightContext, launch.VerificationContext{
-		SessionsDirectory:  sessionsDirectory,
-		SessionDirectory:   session.RootDir,
-		SessionHome:        session.HomeDir,
-		TemporaryDirectory: session.TemporaryDir,
-		WorkingDirectory:   session.WorkingDirectory,
-	}); err != nil {
+	devinSession := &Session{
+		RootDir:          createdSession.RootDirectory(),
+		HomeDir:          createdSession.HomeDirectory(),
+		TemporaryDir:     createdSession.TemporaryDirectory(),
+		SessionsDir:      createdSession.SessionsDirectory(),
+		WorkingDirectory: createdSession.WorkingDirectory(),
+	}
+	if err := resolved.Verify(preflightContext, createdSession.VerificationContext()); err != nil {
 		return 1, sanitizeLaunchError(err)
 	}
-	if err := a.verifyAuthentication(preflightContext, session); err != nil {
+	if err := a.verifyAuthentication(preflightContext, devinSession); err != nil {
 		return 1, sanitizeLaunchError(err)
 	}
 	if preflightContext.Err() != nil {
@@ -79,15 +81,15 @@ func (a *Adapter) Launch(
 	}
 
 	process, err := a.sandbox.Prepare(preflightContext, launch.ProcessRequest{
-		Workspace: session.WorkingDirectory, SessionsDirectory: sessionsDirectory,
-		SessionDirectory: session.RootDir, SessionHome: session.HomeDir,
-		TemporaryDirectory: session.TemporaryDir, Executable: a.binaryPath,
+		Workspace: createdSession.WorkingDirectory(), SessionsDirectory: sessionsDirectory,
+		SessionDirectory: createdSession.RootDirectory(), SessionHome: createdSession.HomeDirectory(),
+		TemporaryDirectory: createdSession.TemporaryDirectory(), Executable: a.binaryPath,
 		RuntimeInputs: a.runtimeInputs, Terminal: terminal,
 	})
 	if err != nil {
 		return 1, sanitizeLaunchError(err)
 	}
-	process, err = launch.RetainSessionUntilProcessDone(process, sessionLease)
+	process, err = createdSession.RetainUntilProcessDone(process)
 	if err != nil {
 		return 1, err
 	}

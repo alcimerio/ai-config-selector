@@ -188,29 +188,6 @@ func (a *Adapter) PrepareSession(rootDir, workingDirectory string, selected []Sk
 	}, nil
 }
 
-func (a *Adapter) prepareResolvedSession(rootDir, workingDirectory string, resolved category.ResolvedProfile) (*Session, error) {
-	homeDir := filepath.Join(rootDir, "home")
-	temporaryDir := filepath.Join(rootDir, "tmp")
-	if err := os.MkdirAll(temporaryDir, 0o700); err != nil {
-		return nil, fmt.Errorf("prepare Devin Session temporary directory: %w", err)
-	}
-	if err := resolved.Materialize(homeDir); err != nil {
-		return nil, err
-	}
-	credentialSource := filepath.Join(a.existingHomeDir, filepath.FromSlash(credentialsRelativePath))
-	credentialDestination := filepath.Join(homeDir, filepath.FromSlash(credentialsRelativePath))
-	if err := copyCredentialIfPresent(credentialSource, credentialDestination); err != nil {
-		return nil, fmt.Errorf("prepare Devin Session authentication allowlist: %w", err)
-	}
-	return &Session{
-		RootDir:          filepath.Clean(rootDir),
-		HomeDir:          homeDir,
-		TemporaryDir:     temporaryDir,
-		SessionsDir:      filepath.Dir(filepath.Clean(rootDir)),
-		WorkingDirectory: filepath.Clean(workingDirectory),
-	}, nil
-}
-
 // Preflight asks the installed Devin CLI to report its observed skills and
 // authentication state. It returns only sanitized capability diagnostics.
 func (a *Adapter) Preflight(ctx context.Context, session *Session) error {

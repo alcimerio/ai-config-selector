@@ -50,6 +50,8 @@ type App struct {
 	DraftEditor       ProfileDraftEditor
 	Planner           LaunchPlanner
 	Launcher          ProfileLauncher
+	SandboxPlanner    LaunchPlanner
+	SandboxLauncher   ProfileLauncher
 	Profiles          ProfileStore
 	SessionsDirectory string
 	WorkingDirectory  string
@@ -85,12 +87,18 @@ func (app App) Run(ctx context.Context, args []string) int {
 		return app.createProfile(ctx, args[3])
 	}
 	if len(args) == 4 && args[0] == "devin" && args[1] == "--profile" && args[2] != "" && args[3] == "--dry-run" {
-		return app.dryRun(ctx, args[2])
+		return app.dryRun(ctx, args[2], app.Planner, "No Session was created and Devin was not started.")
 	}
 	if len(args) == 3 && args[0] == "devin" && args[1] == "--profile" && args[2] != "" {
-		return app.launchProfile(ctx, args[2])
+		return app.launchProfile(ctx, args[2], app.Launcher, "launch")
 	}
-	return app.fail("usage: acs devin create-profile --name <name> | acs devin --profile <name> [--dry-run] | acs version; ACS will not start Devin without the required sandbox")
+	if len(args) == 4 && args[0] == "sandbox" && args[1] == "--profile" && args[2] != "" && args[3] == "--dry-run" {
+		return app.dryRun(ctx, args[2], app.SandboxPlanner, "No Session was created and no sandbox shell was started.")
+	}
+	if len(args) == 3 && args[0] == "sandbox" && args[1] == "--profile" && args[2] != "" {
+		return app.launchProfile(ctx, args[2], app.SandboxLauncher, "launch sandbox")
+	}
+	return app.fail("usage: acs devin create-profile --name <name> | acs devin --profile <name> [--dry-run] | acs sandbox --profile <name> [--dry-run] | acs version; ACS will not start Devin without the required sandbox; ACS will not start a sandbox shell without the required sandbox")
 }
 
 func (app App) createProfile(ctx context.Context, name string) int {
@@ -159,12 +167,12 @@ func (app App) createProfile(ctx context.Context, name string) int {
 	return 0
 }
 
-func (app App) dryRun(ctx context.Context, name string) int {
+func (app App) dryRun(ctx context.Context, name string, planner LaunchPlanner, closingMessage string) int {
 	resolved, err := app.resolveProfile(ctx, name)
 	if err != nil {
 		return app.fail("%v", err)
 	}
-	plan, err := app.Planner.PlanLaunch(ctx, app.WorkingDirectory, resolved)
+	plan, err := planner.PlanLaunch(ctx, app.WorkingDirectory, resolved)
 	if err != nil {
 		return app.fail("plan Profile %q launch: %v", name, err)
 	}
@@ -182,16 +190,16 @@ func (app App) dryRun(ctx context.Context, name string) int {
 			}
 		}
 	}
-	fmt.Fprintln(app.Output, "\nNo Session was created and Devin was not started.")
+	fmt.Fprintln(app.Output, "\n"+closingMessage)
 	return 0
 }
 
-func (app App) launchProfile(ctx context.Context, name string) int {
+func (app App) launchProfile(ctx context.Context, name string, launcher ProfileLauncher, action string) int {
 	resolved, err := app.resolveProfile(ctx, name)
 	if err != nil {
 		return app.fail("%v", err)
 	}
-	exitCode, err := app.Launcher.Launch(
+	exitCode, err := launcher.Launch(
 		ctx,
 		app.SessionsDirectory,
 		app.WorkingDirectory,
@@ -203,7 +211,7 @@ func (app App) launchProfile(ctx context.Context, name string) int {
 		if errors.As(err, &targetExit) {
 			return targetExit.ExitCode()
 		}
-		return app.fail("launch Profile %q: %v", name, err)
+		return app.fail("%s Profile %q: %v", action, name, err)
 	}
 	return exitCode
 }

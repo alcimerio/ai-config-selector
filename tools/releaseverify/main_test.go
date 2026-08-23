@@ -13,7 +13,7 @@ import (
 	"testing"
 )
 
-func TestReleaseCandidateAcceptsExactlyFourSupportedArchives(t *testing.T) {
+func TestReleaseCandidateAcceptsExactlyTwoMacOSArchives(t *testing.T) {
 	version := "v0.2.0"
 	dist := writeCandidate(t, version)
 
@@ -22,7 +22,7 @@ func TestReleaseCandidateAcceptsExactlyFourSupportedArchives(t *testing.T) {
 		t.Fatalf("release candidate rejected: %v\n%s", err, output)
 	}
 	host := runtime.GOOS + "/" + runtime.GOARCH
-	for _, target := range []string{"darwin/arm64", "darwin/amd64", "linux/amd64", "linux/arm64"} {
+	for _, target := range []string{"darwin/arm64", "darwin/amd64"} {
 		var want string
 		if target == host {
 			want = "Verified packaged executable for " + target + "."
@@ -42,16 +42,16 @@ func TestReleaseCandidateRejectsInvalidArtifactSets(t *testing.T) {
 		mutate func(*testing.T, string)
 	}{
 		{name: "missing archive", mutate: func(t *testing.T, dist string) {
-			mustRemove(t, filepath.Join(dist, "acs_0.2.0_linux_arm64.tar.gz"))
+			mustRemove(t, filepath.Join(dist, "acs_0.2.0_darwin_amd64.tar.gz"))
 		}},
 		{name: "extra archive", mutate: func(t *testing.T, dist string) {
 			mustWriteFile(t, filepath.Join(dist, "acs_0.2.0_windows_amd64.tar.gz"), []byte("unexpected"))
 		}},
 		{name: "malformed archive name", mutate: func(t *testing.T, dist string) {
-			mustRename(t, filepath.Join(dist, "acs_0.2.0_linux_arm64.tar.gz"), filepath.Join(dist, "acs-v0.2.0-linux-arm64.tar.gz"))
+			mustRename(t, filepath.Join(dist, "acs_0.2.0_darwin_amd64.tar.gz"), filepath.Join(dist, "acs-v0.2.0-darwin-amd64.tar.gz"))
 		}},
 		{name: "zip artifact", mutate: func(t *testing.T, dist string) {
-			mustWriteFile(t, filepath.Join(dist, "acs_0.2.0_linux_arm64.zip"), []byte("unexpected"))
+			mustWriteFile(t, filepath.Join(dist, "acs_0.2.0_darwin_amd64.zip"), []byte("unexpected"))
 		}},
 		{name: "missing checksum manifest", mutate: func(t *testing.T, dist string) {
 			mustRemove(t, filepath.Join(dist, "SHA256SUMS"))
@@ -68,7 +68,7 @@ func TestReleaseCandidateRejectsInvalidArtifactSets(t *testing.T) {
 			mustWriteFile(t, filepath.Join(dist, "SHA256SUMS"), []byte("not a checksum\n"))
 		}},
 		{name: "checksum mismatch", mutate: func(t *testing.T, dist string) {
-			path := filepath.Join(dist, "acs_0.2.0_linux_arm64.tar.gz")
+			path := filepath.Join(dist, "acs_0.2.0_darwin_amd64.tar.gz")
 			file, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
 			if err != nil {
 				t.Fatal(err)
@@ -81,14 +81,14 @@ func TestReleaseCandidateRejectsInvalidArtifactSets(t *testing.T) {
 			}
 		}},
 		{name: "nested archive content", mutate: func(t *testing.T, dist string) {
-			rewriteArchive(t, dist, "acs_0.2.0_linux_arm64.tar.gz", []archiveEntry{
+			rewriteArchive(t, dist, "acs_0.2.0_darwin_amd64.tar.gz", []archiveEntry{
 				{name: "bin/acs", mode: 0o755, body: []byte("fixture")},
 				{name: "README.md", mode: 0o644, body: []byte("fixture")},
 				{name: "LICENSE", mode: 0o644, body: []byte("fixture")},
 			})
 		}},
 		{name: "extra archive content", mutate: func(t *testing.T, dist string) {
-			rewriteArchive(t, dist, "acs_0.2.0_linux_arm64.tar.gz", []archiveEntry{
+			rewriteArchive(t, dist, "acs_0.2.0_darwin_amd64.tar.gz", []archiveEntry{
 				{name: "acs", mode: 0o755, body: []byte("fixture")},
 				{name: "README.md", mode: 0o644, body: []byte("fixture")},
 				{name: "LICENSE", mode: 0o644, body: []byte("fixture")},
@@ -96,14 +96,14 @@ func TestReleaseCandidateRejectsInvalidArtifactSets(t *testing.T) {
 			})
 		}},
 		{name: "non-executable acs", mutate: func(t *testing.T, dist string) {
-			rewriteArchive(t, dist, "acs_0.2.0_linux_arm64.tar.gz", []archiveEntry{
+			rewriteArchive(t, dist, "acs_0.2.0_darwin_amd64.tar.gz", []archiveEntry{
 				{name: "acs", mode: 0o644, body: []byte("fixture")},
 				{name: "README.md", mode: 0o644, body: []byte("fixture")},
 				{name: "LICENSE", mode: 0o644, body: []byte("fixture")},
 			})
 		}},
 		{name: "host ownership metadata", mutate: func(t *testing.T, dist string) {
-			rewriteArchive(t, dist, "acs_0.2.0_linux_arm64.tar.gz", []archiveEntry{
+			rewriteArchive(t, dist, "acs_0.2.0_darwin_amd64.tar.gz", []archiveEntry{
 				{name: "acs", mode: 0o755, body: []byte("fixture"), uid: 501, gid: 20, uname: "maintainer", gname: "staff"},
 				{name: "README.md", mode: 0o644, body: []byte("fixture")},
 				{name: "LICENSE", mode: 0o644, body: []byte("fixture")},
@@ -169,8 +169,6 @@ func writeCandidate(t *testing.T, version string) string {
 	}{
 		{goos: "darwin", goarch: "arm64"},
 		{goos: "darwin", goarch: "amd64"},
-		{goos: "linux", goarch: "amd64"},
-		{goos: "linux", goarch: "arm64"},
 	} {
 		name := fmt.Sprintf("acs_%s_%s_%s.tar.gz", archiveVersion, target.goos, target.goarch)
 		binary := []byte("fixture executable")
@@ -252,7 +250,7 @@ func rewriteArchive(t *testing.T, dist, name string, entries []archiveEntry) {
 func writeChecksums(t *testing.T, dist, archiveVersion string) {
 	t.Helper()
 	var checksums strings.Builder
-	for _, target := range []string{"darwin_arm64", "darwin_amd64", "linux_amd64", "linux_arm64"} {
+	for _, target := range []string{"darwin_arm64", "darwin_amd64"} {
 		name := fmt.Sprintf("acs_%s_%s.tar.gz", archiveVersion, target)
 		contents, err := os.ReadFile(filepath.Join(dist, name))
 		if err != nil {

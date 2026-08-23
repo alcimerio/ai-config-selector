@@ -1,387 +1,140 @@
-# Contributing to AI Config Selector
+# Contributing
 
-Thanks for contributing to AI Config Selector (ACS).
-
-## Before you start
-
-The v0.3.3 release contract defines macOS 26 and Ubuntu 24.04 LTS as the
-Supported Platforms. Its Supported Release Targets are `darwin/arm64`,
-`darwin/amd64`, `linux/amd64`, and `linux/arm64`. Other Linux distributions,
-Windows, WSL, and other target pairs are outside that contract. ACS supports
-the Devin CLI on both Supported Platforms. Read
-[`docs/architecture.md`](docs/architecture.md) before changing Profile,
-Session, discovery, isolation, or launch behavior.
-
-Open a GitHub issue before starting a feature, architecture change, or large
-refactor. Small bug fixes and documentation corrections may go directly to a
-pull request. Keep each pull request focused on one problem.
+ACS v0.4.0 is a macOS-first project. Supported runtime behavior and release
+evidence cover macOS 26 on arm64 and Intel. Linux/Bubblewrap source is retained,
+but Linux failures are not release blockers and do not imply a support promise.
 
 ## Local setup
 
 Install Go 1.25 or later, clone the repository, and run:
 
-```bash
+```sh
+go mod download
 go test ./...
+go test -race ./...
+go vet ./...
 go build ./cmd/acs
 ```
 
-ACS can create files under `~/.acs` and launch an installed target CLI. Use
-temporary homes, fake target binaries, or test fixtures while developing. Do
-not point tests at a user's real global Skill directories or credentials.
+Run formatting before committing:
 
-### Opt-in real-Devin integration test
-
-The normal test suite does not invoke a real Devin installation. Maintainers
-can run the adapter contract against the installed CLI explicitly:
-
-```bash
-ACS_REAL_DEVIN_INTEGRATION=I_ACKNOWLEDGE_LOCAL_CREDENTIAL_ACCESS \
-  go test -tags=integration ./internal/adapter/devin
+```sh
+gofmt -w path/to/changed.go
 ```
 
-This opt-in test requires macOS or Linux, an installed Devin CLI, and an
-authenticated Devin account. It reads the existing authenticated state. The
-build tag alone is insufficient; the exact environment value records an
-explicit local acknowledgement. Run it only when the machine owner has agreed
-to that access. `go test ./...` and all pull-request and `main` workflows remain
-credential-free.
+Do not commit generated `dist/` content, credentials, Session data, captured
+target output, private paths, environment values, or generated Seatbelt policy.
 
-## Development guidelines
+## Development rules
 
-- Preserve the configuration-isolation boundaries and invariants documented
-  in the architecture.
-- Keep shared Profile and launch behavior independent of target-specific paths.
-- Add regression tests for behavior changes and bug fixes. Prefer public seams
-  such as the Profile Store and CLI application over private helpers.
-- Keep terminal output free of raw control characters from discovered names,
-  paths, subprocess output, or errors.
-- Update `docs/architecture.md` when a change alters observable behavior or a
-  system boundary.
-- For every public process-isolation claim, link the v0.3.3 native evidence
-  from [issue #62](https://github.com/alcimerio/ai-config-selector/issues/62)
-  or an exact maintained test/workflow path. Link exceptions to a limitation or
-  compatibility record; do not use a local source build as release evidence.
+- Add a failing test before changing behavior.
+- Keep public CLI parsing in `internal/cli` and target behavior behind planner
+  and launcher boundaries.
+- Keep Profile materialization target-independent. Credentials and executable
+  verification belong to the target adapter.
+- Do not add a backend selector, sandbox bypass, unsandboxed fallback, arbitrary
+  shell command option, or `$SHELL` lookup.
+- Preserve stable error categories and sanitize private backend detail.
+- Treat cleanup proof as part of correctness. Never delete a Session while its
+  contained process tree may still be alive.
+- Preserve existing version-1 and version-2 Profile behavior unless an explicit
+  migration is designed and documented.
 
-Format and verify the change before opening a pull request:
+## Testing the sandbox shell
 
-```bash
-go fmt ./...
-go vet ./...
-go test ./...
-git diff --check
+The main contract is:
+
+```sh
+acs sandbox --profile PROFILE --dry-run
+acs sandbox --profile PROFILE
 ```
 
-Release-related pull requests also run the complete locally applicable gate:
+The interactive target must remain exactly `/bin/zsh -f`. Tests should cover:
 
-```bash
-test -z "$(gofmt -l .)"
-go vet ./...
-go mod tidy
-git diff --exit-code -- go.mod go.sum
-go mod verify
-go test ./...
-if [ "$(go env GOOS)" = linux ]; then
-  go test -race ./... -skip '^TestProfileBuilderPTYRestoresTerminal/(runtime_error|recovered_panic)$'
-else
-  go test -race ./...
-fi
-go build ./cmd/acs
-for script in scripts/goreleaser.sh scripts/release-candidate.sh \
-  scripts/prepare-release-tag.sh scripts/release-tag-identity.sh \
-  scripts/validate-promoted-artifact.sh scripts/install.sh.tmpl; do
-  sh -n "$script"
-done
-bash -n scripts/publish-release.sh
-go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+- selected Skills in the synthetic home;
+- absence of the Devin credential and Devin preflights;
+- workspace, Session home, and Session temporary writes;
+- denial of unrelated host reads/writes and symlink escapes;
+- clean environment and descriptor behavior;
+- terminal input/output, resize, signals, and exit status;
+- descendants and Session cleanup after every exit path;
+- stable fail-closed errors before and after Session creation.
+
+Native Seatbelt tests can fail when run inside another restrictive sandbox.
+Run them from a normal macOS terminal when validating production behavior:
+
+```sh
+go test ./internal/launch ./internal/sandboxshell -count=1
+go test -race ./internal/launch ./internal/sandboxshell -count=1
 ```
 
-The race-test skip is only for the documented third-party Linux cancelreader
-shutdown race in the abrupt `runtime_error` and `recovered_panic` PTY cases.
-The normal suite still exercises both cases. On macOS, the ThreadSanitizer
-runtime cannot start inside the production Seatbelt policy. Only Darwin tests
-that require nested execution of the race-instrumented test binary inside the
-production Seatbelt policy are skipped by standard race build tags. Policy
-construction, escaping, backend verification, input sanitization, and every
-test that does not require nested execution remain in `go test -race ./...`;
-the preceding non-race native suite and the installed promoted-artifact
-acceptance still exercise native containment without changing the production
-policy. Also cross-build and cross-test-compile all four
-Supported Release Targets and reconcile the final worktree. Native jobs, not
-cross-compilation, provide promoted-artifact acceptance evidence.
+Do not weaken macOS security settings to make a test pass.
 
-### Ubuntu native-test remediation
+## Linux source
 
-Ubuntu 24.04 restricts unprivileged user namespaces through AppArmor, so the
-Ubuntu-native workflows install the targeted AppArmor
-`bwrap-userns-restrict` profile for `/usr/bin/bwrap` before their native test
-commands. Ubuntu Noble exposes this optional profile through
-`apparmor-profiles`, but it is not enabled by default and its documented
-compatibility may lag upstream. The workflows therefore use the pinned
-AppArmor project v4.0.3 profile, verify its SHA-256
-`a964037f6cf0df1099f14226b037eaedde6237c86e715188e93eb460b30be859`, install
-it root-owned at `/etc/apparmor.d/bwrap-userns-restrict`, and load it with
-`apparmor_parser`. They then execute a real `/usr/bin/bwrap` user-namespace
-probe before running Go tests.
+The retained Linux implementation may be compiled as a non-blocking observation:
 
-This remediation permits the targeted Bubblewrap profile only. It does not
-set `kernel.apparmor_restrict_unprivileged_userns=0`, disable AppArmor, skip
-native tests, or relax ACS's package-integrity and runtime capability checks.
-Local Ubuntu-native validation needs the same reviewed profile setup; a failed
-probe is an infrastructure failure, not evidence that the production sandbox
-can run without containment.
-
-For an Ubuntu host, install or repair Bubblewrap only from reviewed configured
-signed apt sources (`sudo apt-get update && sudo apt-get install --reinstall
-bubblewrap`). Do not download a replacement binary, disable AppArmor, or relax
-the global user-namespace setting to make a test pass. The profile is a narrow
-compatibility prerequisite for `/usr/bin/bwrap`, not permission to run ACS
-without its runtime verification.
-
-## Release validation
-
-Release packaging uses GoReleaser OSS v2.17.1. The repository wrapper downloads
-that exact version, verifies the official binary checksum for the validation
-host, and rejects unsupported validation hosts. From a clean Git worktree,
-check the configuration, build all four snapshot archives, and inspect the
-candidate artifact set with:
-
-```bash
-scripts/goreleaser.sh check
-scripts/release-candidate.sh v0.3.3
+```sh
+GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go test -run '^$' ./...
+GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go test -run '^$' ./...
 ```
 
-The candidate command disables CGO, builds only the supported Darwin and Linux
-amd64 and arm64 targets, stages the four archives and `SHA256SUMS` under
-`dist/release-candidate/`, and validates their names, checksums, top-level
-contents, executable mode, and locally runnable packaged version. It does not
-create a tag or GitHub Release. Use the intended canonical tag for the
-candidate; the command does not accept development, prerelease, build-metadata,
-or dirty source input.
+Do not publish Linux archives, add Linux native release jobs, or describe Linux
+as supported without a separate decision that restores ownership and evidence
+for that platform.
 
-The candidate set also contains one executable `install.sh` rendered with the
-same immutable tag. Installer acceptance uses fake host and download tools plus
-local archives; it never contacts a GitHub Release or writes to a real user
-installation. Run it with the normal test suite, or focus it with:
+## Optional authenticated Devin smoke
 
-```bash
-go test ./scripts -run Installer
-```
-
-The supported installer interface accepts only an optional `--bin-dir` and has
-no version override. Tests cover exact Release URLs, all supported targets,
-checksum and archive rejection, destination safety, executable validation,
-atomic placement, PATH guidance, and cleanup.
-
-Pull requests and `main` also build one complete candidate set and transfer
-those exact workflow-artifact bytes to four native jobs: darwin/arm64,
-darwin/amd64, linux/amd64, and linux/arm64. Each job rejects a host whose
-operating system or architecture does not match its required target, runs the
-normal credential-free application, Adapter, installer, race, and PTY suites,
-then installs and exercises the candidate executable as a black box. The
-acceptance harness uses only a synthetic home, a fake Devin executable, and
-temporary install and Session directories. It does not read real Devin
-credentials or modify a maintainer installation. Each target declares the
-native sandbox capability expected at that release increment. Darwin targets
-exercise successful Seatbelt launch, signal, terminal-resize, and
-concurrent-lease behavior. The two Ubuntu targets require the installed launch,
-signal, terminal-resize, and concurrent-lease assertions to succeed through
-the system Bubblewrap backend. Ubuntu-native tests additionally prove
-filesystem, environment, descriptor, networking, descendant, and lifecycle
-containment.
-
-### Native candidate gate
-
-The required native candidate gate is the release evidence for the four
-Supported Release Targets: macOS 26 `darwin/arm64` and `darwin/amd64`, plus
-Ubuntu 24.04 LTS `linux/amd64` and `linux/arm64`. Each job installs the exact
-candidate artifact supplied by the single build job and never rebuilds a
-candidate binary. Its black-box fixture suite covers backend readiness,
-filesystem allow and deny behavior (including symlink escapes), descendants,
-allowlisted and blocked environment values, file descriptors, host Unix
-sockets, outbound IP, Skill and authentication preflight, terminal signals,
-resize and exit, and concurrent and abandoned Session cleanup.
-
-The suite also checks the release criterion that a missing backend OR invalid
-policy cannot start a fixture target marker. Every native matrix row exercises
-the exact candidate's missing-backend branch and verifies no Session residue;
-genuine backend policy-validation tests cover the invalid-policy branch.
-Failures identify the test and a stable safe category without host details.
-Successful jobs record only sanitized
-target/backend observations and the retained compatibility rules:
-verified system Seatbelt on macOS; verified signed-system Bubblewrap plus the
-targeted AppArmor profile on Ubuntu. Logs, artifacts, and summaries must not
-contain credentials, account data, target output, Session contents, private
-paths, generated policies, environment values, or terminal control characters.
-
-After building a clean candidate locally, run the validator on a matching
-native host with a fresh absolute install directory:
-
-```bash
-install_root="$(mktemp -d)"
-install_root="$(cd "$install_root" && pwd -P)"
-scripts/validate-promoted-artifact.sh \
-  v0.3.3 "$(go env GOOS)" "$(go env GOARCH)" \
-  dist/release-candidate "$install_root/bin"
-ACS_PROMOTED_BINARY="$install_root/bin/acs" \
-  ACS_PROMOTED_VERSION=v0.3.3 \
-  ACS_PROMOTED_SANDBOX_BACKEND=available \
-  go test ./acceptance -count=1
-```
-
-The native target validator preserves the installer's exact pinned GitHub
-Release URLs while serving the supplied bytes through a controlled local
-download tool. It verifies the complete candidate set, selected archive,
-checksum, structure, executable mode, version, custom and default destination
-behavior, PATH guidance, and cleanup. Cross-compilation and emulation are not
-native validation. If any required runner is unavailable or any native job
-fails, the candidate is not promoted.
-
-These four native jobs are the required runtime release gate. They install and
-exercise the same candidate bytes that the workflow later attests and
-publishes. A failing or unavailable native job blocks the release.
-
-### v0.3.3 evidence and documentation contract
-
-The v0.3.3 public protection contract is tied to the credential-free native
-candidate evidence in [issue #62](https://github.com/alcimerio/ai-config-selector/issues/62),
-[acceptance/promoted_artifact_native_test.go](acceptance/promoted_artifact_native_test.go),
-[acceptance/promoted_artifact_test.go](acceptance/promoted_artifact_test.go),
-and [.github/workflows/release.yml](.github/workflows/release.yml). It covers
-the exact supplied candidate on macOS 26 `darwin/arm64` and `darwin/amd64`, and
-Ubuntu 24.04 LTS `linux/amd64` and `linux/arm64`—not an equivalent source build.
-
-When editing release documentation, retain explicit pointers for backend
-selection, allowed paths, environment exclusions, descriptors, host Unix
-sockets, outbound IP, preflight, terminal and descendant lifecycle, Session
-cleanup, and fail-closed no-target cases. The documented exception records are
-the [README limitations](README.md#known-limitations) and
-[architecture limitations](docs/architecture.md#current-limitations): ACS is
-not an egress firewall; repository-local Skills remain Devin-controlled; the
-Ubuntu package check does not defend against a compromised administrator; and
-the real-Devin smoke and source builds do not qualify a release.
-
-An authenticated smoke with real Devin is optional and risk-triggered. Run the
-[authenticated release-candidate smoke procedure](docs/authenticated-release-smoke.md)
-on the maintainer's macOS 26 arm64 host before the first release, or when a
-change touches authentication, the Devin Adapter, Profile selection, Session
-isolation, or interactive lifecycle behavior. It is a maintainer confidence
-check, does not use CI credentials, and is not attached to the tag or workflow.
-The exact `ACS_REAL_DEVIN_INTEGRATION=I_ACKNOWLEDGE_LOCAL_CREDENTIAL_ACCESS`
-value is the maintainer's explicit acknowledgement for the integration probe;
-the private smoke remains supplemental and never substitutes for the native
-candidate gate.
-
-The release tag is an annotated canonical SemVer tag. The tag points to the
-exact source commit and carries a short human-readable annotation. The source
-tree must also contain nonempty release notes at `docs/releases/<tag>.md`. From
-a clean, freshly fetched `main` whose `HEAD` exactly matches `origin/main`,
-prepare the local tag with:
-
-```bash
-git fetch origin main
-scripts/prepare-release-tag.sh v0.3.3
-```
-
-The command rebuilds and validates the complete candidate, creates the
-human-readable annotated tag locally, re-reads its identity, and prints the
-tag-object SHA and peeled source commit. It never pushes. Inspect those exact
-identities before pushing only the printed tag ref. For v0.3.3, that command is:
-
-```bash
-git push origin refs/tags/v0.3.3
-```
-
-Do not push a branch, another tag, or a rewritten tag as part of that approval.
-The human tag push is the release authorization boundary; GitHub Actions owns
-the mechanical draft, asset, and publication transitions.
-
-Before the tag is pushed, enable the repository's immutable Releases setting
-and create two active tag rulesets covering exactly `refs/tags/v*`. The first
-must restrict updates and deletions with no bypass actors. The second must
-restrict creation and allow only the designated release maintainers to bypass
-that creation rule. Record their numeric IDs in the
-`ACS_RELEASE_TAG_RULESET_ID` and `ACS_RELEASE_TAG_CREATION_RULESET_ID`
-repository variables. The creation ruleset must have exactly one `User` bypass
-actor in `always` mode; record that user's numeric ID as
-`ACS_RELEASE_TAG_CREATOR_ID`. The tag-triggering actor must match that ID.
-
-Configure a `release` environment restricted to `v*` tag refs, with no
-required reviewers. For a sole maintainer, a self-review prohibition would make
-publication impossible and a self-approval click would not add an independent
-reviewer. The environment scopes the policy credential; it is not a second
-human authorization gate.
-
-Install one repository-only policy GitHub App. It needs
-Administration(write), because GitHub omits ruleset bypass actors from weaker
-tokens; store its client ID as `ACS_RELEASE_POLICY_APP_CLIENT_ID` and its key as
-the `ACS_RELEASE_POLICY_APP_PRIVATE_KEY` environment secret. The publication
-job uses its own job-scoped `GITHUB_TOKEN` with Contents(write), while the rest
-of the workflow remains read-only. The policy App token cannot publish a
-Release, the workflow token cannot inspect the creation-rule bypass actor, and
-no personal access token is accepted. The tagged commit must be contained in
-the current protected `main` history, and the tag-triggering actor must be the
-single User authorized by the creation ruleset.
-
-The tag workflow builds once, transfers those bytes through all four
-native jobs, attests the four archives and checksum manifest, and only then
-creates or resumes a draft Release. It uploads only missing assets whose names
-are in the exact Release Artifact Set and rejects conflicting assets or
-metadata. A complete draft is made public with one final transition. A rerun
-of the unchanged tag resumes a compatible draft or accepts the already
-immutable, byte-identical Release; it never deletes, replaces, or rebuilds an
-asset during publication.
-
-If any gate fails, no public Release is created. Correct source, notes,
-workflow configuration, tags, or artifact bytes with a new patch
-version. Never move a published tag or replace a published asset.
-
-After publishing the immutable tag, repeat the public Supported Install Path on
-clean macOS 26 arm64 and Ubuntu 24.04 amd64 reference hosts. Download and
-inspect `install.sh`, exercise both its default and custom destinations, and
-require exact `acs v0.3.3` output. Independently verify the public archive with
-`SHA256SUMS` and GitHub provenance, then repeat the Profile dry run,
-authenticated Devin launch, normal exit, Session isolation, and cleanup. The
-README contains the public commands; the checklist records only sanitized
-results and public identifiers.
-
-The source installation below is a compatibility check, not the Supported
-Install Path. Run it in another clean temporary `GOBIN` only when the module
-proxy is part of the release audit:
-
-```bash
-tagged_gobin="$(mktemp -d)"
-GOBIN="$tagged_gobin" go install github.com/alcimerio/ai-config-selector/cmd/acs@v0.3.3
-"$tagged_gobin/acs" version
-rm "$tagged_gobin/acs"
-rmdir "$tagged_gobin"
-```
-
-The tagged installation must print `acs v0.3.3`. A local checkout without
-qualifying release metadata prints `acs devel`. Do not move or reuse a
-published tag; publish a new version to correct a release defect.
+The credential-free native suite is the release gate. A maintainer may run the
+opt-in authenticated smoke locally as supplemental confidence; follow
+[docs/authenticated-release-smoke.md](docs/authenticated-release-smoke.md).
+Never paste or capture account details, credential contents, target output, or
+Session contents in an issue, PR, artifact, or workflow summary.
 
 ## Pull requests
 
-Each pull request should:
+Before opening a PR:
 
-- explain the problem and the behavior delivered;
-- link the issue or discussion that defines the work, when one exists;
-- describe compatibility or migration risks;
-- list the exact validation commands that passed;
-- include terminal output, screenshots, or a recording when interaction or
-  presentation changes;
-- identify macOS behavior that was tested and any relevant behavior that was
-  not tested.
+1. Run formatting, vet, normal tests, and race tests on macOS.
+2. Run the native sandbox-shell test from a normal terminal.
+3. Inspect `git diff --check` and the complete diff.
+4. Explain the user-visible contract and the tests that prove it.
+5. Confirm that no release asset, tag, or external state is changed by the PR.
 
-For release documentation, reviewers must also reconcile README, contributor,
-architecture, version-controlled release-note, and checklist terminology;
-execute safe local equivalents of documented commands against controlled
-assets; and perform independent cumulative Standards and Spec reviews against
-the fixed base. Record unavailable human and production gates truthfully.
+The PR gates install the same candidate bytes on macOS 26 arm64 and Intel. Both
+native jobs must pass before merge. The Linux compile observation is explicitly
+non-blocking.
 
-Keep the pull request title in Conventional Commit form. When squash-merging,
-set the resulting commit subject to `<pull request title> (#<pull request
-number>)` and verify that exact subject from the merged commit SHA.
+## Release preparation
 
-Maintainers may ask to narrow, redesign, or split a contribution before
-merging it.
+Release tags are immutable and created only after the release-preparation PR is
+merged to protected `main`.
+
+For v0.4.0:
+
+```sh
+scripts/release-candidate.sh v0.4.0
+scripts/prepare-release-tag.sh v0.4.0
+git push origin refs/tags/v0.4.0
+```
+
+The first command requires a clean worktree and creates exactly:
+
+```text
+acs_0.4.0_darwin_arm64.tar.gz
+acs_0.4.0_darwin_amd64.tar.gz
+SHA256SUMS
+install.sh
+```
+
+The tag workflow validates annotated tag identity and ancestry, builds the
+candidate once, installs the exact bytes on both macOS targets, runs normal,
+race, and black-box acceptance tests, attests the archives and checksum
+manifest, and publishes through the protected `release` environment.
+
+Never move or delete a release tag. If a candidate fails, fix the source in a
+new commit and prepare a new version. Do not treat a local build or authenticated
+smoke as a replacement for the two native artifact gates.
+
+Record pre-tag and post-publication evidence in
+[docs/releases/v0.4.0-checklist.md](docs/releases/v0.4.0-checklist.md).

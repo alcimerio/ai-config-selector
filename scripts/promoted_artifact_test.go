@@ -90,7 +90,7 @@ func writePromotedCandidate(t *testing.T, candidateDirectory string) {
 		t.Fatal(err)
 	}
 	var manifest strings.Builder
-	for _, target := range []string{"darwin_arm64", "darwin_amd64", "linux_amd64", "linux_arm64"} {
+	for _, target := range []string{"darwin_arm64", "darwin_amd64"} {
 		name := "acs_0.2.0_" + target + ".tar.gz"
 		path := filepath.Join(candidateDirectory, name)
 		writeInstallerArchive(t, path, "#!/bin/sh\nif [ \"${1:-}\" = version ]; then printf 'acs v0.2.0\\n'; exit 0; fi\nexit 2\n")

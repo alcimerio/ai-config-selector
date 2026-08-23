@@ -14,10 +14,11 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  verify:
-    name: Verify (Ubuntu)
+  linux-portability:
+    name: Observe Linux portability (non-blocking)
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    continue-on-error: true
+    timeout-minutes: 5
 
     steps:
       - name: Check out repository
@@ -31,78 +32,8 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Install and verify Ubuntu Bubblewrap
-        shell: bash
-        run: |
-          apt_options=(-o Acquire::Retries=2 -o Acquire::http::Timeout=15 -o Acquire::https::Timeout=15)
-          if ! timeout 60s sudo apt-get "${apt_options[@]}" update; then
-            case "$(/usr/bin/dpkg --print-architecture)" in
-              amd64) ubuntu_archive='https://archive.ubuntu.com/ubuntu/' ;;
-              arm64) ubuntu_archive='https://ports.ubuntu.com/ubuntu-ports/' ;;
-              *) echo 'Unsupported Ubuntu package architecture' >&2; exit 1 ;;
-            esac
-            printf '%s\n' "$ubuntu_archive" | sudo tee /etc/apt/apt-mirrors.txt >/dev/null
-            timeout 60s sudo apt-get "${apt_options[@]}" update
-          fi
-          timeout 60s sudo apt-get "${apt_options[@]}" install --yes --no-install-recommends apparmor apparmor-utils bubblewrap
-          profile_source="$(mktemp)"
-          verify_stdout="$(mktemp)"
-          verify_stderr="$(mktemp)"
-          trap 'rm -f "$profile_source" "$verify_stdout" "$verify_stderr"' EXIT
-          curl --fail --location --silent --show-error --retry 3 --retry-all-errors --connect-timeout 10 --max-time 60 --output "$profile_source" \
-            https://gitlab.com/apparmor/apparmor/-/raw/v4.0.3/profiles/apparmor/profiles/extras/bwrap-userns-restrict
-          echo 'a964037f6cf0df1099f14226b037eaedde6237c86e715188e93eb460b30be859  '"$profile_source" | sha256sum --check --status
-          sudo install --owner=root --group=root --mode=0644 "$profile_source" /etc/apparmor.d/bwrap-userns-restrict
-          sudo /usr/sbin/apparmor_parser --replace /etc/apparmor.d/bwrap-userns-restrict
-          sudo /usr/sbin/aa-status --enabled
-          [[ -f /usr/bin/bwrap && ! -L /usr/bin/bwrap && -x /usr/bin/bwrap ]]
-          [[ "$(stat --format='%u:%a' /usr/bin/bwrap)" == "0:755" ]]
-          [[ "$(env -i LC_ALL=C PATH=/usr/sbin:/usr/bin:/sbin:/bin /usr/bin/dpkg-query --search /usr/bin/bwrap)" == "bubblewrap: /usr/bin/bwrap" ]]
-          package_record="$(env -i LC_ALL=C PATH=/usr/sbin:/usr/bin:/sbin:/bin /usr/bin/dpkg-query --show --showformat='${db:Status-Abbrev}\n${binary:Package}\n${source:Package}\n${Architecture}\n' bubblewrap)"
-          [[ "$package_record" == $'ii \nbubblewrap\nbubblewrap\namd64' ]]
-          env -i LC_ALL=C PATH=/usr/sbin:/usr/bin:/sbin:/bin /usr/bin/dpkg --verify --verify-format=rpm bubblewrap >"$verify_stdout" 2>"$verify_stderr"
-          [[ ! -s "$verify_stdout" && ! -s "$verify_stderr" ]]
-          /usr/bin/bwrap \
-            --unshare-user --unshare-ipc --unshare-pid --unshare-uts --unshare-cgroup \
-            --die-with-parent --clearenv --proc /proc --dev /dev \
-            --dir /tmp \
-            --symlink usr/bin /bin --symlink usr/sbin /sbin \
-            --symlink usr/lib /lib --symlink usr/lib64 /lib64 \
-            --ro-bind /usr /usr --remount-ro / \
-            --setenv PATH /usr/bin:/bin --chdir /tmp -- /usr/bin/true
+      - name: Compile portable tests without running Linux-native behavior
+        run: go test -run '^$' ./...
 
-      - name: Check formatting
-        shell: bash
-        run: |
-          unformatted="$(gofmt -l .)"
-          if [[ -n "$unformatted" ]]; then
-            echo "The following files need gofmt:"
-            printf '%s\n' "$unformatted"
-            exit 1
-          fi
-
-      - name: Vet
-        run: go vet ./...
-
-      - name: Verify module metadata
-        shell: bash
-        run: |
-          go mod tidy
-          git diff --exit-code -- go.mod go.sum
-          go mod verify
-
-      - name: Test
-        run: go test ./...
-
-      - name: Race test
-        # The Linux cancelreader used by Bubble Tea races with its own shutdown
-        # when an abrupt runtime-error or recovered-panic PTY subprocess is
-        # race-instrumented. The normal Test step still runs both native
-        # terminal-restoration cases.
-        run: go test -race ./... -skip '^TestProfileBuilderPTYRestoresTerminal/(runtime_error|recovered_panic)$'
-
-      - name: Build
-        run: go build -o /tmp/acs ./cmd/acs
-
-      - name: Build and verify Release candidate
-        run: scripts/release-candidate.sh v0.3.3
+      - name: Compile the retained Linux command
+        run: CGO_ENABLED=0 go build -o /tmp/acs-linux ./cmd/acs

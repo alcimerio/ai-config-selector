@@ -173,8 +173,6 @@ func expectedAssetNames(version string) []string {
 	return []string{
 		fmt.Sprintf("acs_%s_darwin_arm64.tar.gz", archiveVersion),
 		fmt.Sprintf("acs_%s_darwin_amd64.tar.gz", archiveVersion),
-		fmt.Sprintf("acs_%s_linux_amd64.tar.gz", archiveVersion),
-		fmt.Sprintf("acs_%s_linux_arm64.tar.gz", archiveVersion),
 		"SHA256SUMS",
 		"install.sh",
 	}

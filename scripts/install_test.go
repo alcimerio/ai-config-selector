@@ -61,8 +61,6 @@ func TestInstallerSelectsOnlySupportedReleaseTargets(t *testing.T) {
 	}{
 		{name: "Darwin arm64", hostOS: "Darwin", hostArch: "arm64", archiveName: "acs_0.2.0_darwin_arm64.tar.gz"},
 		{name: "Darwin amd64", hostOS: "Darwin", hostArch: "x86_64", archiveName: "acs_0.2.0_darwin_amd64.tar.gz"},
-		{name: "Linux amd64", hostOS: "Linux", hostArch: "amd64", archiveName: "acs_0.2.0_linux_amd64.tar.gz"},
-		{name: "Linux arm64", hostOS: "Linux", hostArch: "aarch64", archiveName: "acs_0.2.0_linux_arm64.tar.gz"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -110,7 +108,7 @@ func TestInstallerRunsWithDash(t *testing.T) {
 	if err != nil {
 		t.Skip("dash is unavailable")
 	}
-	fixture := newInstallerFixture(t, "Linux", "amd64")
+	fixture := newInstallerFixture(t, "Darwin", "amd64")
 	fixture.shell = dash
 	destination := filepath.Join(realTemporaryDirectory(t), "bin")
 	if err := os.Mkdir(destination, 0o700); err != nil {
@@ -132,6 +130,7 @@ func TestInstallerRejectsUnsupportedInputsBeforeDownloading(t *testing.T) {
 		want     string
 	}{
 		{name: "unsupported operating system", hostOS: "FreeBSD", hostArch: "amd64", want: "unsupported operating system"},
+		{name: "unsupported Linux", hostOS: "Linux", hostArch: "amd64", want: "ACS v0.4 supports macOS only"},
 		{name: "unsupported architecture", hostOS: "Darwin", hostArch: "riscv64", want: "unsupported architecture"},
 		{name: "unknown argument", hostOS: "Darwin", hostArch: "arm64", args: func(_ *testing.T, _ *installerFixture) []string { return []string{"--version", "v9.9.9"} }, want: "unknown argument"},
 		{name: "missing option value", hostOS: "Darwin", hostArch: "arm64", args: func(_ *testing.T, _ *installerFixture) []string { return []string{"--bin-dir"} }, want: "--bin-dir requires a value"},
@@ -625,7 +624,7 @@ func (fixture *installerFixture) writeReleaseAssets(hostOS, hostArch string) {
 	}
 	selectedChecksum := fmt.Sprintf("%x", sha256.Sum256(archive))
 	var manifest strings.Builder
-	for _, target := range []string{"darwin_arm64", "darwin_amd64", "linux_amd64", "linux_arm64"} {
+	for _, target := range []string{"darwin_arm64", "darwin_amd64"} {
 		name := "acs_0.2.0_" + target + ".tar.gz"
 		checksum := strings.Repeat("0", 64)
 		if name == archiveName {
@@ -646,7 +645,7 @@ func (fixture *installerFixture) updateManifestChecksum() {
 	}
 	selectedChecksum := fmt.Sprintf("%x", sha256.Sum256(archive))
 	var manifest strings.Builder
-	for _, target := range []string{"darwin_arm64", "darwin_amd64", "linux_amd64", "linux_arm64"} {
+	for _, target := range []string{"darwin_arm64", "darwin_amd64"} {
 		name := "acs_0.2.0_" + target + ".tar.gz"
 		checksum := strings.Repeat("0", 64)
 		if name == fixture.archiveName {

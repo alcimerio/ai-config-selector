@@ -69,6 +69,26 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      - name: Check formatting
+        shell: bash
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [[ -n "$unformatted" ]]; then
+            echo "The following files need gofmt:"
+            printf '%s\n' "$unformatted"
+            exit 1
+          fi
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Verify module metadata
+        shell: bash
+        run: |
+          go mod tidy
+          git diff --exit-code -- go.mod go.sum
+          go mod verify
+
       - name: Test
         run: go test ./...
 
@@ -79,4 +99,4 @@ jobs:
         run: go build -o /tmp/acs ./cmd/acs
 
       - name: Build and verify Release candidate
-        run: scripts/release-candidate.sh v0.3.3
+        run: scripts/release-candidate.sh v0.4.0

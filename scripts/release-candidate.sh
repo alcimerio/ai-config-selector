@@ -49,8 +49,6 @@ mkdir "$candidate_directory"
 for artifact in \
   "acs_${archive_version}_darwin_arm64.tar.gz" \
   "acs_${archive_version}_darwin_amd64.tar.gz" \
-  "acs_${archive_version}_linux_amd64.tar.gz" \
-  "acs_${archive_version}_linux_arm64.tar.gz" \
   SHA256SUMS
 do
   cp "dist/$artifact" "$candidate_directory/$artifact"

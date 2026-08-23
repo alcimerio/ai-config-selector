@@ -35,8 +35,7 @@ fi
 command -v uname >/dev/null 2>&1 || fail "required tool is unavailable: uname"
 case "$(uname -s)" in
   Darwin) target_os="darwin" ;;
-  Linux) target_os="linux" ;;
-  *) fail "unsupported operating system; ACS supports Darwin and Linux only" ;;
+  *) fail "unsupported operating system; ACS v0.4 supports macOS only" ;;
 esac
 case "$(uname -m)" in
   x86_64 | amd64) target_arch="amd64" ;;
@@ -147,9 +146,7 @@ download "$manifest_path" "$release_url/SHA256SUMS" || fail "checksum manifest d
 if ! expected_checksum="$(awk -v selected="$archive_name" -v version="$archive_version" '
 function expected(name) {
   return name == "acs_" version "_darwin_arm64.tar.gz" ||
-    name == "acs_" version "_darwin_amd64.tar.gz" ||
-    name == "acs_" version "_linux_amd64.tar.gz" ||
-    name == "acs_" version "_linux_arm64.tar.gz"
+    name == "acs_" version "_darwin_amd64.tar.gz"
 }
 {
   if (NF != 2 || length($1) != 64 || $1 ~ /[^0-9a-fA-F]/ || !expected($2) || seen[$2]++) invalid = 1
@@ -157,7 +154,7 @@ function expected(name) {
   count++
 }
 END {
-  if (invalid || count != 4 || !(selected in checksums)) exit 1
+  if (invalid || count != 2 || !(selected in checksums)) exit 1
   print checksums[selected]
 }
 ' "$manifest_path")"; then

@@ -52,8 +52,6 @@ func verify(dist, version string) error {
 	expectedArchives := []string{
 		fmt.Sprintf("acs_%s_darwin_arm64.tar.gz", archiveVersion),
 		fmt.Sprintf("acs_%s_darwin_amd64.tar.gz", archiveVersion),
-		fmt.Sprintf("acs_%s_linux_amd64.tar.gz", archiveVersion),
-		fmt.Sprintf("acs_%s_linux_arm64.tar.gz", archiveVersion),
 	}
 	expectedFiles := append(append([]string(nil), expectedArchives...), "SHA256SUMS", "install.sh")
 	sort.Strings(expectedFiles)

@@ -23,8 +23,8 @@ func TestValidatePlatformCoversSupportedMatrix(t *testing.T) {
 	}{
 		{name: "macOS 26 arm64", platform: Platform{OS: "darwin", Architecture: "arm64", Release: "26.0"}, accepted: true},
 		{name: "macOS 26 amd64", platform: Platform{OS: "darwin", Architecture: "amd64", Release: "26.9.1"}, accepted: true},
-		{name: "Ubuntu 24.04 amd64", platform: Platform{OS: "linux", Architecture: "amd64", Distribution: "ubuntu", Release: "24.04"}, accepted: true},
-		{name: "Ubuntu 24.04 arm64", platform: Platform{OS: "linux", Architecture: "arm64", Distribution: "ubuntu", Release: "24.04.3"}, accepted: true},
+		{name: "formerly supported Ubuntu 24.04 amd64", platform: Platform{OS: "linux", Architecture: "amd64", Distribution: "ubuntu", Release: "24.04"}},
+		{name: "formerly supported Ubuntu 24.04 arm64", platform: Platform{OS: "linux", Architecture: "arm64", Distribution: "ubuntu", Release: "24.04.3"}},
 		{name: "old macOS", platform: Platform{OS: "darwin", Architecture: "arm64", Release: "15.6"}},
 		{name: "future macOS", platform: Platform{OS: "darwin", Architecture: "amd64", Release: "27.0"}},
 		{name: "old Ubuntu", platform: Platform{OS: "linux", Architecture: "amd64", Distribution: "ubuntu", Release: "22.04"}},
@@ -61,7 +61,7 @@ func TestSandboxErrorsExposeOnlyStableCategory(t *testing.T) {
 	secret := filepath.Join(t.TempDir(), "PRIVATE_WORKSPACE")
 	err := sandboxError(SandboxUnsafePath, errors.New("backend rejected "+secret+" policy=(allow file-read*)"))
 	assertSandboxCategory(t, err, SandboxUnsafePath)
-	if got, want := err.Error(), "unsafe_path: process sandbox preparation failed: unsafe runtime path; ACS will not start Devin without the required sandbox"; got != want {
+	if got, want := err.Error(), "unsafe_path: process sandbox preparation failed: unsafe runtime path; ACS will not start the requested process without the required sandbox"; got != want {
 		t.Fatalf("sandbox error = %q, want %q", got, want)
 	}
 	for _, private := range []string{secret, "PRIVATE_WORKSPACE", "backend rejected", "policy"} {
@@ -78,7 +78,7 @@ func TestSandboxErrorsExposeOnlyStableCategory(t *testing.T) {
 func TestBubblewrapUnavailableProvidesFixedPackageRemediationWithoutBackendOutput(t *testing.T) {
 	err := bubblewrapUnavailable()
 	assertSandboxCategory(t, err, SandboxBackendUnavailable)
-	if got, want := err.Error(), "backend_unavailable: process sandbox unavailable: required system backend is unavailable; review Ubuntu's configured signed apt sources, then install or repair Bubblewrap with 'sudo apt-get update && sudo apt-get install --reinstall bubblewrap'; ACS will not start Devin without the required sandbox"; got != want {
+	if got, want := err.Error(), "backend_unavailable: process sandbox unavailable: required system backend is unavailable; review Ubuntu's configured signed apt sources, then install or repair Bubblewrap with 'sudo apt-get update && sudo apt-get install --reinstall bubblewrap'; ACS will not start the requested process without the required sandbox"; got != want {
 		t.Fatalf("Bubblewrap unavailable error = %q, want %q", got, want)
 	}
 	for _, private := range []string{"PRIVATE_BACKEND_OUTPUT", "/home/alice", "policy=(allow"} {
@@ -363,9 +363,9 @@ func TestProcessSandboxSanitizesBackendFailures(t *testing.T) {
 	backend := &capturingBackend{checkErr: errors.New(secret)}
 	sandbox := newNativeProcessSandbox(
 		func() (Platform, error) {
-			return Platform{OS: "linux", Architecture: "amd64", Distribution: "ubuntu", Release: "24.04"}, nil
+			return Platform{OS: "darwin", Architecture: "amd64", Release: "26.1"}, nil
 		},
-		map[string]sandboxBackend{"linux": backend},
+		map[string]sandboxBackend{"darwin": backend},
 	)
 	err := sandbox.Check(context.Background(), SandboxCheck{})
 	assertSandboxCategory(t, err, SandboxVerificationFailed)
@@ -386,7 +386,7 @@ func TestProcessSandboxRebuildsClassifiedBackendFailures(t *testing.T) {
 		{
 			name:     "direct validation failure",
 			category: SandboxBackendUnavailable,
-			message:  "backend_unavailable: process sandbox unavailable: required system backend is unavailable; ACS will not start Devin without the required sandbox",
+			message:  "backend_unavailable: process sandbox unavailable: required system backend is unavailable; ACS will not start the requested process without the required sandbox",
 			invoke: func(sandbox *nativeProcessSandbox) error {
 				return sandbox.Check(context.Background(), SandboxCheck{})
 			},
@@ -394,7 +394,7 @@ func TestProcessSandboxRebuildsClassifiedBackendFailures(t *testing.T) {
 		{
 			name:     "wrapped validation failure",
 			category: SandboxUnsupportedPlatform,
-			message:  "unsupported_platform: process sandbox unavailable: unsupported platform; ACS will not start Devin without the required sandbox",
+			message:  "unsupported_platform: process sandbox unavailable: unsupported platform; ACS will not start the requested process without the required sandbox",
 			wrapped:  true,
 			invoke: func(sandbox *nativeProcessSandbox) error {
 				return sandbox.Check(context.Background(), SandboxCheck{})
@@ -403,7 +403,7 @@ func TestProcessSandboxRebuildsClassifiedBackendFailures(t *testing.T) {
 		{
 			name:     "direct preparation failure",
 			category: SandboxSetupFailed,
-			message:  "setup_failed: process sandbox preparation failed; ACS will not start Devin without the required sandbox",
+			message:  "setup_failed: process sandbox preparation failed; ACS will not start the requested process without the required sandbox",
 			invoke: func(sandbox *nativeProcessSandbox) error {
 				_, err := sandbox.Prepare(context.Background(), validProcessRequest(t))
 				return err
@@ -412,7 +412,7 @@ func TestProcessSandboxRebuildsClassifiedBackendFailures(t *testing.T) {
 		{
 			name:     "wrapped preparation failure",
 			category: SandboxInvalidEnvironment,
-			message:  "invalid_environment: process sandbox preparation failed: invalid environment; ACS will not start Devin without the required sandbox",
+			message:  "invalid_environment: process sandbox preparation failed: invalid environment; ACS will not start the requested process without the required sandbox",
 			wrapped:  true,
 			invoke: func(sandbox *nativeProcessSandbox) error {
 				_, err := sandbox.Prepare(context.Background(), validProcessRequest(t))

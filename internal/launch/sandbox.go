@@ -17,7 +17,7 @@ import (
 )
 
 const safeProcessPath = "/usr/local/bin:/usr/bin:/bin"
-const requiredSandboxNotice = "ACS will not start Devin without the required sandbox"
+const requiredSandboxNotice = "ACS will not start the requested process without the required sandbox"
 
 // SandboxErrorCategory is a stable, non-sensitive class of sandbox failure.
 type SandboxErrorCategory string
@@ -110,8 +110,6 @@ func ValidatePlatform(platform Platform) error {
 	switch platform.OS {
 	case "darwin":
 		supported = architectureSupported && releaseLine(platform.Release, "26")
-	case "linux":
-		supported = architectureSupported && strings.EqualFold(platform.Distribution, "ubuntu") && releaseLine(platform.Release, "24.04")
 	}
 	if !supported {
 		return sandboxError(SandboxUnsupportedPlatform, nil)

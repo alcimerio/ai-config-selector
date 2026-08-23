@@ -165,8 +165,8 @@ func decodeVersionOneProfile(contents []byte) (profile.Profile, error) {
 	}, nil
 }
 
-func (contribution skillsContribution) Plan(ctx context.Context, workingDirectory string, plan *launch.Plan) error {
-	return contribution.adapter.planSkills(ctx, workingDirectory, contribution.selected, plan)
+func (contribution skillsContribution) Plan(ctx context.Context, _ string, plan *launch.Plan) error {
+	return contribution.adapter.planSelectedSkills(ctx, contribution.selected, plan)
 }
 
 func (contribution skillsContribution) Materialize(sessionHome string) error {
