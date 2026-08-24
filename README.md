@@ -17,18 +17,8 @@ binary, installer path, native gate, or support commitment.
 
 ## Install
 
-The latest published immutable release is v0.3.3 until v0.4.0 is tagged. To
-build the v0.4.0 development source on macOS:
-
-```sh
-git clone https://github.com/alcimerio/ai-config-selector.git
-cd ai-config-selector
-go build -o ./bin/acs ./cmd/acs
-./bin/acs version
-```
-
-A source build reports `acs devel`. After v0.4.0 is published, download its
-release-specific installer, inspect it, then run the local file:
+The latest published immutable release is v0.4.0. Download its release-specific
+installer, inspect it, then run the local file:
 
 ```sh
 release_version=v0.4.0
@@ -39,6 +29,17 @@ less install.sh
 sh ./install.sh
 "$HOME/.local/bin/acs" version
 ```
+
+To build the current source on macOS instead:
+
+```sh
+git clone https://github.com/alcimerio/ai-config-selector.git
+cd ai-config-selector
+go build -o ./bin/acs ./cmd/acs
+./bin/acs version
+```
+
+A source build reports `acs devel`.
 
 The installer accepts only macOS arm64 and amd64. It verifies the selected
 archive against the release's `SHA256SUMS`, validates the embedded version and
