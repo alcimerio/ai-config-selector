@@ -32,7 +32,7 @@ type loginRunResult struct {
 
 type loginRunner interface {
 	Check(context.Context) error
-	Run(context.Context, *session.Session, bool, launch.Terminal) loginRunResult
+	Run(context.Context, *session.Session, string, bool, launch.Terminal) loginRunResult
 }
 
 type identityLocker interface {
@@ -69,6 +69,7 @@ type Registry struct {
 	locks             identityLocker
 	status            statusRunner
 	quarantine        bindingQuarantine
+	verifyCleanup     func(string, []byte) (bool, error)
 	sessionsDirectory string
 	workingDirectory  string
 }
@@ -89,6 +90,17 @@ func New(config Config) (*Registry, error) {
 		if path == "" || !filepath.IsAbs(path) {
 			return nil, fmt.Errorf("create Codex authentication registry: %s must be absolute", label)
 		}
+	}
+	workingDirectory, err := filepath.EvalSymlinks(config.WorkingDirectory)
+	if err != nil {
+		return nil, errors.New("create Codex authentication registry: working directory must exist")
+	}
+	acsHome := filepath.Clean(config.ACSHome)
+	if resolved, err := filepath.EvalSymlinks(acsHome); err == nil {
+		acsHome = resolved
+	}
+	if pathsOverlap(workingDirectory, acsHome) {
+		return nil, errors.New("create Codex authentication registry: working directory must not overlap ACS home")
 	}
 	sandbox := launch.NewProcessSandbox()
 	registry, err := newRegistry(
@@ -120,6 +132,7 @@ func newRegistry(provider credentialProvider, login loginRunner, locks identityL
 	}
 	return &Registry{
 		provider: provider, login: login, locks: locks, quarantine: noBindingQuarantine{},
+		verifyCleanup: launch.VerifySessionCleanupProof,
 	}, nil
 }
 
@@ -147,7 +160,7 @@ func (registry *Registry) Login(ctx context.Context, request LoginRequest) (Iden
 	if err := registry.login.Check(ctx); err != nil {
 		return IdentityMetadata{}, err
 	}
-	created, stage, err := registry.prepareBinding(ctx, name)
+	created, proofChallenge, stage, err := registry.prepareBinding(ctx, name)
 	if err != nil {
 		if errors.Is(err, ErrBindingQuarantined) {
 			return IdentityMetadata{}, ErrLoginCleanupUncertain
@@ -158,7 +171,7 @@ func (registry *Registry) Login(ctx context.Context, request LoginRequest) (Iden
 		return IdentityMetadata{}, ErrLoginFailed
 	}
 
-	run := registry.login.Run(ctx, created, request.DeviceAuth, request.Terminal)
+	run := registry.login.Run(ctx, created, proofChallenge, request.DeviceAuth, request.Terminal)
 	if err := registry.settleBinding(ctx, created, name, run.cleanupProven, run.cleanupProcess); err != nil {
 		clearBytes(run.auth)
 		return IdentityMetadata{}, ErrLoginCleanupUncertain

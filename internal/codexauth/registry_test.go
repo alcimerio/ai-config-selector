@@ -41,6 +41,22 @@ func TestRegistryLoginCreatesWithoutReplacingNamedIdentity(t *testing.T) {
 	}
 }
 
+func TestRegistryRejectsWorkspaceThatCouldReadRecoveryChallenges(t *testing.T) {
+	root := t.TempDir()
+	acsHome := filepath.Join(root, "acs")
+	workspace := filepath.Join(acsHome, "quarantine")
+	if err := os.MkdirAll(workspace, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	_, err := New(Config{
+		BinaryPath: "/usr/bin/true", ACSHome: acsHome,
+		SessionsDirectory: filepath.Join(acsHome, "sessions"), WorkingDirectory: workspace,
+	})
+	if err == nil {
+		t.Fatal("workspace inside ACS home was accepted")
+	}
+}
+
 func TestRegistryLoginCleanupUncertaintyQuarantinesNameAndProjection(t *testing.T) {
 	provider := newFakeProvider()
 	cleanupDone := make(chan struct{})
@@ -218,6 +234,7 @@ func (*fakeLoginRunner) Check(context.Context) error { return nil }
 func (runner *fakeLoginRunner) Run(
 	_ context.Context,
 	created *session.Session,
+	_ string,
 	deviceAuth bool,
 	_ launch.Terminal,
 ) loginRunResult {

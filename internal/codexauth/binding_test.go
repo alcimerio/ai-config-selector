@@ -3,6 +3,7 @@ package codexauth
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -316,7 +317,7 @@ func TestRecoveryRefusesAnActiveProtectedSession(t *testing.T) {
 	}
 	if err := registry.quarantine.Create(context.Background(), quarantineMarker{
 		Version: recordVersion, Name: "work", SessionID: filepath.Base(created.RootDirectory()),
-		Phase: quarantineRecoverable,
+		Phase: quarantineRecoverable, ProofChallenge: testCleanupProofChallenge,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -331,12 +332,55 @@ func TestRecoveryRefusesAnActiveProtectedSession(t *testing.T) {
 	}
 }
 
+func TestRecoveryAcceptsSupervisorProofForInactivePendingSession(t *testing.T) {
+	auth := testChatGPTAuthJSON(t, "user", "workspace")
+	registry, _, _, sessionsDirectory := newBindingTestRegistry(t, "work", auth)
+	created, err := session.Create(sessionsDirectory, t.TempDir(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := created.ProtectForRecovery(); err != nil {
+		t.Fatal(err)
+	}
+	metadata, err := validateAuthJSON("work", auth)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := projectCredential(created.HomeDirectory(), credentialRecord{Metadata: metadata, Auth: auth}); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.quarantine.Create(context.Background(), quarantineMarker{
+		Version: recordVersion, Name: "work", SessionID: filepath.Base(created.RootDirectory()),
+		Phase: quarantineCleanupPending, ProofChallenge: testCleanupProofChallenge,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := created.PreserveForRecovery(); err != nil {
+		t.Fatal(err)
+	}
+	registry.verifyCleanup = func(root string, challenge []byte) (bool, error) {
+		if root != created.RootDirectory() {
+			t.Fatalf("proof root = %q", root)
+		}
+		if got := fmt.Sprintf("%x", challenge); got != testCleanupProofChallenge {
+			t.Fatalf("proof challenge = %q", got)
+		}
+		return true, nil
+	}
+
+	disposition, err := registry.Recover(context.Background(), "work")
+	if err != nil || disposition != DiscardedProjection {
+		t.Fatalf("recovery = (%q, %v)", disposition, err)
+	}
+	assertNoSessionDirectories(t, sessionsDirectory)
+}
+
 func TestRecoveryClearsPendingMarkerAfterSessionIsAlreadyGone(t *testing.T) {
 	auth := testChatGPTAuthJSON(t, "user", "workspace")
 	registry, _, _, _ := newBindingTestRegistry(t, "work", auth)
 	if err := registry.quarantine.Create(context.Background(), quarantineMarker{
 		Version: recordVersion, Name: "work", SessionID: "session-already-gone",
-		Phase: quarantineCleanupPending,
+		Phase: quarantineCleanupPending, ProofChallenge: testCleanupProofChallenge,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -376,7 +420,7 @@ func TestRecoveryDiscardsAnIdentityChangingProjection(t *testing.T) {
 	}
 	if err := registry.quarantine.Create(context.Background(), quarantineMarker{
 		Version: recordVersion, Name: "work", SessionID: filepath.Base(created.RootDirectory()),
-		Phase: quarantineRecoverable,
+		Phase: quarantineRecoverable, ProofChallenge: testCleanupProofChallenge,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -503,7 +547,7 @@ func (store createErrorAfterPublishQuarantine) Create(ctx context.Context, marke
 
 func (*pendingCleanupStatusRunner) Check(context.Context) error { return nil }
 
-func (runner *pendingCleanupStatusRunner) Run(_ context.Context, created *session.Session, _ string) statusRunResult {
+func (runner *pendingCleanupStatusRunner) Run(_ context.Context, created *session.Session, _, _ string) statusRunResult {
 	runner.sessionRoot = created.RootDirectory()
 	process, err := created.RetainUntilProcessDone(pendingCleanupProcess{done: runner.cleanupDone})
 	if err != nil {
@@ -529,7 +573,7 @@ func (runner *fakeStatusRunner) Check(context.Context) error {
 	return runner.checkErr
 }
 
-func (runner *fakeStatusRunner) Run(_ context.Context, created *session.Session, _ string) statusRunResult {
+func (runner *fakeStatusRunner) Run(_ context.Context, created *session.Session, _, _ string) statusRunResult {
 	configuration, err := os.ReadFile(filepath.Join(created.HomeDirectory(), ".codex", "config.toml"))
 	if err != nil {
 		return statusRunResult{err: ErrStatusFailed, cleanupProven: true}

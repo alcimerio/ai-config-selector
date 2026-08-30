@@ -3,6 +3,7 @@ package codexauth
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -44,7 +45,7 @@ func (registry *Registry) Status(ctx context.Context, value string) (IdentitySta
 		_ = locked.Release()
 		return result, sanitizeStatusError(err)
 	}
-	created, stage, err := registry.prepareBinding(ctx, name)
+	created, proofChallenge, stage, err := registry.prepareBinding(ctx, name)
 	if err != nil {
 		_ = locked.Release()
 		if errors.Is(err, ErrBindingQuarantined) {
@@ -67,7 +68,7 @@ func (registry *Registry) Status(ctx context.Context, value string) (IdentitySta
 		return result, ErrProjectedAuthInvalid
 	}
 
-	run := registry.status.Run(ctx, created, record.Metadata.Workspace)
+	run := registry.status.Run(ctx, created, record.Metadata.Workspace, proofChallenge)
 	run.err = sanitizeStatusError(run.err)
 	if err := registry.settleBinding(ctx, created, name, run.cleanupProven, run.cleanupProcess); err != nil {
 		result.Disposition = QuarantinedUncertain
@@ -110,7 +111,11 @@ func (registry *Registry) Recover(ctx context.Context, value string) (BindingDis
 	}
 	defer recovered.Preserve()
 	if marker.Phase == quarantineCleanupPending {
-		return QuarantinedUncertain, fmt.Errorf("%w: %q", ErrIdentityBusy, name)
+		challenge, decodeErr := hex.DecodeString(marker.ProofChallenge)
+		proven, proofErr := registry.verifyCleanup(recovered.RootDir, challenge)
+		if decodeErr != nil || proofErr != nil || !proven {
+			return QuarantinedUncertain, fmt.Errorf("%w: %q", ErrIdentityBusy, name)
+		}
 	}
 
 	record, recordExists, err := registry.provider.Load(ctx, name)

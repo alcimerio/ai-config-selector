@@ -14,6 +14,7 @@ func TestFileBindingQuarantineCreatesPrivateSecretFreeMarkerWithoutReplacement(t
 	store := newFileBindingQuarantine(directory)
 	marker := quarantineMarker{
 		Version: recordVersion, Name: "work", SessionID: "session-fixture", Phase: quarantineCleanupPending,
+		ProofChallenge: testCleanupProofChallenge,
 	}
 
 	if err := store.Create(context.Background(), marker); err != nil {
@@ -139,6 +140,7 @@ func TestFileBindingQuarantineRejectsSymlinkDirectoryWithoutChangingTarget(t *te
 	store := newFileBindingQuarantine(directory)
 	marker := quarantineMarker{
 		Version: recordVersion, Name: "work", SessionID: "session-fixture", Phase: quarantineCleanupPending,
+		ProofChallenge: testCleanupProofChallenge,
 	}
 	if err := store.Create(context.Background(), marker); !errors.Is(err, ErrProviderUnavailable) {
 		t.Fatalf("symlink directory error = %v", err)

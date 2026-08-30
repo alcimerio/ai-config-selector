@@ -16,6 +16,7 @@ import (
 const maximumQuarantineMarkerSize = 16 * 1024
 
 var sessionIDPattern = regexp.MustCompile(`^session-[A-Za-z0-9._-]{1,128}$`)
+var proofChallengePattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
 type quarantinePhase string
 
@@ -25,10 +26,11 @@ const (
 )
 
 type quarantineMarker struct {
-	Version   int             `json:"version"`
-	Name      CredentialRef   `json:"name"`
-	SessionID string          `json:"sessionId"`
-	Phase     quarantinePhase `json:"phase"`
+	Version        int             `json:"version"`
+	Name           CredentialRef   `json:"name"`
+	SessionID      string          `json:"sessionId"`
+	Phase          quarantinePhase `json:"phase"`
+	ProofChallenge string          `json:"proofChallenge"`
 }
 
 type bindingQuarantine interface {
@@ -247,6 +249,9 @@ func validateQuarantineMarker(marker quarantineMarker) error {
 	}
 	if marker.Phase != quarantineCleanupPending && marker.Phase != quarantineRecoverable {
 		return errors.New("invalid quarantine phase")
+	}
+	if !proofChallengePattern.MatchString(marker.ProofChallenge) {
+		return errors.New("invalid quarantine cleanup proof challenge")
 	}
 	return nil
 }

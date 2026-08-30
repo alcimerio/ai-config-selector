@@ -14,7 +14,7 @@ type statusRunResult = containedRunResult
 
 type statusRunner interface {
 	Check(context.Context) error
-	Run(context.Context, *session.Session, string) statusRunResult
+	Run(context.Context, *session.Session, string, string) statusRunResult
 }
 
 type codexStatusRunner struct {
@@ -46,9 +46,19 @@ func (runner *codexStatusRunner) Check(ctx context.Context) error {
 	})
 }
 
-func (runner *codexStatusRunner) Run(ctx context.Context, created *session.Session, workspace string) statusRunResult {
+func (runner *codexStatusRunner) Run(
+	ctx context.Context,
+	created *session.Session,
+	workspace string,
+	proofChallenge string,
+) statusRunResult {
+	config, cleanup, err := runner.snapshotConfig()
+	if err != nil {
+		return statusRunResult{err: ErrUnsupportedVersion, cleanupProven: true}
+	}
+	defer cleanup()
 	versionOutput := boundedBuffer{limit: maximumVersionOutputSize}
-	result := runner.run(ctx, created, workspace, []string{"--version"}, launch.Terminal{
+	result := runner.run(ctx, config, created, workspace, proofChallenge, []string{"--version"}, launch.Terminal{
 		Output: &versionOutput, ErrorOutput: io.Discard,
 	})
 	if result.err != nil || !result.cleanupProven {
@@ -57,28 +67,38 @@ func (runner *codexStatusRunner) Run(ctx context.Context, created *session.Sessi
 	if versionOutput.overflow || strings.TrimSpace(versionOutput.String()) != "codex-cli "+runner.config.SupportedVersion {
 		return statusRunResult{err: ErrUnsupportedVersion, cleanupProven: true}
 	}
-	return runner.run(ctx, created, workspace, []string{"login", "status"}, launch.Terminal{
+	return runner.run(ctx, config, created, workspace, proofChallenge, []string{"login", "status"}, launch.Terminal{
 		Output: io.Discard, ErrorOutput: io.Discard,
 	})
 }
 
 func (runner *codexStatusRunner) run(
 	ctx context.Context,
+	config codexLoginConfig,
 	created *session.Session,
 	workspace string,
+	proofChallenge string,
 	arguments []string,
 	terminal launch.Terminal,
 ) statusRunResult {
-	executable, err := runner.executable.Resolve()
+	return runContainedCodex(
+		ctx, config, runner.sandbox, created, workspace, proofChallenge, arguments, terminal,
+		ErrStatusFailed, ErrBindingQuarantined,
+	)
+}
+
+func (runner *codexStatusRunner) snapshotConfig() (codexLoginConfig, func(), error) {
+	root, err := executableSnapshotRoot(runner.config)
 	if err != nil {
-		return containedRunResult{err: ErrUnsupportedVersion, cleanupProven: true}
+		return codexLoginConfig{}, nil, err
+	}
+	executable, cleanup, err := runner.executable.Snapshot(root)
+	if err != nil {
+		return codexLoginConfig{}, nil, err
 	}
 	config := runner.config
 	config.BinaryPath = executable
-	return runContainedCodex(
-		ctx, config, runner.sandbox, created, workspace, arguments, terminal,
-		ErrStatusFailed, ErrBindingQuarantined,
-	)
+	return config, cleanup, nil
 }
 
 func sanitizeStatusError(err error) error {

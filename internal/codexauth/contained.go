@@ -2,6 +2,7 @@ package codexauth
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 
 	"github.com/alcimerio/ai-config-selector/internal/launch"
@@ -22,17 +23,26 @@ func runContainedCodex(
 	sandbox launch.ProcessSandbox,
 	created *session.Session,
 	workspace string,
+	proofChallenge string,
 	arguments []string,
 	terminal launch.Terminal,
 	targetFailure error,
 	cleanupFailure error,
 ) containedRunResult {
+	challenge, err := hex.DecodeString(proofChallenge)
+	if err != nil || len(challenge) != launch.RecoveryProofChallengeSize {
+		return containedRunResult{err: targetFailure, cleanupProven: true}
+	}
+	if err := launch.PrepareSessionCleanupProof(created.RootDirectory()); err != nil {
+		return containedRunResult{err: targetFailure, cleanupProven: true}
+	}
 	process, err := sandbox.Prepare(ctx, launch.ProcessRequest{
 		Workspace: created.WorkingDirectory(), SessionsDirectory: created.SessionsDirectory(),
 		SessionDirectory: created.RootDirectory(), SessionHome: created.HomeDirectory(),
 		TemporaryDirectory: created.TemporaryDirectory(), Executable: config.BinaryPath,
 		RuntimeInputs: config.RuntimeInputs, RuntimeProbePaths: config.RuntimeProbePaths,
-		Arguments: codexAuthRuntimeArguments(workspace, arguments...), Terminal: terminal,
+		RecoveryProofChallenge: challenge,
+		Arguments:              codexAuthRuntimeArguments(workspace, arguments...), Terminal: terminal,
 	})
 	if err != nil {
 		return containedRunResult{err: err, cleanupProven: true}

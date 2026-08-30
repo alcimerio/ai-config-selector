@@ -96,6 +96,7 @@ func (runner *codexLoginRunner) Check(ctx context.Context) error {
 func (runner *codexLoginRunner) Run(
 	ctx context.Context,
 	created *session.Session,
+	proofChallenge string,
 	deviceAuth bool,
 	terminal launch.Terminal,
 ) loginRunResult {
@@ -114,9 +115,14 @@ func (runner *codexLoginRunner) Run(
 	if err := os.WriteFile(filepath.Join(codexHome, "config.toml"), configuration, 0o600); err != nil {
 		return loginRunResult{containedRunResult: containedRunResult{err: ErrLoginFailed, cleanupProven: true}}
 	}
+	config, cleanup, err := runner.snapshotConfig()
+	if err != nil {
+		return loginRunResult{containedRunResult: containedRunResult{err: ErrUnsupportedVersion, cleanupProven: true}}
+	}
+	defer cleanup()
 
 	versionOutput := boundedBuffer{limit: maximumVersionOutputSize}
-	versionRun := runner.run(ctx, created, []string{"--version"}, launch.Terminal{
+	versionRun := runner.run(ctx, config, created, proofChallenge, []string{"--version"}, launch.Terminal{
 		Output: &versionOutput, ErrorOutput: io.Discard,
 	})
 	if versionRun.err != nil || !versionRun.cleanupProven {
@@ -132,7 +138,7 @@ func (runner *codexLoginRunner) Run(
 	if deviceAuth {
 		arguments = append(arguments, "--device-auth")
 	}
-	loginRun := runner.run(ctx, created, arguments, terminal)
+	loginRun := runner.run(ctx, config, created, proofChallenge, arguments, terminal)
 	if loginRun.err != nil || !loginRun.cleanupProven {
 		return loginRunResult{
 			containedRunResult: loginRun,
@@ -182,18 +188,28 @@ func readPrivateRegularFile(path string, maximumSize int64) ([]byte, error) {
 
 func (runner *codexLoginRunner) run(
 	ctx context.Context,
+	config codexLoginConfig,
 	created *session.Session,
+	proofChallenge string,
 	arguments []string,
 	terminal launch.Terminal,
 ) statusRunResult {
-	executable, err := runner.executable.Resolve()
+	return runContainedCodex(
+		ctx, config, runner.sandbox, created, "", proofChallenge, arguments, terminal,
+		ErrLoginFailed, ErrLoginCleanupUncertain,
+	)
+}
+
+func (runner *codexLoginRunner) snapshotConfig() (codexLoginConfig, func(), error) {
+	root, err := executableSnapshotRoot(runner.config)
 	if err != nil {
-		return containedRunResult{err: ErrUnsupportedVersion, cleanupProven: true}
+		return codexLoginConfig{}, nil, err
+	}
+	executable, cleanup, err := runner.executable.Snapshot(root)
+	if err != nil {
+		return codexLoginConfig{}, nil, err
 	}
 	config := runner.config
 	config.BinaryPath = executable
-	return runContainedCodex(
-		ctx, config, runner.sandbox, created, "", arguments, terminal,
-		ErrLoginFailed, ErrLoginCleanupUncertain,
-	)
+	return config, cleanup, nil
 }

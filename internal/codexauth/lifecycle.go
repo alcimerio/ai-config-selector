@@ -2,6 +2,8 @@ package codexauth
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"path/filepath"
 
@@ -22,30 +24,35 @@ const (
 func (registry *Registry) prepareBinding(
 	ctx context.Context,
 	name CredentialRef,
-) (*session.Session, bindingPreparationStage, error) {
+) (*session.Session, string, bindingPreparationStage, error) {
+	proofChallenge := make([]byte, launch.RecoveryProofChallengeSize)
+	if _, err := rand.Read(proofChallenge); err != nil {
+		return nil, "", bindingSessionCreation, err
+	}
+	encodedChallenge := hex.EncodeToString(proofChallenge)
 	created, err := session.Create(registry.sessionsDirectory, registry.workingDirectory, nil)
 	if err != nil {
-		return nil, bindingSessionCreation, err
+		return nil, "", bindingSessionCreation, err
 	}
 	marker := quarantineMarker{
 		Version: recordVersion, Name: name, SessionID: filepath.Base(created.RootDirectory()),
-		Phase: quarantineCleanupPending,
+		Phase: quarantineCleanupPending, ProofChallenge: encodedChallenge,
 	}
 	if err := registry.quarantine.Create(ctx, marker); err != nil {
 		if errors.Is(err, ErrBindingQuarantined) && registry.preservePublishedBinding(ctx, created, marker) {
-			return nil, bindingMarkerCreation, ErrBindingQuarantined
+			return nil, "", bindingMarkerCreation, ErrBindingQuarantined
 		}
 		_ = created.Remove()
-		return nil, bindingMarkerCreation, err
+		return nil, "", bindingMarkerCreation, err
 	}
 	if err := created.ProtectForRecovery(); err != nil {
 		_ = registry.quarantine.MarkRecoverable(ctx, name)
 		if cleanupErr := registry.removeCreatedBinding(ctx, created, name); cleanupErr != nil {
-			return nil, bindingRecoveryProtection, ErrBindingQuarantined
+			return nil, "", bindingRecoveryProtection, ErrBindingQuarantined
 		}
-		return nil, bindingRecoveryProtection, err
+		return nil, "", bindingRecoveryProtection, err
 	}
-	return created, bindingRecoveryProtection, nil
+	return created, encodedChallenge, bindingRecoveryProtection, nil
 }
 
 // preservePublishedBinding repairs the live state after marker publication was

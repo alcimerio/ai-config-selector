@@ -255,6 +255,26 @@ func TestSeatbeltCleansDescendantAfterProcessGroupAndSessionEscape(t *testing.T)
 	}
 }
 
+func TestSeatbeltPersistsAuthenticatedRecoveryProofAfterNativeCleanup(t *testing.T) {
+	skipSeatbeltNativeTestBinaryUnderRace(t)
+	request := seatbeltTestRequest(t)
+	request.executable = "/usr/bin/true"
+	request.recoveryProofChallenge = bytes.Repeat([]byte{0x8e}, RecoveryProofChallengeSize)
+	process, err := newSeatbeltBackend(seatbeltExecutable).prepare(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := process.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if err := process.Wait(); err != nil {
+		t.Fatal(err)
+	}
+	if proven, err := VerifySessionCleanupProof(request.sessionDirectory, request.recoveryProofChallenge); err != nil || !proven {
+		t.Fatalf("native recovery proof = (%v, %v)", proven, err)
+	}
+}
+
 func TestSeatbeltResolvesHostnameThroughMDNSSocketAlias(t *testing.T) {
 	skipSeatbeltNativeTestBinaryUnderRace(t)
 	request := seatbeltTestRequest(t)
@@ -514,6 +534,90 @@ func TestSeatbeltSupervisorProvesPreTargetStartFailure(t *testing.T) {
 	}
 	if err := matchSeatbeltProofStatus(proof, seatbeltTestExitStatus(t, 125)); err != nil {
 		t.Fatalf("pre-target status match = %v, want success", err)
+	}
+}
+
+func TestSeatbeltSupervisorPersistsRecoveryProofBeforeParentAcknowledgement(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "home"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", filepath.Join(root, "home"))
+	t.Setenv(seatbeltRecoveryProofEnvironment, "1")
+	control, peer := seatbeltTestSocketPair(t)
+	supervisorFD, err := unix.Dup(int(peer.Fd()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := peer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	challenge := bytes.Repeat([]byte{0x7d}, RecoveryProofChallengeSize)
+	result := make(chan int, 1)
+	go func() {
+		result <- runSeatbeltSupervisor(supervisorFD, filepath.Join(root, "missing-target"), nil)
+	}()
+	if _, err := control.Write(challenge); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.ReadAll(control); err != nil {
+		t.Fatal(err)
+	}
+	if status := <-result; status != 125 {
+		t.Fatalf("pre-target supervisor status = %d, want 125", status)
+	}
+	if proven, err := VerifySessionCleanupProof(root, challenge); err != nil || !proven {
+		t.Fatalf("persisted recovery proof = (%v, %v)", proven, err)
+	}
+}
+
+func TestSeatbeltSupervisorPersistsRecoveryProofAfterOwnerConnectionLoss(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "home"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", filepath.Join(root, "home"))
+	t.Setenv(seatbeltRecoveryProofEnvironment, "1")
+	control, peer := seatbeltTestSocketPair(t)
+	supervisorFD, err := unix.Dup(int(peer.Fd()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := peer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	challenge := bytes.Repeat([]byte{0x8f}, RecoveryProofChallengeSize)
+	result := make(chan int, 1)
+	go func() {
+		result <- runSeatbeltSupervisor(supervisorFD, filepath.Join(root, "missing-target"), nil)
+	}()
+	if _, err := control.Write(challenge); err != nil {
+		t.Fatal(err)
+	}
+	if err := control.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if status := <-result; status != 125 {
+		t.Fatalf("disconnected supervisor status = %d, want 125", status)
+	}
+	if proven, err := VerifySessionCleanupProof(root, challenge); err != nil || !proven {
+		t.Fatalf("recovery proof after owner loss = (%v, %v)", proven, err)
+	}
+}
+
+func TestSeatbeltRecoveryProofControlNeverReachesTargetEnvironment(t *testing.T) {
+	proxy := seatbeltStatusProxyEnvironment([]string{
+		"HOME=/private/tmp/session/home", seatbeltRecoveryProofEnvironment + "=1",
+	})
+	if !seatbeltRecoveryProofEnabled(proxy) {
+		t.Fatal("status proxy lost recovery-proof control")
+	}
+	supervisor := seatbeltSupervisorEnvironment(proxy)
+	if !seatbeltRecoveryProofEnabled(supervisor) {
+		t.Fatal("supervisor lost recovery-proof control")
+	}
+	if seatbeltRecoveryProofEnabled(seatbeltTargetEnvironment(supervisor)) {
+		t.Fatal("target inherited recovery-proof control")
 	}
 }
 

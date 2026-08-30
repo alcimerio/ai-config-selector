@@ -59,11 +59,14 @@ API-key, non-interactive token injection, and credential import are unsupported.
 
 ## Contained login and cleanup
 
-Before creating any temporary state, ACS resolves and pins one canonical Codex
-executable identity, then verifies that its native Process Sandbox is available
-for the workspace, Session root, pinned executable, and runtime inputs. The
-identity is revalidated before every subprocess, so a replaced executable is
-rejected before sandbox preparation. Codex also checks the optional
+Before creating any temporary state, ACS resolves, hashes, and pins one
+canonical Codex executable identity, then verifies that its native Process
+Sandbox is available for the workspace, Session root, pinned executable, and
+runtime inputs. Each operation copies those verified bytes once into a private
+read-only snapshot outside the target-writable workspace and Session. Both the
+version probe and credential-bearing subprocess execute that same snapshot, so
+path replacement and in-place rewriting cannot switch the executable after
+verification. Codex also checks the optional
 managed-requirements file at
 `/etc/codex/requirements.toml`. ACS grants an exact, read-only probe for that
 file: Codex can enforce it when present and receives the normal not-found result
@@ -162,12 +165,13 @@ the projection after verified cleanup.
 
 ## Quarantine and recovery
 
-Before projecting credentials, ACS creates a private, secret-free marker under
+Before projecting credentials, ACS creates a private, credential-free marker under
 `~/.acs/quarantine/codex-auth` and a private recovery-protection marker in the
 Session lease directory. Quarantine metadata contains only its version, the
-identity name, the random Session identifier, and a lifecycle phase. It never
-contains credential bytes, metadata fingerprints, tokens, workspace
-identifiers, or `auth.json`.
+identity name, the random Session identifier, a lifecycle phase, and a random
+cleanup-proof challenge that is never exposed to the contained target. It never
+contains credential bytes, metadata fingerprints, authentication tokens,
+workspace identifiers, or `auth.json`.
 
 Recovery protection prevents normal abandoned-Session cleanup from reclaiming
 a quarantined projection. The marker starts in `cleanup_pending`; after the
@@ -181,12 +185,16 @@ identity, and makes one idempotent decision:
 - commit a different payload only when it is a valid same-identity refresh; or
 - discard missing, unchanged, invalid, deleted, or identity-changing state.
 
-Recovery removes the protected Session before deleting the identity marker. If
-the Session is still active or logical removal cannot be proven, both markers
-remain and the identity stays blocked. If a prior cleanup already removed the
-Session, recovery clears the stale marker as an already-discarded projection.
-A marker left in `cleanup_pending` after the original ACS process exits remains
-blocked: recovery does not infer process death from an unlocked file alone.
+The native supervisor removes any proof from an earlier subprocess before it
+starts the next target, then writes and durably syncs a challenge-authenticated
+proof only after it has established zero live target processes. This evidence
+survives an ACS crash without being forgeable by the contained target. Recovery
+removes the protected Session before deleting the identity marker. If the
+Session is still active, or a `cleanup_pending` marker lacks valid supervisor
+proof, both markers remain and the identity stays blocked. A pending inactive
+Session with valid proof can be finalized safely; an unlocked Session alone is
+not treated as proof. If prior cleanup already removed the Session, recovery
+clears the stale marker as an already-discarded projection.
 
 Session removal is logical removal; ACS does not claim physical erasure from
 the filesystem or storage media.
@@ -198,6 +206,10 @@ for the selected name. Concurrent use of the same identity returns an in-use
 error through final projection removal or quarantine; different names can
 proceed independently. Keychain creation is also atomic, so a duplicate cannot
 replace the existing record even across processes.
+
+Contained authentication refuses a working directory that overlaps ACS home.
+This keeps the target from reading quarantine proof challenges or modifying
+operation-scoped executable snapshots through workspace permissions.
 
 Logout deletes only the selected ACS Keychain item and succeeds when a valid
 name is already absent. It refuses a quarantined name. The same binding

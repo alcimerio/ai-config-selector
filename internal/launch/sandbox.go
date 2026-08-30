@@ -185,16 +185,17 @@ type SandboxCheck struct {
 // ProcessRequest describes one command that must run through the selected
 // native sandbox. Callers supply intent, not backend policy or mount details.
 type ProcessRequest struct {
-	Workspace          string
-	SessionsDirectory  string
-	SessionDirectory   string
-	SessionHome        string
-	TemporaryDirectory string
-	Executable         string
-	RuntimeInputs      []string
-	RuntimeProbePaths  []string
-	Arguments          []string
-	Terminal           Terminal
+	Workspace              string
+	SessionsDirectory      string
+	SessionDirectory       string
+	SessionHome            string
+	TemporaryDirectory     string
+	Executable             string
+	RuntimeInputs          []string
+	RuntimeProbePaths      []string
+	RecoveryProofChallenge []byte
+	Arguments              []string
+	Terminal               Terminal
 }
 
 // Process is a prepared sandboxed process tree.
@@ -515,6 +516,7 @@ type validatedProcessRequest struct {
 	runtimeInputs              []string
 	runtimeProbePaths          []string
 	runtimeProbeTraversalPaths []string
+	recoveryProofChallenge     []byte
 	arguments                  []string
 	environment                []string
 	terminal                   Terminal
@@ -541,12 +543,16 @@ func validateProcessRequest(request ProcessRequest) (validatedProcessRequest, er
 	if err != nil || !pathWithin(sessionDirectory, temporaryDirectory) {
 		return validatedProcessRequest{}, sandboxError(SandboxUnsafePath, err)
 	}
+	if len(request.RecoveryProofChallenge) != 0 && len(request.RecoveryProofChallenge) != RecoveryProofChallengeSize {
+		return validatedProcessRequest{}, sandboxError(SandboxInvalidEnvironment, nil)
+	}
 	return validatedProcessRequest{
 		workspace: checked.workspace, sessionsDirectory: checked.sessionsDirectory,
 		sessionDirectory: sessionDirectory, sessionHome: sessionHome,
 		temporaryDirectory: temporaryDirectory, executable: checked.executable,
 		runtimeInputs: checked.runtimeInputs, runtimeProbePaths: checked.runtimeProbePaths,
 		runtimeProbeTraversalPaths: checked.runtimeProbeTraversalPaths,
+		recoveryProofChallenge:     append([]byte(nil), request.RecoveryProofChallenge...),
 		arguments:                  append([]string(nil), request.Arguments...),
 		terminal:                   request.Terminal,
 	}, nil

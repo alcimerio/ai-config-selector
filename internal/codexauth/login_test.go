@@ -15,6 +15,8 @@ import (
 	"github.com/alcimerio/ai-config-selector/internal/session"
 )
 
+const testCleanupProofChallenge = "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a"
+
 func TestContainedLoginPinsVersionUsesSyntheticHomeAndCleansSession(t *testing.T) {
 	root := t.TempDir()
 	sessionsDirectory := filepath.Join(root, "acs", "sessions")
@@ -30,7 +32,7 @@ func TestContainedLoginPinsVersionUsesSyntheticHomeAndCleansSession(t *testing.T
 	sandbox := &fakeLoginSandbox{version: SupportedCodexVersion, auth: auth}
 	runner := newCodexLoginRunner(codexLoginConfig{
 		BinaryPath: "/usr/bin/true", SupportedVersion: SupportedCodexVersion,
-		SessionsDirectory: sessionsDirectory, WorkingDirectory: root,
+		SessionsDirectory: sessionsDirectory, WorkingDirectory: testCodexWorkspace(t, root),
 	}, sandbox)
 
 	var stdout bytes.Buffer
@@ -84,7 +86,7 @@ func TestContainedLoginUsesDefaultBrowserFlowWithoutDeviceFlag(t *testing.T) {
 	}
 	runner := newCodexLoginRunner(codexLoginConfig{
 		BinaryPath: "/usr/bin/true", SupportedVersion: SupportedCodexVersion,
-		SessionsDirectory: filepath.Join(root, "sessions"), WorkingDirectory: root,
+		SessionsDirectory: filepath.Join(root, "sessions"), WorkingDirectory: testCodexWorkspace(t, root),
 	}, sandbox)
 	result, created := runLoginRunnerForTest(t, runner, false, launch.Terminal{})
 	if result.err != nil || !result.cleanupProven {
@@ -106,7 +108,7 @@ func TestContainedLoginRejectsWrongVersionBeforeLogin(t *testing.T) {
 	sandbox := &fakeLoginSandbox{version: "0.999.0", auth: testChatGPTAuthJSON(t, "user", "workspace")}
 	runner := newCodexLoginRunner(codexLoginConfig{
 		BinaryPath: "/usr/bin/true", SupportedVersion: SupportedCodexVersion,
-		SessionsDirectory: filepath.Join(root, "sessions"), WorkingDirectory: root,
+		SessionsDirectory: filepath.Join(root, "sessions"), WorkingDirectory: testCodexWorkspace(t, root),
 	}, sandbox)
 	result, created := runLoginRunnerForTest(t, runner, false, launch.Terminal{})
 	defer created.Remove()
@@ -123,7 +125,7 @@ func TestContainedLoginBoundsVersionOutput(t *testing.T) {
 	sandbox := &fakeLoginSandbox{version: strings.Repeat("x", maximumVersionOutputSize*2)}
 	runner := newCodexLoginRunner(codexLoginConfig{
 		BinaryPath: "/usr/bin/true", SupportedVersion: SupportedCodexVersion,
-		SessionsDirectory: filepath.Join(root, "sessions"), WorkingDirectory: root,
+		SessionsDirectory: filepath.Join(root, "sessions"), WorkingDirectory: testCodexWorkspace(t, root),
 	}, sandbox)
 	result, created := runLoginRunnerForTest(t, runner, false, launch.Terminal{})
 	defer created.Remove()
@@ -163,7 +165,7 @@ func TestContainedLoginSanitizesTargetFailure(t *testing.T) {
 	}
 	runner := newCodexLoginRunner(codexLoginConfig{
 		BinaryPath: "/usr/bin/true", SupportedVersion: SupportedCodexVersion,
-		SessionsDirectory: filepath.Join(root, "sessions"), WorkingDirectory: root,
+		SessionsDirectory: filepath.Join(root, "sessions"), WorkingDirectory: testCodexWorkspace(t, root),
 	}, sandbox)
 	result, created := runLoginRunnerForTest(t, runner, false, launch.Terminal{})
 	defer created.Remove()
@@ -190,7 +192,7 @@ func runLoginRunnerForTest(
 	if err != nil {
 		t.Fatal(err)
 	}
-	return runner.Run(context.Background(), created, deviceAuth, terminal), created
+	return runner.Run(context.Background(), created, testCleanupProofChallenge, deviceAuth, terminal), created
 }
 
 func TestContainedStatusPinsAuthPolicyAtRuntimePrecedence(t *testing.T) {
@@ -212,9 +214,9 @@ func TestContainedStatusPinsAuthPolicyAtRuntimePrecedence(t *testing.T) {
 	sandbox := &fakeLoginSandbox{version: SupportedCodexVersion, auth: auth}
 	runner := newCodexStatusRunner(codexLoginConfig{
 		BinaryPath: "/usr/bin/true", SupportedVersion: SupportedCodexVersion,
-		SessionsDirectory: filepath.Join(root, "sessions"), WorkingDirectory: root,
+		SessionsDirectory: filepath.Join(root, "sessions"), WorkingDirectory: testCodexWorkspace(t, root),
 	}, sandbox)
-	result := runner.Run(context.Background(), created, "workspace")
+	result := runner.Run(context.Background(), created, "workspace", testCleanupProofChallenge)
 	if result.err != nil || !result.cleanupProven {
 		t.Fatalf("status result = %#v", result)
 	}
@@ -243,7 +245,7 @@ func TestContainedLoginRejectsExecutableReplacementAfterPreflight(t *testing.T) 
 	}
 	runner := newCodexLoginRunner(codexLoginConfig{
 		BinaryPath: binary, SupportedVersion: SupportedCodexVersion,
-		SessionsDirectory: filepath.Join(root, "sessions"), WorkingDirectory: root,
+		SessionsDirectory: filepath.Join(root, "sessions"), WorkingDirectory: testCodexWorkspace(t, root),
 	}, sandbox)
 	if err := runner.Check(context.Background()); err != nil {
 		t.Fatal(err)
@@ -268,7 +270,7 @@ func TestContainedLoginRejectsExecutableReplacementAfterPreflight(t *testing.T) 
 	}
 	defer created.Remove()
 
-	result := runner.Run(context.Background(), created, false, launch.Terminal{})
+	result := runner.Run(context.Background(), created, testCleanupProofChallenge, false, launch.Terminal{})
 	if !errors.Is(result.err, ErrUnsupportedVersion) || !result.cleanupProven {
 		t.Fatalf("result = %#v", result)
 	}
@@ -277,14 +279,130 @@ func TestContainedLoginRejectsExecutableReplacementAfterPreflight(t *testing.T) 
 	}
 }
 
+func TestContainedLoginRejectsInPlaceExecutableRewriteWithRestoredMetadata(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "codex")
+	original := []byte("first-executable")
+	if err := os.WriteFile(target, original, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sandbox := &fakeLoginSandbox{version: SupportedCodexVersion, auth: testChatGPTAuthJSON(t, "user", "workspace")}
+	runner := newCodexLoginRunner(codexLoginConfig{
+		BinaryPath: target, SupportedVersion: SupportedCodexVersion,
+		SessionsDirectory: filepath.Join(root, "sessions"), WorkingDirectory: testCodexWorkspace(t, root),
+	}, sandbox)
+	if err := runner.Check(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(target, []byte("other-executable"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(target, info.ModTime(), info.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+	created, err := session.Create(filepath.Join(root, "sessions"), root, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer created.Remove()
+
+	result := runner.Run(context.Background(), created, testCleanupProofChallenge, false, launch.Terminal{})
+	if !errors.Is(result.err, ErrUnsupportedVersion) || !result.cleanupProven {
+		t.Fatalf("result = %#v", result)
+	}
+	if len(sandbox.arguments) != 0 {
+		t.Fatalf("rewritten executable reached sandbox: %#v", sandbox.arguments)
+	}
+}
+
+func TestContainedLoginExecutesOnePrivateSnapshotAcrossBothSubprocesses(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "codex")
+	original := []byte("first-executable")
+	if err := os.WriteFile(target, original, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	sandbox := &fakeLoginSandbox{version: SupportedCodexVersion, auth: testChatGPTAuthJSON(t, "user", "workspace")}
+	sandbox.prepareHook = func(request launch.ProcessRequest) {
+		if request.Executable == target {
+			t.Fatalf("mutable source executable reached sandbox: %q", request.Executable)
+		}
+		contents, err := os.ReadFile(request.Executable)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(contents, original) {
+			t.Fatalf("snapshot contents = %q", contents)
+		}
+	}
+	runner := newCodexLoginRunner(codexLoginConfig{
+		BinaryPath: target, SupportedVersion: SupportedCodexVersion,
+		SessionsDirectory: filepath.Join(root, "sessions"), WorkingDirectory: testCodexWorkspace(t, root),
+	}, sandbox)
+	result, created := runLoginRunnerForTest(t, runner, false, launch.Terminal{})
+	defer created.Remove()
+	if result.err != nil || !result.cleanupProven {
+		t.Fatalf("result = %#v", result)
+	}
+	if len(sandbox.requests) != 2 || sandbox.requests[0].Executable != sandbox.requests[1].Executable {
+		t.Fatalf("request executables = %#v", sandbox.requests)
+	}
+	if _, err := os.Stat(sandbox.requests[0].Executable); !os.IsNotExist(err) {
+		t.Fatalf("snapshot remains after operation: %v", err)
+	}
+}
+
+func TestContainedLoginRejectsSnapshotDirectoryInsideWritableWorkspace(t *testing.T) {
+	root := t.TempDir()
+	sessionsDirectory := filepath.Join(root, "sessions")
+	workspace := sessionsDirectory + ".executables"
+	if err := os.MkdirAll(workspace, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	sandbox := &fakeLoginSandbox{version: SupportedCodexVersion, auth: testChatGPTAuthJSON(t, "user", "workspace")}
+	runner := newCodexLoginRunner(codexLoginConfig{
+		BinaryPath: "/usr/bin/true", SupportedVersion: SupportedCodexVersion,
+		SessionsDirectory: sessionsDirectory, WorkingDirectory: workspace,
+	}, sandbox)
+	if err := runner.Check(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	created, err := session.Create(sessionsDirectory, workspace, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer created.Remove()
+	result := runner.Run(context.Background(), created, testCleanupProofChallenge, false, launch.Terminal{})
+	if !errors.Is(result.err, ErrUnsupportedVersion) || !result.cleanupProven {
+		t.Fatalf("result = %#v", result)
+	}
+	if len(sandbox.arguments) != 0 {
+		t.Fatalf("unsafe snapshot reached sandbox: %#v", sandbox.arguments)
+	}
+}
+
+func testCodexWorkspace(t *testing.T, root string) string {
+	t.Helper()
+	workspace := filepath.Join(root, "workspace")
+	if err := os.MkdirAll(workspace, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return workspace
+}
+
 type fakeLoginSandbox struct {
-	version   string
-	auth      []byte
-	waitErr   error
-	arguments [][]string
-	config    string
-	check     launch.SandboxCheck
-	requests  []launch.ProcessRequest
+	version     string
+	auth        []byte
+	waitErr     error
+	arguments   [][]string
+	config      string
+	check       launch.SandboxCheck
+	requests    []launch.ProcessRequest
+	prepareHook func(launch.ProcessRequest)
 }
 
 func (*fakeLoginSandbox) Readiness(context.Context) (launch.SandboxReadiness, error) {
@@ -297,6 +415,9 @@ func (sandbox *fakeLoginSandbox) Check(_ context.Context, check launch.SandboxCh
 }
 
 func (sandbox *fakeLoginSandbox) Prepare(_ context.Context, request launch.ProcessRequest) (launch.Process, error) {
+	if sandbox.prepareHook != nil {
+		sandbox.prepareHook(request)
+	}
 	sandbox.arguments = append(sandbox.arguments, append([]string(nil), request.Arguments...))
 	sandbox.requests = append(sandbox.requests, request)
 	return &fakeLoginProcess{start: func() error {

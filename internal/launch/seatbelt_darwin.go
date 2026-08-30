@@ -138,7 +138,9 @@ func (backend *seatbeltBackend) prepare(ctx context.Context, request validatedPr
 		return nil, sandboxError(SandboxSetupFailed, nil)
 	}
 	challenge := make([]byte, seatbeltChallengeSize)
-	if _, err := rand.Read(challenge); err != nil {
+	if len(request.recoveryProofChallenge) > 0 {
+		copy(challenge, request.recoveryProofChallenge)
+	} else if _, err := rand.Read(challenge); err != nil {
 		_ = control.Close()
 		_ = helperControl.Close()
 		_ = statusControl.Close()
@@ -148,7 +150,11 @@ func (backend *seatbeltBackend) prepare(ctx context.Context, request validatedPr
 	proxyArguments := append([]string{seatbeltStatusProxyArgument, "--", backend.executable}, arguments...)
 	command := exec.CommandContext(ctx, supervisor, proxyArguments...)
 	command.Dir = request.workspace
-	command.Env = seatbeltStatusProxyEnvironment(request.environment)
+	proxyEnvironment := request.environment
+	if len(request.recoveryProofChallenge) > 0 {
+		proxyEnvironment = append(append([]string(nil), proxyEnvironment...), seatbeltRecoveryProofEnvironment+"=1")
+	}
+	command.Env = seatbeltStatusProxyEnvironment(proxyEnvironment)
 	command.Stdin = request.terminal.Input
 	command.Stdout = request.terminal.Output
 	command.Stderr = request.terminal.ErrorOutput
