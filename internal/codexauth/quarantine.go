@@ -17,15 +17,24 @@ const maximumQuarantineMarkerSize = 16 * 1024
 
 var sessionIDPattern = regexp.MustCompile(`^session-[A-Za-z0-9._-]{1,128}$`)
 
+type quarantinePhase string
+
+const (
+	quarantineCleanupPending quarantinePhase = "cleanup_pending"
+	quarantineRecoverable    quarantinePhase = "recoverable"
+)
+
 type quarantineMarker struct {
-	Version   int           `json:"version"`
-	Name      CredentialRef `json:"name"`
-	SessionID string        `json:"sessionId"`
+	Version   int             `json:"version"`
+	Name      CredentialRef   `json:"name"`
+	SessionID string          `json:"sessionId"`
+	Phase     quarantinePhase `json:"phase"`
 }
 
 type bindingQuarantine interface {
 	Inspect(context.Context, CredentialRef) (quarantineMarker, bool, error)
 	Create(context.Context, quarantineMarker) error
+	MarkRecoverable(context.Context, CredentialRef) error
 	Delete(context.Context, CredentialRef) error
 }
 
@@ -35,8 +44,9 @@ func (noBindingQuarantine) Inspect(context.Context, CredentialRef) (quarantineMa
 	return quarantineMarker{}, false, nil
 }
 
-func (noBindingQuarantine) Create(context.Context, quarantineMarker) error { return nil }
-func (noBindingQuarantine) Delete(context.Context, CredentialRef) error    { return nil }
+func (noBindingQuarantine) Create(context.Context, quarantineMarker) error       { return nil }
+func (noBindingQuarantine) MarkRecoverable(context.Context, CredentialRef) error { return nil }
+func (noBindingQuarantine) Delete(context.Context, CredentialRef) error          { return nil }
 
 type fileBindingQuarantine struct{ directory string }
 
@@ -120,6 +130,54 @@ func (store *fileBindingQuarantine) Create(ctx context.Context, marker quarantin
 	return nil
 }
 
+func (store *fileBindingQuarantine) MarkRecoverable(ctx context.Context, name CredentialRef) error {
+	marker, exists, err := store.Inspect(ctx, name)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return ErrBindingQuarantined
+	}
+	if marker.Phase == quarantineRecoverable {
+		return nil
+	}
+	marker.Phase = quarantineRecoverable
+	contents, err := json.Marshal(marker)
+	if err != nil {
+		return ErrProviderUnavailable
+	}
+	defer clearBytes(contents)
+	temporary, err := os.CreateTemp(store.directory, ".marker-*")
+	if err != nil {
+		return ErrProviderUnavailable
+	}
+	temporaryPath := temporary.Name()
+	defer func() {
+		_ = temporary.Close()
+		_ = os.Remove(temporaryPath)
+	}()
+	if err := temporary.Chmod(0o600); err != nil {
+		return ErrProviderUnavailable
+	}
+	if _, err := temporary.Write(contents); err != nil {
+		return ErrProviderUnavailable
+	}
+	if err := temporary.Sync(); err != nil {
+		return ErrProviderUnavailable
+	}
+	if err := temporary.Close(); err != nil {
+		return ErrProviderUnavailable
+	}
+	if err := os.Rename(temporaryPath, store.path(name)); err != nil {
+		return ErrProviderUnavailable
+	}
+	temporaryPath = ""
+	if err := syncDirectory(store.directory); err != nil {
+		return ErrBindingQuarantined
+	}
+	return nil
+}
+
 func (store *fileBindingQuarantine) Delete(ctx context.Context, name CredentialRef) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -186,6 +244,9 @@ func validateQuarantineMarker(marker quarantineMarker) error {
 	}
 	if !sessionIDPattern.MatchString(marker.SessionID) {
 		return fmt.Errorf("invalid quarantine Session identifier")
+	}
+	if marker.Phase != quarantineCleanupPending && marker.Phase != quarantineRecoverable {
+		return errors.New("invalid quarantine phase")
 	}
 	return nil
 }

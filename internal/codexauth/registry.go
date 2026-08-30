@@ -8,6 +8,7 @@ import (
 	"sort"
 
 	"github.com/alcimerio/ai-config-selector/internal/launch"
+	"github.com/alcimerio/ai-config-selector/internal/session"
 )
 
 type credentialRecord struct {
@@ -24,8 +25,16 @@ type credentialProvider interface {
 	Delete(context.Context, CredentialRef) error
 }
 
+type loginRunResult struct {
+	auth           []byte
+	err            error
+	cleanupProven  bool
+	cleanupProcess launch.Process
+}
+
 type loginRunner interface {
-	Login(context.Context, bool, launch.Terminal) ([]byte, error)
+	Check(context.Context) error
+	Run(context.Context, *session.Session, bool, launch.Terminal) loginRunResult
 }
 
 type identityLocker interface {
@@ -134,17 +143,69 @@ func (registry *Registry) Login(ctx context.Context, request LoginRequest) (Iden
 		return IdentityMetadata{}, fmt.Errorf("%w: %q", ErrIdentityExists, name)
 	}
 
-	auth, err := registry.login.Login(ctx, request.DeviceAuth, request.Terminal)
-	if err != nil {
+	if registry.sessionsDirectory == "" || registry.workingDirectory == "" {
+		return IdentityMetadata{}, ErrProviderUnavailable
+	}
+	if err := registry.login.Check(ctx); err != nil {
 		return IdentityMetadata{}, err
 	}
-	defer clearBytes(auth)
-	metadata, err := validateAuthJSON(name, auth)
+	created, err := session.Create(registry.sessionsDirectory, registry.workingDirectory, nil)
 	if err != nil {
+		return IdentityMetadata{}, ErrLoginFailed
+	}
+	marker := quarantineMarker{
+		Version: recordVersion, Name: name, SessionID: filepath.Base(created.RootDirectory()),
+		Phase: quarantineCleanupPending,
+	}
+	if err := registry.quarantine.Create(ctx, marker); err != nil {
+		_ = created.Remove()
+		if errors.Is(err, ErrIdentityBusy) || errors.Is(err, ErrBindingQuarantined) {
+			return IdentityMetadata{}, ErrLoginCleanupUncertain
+		}
+		return IdentityMetadata{}, err
+	}
+	if err := created.ProtectForRecovery(); err != nil {
+		_ = registry.quarantine.MarkRecoverable(ctx, name)
+		if cleanupErr := registry.removeCreatedBinding(ctx, created, name); cleanupErr != nil {
+			return IdentityMetadata{}, ErrLoginCleanupUncertain
+		}
+		return IdentityMetadata{}, ErrLoginFailed
+	}
+
+	run := registry.login.Run(ctx, created, request.DeviceAuth, request.Terminal)
+	if !run.cleanupProven {
+		clearBytes(run.auth)
+		registry.transferPendingBinding(created, name, run.cleanupProcess)
+		return IdentityMetadata{}, ErrLoginCleanupUncertain
+	}
+	if err := registry.quarantine.MarkRecoverable(ctx, name); err != nil {
+		clearBytes(run.auth)
+		_ = created.PreserveForRecovery()
+		return IdentityMetadata{}, ErrLoginCleanupUncertain
+	}
+	if run.err != nil {
+		clearBytes(run.auth)
+		if cleanupErr := registry.removeCreatedBinding(ctx, created, name); cleanupErr != nil {
+			return IdentityMetadata{}, ErrLoginCleanupUncertain
+		}
+		return IdentityMetadata{}, run.err
+	}
+	defer clearBytes(run.auth)
+	metadata, err := validateAuthJSON(name, run.auth)
+	if err != nil {
+		if cleanupErr := registry.removeCreatedBinding(ctx, created, name); cleanupErr != nil {
+			return IdentityMetadata{}, ErrLoginCleanupUncertain
+		}
 		return IdentityMetadata{}, ErrUnsupportedAuth
 	}
-	if err := registry.provider.Create(ctx, credentialRecord{Metadata: metadata, Auth: auth}); err != nil {
+	if err := registry.provider.Create(ctx, credentialRecord{Metadata: metadata, Auth: run.auth}); err != nil {
+		if cleanupErr := registry.removeCreatedBinding(ctx, created, name); cleanupErr != nil {
+			return IdentityMetadata{}, ErrLoginCleanupUncertain
+		}
 		return IdentityMetadata{}, fmt.Errorf("store Codex authentication identity %q: %w", name, err)
+	}
+	if err := registry.removeCreatedBinding(ctx, created, name); err != nil {
+		return IdentityMetadata{}, ErrLoginCleanupUncertain
 	}
 	return metadata, nil
 }

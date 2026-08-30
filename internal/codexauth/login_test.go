@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/alcimerio/ai-config-selector/internal/launch"
+	"github.com/alcimerio/ai-config-selector/internal/session"
 )
 
 func TestContainedLoginPinsVersionUsesSyntheticHomeAndCleansSession(t *testing.T) {
@@ -34,16 +35,21 @@ func TestContainedLoginPinsVersionUsesSyntheticHomeAndCleansSession(t *testing.T
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	got, err := runner.Login(context.Background(), true, launch.Terminal{
+	result, created := runLoginRunnerForTest(t, runner, true, launch.Terminal{
 		Input: strings.NewReader(""), Output: &stdout, ErrorOutput: &stderr,
 	})
-	if err != nil {
-		t.Fatal(err)
+	if result.err != nil || !result.cleanupProven {
+		t.Fatalf("login result = %#v", result)
 	}
-	if string(got) != string(auth) {
+	defer clearBytes(result.auth)
+	if string(result.auth) != string(auth) {
 		t.Fatal("login changed auth payload")
 	}
-	if gotArgs := sandbox.arguments; !reflect.DeepEqual(gotArgs, [][]string{{"--version"}, {"login", "--device-auth"}}) {
+	wantArguments := [][]string{
+		{"-c", `cli_auth_credentials_store="file"`, "-c", `forced_login_method="chatgpt"`, "--version"},
+		{"-c", `cli_auth_credentials_store="file"`, "-c", `forced_login_method="chatgpt"`, "login", "--device-auth"},
+	}
+	if gotArgs := sandbox.arguments; !reflect.DeepEqual(gotArgs, wantArguments) {
 		t.Fatalf("arguments = %#v", gotArgs)
 	}
 	if sandbox.config != "cli_auth_credentials_store = \"file\"\nforced_login_method = \"chatgpt\"\n" {
@@ -61,6 +67,9 @@ func TestContainedLoginPinsVersionUsesSyntheticHomeAndCleansSession(t *testing.T
 	if err != nil || string(global) != "global-sentinel" {
 		t.Fatalf("global auth changed: %q, %v", global, err)
 	}
+	if err := created.Remove(); err != nil {
+		t.Fatal(err)
+	}
 	entries, err := os.ReadDir(sessionsDirectory)
 	if err != nil || len(entries) != 0 {
 		t.Fatalf("Session cleanup = (%d entries, %v)", len(entries), err)
@@ -77,10 +86,17 @@ func TestContainedLoginUsesDefaultBrowserFlowWithoutDeviceFlag(t *testing.T) {
 		BinaryPath: "/usr/bin/true", SupportedVersion: SupportedCodexVersion,
 		SessionsDirectory: filepath.Join(root, "sessions"), WorkingDirectory: root,
 	}, sandbox)
-	if _, err := runner.Login(context.Background(), false, launch.Terminal{}); err != nil {
-		t.Fatal(err)
+	result, created := runLoginRunnerForTest(t, runner, false, launch.Terminal{})
+	if result.err != nil || !result.cleanupProven {
+		t.Fatalf("login result = %#v", result)
 	}
-	if got := sandbox.arguments; !reflect.DeepEqual(got, [][]string{{"--version"}, {"login"}}) {
+	defer clearBytes(result.auth)
+	defer created.Remove()
+	wantArguments := [][]string{
+		{"-c", `cli_auth_credentials_store="file"`, "-c", `forced_login_method="chatgpt"`, "--version"},
+		{"-c", `cli_auth_credentials_store="file"`, "-c", `forced_login_method="chatgpt"`, "login"},
+	}
+	if got := sandbox.arguments; !reflect.DeepEqual(got, wantArguments) {
 		t.Fatalf("arguments = %#v", got)
 	}
 }
@@ -92,8 +108,10 @@ func TestContainedLoginRejectsWrongVersionBeforeLogin(t *testing.T) {
 		BinaryPath: "/usr/bin/true", SupportedVersion: SupportedCodexVersion,
 		SessionsDirectory: filepath.Join(root, "sessions"), WorkingDirectory: root,
 	}, sandbox)
-	if _, err := runner.Login(context.Background(), false, launch.Terminal{}); !errors.Is(err, ErrUnsupportedVersion) {
-		t.Fatalf("error = %v", err)
+	result, created := runLoginRunnerForTest(t, runner, false, launch.Terminal{})
+	defer created.Remove()
+	if !errors.Is(result.err, ErrUnsupportedVersion) || !result.cleanupProven {
+		t.Fatalf("result = %#v", result)
 	}
 	if len(sandbox.arguments) != 1 {
 		t.Fatalf("wrong version still launched login: %#v", sandbox.arguments)
@@ -107,8 +125,10 @@ func TestContainedLoginBoundsVersionOutput(t *testing.T) {
 		BinaryPath: "/usr/bin/true", SupportedVersion: SupportedCodexVersion,
 		SessionsDirectory: filepath.Join(root, "sessions"), WorkingDirectory: root,
 	}, sandbox)
-	if _, err := runner.Login(context.Background(), false, launch.Terminal{}); !errors.Is(err, ErrUnsupportedVersion) {
-		t.Fatalf("error = %v", err)
+	result, created := runLoginRunnerForTest(t, runner, false, launch.Terminal{})
+	defer created.Remove()
+	if !errors.Is(result.err, ErrUnsupportedVersion) || !result.cleanupProven {
+		t.Fatalf("result = %#v", result)
 	}
 }
 
@@ -145,9 +165,65 @@ func TestContainedLoginSanitizesTargetFailure(t *testing.T) {
 		BinaryPath: "/usr/bin/true", SupportedVersion: SupportedCodexVersion,
 		SessionsDirectory: filepath.Join(root, "sessions"), WorkingDirectory: root,
 	}, sandbox)
-	_, err := runner.Login(context.Background(), false, launch.Terminal{})
-	if !errors.Is(err, ErrLoginFailed) || strings.Contains(err.Error(), "secret target diagnostic") {
-		t.Fatalf("error = %v", err)
+	result, created := runLoginRunnerForTest(t, runner, false, launch.Terminal{})
+	defer created.Remove()
+	if !errors.Is(result.err, ErrLoginFailed) || strings.Contains(result.err.Error(), "secret target diagnostic") {
+		t.Fatalf("error = %v", result.err)
+	}
+}
+
+func runLoginRunnerForTest(
+	t *testing.T,
+	runner *codexLoginRunner,
+	deviceAuth bool,
+	terminal launch.Terminal,
+) (loginRunResult, *session.Session) {
+	t.Helper()
+	if err := runner.Check(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	created, err := session.Create(
+		runner.config.SessionsDirectory,
+		runner.config.WorkingDirectory,
+		nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return runner.Run(context.Background(), created, deviceAuth, terminal), created
+}
+
+func TestContainedStatusPinsAuthPolicyAtRuntimePrecedence(t *testing.T) {
+	root := t.TempDir()
+	auth := testChatGPTAuthJSON(t, "user", "workspace")
+	metadata, err := validateAuthJSON("work", auth)
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := session.Create(filepath.Join(root, "sessions"), root, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer created.Remove()
+	if err := projectCredential(created.HomeDirectory(), credentialRecord{Metadata: metadata, Auth: auth}); err != nil {
+		t.Fatal(err)
+	}
+
+	sandbox := &fakeLoginSandbox{version: SupportedCodexVersion, auth: auth}
+	runner := newCodexStatusRunner(codexLoginConfig{
+		BinaryPath: "/usr/bin/true", SupportedVersion: SupportedCodexVersion,
+		SessionsDirectory: filepath.Join(root, "sessions"), WorkingDirectory: root,
+	}, sandbox)
+	result := runner.Run(context.Background(), created, "workspace")
+	if result.err != nil || !result.cleanupProven {
+		t.Fatalf("status result = %#v", result)
+	}
+	wantArguments := [][]string{
+		{"-c", `cli_auth_credentials_store="file"`, "-c", `forced_login_method="chatgpt"`, "-c", `forced_chatgpt_workspace_id="workspace"`, "--version"},
+		{"-c", `cli_auth_credentials_store="file"`, "-c", `forced_login_method="chatgpt"`, "-c", `forced_chatgpt_workspace_id="workspace"`, "login", "status"},
+	}
+	if !reflect.DeepEqual(sandbox.arguments, wantArguments) {
+		t.Fatalf("arguments = %#v", sandbox.arguments)
 	}
 }
 
@@ -174,11 +250,15 @@ func (sandbox *fakeLoginSandbox) Prepare(_ context.Context, request launch.Proce
 	sandbox.arguments = append(sandbox.arguments, append([]string(nil), request.Arguments...))
 	sandbox.requests = append(sandbox.requests, request)
 	return &fakeLoginProcess{start: func() error {
+		commandArguments := request.Arguments
+		for len(commandArguments) >= 2 && commandArguments[0] == "-c" {
+			commandArguments = commandArguments[2:]
+		}
 		switch {
-		case reflect.DeepEqual(request.Arguments, []string{"--version"}):
+		case reflect.DeepEqual(commandArguments, []string{"--version"}):
 			_, err := io.WriteString(request.Terminal.Output, "codex-cli "+sandbox.version+"\n")
 			return err
-		case len(request.Arguments) > 0 && request.Arguments[0] == "login":
+		case len(commandArguments) > 0 && commandArguments[0] == "login":
 			configuration, err := os.ReadFile(filepath.Join(request.SessionHome, ".codex", "config.toml"))
 			if err != nil {
 				return err

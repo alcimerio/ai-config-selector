@@ -51,6 +51,7 @@ func (registry *Registry) Status(ctx context.Context, value string) (IdentitySta
 	}
 	marker := quarantineMarker{
 		Version: recordVersion, Name: name, SessionID: filepath.Base(created.RootDirectory()),
+		Phase: quarantineCleanupPending,
 	}
 	if err := registry.quarantine.Create(ctx, marker); err != nil {
 		_ = created.Remove()
@@ -63,6 +64,7 @@ func (registry *Registry) Status(ctx context.Context, value string) (IdentitySta
 	}
 	defer locked.Release()
 	if err := created.ProtectForRecovery(); err != nil {
+		_ = registry.quarantine.MarkRecoverable(ctx, name)
 		if cleanupErr := registry.removeCreatedBinding(ctx, created, name); cleanupErr != nil {
 			result.Disposition = QuarantinedUncertain
 			return result, ErrBindingQuarantined
@@ -71,6 +73,7 @@ func (registry *Registry) Status(ctx context.Context, value string) (IdentitySta
 		return result, ErrStatusFailed
 	}
 	if err := projectCredential(created.HomeDirectory(), record); err != nil {
+		_ = registry.quarantine.MarkRecoverable(ctx, name)
 		if cleanupErr := registry.removeCreatedBinding(ctx, created, name); cleanupErr != nil {
 			result.Disposition = QuarantinedUncertain
 			return result, ErrBindingQuarantined
@@ -79,10 +82,15 @@ func (registry *Registry) Status(ctx context.Context, value string) (IdentitySta
 		return result, ErrProjectedAuthInvalid
 	}
 
-	run := registry.status.Run(ctx, created)
+	run := registry.status.Run(ctx, created, record.Metadata.Workspace)
 	run.err = sanitizeStatusError(run.err)
 	if !run.cleanupProven {
-		_ = created.Remove()
+		registry.transferPendingBinding(created, name, run.cleanupProcess)
+		result.Disposition = QuarantinedUncertain
+		return result, ErrBindingQuarantined
+	}
+	if err := registry.quarantine.MarkRecoverable(ctx, name); err != nil {
+		_ = created.PreserveForRecovery()
 		result.Disposition = QuarantinedUncertain
 		return result, ErrBindingQuarantined
 	}
@@ -107,6 +115,9 @@ func (registry *Registry) Recover(ctx context.Context, value string) (BindingDis
 	}
 	if !exists {
 		return DiscardedProjection, nil
+	}
+	if marker.Phase == quarantineCleanupPending {
+		return QuarantinedUncertain, fmt.Errorf("%w: %q", ErrIdentityBusy, name)
 	}
 
 	recovered, sessionExists, err := launch.RecoverSession(registry.sessionsDirectory, marker.SessionID)
@@ -150,6 +161,26 @@ func (registry *Registry) Recover(ctx context.Context, value string) (BindingDis
 		return QuarantinedUncertain, ErrBindingQuarantined
 	}
 	return disposition, nil
+}
+
+func (registry *Registry) transferPendingBinding(
+	created *session.Session,
+	name CredentialRef,
+	process launch.Process,
+) {
+	if process == nil {
+		_ = created.PreserveForRecovery()
+		return
+	}
+	go func() {
+		if err := launch.AwaitRetainedSessionCleanup(process); err != nil {
+			return
+		}
+		if err := created.PreserveForRecovery(); err != nil {
+			return
+		}
+		_ = registry.quarantine.MarkRecoverable(context.Background(), name)
+	}()
 }
 
 func (registry *Registry) finalizeStatus(

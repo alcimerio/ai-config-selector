@@ -67,15 +67,19 @@ file: Codex can enforce it when present and receives the normal not-found result
 when absent, without gaining access to the rest of `/etc`. It then:
 
 1. creates a leased private Session and synthetic home;
-2. writes a private `.codex/config.toml` that selects file credential storage
+2. creates a secret-free identity quarantine marker and recovery-protects the
+   Session before credential bytes can be written;
+3. writes a private `.codex/config.toml` that selects file credential storage
    and forces the ChatGPT login method;
-3. verifies the exact Codex CLI version inside the sandbox;
-4. runs `codex login`, optionally with `--device-auth`, inside the same sandbox;
-5. opens only the Session's `.codex/auth.json`, without following symlinks, and
+4. passes the same storage and login-method restrictions as Codex `-c`
+   overrides so project configuration cannot replace them;
+5. verifies the exact Codex CLI version inside the sandbox;
+6. runs `codex login`, optionally with `--device-auth`, inside the same sandbox;
+7. opens only the Session's `.codex/auth.json`, without following symlinks, and
    requires a private, regular, single-link file owned by the invoking user;
-6. validates the bounded JSON schema and derives non-secret metadata before the
+8. validates the bounded JSON schema and derives non-secret metadata before the
    first durable write;
-7. atomically creates the named Keychain record and removes the temporary
+9. atomically creates the named Keychain record and removes the temporary
    Session.
 
 The temporary file necessarily contains credential bytes between successful
@@ -83,7 +87,9 @@ Codex login and Keychain storage. It is never a durable ACS provider and is not
 copied to a Profile, log, plan, error, or command-line argument. Session cleanup
 is logical removal; ACS does not claim physical erasure from the filesystem or
 storage media. If contained-process cleanup is uncertain, login fails rather
-than reporting a stored identity as safely completed.
+than reporting a stored identity as safely completed, and its name and Session
+remain quarantined until settlement is proven and recovery removes the
+projection.
 
 ## Keychain record and metadata
 
@@ -121,9 +127,11 @@ partially created second index to repair.
 5. write private `.codex/config.toml` and `.codex/auth.json` files with file
    credential storage, forced ChatGPT login, and the validated workspace
    restriction when present;
-6. verify `codex-cli 0.149.1` and run `codex login status` inside the mandatory
+6. pass those restrictions as Codex `-c` overrides, which have runtime
+   precedence over project configuration;
+7. verify `codex-cli 0.149.1` and run `codex login status` inside the mandatory
    process sandbox;
-7. prove contained-process cleanup, validate the final projected credential,
+8. prove contained-process cleanup, validate the final projected credential,
    make one typed commit-or-discard decision, remove the projection, and only
    then release the identity lock.
 
@@ -153,14 +161,18 @@ the projection after verified cleanup.
 Before projecting credentials, ACS creates a private, secret-free marker under
 `~/.acs/quarantine/codex-auth` and a private recovery-protection marker in the
 Session lease directory. Quarantine metadata contains only its version, the
-identity name, and the random Session identifier. It never contains credential
-bytes, metadata fingerprints, tokens, workspace identifiers, or `auth.json`.
+identity name, the random Session identifier, and a lifecycle phase. It never
+contains credential bytes, metadata fingerprints, tokens, workspace
+identifiers, or `auth.json`.
 
 Recovery protection prevents normal abandoned-Session cleanup from reclaiming
-a quarantined projection. The name remains blocked across ACS processes even
-after the original file lock is released. `auth recover` acquires that name,
-requires the protected Session lease to be inactive, revalidates the projection
-against the current durable identity, and makes one idempotent decision:
+a quarantined projection. The marker starts in `cleanup_pending`; after the
+original ACS process proves settlement and releases the live Session guard, it
+atomically advances the marker to `recoverable`. The name remains blocked
+across ACS processes even after the original file lock is released. `auth
+recover` acquires that name, requires both the recoverable phase and an inactive
+protected Session lease, revalidates the projection against the current durable
+identity, and makes one idempotent decision:
 
 - commit a different payload only when it is a valid same-identity refresh; or
 - discard missing, unchanged, invalid, deleted, or identity-changing state.
@@ -169,6 +181,8 @@ Recovery removes the protected Session before deleting the identity marker. If
 the Session is still active or logical removal cannot be proven, both markers
 remain and the identity stays blocked. If a prior cleanup already removed the
 Session, recovery clears the stale marker as an already-discarded projection.
+A marker left in `cleanup_pending` after the original ACS process exits remains
+blocked: recovery does not infer process death from an unlocked file alone.
 
 Session removal is logical removal; ACS does not claim physical erasure from
 the filesystem or storage media.

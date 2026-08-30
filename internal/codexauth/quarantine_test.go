@@ -12,7 +12,9 @@ import (
 func TestFileBindingQuarantineCreatesPrivateSecretFreeMarkerWithoutReplacement(t *testing.T) {
 	directory := filepath.Join(t.TempDir(), "quarantine")
 	store := newFileBindingQuarantine(directory)
-	marker := quarantineMarker{Version: recordVersion, Name: "work", SessionID: "session-fixture"}
+	marker := quarantineMarker{
+		Version: recordVersion, Name: "work", SessionID: "session-fixture", Phase: quarantineCleanupPending,
+	}
 
 	if err := store.Create(context.Background(), marker); err != nil {
 		t.Fatal(err)
@@ -23,6 +25,16 @@ func TestFileBindingQuarantineCreatesPrivateSecretFreeMarkerWithoutReplacement(t
 	got, exists, err := store.Inspect(context.Background(), "work")
 	if err != nil || !exists || got != marker {
 		t.Fatalf("inspect = (%#v, %v, %v)", got, exists, err)
+	}
+	if err := store.MarkRecoverable(context.Background(), "work"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.MarkRecoverable(context.Background(), "work"); err != nil {
+		t.Fatalf("idempotent recoverable transition: %v", err)
+	}
+	got, exists, err = store.Inspect(context.Background(), "work")
+	if err != nil || !exists || got.Phase != quarantineRecoverable {
+		t.Fatalf("recoverable marker = (%#v, %v, %v)", got, exists, err)
 	}
 
 	for path, mode := range map[string]os.FileMode{
@@ -61,15 +73,21 @@ func TestFileBindingQuarantineRejectsMalformedAndLinkedMarkers(t *testing.T) {
 		prepare func(*testing.T, *fileBindingQuarantine)
 	}{
 		{
+			name: "missing phase",
+			prepare: func(t *testing.T, store *fileBindingQuarantine) {
+				writeQuarantineFixture(t, store, []byte(`{"version":1,"name":"work","sessionId":"session-fixture"}`))
+			},
+		},
+		{
 			name: "unknown field",
 			prepare: func(t *testing.T, store *fileBindingQuarantine) {
-				writeQuarantineFixture(t, store, []byte(`{"version":1,"name":"work","sessionId":"session-fixture","secret":"no"}`))
+				writeQuarantineFixture(t, store, []byte(`{"version":1,"name":"work","sessionId":"session-fixture","phase":"recoverable","secret":"no"}`))
 			},
 		},
 		{
 			name: "duplicate field",
 			prepare: func(t *testing.T, store *fileBindingQuarantine) {
-				writeQuarantineFixture(t, store, []byte(`{"version":1,"name":"work","name":"work","sessionId":"session-fixture"}`))
+				writeQuarantineFixture(t, store, []byte(`{"version":1,"name":"work","name":"work","sessionId":"session-fixture","phase":"recoverable"}`))
 			},
 		},
 		{
@@ -79,7 +97,7 @@ func TestFileBindingQuarantineRejectsMalformedAndLinkedMarkers(t *testing.T) {
 					t.Fatal(err)
 				}
 				target := filepath.Join(filepath.Dir(store.directory), "target")
-				if err := os.WriteFile(target, []byte(`{"version":1,"name":"work","sessionId":"session-fixture"}`), 0o600); err != nil {
+				if err := os.WriteFile(target, []byte(`{"version":1,"name":"work","sessionId":"session-fixture","phase":"recoverable"}`), 0o600); err != nil {
 					t.Fatal(err)
 				}
 				if err := os.Symlink(target, store.path("work")); err != nil {
@@ -90,7 +108,7 @@ func TestFileBindingQuarantineRejectsMalformedAndLinkedMarkers(t *testing.T) {
 		{
 			name: "hard link",
 			prepare: func(t *testing.T, store *fileBindingQuarantine) {
-				writeQuarantineFixture(t, store, []byte(`{"version":1,"name":"work","sessionId":"session-fixture"}`))
+				writeQuarantineFixture(t, store, []byte(`{"version":1,"name":"work","sessionId":"session-fixture","phase":"recoverable"}`))
 				if err := os.Link(store.path("work"), filepath.Join(store.directory, "copy")); err != nil {
 					t.Fatal(err)
 				}
@@ -119,7 +137,9 @@ func TestFileBindingQuarantineRejectsSymlinkDirectoryWithoutChangingTarget(t *te
 		t.Fatal(err)
 	}
 	store := newFileBindingQuarantine(directory)
-	marker := quarantineMarker{Version: recordVersion, Name: "work", SessionID: "session-fixture"}
+	marker := quarantineMarker{
+		Version: recordVersion, Name: "work", SessionID: "session-fixture", Phase: quarantineCleanupPending,
+	}
 	if err := store.Create(context.Background(), marker); !errors.Is(err, ErrProviderUnavailable) {
 		t.Fatalf("symlink directory error = %v", err)
 	}

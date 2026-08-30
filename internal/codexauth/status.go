@@ -11,13 +11,14 @@ import (
 )
 
 type statusRunResult struct {
-	err           error
-	cleanupProven bool
+	err            error
+	cleanupProven  bool
+	cleanupProcess launch.Process
 }
 
 type statusRunner interface {
 	Check(context.Context) error
-	Run(context.Context, *session.Session) statusRunResult
+	Run(context.Context, *session.Session, string) statusRunResult
 }
 
 type codexStatusRunner struct {
@@ -42,9 +43,9 @@ func (runner *codexStatusRunner) Check(ctx context.Context) error {
 	})
 }
 
-func (runner *codexStatusRunner) Run(ctx context.Context, created *session.Session) statusRunResult {
+func (runner *codexStatusRunner) Run(ctx context.Context, created *session.Session, workspace string) statusRunResult {
 	versionOutput := boundedBuffer{limit: maximumVersionOutputSize}
-	result := runner.run(ctx, created, []string{"--version"}, launch.Terminal{
+	result := runner.run(ctx, created, workspace, []string{"--version"}, launch.Terminal{
 		Output: &versionOutput, ErrorOutput: io.Discard,
 	})
 	if result.err != nil || !result.cleanupProven {
@@ -53,7 +54,7 @@ func (runner *codexStatusRunner) Run(ctx context.Context, created *session.Sessi
 	if versionOutput.overflow || strings.TrimSpace(versionOutput.String()) != "codex-cli "+runner.config.SupportedVersion {
 		return statusRunResult{err: ErrUnsupportedVersion, cleanupProven: true}
 	}
-	return runner.run(ctx, created, []string{"login", "status"}, launch.Terminal{
+	return runner.run(ctx, created, workspace, []string{"login", "status"}, launch.Terminal{
 		Output: io.Discard, ErrorOutput: io.Discard,
 	})
 }
@@ -61,6 +62,7 @@ func (runner *codexStatusRunner) Run(ctx context.Context, created *session.Sessi
 func (runner *codexStatusRunner) run(
 	ctx context.Context,
 	created *session.Session,
+	workspace string,
 	arguments []string,
 	terminal launch.Terminal,
 ) statusRunResult {
@@ -69,7 +71,7 @@ func (runner *codexStatusRunner) run(
 		SessionDirectory: created.RootDirectory(), SessionHome: created.HomeDirectory(),
 		TemporaryDirectory: created.TemporaryDirectory(), Executable: runner.config.BinaryPath,
 		RuntimeInputs: runner.config.RuntimeInputs, RuntimeProbePaths: runner.config.RuntimeProbePaths,
-		Arguments: arguments, Terminal: terminal,
+		Arguments: codexAuthRuntimeArguments(workspace, arguments...), Terminal: terminal,
 	})
 	if err != nil {
 		return statusRunResult{err: err, cleanupProven: true}
@@ -80,7 +82,7 @@ func (runner *codexStatusRunner) run(
 	}
 	runErr := launch.RunAttached(process)
 	if cleanupErr := launch.AwaitRetainedSessionCleanup(process); cleanupErr != nil {
-		return statusRunResult{err: ErrBindingQuarantined, cleanupProven: false}
+		return statusRunResult{err: ErrBindingQuarantined, cleanupProven: false, cleanupProcess: process}
 	}
 	if runErr != nil {
 		var sandboxFailure *launch.SandboxError

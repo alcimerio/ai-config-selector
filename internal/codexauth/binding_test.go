@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/alcimerio/ai-config-selector/internal/launch"
 	"github.com/alcimerio/ai-config-selector/internal/session"
 )
 
@@ -216,9 +217,9 @@ func TestStatusQuarantinesReplacementFailureAndRecoveryCommitsOnce(t *testing.T)
 	}
 }
 
-func TestStatusCleanupUncertaintyLeavesMarkerForIdempotentRecovery(t *testing.T) {
+func TestStatusCleanupUncertaintyWithoutSettlementProofRemainsBlocked(t *testing.T) {
 	auth := testChatGPTAuthJSON(t, "user", "workspace")
-	registry, _, runner, sessionsDirectory := newBindingTestRegistry(t, "work", auth)
+	registry, _, runner, _ := newBindingTestRegistry(t, "work", auth)
 	runner.result = statusRunResult{err: ErrBindingQuarantined, cleanupProven: false}
 
 	status, err := registry.Status(context.Background(), "work")
@@ -226,12 +227,55 @@ func TestStatusCleanupUncertaintyLeavesMarkerForIdempotentRecovery(t *testing.T)
 		t.Fatalf("status = (%#v, %v)", status, err)
 	}
 	disposition, err := registry.Recover(context.Background(), "work")
-	if err != nil || disposition != DiscardedProjection {
+	if !errors.Is(err, ErrIdentityBusy) || disposition != QuarantinedUncertain {
 		t.Fatalf("recovery = (%q, %v)", disposition, err)
 	}
 	disposition, err = registry.Recover(context.Background(), "work")
+	if !errors.Is(err, ErrIdentityBusy) || disposition != QuarantinedUncertain {
+		t.Fatalf("repeated recovery = (%q, %v)", disposition, err)
+	}
+}
+
+func TestStatusCleanupUncertaintyPreservesProjectionUntilSettlementAndRecovery(t *testing.T) {
+	auth := testChatGPTAuthJSON(t, "user", "workspace")
+	registry, _, _, sessionsDirectory := newBindingTestRegistry(t, "work", auth)
+	cleanupDone := make(chan struct{})
+	runner := &pendingCleanupStatusRunner{cleanupDone: cleanupDone}
+	registry.status = runner
+
+	status, err := registry.Status(context.Background(), "work")
+	if !errors.Is(err, ErrBindingQuarantined) || status.Disposition != QuarantinedUncertain {
+		t.Fatalf("status = (%#v, %v)", status, err)
+	}
+	marker, exists, err := registry.quarantine.Inspect(context.Background(), "work")
+	if err != nil || !exists || marker.Phase != quarantineCleanupPending {
+		t.Fatalf("pending quarantine marker = (%#v, %v, %v)", marker, exists, err)
+	}
+	if _, err := os.Stat(runner.sessionRoot); err != nil {
+		t.Fatalf("pending cleanup removed projection: %v", err)
+	}
+	if disposition, err := registry.Recover(context.Background(), "work"); !errors.Is(err, ErrIdentityBusy) || disposition != QuarantinedUncertain {
+		t.Fatalf("pending recovery = (%q, %v)", disposition, err)
+	}
+
+	close(cleanupDone)
+	deadline := time.Now().Add(time.Second)
+	for {
+		marker, exists, err = registry.quarantine.Inspect(context.Background(), "work")
+		if err == nil && exists && marker.Phase == quarantineRecoverable {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("quarantine did not become recoverable: (%#v, %v, %v)", marker, exists, err)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if _, err := os.Stat(runner.sessionRoot); err != nil {
+		t.Fatalf("settled quarantine removed projection: %v", err)
+	}
+	disposition, err := registry.Recover(context.Background(), "work")
 	if err != nil || disposition != DiscardedProjection {
-		t.Fatalf("idempotent recovery = (%q, %v)", disposition, err)
+		t.Fatalf("settled recovery = (%q, %v)", disposition, err)
 	}
 	assertNoSessionDirectories(t, sessionsDirectory)
 }
@@ -248,6 +292,7 @@ func TestRecoveryRefusesAnActiveProtectedSession(t *testing.T) {
 	}
 	if err := registry.quarantine.Create(context.Background(), quarantineMarker{
 		Version: recordVersion, Name: "work", SessionID: filepath.Base(created.RootDirectory()),
+		Phase: quarantineRecoverable,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -288,6 +333,7 @@ func TestRecoveryDiscardsAnIdentityChangingProjection(t *testing.T) {
 	}
 	if err := registry.quarantine.Create(context.Background(), quarantineMarker{
 		Version: recordVersion, Name: "work", SessionID: filepath.Base(created.RootDirectory()),
+		Phase: quarantineRecoverable,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -398,6 +444,32 @@ type fakeStatusRunner struct {
 	release       chan struct{}
 }
 
+type pendingCleanupStatusRunner struct {
+	cleanupDone chan struct{}
+	sessionRoot string
+}
+
+func (*pendingCleanupStatusRunner) Check(context.Context) error { return nil }
+
+func (runner *pendingCleanupStatusRunner) Run(_ context.Context, created *session.Session, _ string) statusRunResult {
+	runner.sessionRoot = created.RootDirectory()
+	process, err := created.RetainUntilProcessDone(pendingCleanupProcess{done: runner.cleanupDone})
+	if err != nil {
+		return statusRunResult{err: ErrBindingQuarantined, cleanupProven: false}
+	}
+	if err := launch.RunAttached(process); err != nil {
+		return statusRunResult{err: ErrBindingQuarantined, cleanupProven: false, cleanupProcess: process}
+	}
+	return statusRunResult{err: ErrBindingQuarantined, cleanupProven: false, cleanupProcess: process}
+}
+
+type pendingCleanupProcess struct{ done <-chan struct{} }
+
+func (pendingCleanupProcess) Start() error                         { return nil }
+func (pendingCleanupProcess) Wait() error                          { return nil }
+func (pendingCleanupProcess) Signal(os.Signal) error               { return nil }
+func (process pendingCleanupProcess) CleanupDone() <-chan struct{} { return process.done }
+
 func (runner *fakeStatusRunner) Check(context.Context) error {
 	runner.mutex.Lock()
 	defer runner.mutex.Unlock()
@@ -405,7 +477,7 @@ func (runner *fakeStatusRunner) Check(context.Context) error {
 	return runner.checkErr
 }
 
-func (runner *fakeStatusRunner) Run(_ context.Context, created *session.Session) statusRunResult {
+func (runner *fakeStatusRunner) Run(_ context.Context, created *session.Session, _ string) statusRunResult {
 	configuration, err := os.ReadFile(filepath.Join(created.HomeDirectory(), ".codex", "config.toml"))
 	if err != nil {
 		return statusRunResult{err: ErrStatusFailed, cleanupProven: true}

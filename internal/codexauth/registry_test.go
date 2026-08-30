@@ -3,20 +3,27 @@ package codexauth
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"reflect"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/alcimerio/ai-config-selector/internal/launch"
+	"github.com/alcimerio/ai-config-selector/internal/session"
 )
 
 func TestRegistryLoginCreatesWithoutReplacingNamedIdentity(t *testing.T) {
 	provider := newFakeProvider()
-	runner := &fakeLoginRunner{auth: testChatGPTAuthJSON(t, "user", "workspace")}
+	runner := &fakeLoginRunner{result: loginRunResult{
+		auth: testChatGPTAuthJSON(t, "user", "workspace"), cleanupProven: true,
+	}}
 	registry, err := newRegistry(provider, runner, newFileIdentityLocker(t.TempDir()))
 	if err != nil {
 		t.Fatal(err)
 	}
+	configureRegistryTestLifecycle(t, registry)
 
 	metadata, err := registry.Login(context.Background(), LoginRequest{Name: "work"})
 	if err != nil {
@@ -31,6 +38,55 @@ func TestRegistryLoginCreatesWithoutReplacingNamedIdentity(t *testing.T) {
 	if runner.calls != 1 {
 		t.Fatalf("duplicate login invoked Codex: calls = %d", runner.calls)
 	}
+}
+
+func TestRegistryLoginCleanupUncertaintyQuarantinesNameAndProjection(t *testing.T) {
+	provider := newFakeProvider()
+	cleanupDone := make(chan struct{})
+	runner := &fakeLoginRunner{
+		result:      loginRunResult{err: ErrLoginCleanupUncertain, cleanupProven: false},
+		cleanupDone: cleanupDone,
+	}
+	registry, err := newRegistry(provider, runner, newFileIdentityLocker(t.TempDir()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionsDirectory := configureRegistryTestLifecycle(t, registry)
+
+	if _, err := registry.Login(context.Background(), LoginRequest{Name: "work"}); !errors.Is(err, ErrLoginCleanupUncertain) {
+		t.Fatalf("login error = %v", err)
+	}
+	marker, exists, err := registry.quarantine.Inspect(context.Background(), "work")
+	if err != nil || !exists || marker.Phase != quarantineCleanupPending {
+		t.Fatalf("pending quarantine marker = (%#v, %v, %v)", marker, exists, err)
+	}
+	if _, exists, err := provider.Metadata(context.Background(), "work"); err != nil || exists {
+		t.Fatalf("uncertain login stored identity = (%v, %v)", exists, err)
+	}
+	if _, err := os.Stat(runner.sessionRoot); err != nil {
+		t.Fatalf("pending login removed projection: %v", err)
+	}
+	if _, err := registry.Login(context.Background(), LoginRequest{Name: "work"}); !errors.Is(err, ErrIdentityBusy) {
+		t.Fatalf("quarantined login retry error = %v", err)
+	}
+
+	close(cleanupDone)
+	deadline := time.Now().Add(time.Second)
+	for {
+		marker, exists, err = registry.quarantine.Inspect(context.Background(), "work")
+		if err == nil && exists && marker.Phase == quarantineRecoverable {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("login quarantine did not become recoverable: (%#v, %v, %v)", marker, exists, err)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	disposition, err := registry.Recover(context.Background(), "work")
+	if err != nil || disposition != DiscardedProjection {
+		t.Fatalf("login recovery = (%q, %v)", disposition, err)
+	}
+	assertNoSessionDirectories(t, sessionsDirectory)
 }
 
 func TestRegistryListUsesMetadataOnlyAndSortsNames(t *testing.T) {
@@ -79,16 +135,48 @@ func TestRegistryLogoutIsIdempotentAndHonorsIdentityLock(t *testing.T) {
 }
 
 type fakeLoginRunner struct {
-	auth       []byte
-	err        error
-	calls      int
-	deviceAuth bool
+	result      loginRunResult
+	calls       int
+	deviceAuth  bool
+	cleanupDone chan struct{}
+	sessionRoot string
 }
 
-func (runner *fakeLoginRunner) Login(_ context.Context, deviceAuth bool, _ launch.Terminal) ([]byte, error) {
+func (*fakeLoginRunner) Check(context.Context) error { return nil }
+
+func (runner *fakeLoginRunner) Run(
+	_ context.Context,
+	created *session.Session,
+	deviceAuth bool,
+	_ launch.Terminal,
+) loginRunResult {
 	runner.calls++
 	runner.deviceAuth = deviceAuth
-	return append([]byte(nil), runner.auth...), runner.err
+	result := runner.result
+	result.auth = append([]byte(nil), result.auth...)
+	if runner.cleanupDone != nil {
+		runner.sessionRoot = created.RootDirectory()
+		process, err := created.RetainUntilProcessDone(pendingCleanupProcess{done: runner.cleanupDone})
+		if err != nil {
+			return loginRunResult{err: ErrLoginCleanupUncertain, cleanupProven: false}
+		}
+		_ = launch.RunAttached(process)
+		result.cleanupProcess = process
+	}
+	return result
+}
+
+func configureRegistryTestLifecycle(t *testing.T, registry *Registry) string {
+	t.Helper()
+	root := t.TempDir()
+	workingDirectory := filepath.Join(root, "workspace")
+	if err := os.Mkdir(workingDirectory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	registry.sessionsDirectory = filepath.Join(root, "sessions")
+	registry.workingDirectory = workingDirectory
+	registry.quarantine = newFileBindingQuarantine(filepath.Join(root, "quarantine"))
+	return registry.sessionsDirectory
 }
 
 type fakeProvider struct {
