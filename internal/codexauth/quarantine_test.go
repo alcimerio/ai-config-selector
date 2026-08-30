@@ -13,7 +13,7 @@ func TestFileBindingQuarantineCreatesPrivateSecretFreeMarkerWithoutReplacement(t
 	directory := filepath.Join(t.TempDir(), "quarantine")
 	store := newFileBindingQuarantine(directory)
 	marker := quarantineMarker{
-		Version: recordVersion, Name: "work", SessionID: "session-fixture", Phase: quarantineCleanupPending,
+		Version: recordVersion, Name: "work", SessionID: "session-fixture", Phase: quarantinePrepared,
 		ProofChallenge: testCleanupProofChallenge,
 	}
 
@@ -26,6 +26,16 @@ func TestFileBindingQuarantineCreatesPrivateSecretFreeMarkerWithoutReplacement(t
 	got, exists, err := store.Inspect(context.Background(), "work")
 	if err != nil || !exists || got != marker {
 		t.Fatalf("inspect = (%#v, %v, %v)", got, exists, err)
+	}
+	if err := store.MarkCleanupPending(context.Background(), "work"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.MarkCleanupPending(context.Background(), "work"); err != nil {
+		t.Fatalf("idempotent pending transition: %v", err)
+	}
+	got, exists, err = store.Inspect(context.Background(), "work")
+	if err != nil || !exists || got.Phase != quarantineCleanupPending {
+		t.Fatalf("pending marker = (%#v, %v, %v)", got, exists, err)
 	}
 	if err := store.MarkRecoverable(context.Background(), "work"); err != nil {
 		t.Fatal(err)

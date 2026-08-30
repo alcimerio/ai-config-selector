@@ -21,6 +21,7 @@ var proofChallengePattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 type quarantinePhase string
 
 const (
+	quarantinePrepared       quarantinePhase = "prepared"
 	quarantineCleanupPending quarantinePhase = "cleanup_pending"
 	quarantineRecoverable    quarantinePhase = "recoverable"
 )
@@ -36,6 +37,7 @@ type quarantineMarker struct {
 type bindingQuarantine interface {
 	Inspect(context.Context, CredentialRef) (quarantineMarker, bool, error)
 	Create(context.Context, quarantineMarker) error
+	MarkCleanupPending(context.Context, CredentialRef) error
 	MarkRecoverable(context.Context, CredentialRef) error
 	Delete(context.Context, CredentialRef) error
 }
@@ -46,7 +48,10 @@ func (noBindingQuarantine) Inspect(context.Context, CredentialRef) (quarantineMa
 	return quarantineMarker{}, false, nil
 }
 
-func (noBindingQuarantine) Create(context.Context, quarantineMarker) error       { return nil }
+func (noBindingQuarantine) Create(context.Context, quarantineMarker) error { return nil }
+func (noBindingQuarantine) MarkCleanupPending(context.Context, CredentialRef) error {
+	return nil
+}
 func (noBindingQuarantine) MarkRecoverable(context.Context, CredentialRef) error { return nil }
 func (noBindingQuarantine) Delete(context.Context, CredentialRef) error          { return nil }
 
@@ -133,6 +138,18 @@ func (store *fileBindingQuarantine) Create(ctx context.Context, marker quarantin
 }
 
 func (store *fileBindingQuarantine) MarkRecoverable(ctx context.Context, name CredentialRef) error {
+	return store.transition(ctx, name, quarantineRecoverable)
+}
+
+func (store *fileBindingQuarantine) MarkCleanupPending(ctx context.Context, name CredentialRef) error {
+	return store.transition(ctx, name, quarantineCleanupPending)
+}
+
+func (store *fileBindingQuarantine) transition(
+	ctx context.Context,
+	name CredentialRef,
+	phase quarantinePhase,
+) error {
 	marker, exists, err := store.Inspect(ctx, name)
 	if err != nil {
 		return err
@@ -140,10 +157,13 @@ func (store *fileBindingQuarantine) MarkRecoverable(ctx context.Context, name Cr
 	if !exists {
 		return ErrBindingQuarantined
 	}
-	if marker.Phase == quarantineRecoverable {
+	if marker.Phase == phase {
 		return nil
 	}
-	marker.Phase = quarantineRecoverable
+	if phase == quarantineCleanupPending && marker.Phase != quarantinePrepared {
+		return ErrBindingQuarantined
+	}
+	marker.Phase = phase
 	contents, err := json.Marshal(marker)
 	if err != nil {
 		return ErrProviderUnavailable
@@ -247,7 +267,7 @@ func validateQuarantineMarker(marker quarantineMarker) error {
 	if !sessionIDPattern.MatchString(marker.SessionID) {
 		return fmt.Errorf("invalid quarantine Session identifier")
 	}
-	if marker.Phase != quarantineCleanupPending && marker.Phase != quarantineRecoverable {
+	if marker.Phase != quarantinePrepared && marker.Phase != quarantineCleanupPending && marker.Phase != quarantineRecoverable {
 		return errors.New("invalid quarantine phase")
 	}
 	if !proofChallengePattern.MatchString(marker.ProofChallenge) {

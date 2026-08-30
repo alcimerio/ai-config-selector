@@ -36,7 +36,7 @@ func (registry *Registry) prepareBinding(
 	}
 	marker := quarantineMarker{
 		Version: recordVersion, Name: name, SessionID: filepath.Base(created.RootDirectory()),
-		Phase: quarantineCleanupPending, ProofChallenge: encodedChallenge,
+		Phase: quarantinePrepared, ProofChallenge: encodedChallenge,
 	}
 	if err := registry.quarantine.Create(ctx, marker); err != nil {
 		if errors.Is(err, ErrBindingQuarantined) && registry.preservePublishedBinding(ctx, created, marker) {

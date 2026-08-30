@@ -25,9 +25,8 @@ type codexLoginConfig struct {
 }
 
 type codexLoginRunner struct {
-	config     codexLoginConfig
-	executable *pinnedExecutable
-	sandbox    launch.ProcessSandbox
+	config  codexLoginConfig
+	sandbox launch.ProcessSandbox
 }
 
 const maximumVersionOutputSize = 256
@@ -58,7 +57,7 @@ func newCodexLoginRunner(config codexLoginConfig, sandbox launch.ProcessSandbox)
 	config.RuntimeInputs = append([]string(nil), config.RuntimeInputs...)
 	config.RuntimeProbePaths = codexRuntimeProbePaths(config.RuntimeProbePaths)
 	return &codexLoginRunner{
-		config: config, executable: newPinnedExecutable(config.BinaryPath), sandbox: sandbox,
+		config: config, sandbox: sandbox,
 	}
 }
 
@@ -82,7 +81,7 @@ func (runner *codexLoginRunner) Check(ctx context.Context) error {
 	if runner == nil || runner.sandbox == nil {
 		return ErrLoginFailed
 	}
-	executable, err := runner.executable.Resolve()
+	executable, err := newPinnedExecutable(runner.config.BinaryPath).Resolve()
 	if err != nil {
 		return ErrUnsupportedVersion
 	}
@@ -97,6 +96,7 @@ func (runner *codexLoginRunner) Run(
 	ctx context.Context,
 	created *session.Session,
 	proofChallenge string,
+	beginProcess func() error,
 	deviceAuth bool,
 	terminal launch.Terminal,
 ) loginRunResult {
@@ -122,7 +122,7 @@ func (runner *codexLoginRunner) Run(
 	defer cleanup()
 
 	versionOutput := boundedBuffer{limit: maximumVersionOutputSize}
-	versionRun := runner.run(ctx, config, created, proofChallenge, []string{"--version"}, launch.Terminal{
+	versionRun := runner.run(ctx, config, created, proofChallenge, beginProcess, []string{"--version"}, launch.Terminal{
 		Output: &versionOutput, ErrorOutput: io.Discard,
 	})
 	if versionRun.err != nil || !versionRun.cleanupProven {
@@ -138,7 +138,7 @@ func (runner *codexLoginRunner) Run(
 	if deviceAuth {
 		arguments = append(arguments, "--device-auth")
 	}
-	loginRun := runner.run(ctx, config, created, proofChallenge, arguments, terminal)
+	loginRun := runner.run(ctx, config, created, proofChallenge, beginProcess, arguments, terminal)
 	if loginRun.err != nil || !loginRun.cleanupProven {
 		return loginRunResult{
 			containedRunResult: loginRun,
@@ -191,11 +191,12 @@ func (runner *codexLoginRunner) run(
 	config codexLoginConfig,
 	created *session.Session,
 	proofChallenge string,
+	beginProcess func() error,
 	arguments []string,
 	terminal launch.Terminal,
 ) statusRunResult {
 	return runContainedCodex(
-		ctx, config, runner.sandbox, created, "", proofChallenge, arguments, terminal,
+		ctx, config, runner.sandbox, created, "", proofChallenge, beginProcess, arguments, terminal,
 		ErrLoginFailed, ErrLoginCleanupUncertain,
 	)
 }
@@ -205,7 +206,8 @@ func (runner *codexLoginRunner) snapshotConfig() (codexLoginConfig, func(), erro
 	if err != nil {
 		return codexLoginConfig{}, nil, err
 	}
-	executable, cleanup, err := runner.executable.Snapshot(root)
+	pinned := newPinnedExecutable(runner.config.BinaryPath)
+	executable, cleanup, err := pinned.Snapshot(root)
 	if err != nil {
 		return codexLoginConfig{}, nil, err
 	}

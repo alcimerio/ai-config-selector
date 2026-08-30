@@ -68,7 +68,8 @@ func (registry *Registry) Status(ctx context.Context, value string) (IdentitySta
 		return result, ErrProjectedAuthInvalid
 	}
 
-	run := registry.status.Run(ctx, created, record.Metadata.Workspace, proofChallenge)
+	beginProcess := func() error { return registry.quarantine.MarkCleanupPending(ctx, name) }
+	run := registry.status.Run(ctx, created, record.Metadata.Workspace, proofChallenge, beginProcess)
 	run.err = sanitizeStatusError(run.err)
 	if err := registry.settleBinding(ctx, created, name, run.cleanupProven, run.cleanupProcess); err != nil {
 		result.Disposition = QuarantinedUncertain
@@ -110,7 +111,17 @@ func (registry *Registry) Recover(ctx context.Context, value string) (BindingDis
 		return DiscardedProjection, nil
 	}
 	defer recovered.Preserve()
-	if marker.Phase == quarantineCleanupPending {
+	if marker.Phase == quarantinePrepared {
+		// No subprocess preparation began, so the projection cannot contain a
+		// target-authored refresh and must never be committed.
+		if err := recovered.Remove(); err != nil {
+			return QuarantinedUncertain, ErrBindingQuarantined
+		}
+		if err := registry.quarantine.Delete(ctx, name); err != nil {
+			return QuarantinedUncertain, ErrBindingQuarantined
+		}
+		return DiscardedProjection, nil
+	} else if marker.Phase == quarantineCleanupPending {
 		challenge, decodeErr := hex.DecodeString(marker.ProofChallenge)
 		proven, proofErr := registry.verifyCleanup(recovered.RootDir, challenge)
 		if decodeErr != nil || proofErr != nil || !proven {

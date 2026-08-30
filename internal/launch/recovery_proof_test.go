@@ -25,7 +25,7 @@ func TestSessionCleanupProofRequiresExactSupervisorChallenge(t *testing.T) {
 func TestSessionCleanupProofIsClearedBeforeTheNextProcess(t *testing.T) {
 	root := t.TempDir()
 	challenge := bytes.Repeat([]byte{0x7c}, RecoveryProofChallengeSize)
-	if err := recordSessionCleanupProof(root, challenge); err != nil {
+	if err := PrepareSessionCleanupProof(root, challenge); err != nil {
 		t.Fatal(err)
 	}
 	if err := clearSessionCleanupProof(root); err != nil {

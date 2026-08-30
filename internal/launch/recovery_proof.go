@@ -21,10 +21,12 @@ func clearSessionCleanupProof(sessionRoot string) error {
 	return syncDirectoryPath(sessionRoot)
 }
 
-// PrepareSessionCleanupProof durably invalidates evidence from an earlier
-// subprocess before a new native supervisor can start.
-func PrepareSessionCleanupProof(sessionRoot string) error {
-	return clearSessionCleanupProof(sessionRoot)
+// PrepareSessionCleanupProof durably records authenticated evidence that no
+// subprocess has started. A native supervisor must clear it after receiving
+// the challenge and before starting a target, then replace it only after
+// proving that the complete target tree is gone.
+func PrepareSessionCleanupProof(sessionRoot string, challenge []byte) error {
+	return recordSessionCleanupProof(sessionRoot, challenge)
 }
 
 func recordSessionCleanupProof(sessionRoot string, challenge []byte) error {

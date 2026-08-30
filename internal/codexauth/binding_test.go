@@ -2,6 +2,7 @@ package codexauth
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -375,6 +376,91 @@ func TestRecoveryAcceptsSupervisorProofForInactivePendingSession(t *testing.T) {
 	assertNoSessionDirectories(t, sessionsDirectory)
 }
 
+func TestRecoveryAcceptsPreparedProofWhenCrashPrecedesFirstProcess(t *testing.T) {
+	auth := testChatGPTAuthJSON(t, "user", "workspace")
+	registry, _, _, sessionsDirectory := newBindingTestRegistry(t, "work", auth)
+	created, err := session.Create(sessionsDirectory, registry.workingDirectory, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := created.ProtectForRecovery(); err != nil {
+		t.Fatal(err)
+	}
+	metadata, err := validateAuthJSON("work", auth)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := projectCredential(created.HomeDirectory(), credentialRecord{Metadata: metadata, Auth: auth}); err != nil {
+		t.Fatal(err)
+	}
+	challenge, err := hex.DecodeString(testCleanupProofChallenge)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := launch.PrepareSessionCleanupProof(created.RootDirectory(), challenge); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.quarantine.Create(context.Background(), quarantineMarker{
+		Version: recordVersion, Name: "work", SessionID: filepath.Base(created.RootDirectory()),
+		Phase: quarantineCleanupPending, ProofChallenge: testCleanupProofChallenge,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := created.PreserveForRecovery(); err != nil {
+		t.Fatal(err)
+	}
+
+	disposition, err := registry.Recover(context.Background(), "work")
+	if err != nil || disposition != DiscardedProjection {
+		t.Fatalf("pre-process recovery = (%q, %v)", disposition, err)
+	}
+	assertNoSessionDirectories(t, sessionsDirectory)
+}
+
+func TestRecoveryDiscardsInactivePreparedSessionWithoutSupervisorProof(t *testing.T) {
+	original := testChatGPTAuthJSON(t, "user", "workspace")
+	refreshed := []byte(strings.Replace(
+		string(original), "2026-08-29T12:34:56Z", "2026-08-29T15:34:56Z", 1,
+	))
+	registry, provider, _, sessionsDirectory := newBindingTestRegistry(t, "work", original)
+	created, err := session.Create(sessionsDirectory, registry.workingDirectory, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := created.ProtectForRecovery(); err != nil {
+		t.Fatal(err)
+	}
+	metadata, err := validateAuthJSON("work", refreshed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := projectCredential(created.HomeDirectory(), credentialRecord{Metadata: metadata, Auth: refreshed}); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.quarantine.Create(context.Background(), quarantineMarker{
+		Version: recordVersion, Name: "work", SessionID: filepath.Base(created.RootDirectory()),
+		Phase: quarantinePrepared, ProofChallenge: testCleanupProofChallenge,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := created.PreserveForRecovery(); err != nil {
+		t.Fatal(err)
+	}
+	registry.verifyCleanup = func(string, []byte) (bool, error) {
+		t.Fatal("prepared recovery requested a supervisor proof")
+		return false, nil
+	}
+
+	disposition, err := registry.Recover(context.Background(), "work")
+	if err != nil || disposition != DiscardedProjection {
+		t.Fatalf("prepared recovery = (%q, %v)", disposition, err)
+	}
+	if provider.replaceCalls != 0 || string(provider.records["work"].Auth) != string(original) {
+		t.Fatal("prepared recovery committed projected bytes")
+	}
+	assertNoSessionDirectories(t, sessionsDirectory)
+}
+
 func TestRecoveryClearsPendingMarkerAfterSessionIsAlreadyGone(t *testing.T) {
 	auth := testChatGPTAuthJSON(t, "user", "workspace")
 	registry, _, _, _ := newBindingTestRegistry(t, "work", auth)
@@ -547,7 +633,17 @@ func (store createErrorAfterPublishQuarantine) Create(ctx context.Context, marke
 
 func (*pendingCleanupStatusRunner) Check(context.Context) error { return nil }
 
-func (runner *pendingCleanupStatusRunner) Run(_ context.Context, created *session.Session, _, _ string) statusRunResult {
+func (runner *pendingCleanupStatusRunner) Run(
+	_ context.Context,
+	created *session.Session,
+	_, _ string,
+	beginProcess func() error,
+) statusRunResult {
+	if beginProcess != nil {
+		if err := beginProcess(); err != nil {
+			return statusRunResult{err: ErrStatusFailed, cleanupProven: true}
+		}
+	}
 	runner.sessionRoot = created.RootDirectory()
 	process, err := created.RetainUntilProcessDone(pendingCleanupProcess{done: runner.cleanupDone})
 	if err != nil {
@@ -573,7 +669,17 @@ func (runner *fakeStatusRunner) Check(context.Context) error {
 	return runner.checkErr
 }
 
-func (runner *fakeStatusRunner) Run(_ context.Context, created *session.Session, _, _ string) statusRunResult {
+func (runner *fakeStatusRunner) Run(
+	_ context.Context,
+	created *session.Session,
+	_, _ string,
+	beginProcess func() error,
+) statusRunResult {
+	if beginProcess != nil {
+		if err := beginProcess(); err != nil {
+			return statusRunResult{err: ErrStatusFailed, cleanupProven: true}
+		}
+	}
 	configuration, err := os.ReadFile(filepath.Join(created.HomeDirectory(), ".codex", "config.toml"))
 	if err != nil {
 		return statusRunResult{err: ErrStatusFailed, cleanupProven: true}

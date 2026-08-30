@@ -174,27 +174,32 @@ contains credential bytes, metadata fingerprints, authentication tokens,
 workspace identifiers, or `auth.json`.
 
 Recovery protection prevents normal abandoned-Session cleanup from reclaiming
-a quarantined projection. The marker starts in `cleanup_pending`; after the
+a quarantined projection. The marker starts in `prepared`, where recovery can
+only discard an inactive projection because no subprocess preparation has
+begun. Immediately before preparation, ACS durably arms a challenge-authenticated
+no-process proof and advances the marker to `cleanup_pending`. After the
 original ACS process proves settlement and releases the live Session guard, it
 atomically advances the marker to `recoverable`. The name remains blocked
 across ACS processes even after the original file lock is released. `auth
-recover` acquires that name, requires both the recoverable phase and an inactive
-protected Session lease, revalidates the projection against the current durable
-identity, and makes one idempotent decision:
+recover` acquires that name, requires an inactive protected Session lease,
+revalidates a recoverable or proven pending projection against the current
+durable identity, and makes one idempotent decision:
 
 - commit a different payload only when it is a valid same-identity refresh; or
 - discard missing, unchanged, invalid, deleted, or identity-changing state.
 
-The native supervisor removes any proof from an earlier subprocess before it
-starts the next target, then writes and durably syncs a challenge-authenticated
-proof only after it has established zero live target processes. This evidence
-survives an ACS crash without being forgeable by the contained target. Recovery
-removes the protected Session before deleting the identity marker. If the
-Session is still active, or a `cleanup_pending` marker lacks valid supervisor
-proof, both markers remain and the identity stays blocked. A pending inactive
-Session with valid proof can be finalized safely; an unlocked Session alone is
-not treated as proof. If prior cleanup already removed the Session, recovery
-clears the stale marker as an already-discarded projection.
+The native supervisor removes the armed proof after receiving its challenge
+and before it starts each target, then writes and durably syncs the same proof
+only after it has established zero live target processes. This ordering lets a
+crash before the first process recover from the armed proof without allowing a
+live target to reuse it. The evidence survives an ACS crash without being
+forgeable by the contained target. Recovery removes the protected Session
+before deleting the identity marker. If the Session is still active, or a
+`cleanup_pending` marker lacks valid proof, both markers remain and the identity
+stays blocked. A pending inactive Session with valid proof can be finalized
+safely; an unlocked Session alone is not treated as proof. If prior cleanup
+already removed the Session, recovery clears the stale marker as an
+already-discarded projection.
 
 Session removal is logical removal; ACS does not claim physical erasure from
 the filesystem or storage media.
@@ -208,8 +213,11 @@ proceed independently. Keychain creation is also atomic, so a duplicate cannot
 replace the existing record even across processes.
 
 Contained authentication refuses a working directory that overlaps ACS home.
-This keeps the target from reading quarantine proof challenges or modifying
-operation-scoped executable snapshots through workspace permissions.
+ACS also anchors its home to a canonical parent and opens each private lock and
+quarantine directory without following symlinks before use. This keeps the
+target from redirecting private state through a writable workspace, reading
+quarantine proof challenges, or modifying operation-scoped executable
+snapshots through workspace permissions.
 
 Logout deletes only the selected ACS Keychain item and succeeds when a valid
 name is already absent. It refuses a quarantined name. The same binding

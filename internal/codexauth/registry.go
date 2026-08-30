@@ -32,7 +32,7 @@ type loginRunResult struct {
 
 type loginRunner interface {
 	Check(context.Context) error
-	Run(context.Context, *session.Session, string, bool, launch.Terminal) loginRunResult
+	Run(context.Context, *session.Session, string, func() error, bool, launch.Terminal) loginRunResult
 }
 
 type identityLocker interface {
@@ -95,12 +95,37 @@ func New(config Config) (*Registry, error) {
 	if err != nil {
 		return nil, errors.New("create Codex authentication registry: working directory must exist")
 	}
-	acsHome := filepath.Clean(config.ACSHome)
-	if resolved, err := filepath.EvalSymlinks(acsHome); err == nil {
-		acsHome = resolved
+	requestedACSHome := filepath.Clean(config.ACSHome)
+	acsHomeParent, err := filepath.EvalSymlinks(filepath.Dir(requestedACSHome))
+	if err != nil {
+		return nil, errors.New("create Codex authentication registry: ACS home parent must exist")
 	}
-	if pathsOverlap(workingDirectory, acsHome) {
+	canonicalACSHome := filepath.Join(acsHomeParent, filepath.Base(requestedACSHome))
+	if pathsOverlap(workingDirectory, canonicalACSHome) {
 		return nil, errors.New("create Codex authentication registry: working directory must not overlap ACS home")
+	}
+	acsHome, err := securePrivateRoot(requestedACSHome)
+	if err != nil {
+		return nil, errors.New("create Codex authentication registry: ACS home must be a private owned directory")
+	}
+	locksRoot, err := securePrivateChild(acsHome, "locks")
+	if err != nil {
+		return nil, errors.New("create Codex authentication registry: locks directory must be private")
+	}
+	locksDirectory, err := securePrivateChild(locksRoot, "codex-auth")
+	if err != nil {
+		return nil, errors.New("create Codex authentication registry: authentication locks directory must be private")
+	}
+	quarantineRoot, err := securePrivateChild(acsHome, "quarantine")
+	if err != nil {
+		return nil, errors.New("create Codex authentication registry: quarantine directory must be private")
+	}
+	quarantineDirectory, err := securePrivateChild(quarantineRoot, "codex-auth")
+	if err != nil {
+		return nil, errors.New("create Codex authentication registry: authentication quarantine directory must be private")
+	}
+	if filepath.Clean(config.SessionsDirectory) == filepath.Join(requestedACSHome, "sessions") {
+		config.SessionsDirectory = filepath.Join(acsHome, "sessions")
 	}
 	sandbox := launch.NewProcessSandbox()
 	registry, err := newRegistry(
@@ -110,7 +135,7 @@ func New(config Config) (*Registry, error) {
 			RuntimeInputs: config.RuntimeInputs, SessionsDirectory: config.SessionsDirectory,
 			WorkingDirectory: config.WorkingDirectory,
 		}, sandbox),
-		newFileIdentityLocker(filepath.Join(config.ACSHome, "locks", "codex-auth")),
+		newFileIdentityLocker(locksDirectory),
 	)
 	if err != nil {
 		return nil, err
@@ -120,7 +145,7 @@ func New(config Config) (*Registry, error) {
 		RuntimeInputs: config.RuntimeInputs, SessionsDirectory: config.SessionsDirectory,
 		WorkingDirectory: config.WorkingDirectory,
 	}, sandbox)
-	registry.quarantine = newFileBindingQuarantine(filepath.Join(config.ACSHome, "quarantine", "codex-auth"))
+	registry.quarantine = newFileBindingQuarantine(quarantineDirectory)
 	registry.sessionsDirectory = config.SessionsDirectory
 	registry.workingDirectory = config.WorkingDirectory
 	return registry, nil
@@ -171,7 +196,8 @@ func (registry *Registry) Login(ctx context.Context, request LoginRequest) (Iden
 		return IdentityMetadata{}, ErrLoginFailed
 	}
 
-	run := registry.login.Run(ctx, created, proofChallenge, request.DeviceAuth, request.Terminal)
+	beginProcess := func() error { return registry.quarantine.MarkCleanupPending(ctx, name) }
+	run := registry.login.Run(ctx, created, proofChallenge, beginProcess, request.DeviceAuth, request.Terminal)
 	if err := registry.settleBinding(ctx, created, name, run.cleanupProven, run.cleanupProcess); err != nil {
 		clearBytes(run.auth)
 		return IdentityMetadata{}, ErrLoginCleanupUncertain

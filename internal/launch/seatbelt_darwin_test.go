@@ -275,6 +275,32 @@ func TestSeatbeltPersistsAuthenticatedRecoveryProofAfterNativeCleanup(t *testing
 	}
 }
 
+func TestSeatbeltClearsPreparedRecoveryProofBeforeTargetStarts(t *testing.T) {
+	skipSeatbeltNativeTestBinaryUnderRace(t)
+	request := seatbeltTestRequest(t)
+	request.recoveryProofChallenge = bytes.Repeat([]byte{0x9d}, RecoveryProofChallengeSize)
+	proofPath := filepath.Join(request.sessionDirectory, sessionCleanupProofFile)
+	if err := PrepareSessionCleanupProof(request.sessionDirectory, request.recoveryProofChallenge); err != nil {
+		t.Fatal(err)
+	}
+	request.arguments = []string{
+		"-test.run=TestSeatbeltHelperProcess", "--", "proof-cleared", proofPath,
+	}
+	process, err := newSeatbeltBackend(seatbeltExecutable).prepare(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := process.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if err := process.Wait(); err != nil {
+		t.Fatal(err)
+	}
+	if proven, err := VerifySessionCleanupProof(request.sessionDirectory, request.recoveryProofChallenge); err != nil || !proven {
+		t.Fatalf("settled recovery proof = (%v, %v)", proven, err)
+	}
+}
+
 func TestSeatbeltResolvesHostnameThroughMDNSSocketAlias(t *testing.T) {
 	skipSeatbeltNativeTestBinaryUnderRace(t)
 	request := seatbeltTestRequest(t)
@@ -2129,6 +2155,11 @@ func TestSeatbeltHelperProcess(t *testing.T) {
 	case "mark":
 		if err := os.WriteFile(arguments[1], []byte("started"), 0o600); err != nil {
 			os.Exit(71)
+		}
+		os.Exit(0)
+	case "proof-cleared":
+		if _, err := os.Stat(arguments[1]); !errors.Is(err, os.ErrNotExist) {
+			os.Exit(120)
 		}
 		os.Exit(0)
 	case "containment":

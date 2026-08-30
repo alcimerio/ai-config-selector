@@ -57,6 +57,52 @@ func TestRegistryRejectsWorkspaceThatCouldReadRecoveryChallenges(t *testing.T) {
 	}
 }
 
+func TestRegistryRejectsLinkedPrivateAncestorsWithoutChangingTheirTargets(t *testing.T) {
+	for _, ancestor := range []string{"locks", "quarantine"} {
+		t.Run(ancestor, func(t *testing.T) {
+			root := t.TempDir()
+			acsHome := filepath.Join(root, "acs")
+			if err := os.Mkdir(acsHome, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			workspace := filepath.Join(root, "workspace")
+			if err := os.Mkdir(workspace, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			target := filepath.Join(workspace, ancestor+"-target")
+			if err := os.Mkdir(target, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			sentinel := filepath.Join(target, "sentinel")
+			if err := os.WriteFile(sentinel, []byte("unchanged"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(target, filepath.Join(acsHome, ancestor)); err != nil {
+				t.Fatal(err)
+			}
+
+			_, err := New(Config{
+				BinaryPath: "/usr/bin/true", ACSHome: acsHome,
+				SessionsDirectory: filepath.Join(acsHome, "sessions"), WorkingDirectory: workspace,
+			})
+			if err == nil {
+				t.Fatal("linked private ancestor was accepted")
+			}
+			contents, readErr := os.ReadFile(sentinel)
+			if readErr != nil || string(contents) != "unchanged" {
+				t.Fatalf("linked target contents = (%q, %v)", contents, readErr)
+			}
+			info, statErr := os.Stat(target)
+			if statErr != nil || info.Mode().Perm() != 0o755 {
+				t.Fatalf("linked target mode = (%v, %v)", info, statErr)
+			}
+			if _, statErr := os.Stat(filepath.Join(target, "codex-auth")); !errors.Is(statErr, os.ErrNotExist) {
+				t.Fatalf("linked target received private child: %v", statErr)
+			}
+		})
+	}
+}
+
 func TestRegistryLoginCleanupUncertaintyQuarantinesNameAndProjection(t *testing.T) {
 	provider := newFakeProvider()
 	cleanupDone := make(chan struct{})
@@ -235,9 +281,17 @@ func (runner *fakeLoginRunner) Run(
 	_ context.Context,
 	created *session.Session,
 	_ string,
+	beginProcess func() error,
 	deviceAuth bool,
 	_ launch.Terminal,
 ) loginRunResult {
+	if beginProcess != nil {
+		if err := beginProcess(); err != nil {
+			return loginRunResult{containedRunResult: containedRunResult{
+				err: ErrLoginFailed, cleanupProven: true,
+			}}
+		}
+	}
 	runner.calls++
 	runner.deviceAuth = deviceAuth
 	result := runner.result

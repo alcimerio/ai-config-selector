@@ -3,6 +3,7 @@ package codexauth
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"errors"
 	"io"
 	"os"
@@ -103,6 +104,45 @@ func TestContainedLoginUsesDefaultBrowserFlowWithoutDeviceFlag(t *testing.T) {
 	}
 }
 
+func TestContainedLoginArmsRecoveryBeforePublishingProcessIntent(t *testing.T) {
+	root := t.TempDir()
+	sandbox := &fakeLoginSandbox{
+		version: SupportedCodexVersion,
+		auth:    testChatGPTAuthJSON(t, "user", "workspace"),
+	}
+	runner := newCodexLoginRunner(codexLoginConfig{
+		BinaryPath: "/usr/bin/true", SupportedVersion: SupportedCodexVersion,
+		SessionsDirectory: filepath.Join(root, "sessions"), WorkingDirectory: testCodexWorkspace(t, root),
+	}, sandbox)
+	created, err := session.Create(runner.config.SessionsDirectory, runner.config.WorkingDirectory, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer created.Remove()
+	challenge, err := hex.DecodeString(testCleanupProofChallenge)
+	if err != nil {
+		t.Fatal(err)
+	}
+	callbackCalls := 0
+	result := runner.Run(context.Background(), created, testCleanupProofChallenge, func() error {
+		callbackCalls++
+		if len(sandbox.requests) != 0 {
+			t.Fatalf("sandbox prepared before process intent: %#v", sandbox.requests)
+		}
+		proven, verifyErr := launch.VerifySessionCleanupProof(created.RootDirectory(), challenge)
+		if verifyErr != nil || !proven {
+			t.Fatalf("pre-process recovery proof = (%v, %v)", proven, verifyErr)
+		}
+		return errors.New("stop before process preparation")
+	}, false, launch.Terminal{})
+	if !errors.Is(result.err, ErrLoginFailed) || !result.cleanupProven {
+		t.Fatalf("result = %#v", result)
+	}
+	if callbackCalls != 1 || len(sandbox.requests) != 0 {
+		t.Fatalf("callback calls = %d, requests = %#v", callbackCalls, sandbox.requests)
+	}
+}
+
 func TestContainedLoginRejectsWrongVersionBeforeLogin(t *testing.T) {
 	root := t.TempDir()
 	sandbox := &fakeLoginSandbox{version: "0.999.0", auth: testChatGPTAuthJSON(t, "user", "workspace")}
@@ -192,7 +232,7 @@ func runLoginRunnerForTest(
 	if err != nil {
 		t.Fatal(err)
 	}
-	return runner.Run(context.Background(), created, testCleanupProofChallenge, deviceAuth, terminal), created
+	return runner.Run(context.Background(), created, testCleanupProofChallenge, nil, deviceAuth, terminal), created
 }
 
 func TestContainedStatusPinsAuthPolicyAtRuntimePrecedence(t *testing.T) {
@@ -216,7 +256,7 @@ func TestContainedStatusPinsAuthPolicyAtRuntimePrecedence(t *testing.T) {
 		BinaryPath: "/usr/bin/true", SupportedVersion: SupportedCodexVersion,
 		SessionsDirectory: filepath.Join(root, "sessions"), WorkingDirectory: testCodexWorkspace(t, root),
 	}, sandbox)
-	result := runner.Run(context.Background(), created, "workspace", testCleanupProofChallenge)
+	result := runner.Run(context.Background(), created, "workspace", testCleanupProofChallenge, nil)
 	if result.err != nil || !result.cleanupProven {
 		t.Fatalf("status result = %#v", result)
 	}
@@ -229,7 +269,7 @@ func TestContainedStatusPinsAuthPolicyAtRuntimePrecedence(t *testing.T) {
 	}
 }
 
-func TestContainedLoginRejectsExecutableReplacementAfterPreflight(t *testing.T) {
+func TestContainedLoginSnapshotsExecutableReplacementForCurrentOperation(t *testing.T) {
 	root := t.TempDir()
 	target := filepath.Join(root, "codex-v1")
 	if err := os.WriteFile(target, []byte("first executable"), 0o700); err != nil {
@@ -270,16 +310,16 @@ func TestContainedLoginRejectsExecutableReplacementAfterPreflight(t *testing.T) 
 	}
 	defer created.Remove()
 
-	result := runner.Run(context.Background(), created, testCleanupProofChallenge, false, launch.Terminal{})
-	if !errors.Is(result.err, ErrUnsupportedVersion) || !result.cleanupProven {
+	result := runner.Run(context.Background(), created, testCleanupProofChallenge, nil, false, launch.Terminal{})
+	if result.err != nil || !result.cleanupProven {
 		t.Fatalf("result = %#v", result)
 	}
-	if len(sandbox.arguments) != 0 {
-		t.Fatalf("replacement executable reached sandbox: %#v", sandbox.arguments)
+	if len(sandbox.requests) != 2 || sandbox.requests[0].Executable == target {
+		t.Fatalf("operation snapshot requests = %#v", sandbox.requests)
 	}
 }
 
-func TestContainedLoginRejectsInPlaceExecutableRewriteWithRestoredMetadata(t *testing.T) {
+func TestContainedLoginSnapshotsInPlaceRewriteForCurrentOperation(t *testing.T) {
 	root := t.TempDir()
 	target := filepath.Join(root, "codex")
 	original := []byte("first-executable")
@@ -310,12 +350,12 @@ func TestContainedLoginRejectsInPlaceExecutableRewriteWithRestoredMetadata(t *te
 	}
 	defer created.Remove()
 
-	result := runner.Run(context.Background(), created, testCleanupProofChallenge, false, launch.Terminal{})
-	if !errors.Is(result.err, ErrUnsupportedVersion) || !result.cleanupProven {
+	result := runner.Run(context.Background(), created, testCleanupProofChallenge, nil, false, launch.Terminal{})
+	if result.err != nil || !result.cleanupProven {
 		t.Fatalf("result = %#v", result)
 	}
-	if len(sandbox.arguments) != 0 {
-		t.Fatalf("rewritten executable reached sandbox: %#v", sandbox.arguments)
+	if len(sandbox.requests) != 2 || sandbox.requests[0].Executable == target {
+		t.Fatalf("operation snapshot requests = %#v", sandbox.requests)
 	}
 }
 
@@ -376,12 +416,44 @@ func TestContainedLoginRejectsSnapshotDirectoryInsideWritableWorkspace(t *testin
 		t.Fatal(err)
 	}
 	defer created.Remove()
-	result := runner.Run(context.Background(), created, testCleanupProofChallenge, false, launch.Terminal{})
+	result := runner.Run(context.Background(), created, testCleanupProofChallenge, nil, false, launch.Terminal{})
 	if !errors.Is(result.err, ErrUnsupportedVersion) || !result.cleanupProven {
 		t.Fatalf("result = %#v", result)
 	}
 	if len(sandbox.arguments) != 0 {
 		t.Fatalf("unsafe snapshot reached sandbox: %#v", sandbox.arguments)
+	}
+}
+
+func TestContainedLoginAcceptsExecutableReplacementForNextOperation(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "codex")
+	if err := os.WriteFile(target, []byte("first-executable"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	sandbox := &fakeLoginSandbox{version: SupportedCodexVersion, auth: testChatGPTAuthJSON(t, "user", "workspace")}
+	runner := newCodexLoginRunner(codexLoginConfig{
+		BinaryPath: target, SupportedVersion: SupportedCodexVersion,
+		SessionsDirectory: filepath.Join(root, "sessions"), WorkingDirectory: testCodexWorkspace(t, root),
+	}, sandbox)
+	first, created := runLoginRunnerForTest(t, runner, false, launch.Terminal{})
+	if first.err != nil {
+		t.Fatalf("first operation = %#v", first)
+	}
+	if err := created.Remove(); err != nil {
+		t.Fatal(err)
+	}
+	replacement := filepath.Join(root, "replacement")
+	if err := os.WriteFile(replacement, []byte("second-executable"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(replacement, target); err != nil {
+		t.Fatal(err)
+	}
+	second, created := runLoginRunnerForTest(t, runner, false, launch.Terminal{})
+	defer created.Remove()
+	if second.err != nil {
+		t.Fatalf("second operation = %#v", second)
 	}
 }
 

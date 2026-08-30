@@ -24,6 +24,7 @@ func runContainedCodex(
 	created *session.Session,
 	workspace string,
 	proofChallenge string,
+	beginProcess func() error,
 	arguments []string,
 	terminal launch.Terminal,
 	targetFailure error,
@@ -33,8 +34,13 @@ func runContainedCodex(
 	if err != nil || len(challenge) != launch.RecoveryProofChallengeSize {
 		return containedRunResult{err: targetFailure, cleanupProven: true}
 	}
-	if err := launch.PrepareSessionCleanupProof(created.RootDirectory()); err != nil {
+	if err := launch.PrepareSessionCleanupProof(created.RootDirectory(), challenge); err != nil {
 		return containedRunResult{err: targetFailure, cleanupProven: true}
+	}
+	if beginProcess != nil {
+		if err := beginProcess(); err != nil {
+			return containedRunResult{err: targetFailure, cleanupProven: true}
+		}
 	}
 	process, err := sandbox.Prepare(ctx, launch.ProcessRequest{
 		Workspace: created.WorkingDirectory(), SessionsDirectory: created.SessionsDirectory(),
