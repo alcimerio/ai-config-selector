@@ -63,6 +63,7 @@ func bubblewrapArguments(request validatedProcessRequest) []string {
 
 	mountPaths := []string{request.workspace, request.sessionDirectory, request.executable}
 	mountPaths = append(mountPaths, request.runtimeInputs...)
+	mountPaths = append(mountPaths, request.runtimeProbePaths...)
 	for _, directory := range bubblewrapParentDirectories(mountPaths) {
 		arguments = append(arguments, "--dir", directory)
 	}
@@ -73,6 +74,9 @@ func bubblewrapArguments(request validatedProcessRequest) []string {
 	)
 	for _, input := range request.runtimeInputs {
 		arguments = append(arguments, "--ro-bind", input, input)
+	}
+	for _, path := range request.runtimeProbePaths {
+		arguments = append(arguments, "--ro-bind-try", path, path)
 	}
 	arguments = append(arguments, "--remount-ro", "/")
 	for _, entry := range request.environment {

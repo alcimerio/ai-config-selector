@@ -697,6 +697,17 @@ func buildSeatbeltPolicy(request validatedProcessRequest) (string, []string, err
 		definitions = append(definitions, "-D"+name+"="+input)
 		fmt.Fprintf(&runtimeRules, "\n  (literal (param %q))\n  (subpath (param %q))", name, name)
 	}
+	var runtimeProbeRules strings.Builder
+	for index, path := range request.runtimeProbePaths {
+		name := "RUNTIME_PROBE_" + strconv.Itoa(index)
+		definitions = append(definitions, "-D"+name+"="+path)
+		fmt.Fprintf(&runtimeProbeRules, "\n  (literal (param %q))", name)
+	}
+	for index, path := range request.runtimeProbeTraversalPaths {
+		name := "RUNTIME_PROBE_TRAVERSAL_" + strconv.Itoa(index)
+		definitions = append(definitions, "-D"+name+"="+path)
+		fmt.Fprintf(&runtimeProbeRules, "\n  (literal (param %q))", name)
+	}
 	policy := `(version 1)
 (deny default)
 
@@ -729,7 +740,7 @@ func buildSeatbeltPolicy(request validatedProcessRequest) (string, []string, err
   (literal (param "SUPERVISOR"))
   (literal (param "EXECUTABLE"))
   (literal (param "WORKSPACE")) (subpath (param "WORKSPACE"))
-  (literal (param "SESSION")) (subpath (param "SESSION"))` + runtimeRules.String() + `)
+  (literal (param "SESSION")) (subpath (param "SESSION"))` + runtimeRules.String() + runtimeProbeRules.String() + `)
 
 ; Security.framework creates TLS policies by inspecting the running executable.
 ; Metadata access is restricted to the already validated executable's ancestors;

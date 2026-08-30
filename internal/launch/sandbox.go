@@ -171,13 +171,15 @@ func CurrentPlatform() (Platform, error) {
 	return platform, nil
 }
 
-// SandboxCheck contains every runtime input ACS can validate before leasing a
-// Session.
+// SandboxCheck contains every runtime capability ACS can validate before
+// leasing a Session. RuntimeProbePaths are exact optional file paths; unlike
+// RuntimeInputs, they need not exist.
 type SandboxCheck struct {
 	Workspace         string
 	SessionsDirectory string
 	Executable        string
 	RuntimeInputs     []string
+	RuntimeProbePaths []string
 }
 
 // ProcessRequest describes one command that must run through the selected
@@ -190,6 +192,7 @@ type ProcessRequest struct {
 	TemporaryDirectory string
 	Executable         string
 	RuntimeInputs      []string
+	RuntimeProbePaths  []string
 	Arguments          []string
 	Terminal           Terminal
 }
@@ -446,10 +449,12 @@ func (process sanitizedProcess) CleanupDone() <-chan struct{} {
 }
 
 type validatedSandboxCheck struct {
-	workspace         string
-	sessionsDirectory string
-	executable        string
-	runtimeInputs     []string
+	workspace                  string
+	sessionsDirectory          string
+	executable                 string
+	runtimeInputs              []string
+	runtimeProbePaths          []string
+	runtimeProbeTraversalPaths []string
 }
 
 func validateSandboxCheck(request SandboxCheck) (validatedSandboxCheck, error) {
@@ -477,7 +482,20 @@ func validateSandboxCheck(request SandboxCheck) (validatedSandboxCheck, error) {
 			return validatedSandboxCheck{}, sandboxError(SandboxUnsafePath, nil)
 		}
 	}
-	return validatedSandboxCheck{workspace: workspace, sessionsDirectory: sessionsDirectory, executable: executable, runtimeInputs: runtimeInputs}, nil
+	runtimeProbePaths, runtimeProbeTraversalPaths, err := resolveRuntimeProbePaths(request.RuntimeProbePaths)
+	if err != nil {
+		return validatedSandboxCheck{}, sandboxError(SandboxUnsafePath, err)
+	}
+	for _, path := range append(append([]string(nil), runtimeProbePaths...), runtimeProbeTraversalPaths...) {
+		if broadRuntimeInput(path, workspace, sessionsDirectory) {
+			return validatedSandboxCheck{}, sandboxError(SandboxUnsafePath, nil)
+		}
+	}
+	return validatedSandboxCheck{
+		workspace: workspace, sessionsDirectory: sessionsDirectory, executable: executable,
+		runtimeInputs: runtimeInputs, runtimeProbePaths: runtimeProbePaths,
+		runtimeProbeTraversalPaths: runtimeProbeTraversalPaths,
+	}, nil
 }
 
 func broadRuntimeInput(input, workspace, sessionsDirectory string) bool {
@@ -488,22 +506,25 @@ func broadRuntimeInput(input, workspace, sessionsDirectory string) bool {
 }
 
 type validatedProcessRequest struct {
-	workspace          string
-	sessionsDirectory  string
-	sessionDirectory   string
-	sessionHome        string
-	temporaryDirectory string
-	executable         string
-	runtimeInputs      []string
-	arguments          []string
-	environment        []string
-	terminal           Terminal
+	workspace                  string
+	sessionsDirectory          string
+	sessionDirectory           string
+	sessionHome                string
+	temporaryDirectory         string
+	executable                 string
+	runtimeInputs              []string
+	runtimeProbePaths          []string
+	runtimeProbeTraversalPaths []string
+	arguments                  []string
+	environment                []string
+	terminal                   Terminal
 }
 
 func validateProcessRequest(request ProcessRequest) (validatedProcessRequest, error) {
 	checked, err := validateSandboxCheck(SandboxCheck{
 		Workspace: request.Workspace, SessionsDirectory: request.SessionsDirectory,
 		Executable: request.Executable, RuntimeInputs: request.RuntimeInputs,
+		RuntimeProbePaths: request.RuntimeProbePaths,
 	})
 	if err != nil {
 		return validatedProcessRequest{}, err
@@ -524,8 +545,10 @@ func validateProcessRequest(request ProcessRequest) (validatedProcessRequest, er
 		workspace: checked.workspace, sessionsDirectory: checked.sessionsDirectory,
 		sessionDirectory: sessionDirectory, sessionHome: sessionHome,
 		temporaryDirectory: temporaryDirectory, executable: checked.executable,
-		runtimeInputs: checked.runtimeInputs, arguments: append([]string(nil), request.Arguments...),
-		terminal: request.Terminal,
+		runtimeInputs: checked.runtimeInputs, runtimeProbePaths: checked.runtimeProbePaths,
+		runtimeProbeTraversalPaths: checked.runtimeProbeTraversalPaths,
+		arguments:                  append([]string(nil), request.Arguments...),
+		terminal:                   request.Terminal,
 	}, nil
 }
 
@@ -559,6 +582,102 @@ func resolveRuntimeInputs(inputs []string) ([]string, error) {
 	}
 	sort.Strings(resolved)
 	return resolved, nil
+}
+
+// resolveRuntimeProbePaths validates exact file paths that a target may probe
+// even when an optional host file is absent. Existing paths must resolve to
+// regular files. Both the cleaned input and its canonical alias are retained:
+// macOS targets may open /etc while the host resolves that path under /private.
+func resolveRuntimeProbePaths(inputs []string) ([]string, []string, error) {
+	resolved := make([]string, 0, len(inputs)*2)
+	seen := make(map[string]struct{}, len(inputs)*2)
+	var traversals []string
+	seenTraversal := make(map[string]struct{})
+	for _, input := range inputs {
+		canonical, err := resolveRuntimeProbePath(input)
+		if err != nil {
+			return nil, nil, err
+		}
+		for _, path := range []string{filepath.Clean(input), canonical} {
+			if _, exists := seen[path]; exists {
+				continue
+			}
+			seen[path] = struct{}{}
+			resolved = append(resolved, path)
+		}
+		links, err := runtimeProbeSymlinkAncestors(input)
+		if err != nil {
+			return nil, nil, err
+		}
+		for _, path := range links {
+			if _, exists := seenTraversal[path]; exists {
+				continue
+			}
+			seenTraversal[path] = struct{}{}
+			traversals = append(traversals, path)
+		}
+	}
+	sort.Strings(resolved)
+	sort.Strings(traversals)
+	return resolved, traversals, nil
+}
+
+func runtimeProbeSymlinkAncestors(path string) ([]string, error) {
+	if path == "" || !filepath.IsAbs(path) {
+		return nil, errors.New("path must be absolute")
+	}
+	cleaned := filepath.Clean(path)
+	current := string(filepath.Separator)
+	components := strings.Split(strings.TrimPrefix(cleaned, string(filepath.Separator)), string(filepath.Separator))
+	var links []string
+	for index, component := range components {
+		current = filepath.Join(current, component)
+		info, err := os.Lstat(current)
+		if errors.Is(err, os.ErrNotExist) {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			links = append(links, current)
+			current, err = filepath.EvalSymlinks(current)
+			if err != nil {
+				return nil, err
+			}
+			info, err = os.Stat(current)
+			if err != nil {
+				return nil, err
+			}
+		}
+		if index < len(components)-1 && !info.IsDir() {
+			return nil, errors.New("runtime probe parent is not a directory")
+		}
+	}
+	return links, nil
+}
+
+func resolveRuntimeProbePath(path string) (string, error) {
+	if path == "" || !filepath.IsAbs(path) {
+		return "", errors.New("path must be absolute")
+	}
+	cleaned := filepath.Clean(path)
+	info, err := os.Stat(cleaned)
+	if err == nil {
+		if !info.Mode().IsRegular() {
+			return "", errors.New("runtime probe path is not a regular file")
+		}
+		return filepath.EvalSymlinks(cleaned)
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return "", err
+	}
+	if _, err := os.Lstat(cleaned); err == nil {
+		return "", errors.New("runtime probe path is a dangling symlink")
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return "", err
+	}
+	return resolveFuturePath(cleaned)
 }
 
 func resolveExistingPath(path string, requireDirectory, requireExecutable bool) (string, error) {

@@ -64,6 +64,7 @@ func TestBubblewrapArgumentsBuildMinimalMountNamespace(t *testing.T) {
 		temporaryDirectory: "/home/alice/.acs/sessions/session-one/tmp",
 		executable:         "/opt/devin/bin/devin",
 		runtimeInputs:      []string{"/etc/ssl/certs/ca-certificates.crt", "/opt/devin/runtime"},
+		runtimeProbePaths:  []string{"/etc/codex/requirements.toml"},
 		arguments:          []string{"skills", "--", "--setenv", "PWD=/private/workspace", ""},
 		environment:        []string{"HOME=/home/alice/.acs/sessions/session-one/home", "PATH=/usr/local/bin:/usr/bin:/bin"},
 	}
@@ -82,6 +83,14 @@ func TestBubblewrapArgumentsBuildMinimalMountNamespace(t *testing.T) {
 	for _, readonly := range append([]string{request.executable}, request.runtimeInputs...) {
 		if !hasBubblewrapMount(arguments, "--ro-bind", readonly, readonly) {
 			t.Errorf("Bubblewrap arguments do not mount %q read-only: %q", readonly, arguments)
+		}
+	}
+	for _, optional := range request.runtimeProbePaths {
+		if !hasBubblewrapMount(arguments, "--ro-bind-try", optional, optional) {
+			t.Errorf("Bubblewrap arguments do not optionally mount %q read-only: %q", optional, arguments)
+		}
+		if hasBubblewrapMount(arguments, "--ro-bind", optional, optional) {
+			t.Errorf("Bubblewrap arguments require optional mount %q: %q", optional, arguments)
 		}
 	}
 	for _, option := range []string{"--unshare-user", "--unshare-ipc", "--unshare-pid", "--unshare-uts", "--unshare-cgroup", "--die-with-parent", "--clearenv"} {
