@@ -11,6 +11,7 @@ import (
 
 	"github.com/alcimerio/ai-config-selector/internal/builder"
 	"github.com/alcimerio/ai-config-selector/internal/category"
+	"github.com/alcimerio/ai-config-selector/internal/codexauth"
 	"github.com/alcimerio/ai-config-selector/internal/launch"
 	"github.com/alcimerio/ai-config-selector/internal/profile"
 )
@@ -38,6 +39,14 @@ type ProfileLauncher interface {
 	Launch(context.Context, string, string, category.ResolvedProfile, launch.Terminal) (int, error)
 }
 
+type CodexAuthRegistry interface {
+	Login(context.Context, codexauth.LoginRequest) (codexauth.IdentityMetadata, error)
+	List(context.Context) ([]codexauth.IdentityMetadata, error)
+	Logout(context.Context, string) error
+	Status(context.Context, string) (codexauth.IdentityStatus, error)
+	Recover(context.Context, string) (codexauth.BindingDisposition, error)
+}
+
 type exitCodeError interface {
 	error
 	ExitCode() int
@@ -52,6 +61,7 @@ type App struct {
 	Launcher          ProfileLauncher
 	SandboxPlanner    LaunchPlanner
 	SandboxLauncher   ProfileLauncher
+	CodexAuth         CodexAuthRegistry
 	Profiles          ProfileStore
 	SessionsDirectory string
 	WorkingDirectory  string
@@ -98,7 +108,111 @@ func (app App) Run(ctx context.Context, args []string) int {
 	if len(args) == 3 && args[0] == "sandbox" && args[1] == "--profile" && args[2] != "" {
 		return app.launchProfile(ctx, args[2], app.SandboxLauncher, "launch sandbox")
 	}
-	return app.fail("usage: acs devin create-profile --name <name> | acs devin --profile <name> [--dry-run] | acs sandbox --profile <name> [--dry-run] | acs version; ACS will not start Devin without the required sandbox; ACS will not start a sandbox shell without the required sandbox")
+	if len(args) == 3 && args[0] == "codex" && args[1] == "auth" && args[2] == "list" {
+		return app.listCodexAuth(ctx)
+	}
+	if len(args) == 5 && args[0] == "codex" && args[1] == "auth" && args[2] == "logout" && args[3] == "--name" && args[4] != "" {
+		return app.logoutCodexAuth(ctx, args[4])
+	}
+	if len(args) == 5 && args[0] == "codex" && args[1] == "auth" && args[2] == "status" && args[3] == "--name" && args[4] != "" {
+		return app.statusCodexAuth(ctx, args[4])
+	}
+	if len(args) == 5 && args[0] == "codex" && args[1] == "auth" && args[2] == "recover" && args[3] == "--name" && args[4] != "" {
+		return app.recoverCodexAuth(ctx, args[4])
+	}
+	if len(args) >= 5 && len(args) <= 6 && args[0] == "codex" && args[1] == "auth" && args[2] == "login" && args[3] == "--name" && args[4] != "" {
+		deviceAuth := len(args) == 6 && args[5] == "--device-auth"
+		if len(args) == 5 || deviceAuth {
+			return app.loginCodexAuth(ctx, args[4], deviceAuth)
+		}
+	}
+	return app.fail("usage: acs devin create-profile --name <name> | acs devin --profile <name> [--dry-run] | acs sandbox --profile <name> [--dry-run] | acs codex auth login --name <name> [--device-auth] | acs codex auth list | acs codex auth status --name <name> | acs codex auth recover --name <name> | acs codex auth logout --name <name> | acs version; ACS will not start Devin without the required sandbox; ACS will not start a sandbox shell without the required sandbox; ACS will not start Codex login or status without the required sandbox")
+}
+
+func (app App) loginCodexAuth(ctx context.Context, name string, deviceAuth bool) int {
+	if app.CodexAuth == nil {
+		return app.fail("Codex authentication is unavailable")
+	}
+	if app.Interactive == nil || !app.Interactive(app.Input, app.Output) {
+		return app.fail("Codex authentication login requires interactive stdin and stdout")
+	}
+	metadata, err := app.CodexAuth.Login(ctx, codexauth.LoginRequest{
+		Name: name, DeviceAuth: deviceAuth,
+		Terminal: launch.Terminal{Input: app.Input, Output: app.Output, ErrorOutput: app.ErrorOutput},
+	})
+	if err != nil {
+		return app.fail("login Codex authentication identity %q: %v", name, err)
+	}
+	fmt.Fprintf(app.Output, "\nStored Codex authentication identity %q.\n", safeTerminalText(string(metadata.Name)))
+	return 0
+}
+
+func (app App) listCodexAuth(ctx context.Context) int {
+	if app.CodexAuth == nil {
+		return app.fail("Codex authentication is unavailable")
+	}
+	identities, err := app.CodexAuth.List(ctx)
+	if err != nil {
+		return app.fail("%v", err)
+	}
+	fmt.Fprintln(app.Output, "Codex authentication identities:")
+	if len(identities) == 0 {
+		fmt.Fprintln(app.Output, "  (none)")
+		return 0
+	}
+	for _, identity := range identities {
+		fmt.Fprintf(app.Output, "  %s\n", safeTerminalText(string(identity.Name)))
+		fmt.Fprintf(app.Output, "    method: %s\n", safeTerminalText(string(identity.Method)))
+		workspace := identity.Workspace
+		if workspace == "" {
+			workspace = "(none)"
+		}
+		fmt.Fprintf(app.Output, "    workspace: %s\n", safeTerminalText(workspace))
+	}
+	return 0
+}
+
+func (app App) logoutCodexAuth(ctx context.Context, name string) int {
+	if app.CodexAuth == nil {
+		return app.fail("Codex authentication is unavailable")
+	}
+	if err := app.CodexAuth.Logout(ctx, name); err != nil {
+		return app.fail("logout Codex authentication identity %q: %v", name, err)
+	}
+	fmt.Fprintf(app.Output, "Removed Codex authentication identity %q if it existed.\n", safeTerminalText(name))
+	return 0
+}
+
+func (app App) statusCodexAuth(ctx context.Context, name string) int {
+	if app.CodexAuth == nil {
+		return app.fail("Codex authentication is unavailable")
+	}
+	status, err := app.CodexAuth.Status(ctx, name)
+	if err != nil {
+		return app.fail("check Codex authentication identity %q: %v", name, err)
+	}
+	fmt.Fprintf(app.Output, "Codex authentication identity %q is authenticated.\n", safeTerminalText(string(status.Metadata.Name)))
+	fmt.Fprintf(app.Output, "  method: %s\n", safeTerminalText(string(status.Metadata.Method)))
+	workspace := status.Metadata.Workspace
+	if workspace == "" {
+		workspace = "(none)"
+	}
+	fmt.Fprintf(app.Output, "  workspace: %s\n", safeTerminalText(workspace))
+	fmt.Fprintf(app.Output, "  disposition: %s\n", safeTerminalText(string(status.Disposition)))
+	return 0
+}
+
+func (app App) recoverCodexAuth(ctx context.Context, name string) int {
+	if app.CodexAuth == nil {
+		return app.fail("Codex authentication is unavailable")
+	}
+	disposition, err := app.CodexAuth.Recover(ctx, name)
+	if err != nil {
+		return app.fail("recover Codex authentication identity %q: %v", name, err)
+	}
+	fmt.Fprintf(app.Output, "Recovered Codex authentication identity %q.\n", safeTerminalText(name))
+	fmt.Fprintf(app.Output, "  disposition: %s\n", safeTerminalText(string(disposition)))
+	return 0
 }
 
 func (app App) createProfile(ctx context.Context, name string) int {

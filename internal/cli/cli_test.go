@@ -20,6 +20,7 @@ import (
 	"github.com/alcimerio/ai-config-selector/internal/builder"
 	"github.com/alcimerio/ai-config-selector/internal/category"
 	"github.com/alcimerio/ai-config-selector/internal/cli"
+	"github.com/alcimerio/ai-config-selector/internal/codexauth"
 	"github.com/alcimerio/ai-config-selector/internal/launch"
 	"github.com/alcimerio/ai-config-selector/internal/profile"
 	"github.com/alcimerio/ai-config-selector/internal/skills"
@@ -50,6 +51,160 @@ func TestUsageIncludesTheVersionCommand(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "acs version") {
 		t.Fatalf("usage omits version command: %q", stderr.String())
+	}
+}
+
+func TestCodexAuthLoginRequiresInteractiveStreamsAndForwardsTheTerminal(t *testing.T) {
+	input := strings.NewReader("")
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	registry := &recordingCodexAuthRegistry{loginMetadata: codexauth.IdentityMetadata{Name: "work"}}
+	application := cli.App{
+		CodexAuth: registry, Input: input, Output: &stdout, ErrorOutput: &stderr,
+		Interactive: func(gotInput io.Reader, gotOutput io.Writer) bool {
+			return gotInput == input && gotOutput == &stdout
+		},
+	}
+
+	exitCode := application.Run(context.Background(), []string{
+		"codex", "auth", "login", "--name", "work", "--device-auth",
+	})
+	if exitCode != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", exitCode, stderr.String())
+	}
+	if registry.loginCalls != 1 || registry.loginRequest.Name != "work" || !registry.loginRequest.DeviceAuth {
+		t.Fatalf("login request = %#v after %d calls", registry.loginRequest, registry.loginCalls)
+	}
+	if registry.loginRequest.Terminal.Input != input || registry.loginRequest.Terminal.Output != &stdout || registry.loginRequest.Terminal.ErrorOutput != &stderr {
+		t.Fatalf("login terminal was not forwarded: %#v", registry.loginRequest.Terminal)
+	}
+	if !strings.Contains(stdout.String(), `Stored Codex authentication identity "work".`) {
+		t.Fatalf("stdout = %q", stdout.String())
+	}
+}
+
+func TestCodexAuthLoginRejectsNonInteractiveStreamsBeforeStarting(t *testing.T) {
+	var stderr bytes.Buffer
+	registry := &recordingCodexAuthRegistry{}
+	application := cli.App{
+		CodexAuth: registry, Input: strings.NewReader(""), Output: &bytes.Buffer{}, ErrorOutput: &stderr,
+		Interactive: func(io.Reader, io.Writer) bool { return false },
+	}
+
+	if exitCode := application.Run(context.Background(), []string{"codex", "auth", "login", "--name", "work"}); exitCode == 0 {
+		t.Fatal("non-interactive login unexpectedly succeeded")
+	}
+	if registry.loginCalls != 0 {
+		t.Fatalf("non-interactive login reached registry %d times", registry.loginCalls)
+	}
+	if !strings.Contains(stderr.String(), "requires interactive stdin and stdout") {
+		t.Fatalf("stderr = %q", stderr.String())
+	}
+}
+
+func TestCodexAuthListPrintsOnlyNonSecretMetadata(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	registry := &recordingCodexAuthRegistry{identities: []codexauth.IdentityMetadata{
+		{Name: "personal", Method: codexauth.LoginMethodChatGPT, Fingerprint: "secret-fingerprint"},
+		{Name: "work", Method: codexauth.LoginMethodChatGPT, Workspace: "workspace-1", Fingerprint: "another-secret-fingerprint"},
+	}}
+	application := cli.App{CodexAuth: registry, Output: &stdout, ErrorOutput: &stderr}
+
+	if exitCode := application.Run(context.Background(), []string{"codex", "auth", "list"}); exitCode != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", exitCode, stderr.String())
+	}
+	for _, want := range []string{"personal", "work", "method: chatgpt", "workspace: (none)", "workspace: workspace-1"} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Errorf("stdout omits %q: %q", want, stdout.String())
+		}
+	}
+	if strings.Contains(stdout.String(), "fingerprint") {
+		t.Fatalf("list disclosed fingerprint: %q", stdout.String())
+	}
+	if registry.listCalls != 1 {
+		t.Fatalf("list calls = %d", registry.listCalls)
+	}
+}
+
+func TestCodexAuthLogoutUsesTheSelectedIdentity(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	registry := &recordingCodexAuthRegistry{}
+	application := cli.App{CodexAuth: registry, Output: &stdout, ErrorOutput: &stderr}
+
+	if exitCode := application.Run(context.Background(), []string{"codex", "auth", "logout", "--name", "work"}); exitCode != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", exitCode, stderr.String())
+	}
+	if registry.logoutCalls != 1 || registry.logoutName != "work" {
+		t.Fatalf("logout = (%d calls, %q)", registry.logoutCalls, registry.logoutName)
+	}
+	if !strings.Contains(stdout.String(), `Removed Codex authentication identity "work" if it existed.`) {
+		t.Fatalf("stdout = %q", stdout.String())
+	}
+}
+
+func TestCodexAuthStatusPrintsOnlyValidatedMetadataAndDisposition(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	registry := &recordingCodexAuthRegistry{statusResult: codexauth.IdentityStatus{
+		Metadata: codexauth.IdentityMetadata{
+			Name: "work", Method: codexauth.LoginMethodChatGPT,
+			Workspace: "workspace-1", Fingerprint: "secret-fingerprint",
+		},
+		Disposition: codexauth.CommittedSameIdentityRefresh,
+	}}
+	application := cli.App{CodexAuth: registry, Output: &stdout, ErrorOutput: &stderr}
+
+	if exitCode := application.Run(context.Background(), []string{"codex", "auth", "status", "--name", "work"}); exitCode != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", exitCode, stderr.String())
+	}
+	for _, want := range []string{
+		`identity "work" is authenticated`, "method: chatgpt", "workspace: workspace-1",
+		"disposition: committed_same_identity_refresh",
+	} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Errorf("stdout omits %q: %q", want, stdout.String())
+		}
+	}
+	if strings.Contains(stdout.String(), "fingerprint") {
+		t.Fatalf("status disclosed fingerprint: %q", stdout.String())
+	}
+	if registry.statusCalls != 1 || registry.statusName != "work" {
+		t.Fatalf("status = (%d calls, %q)", registry.statusCalls, registry.statusName)
+	}
+}
+
+func TestCodexAuthRecoverPrintsTheTerminalDisposition(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	registry := &recordingCodexAuthRegistry{recoverResult: codexauth.DiscardedProjection}
+	application := cli.App{CodexAuth: registry, Output: &stdout, ErrorOutput: &stderr}
+
+	if exitCode := application.Run(context.Background(), []string{"codex", "auth", "recover", "--name", "work"}); exitCode != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", exitCode, stderr.String())
+	}
+	if registry.recoverCalls != 1 || registry.recoverName != "work" {
+		t.Fatalf("recover = (%d calls, %q)", registry.recoverCalls, registry.recoverName)
+	}
+	if !strings.Contains(stdout.String(), "disposition: discarded_projection") {
+		t.Fatalf("stdout = %q", stdout.String())
+	}
+}
+
+func TestCodexAuthRejectsUnknownLoginFlagsWithoutCallingTheRegistry(t *testing.T) {
+	var stderr bytes.Buffer
+	registry := &recordingCodexAuthRegistry{}
+	application := cli.App{CodexAuth: registry, Output: &bytes.Buffer{}, ErrorOutput: &stderr}
+
+	if exitCode := application.Run(context.Background(), []string{"codex", "auth", "login", "--name", "work", "--unknown"}); exitCode == 0 {
+		t.Fatal("unknown login flag unexpectedly succeeded")
+	}
+	if registry.loginCalls != 0 {
+		t.Fatalf("invalid grammar reached registry %d times", registry.loginCalls)
+	}
+	if !strings.Contains(stderr.String(), "usage:") {
+		t.Fatalf("stderr = %q", stderr.String())
 	}
 }
 
@@ -1209,6 +1364,56 @@ type recordingProfileLauncher struct {
 	workingDirectory  string
 	resolved          category.ResolvedProfile
 	terminal          launch.Terminal
+}
+
+type recordingCodexAuthRegistry struct {
+	loginCalls    int
+	loginRequest  codexauth.LoginRequest
+	loginMetadata codexauth.IdentityMetadata
+	loginErr      error
+	listCalls     int
+	identities    []codexauth.IdentityMetadata
+	listErr       error
+	logoutCalls   int
+	logoutName    string
+	logoutErr     error
+	statusCalls   int
+	statusName    string
+	statusResult  codexauth.IdentityStatus
+	statusErr     error
+	recoverCalls  int
+	recoverName   string
+	recoverResult codexauth.BindingDisposition
+	recoverErr    error
+}
+
+func (registry *recordingCodexAuthRegistry) Login(_ context.Context, request codexauth.LoginRequest) (codexauth.IdentityMetadata, error) {
+	registry.loginCalls++
+	registry.loginRequest = request
+	return registry.loginMetadata, registry.loginErr
+}
+
+func (registry *recordingCodexAuthRegistry) List(context.Context) ([]codexauth.IdentityMetadata, error) {
+	registry.listCalls++
+	return append([]codexauth.IdentityMetadata(nil), registry.identities...), registry.listErr
+}
+
+func (registry *recordingCodexAuthRegistry) Logout(_ context.Context, name string) error {
+	registry.logoutCalls++
+	registry.logoutName = name
+	return registry.logoutErr
+}
+
+func (registry *recordingCodexAuthRegistry) Status(_ context.Context, name string) (codexauth.IdentityStatus, error) {
+	registry.statusCalls++
+	registry.statusName = name
+	return registry.statusResult, registry.statusErr
+}
+
+func (registry *recordingCodexAuthRegistry) Recover(_ context.Context, name string) (codexauth.BindingDisposition, error) {
+	registry.recoverCalls++
+	registry.recoverName = name
+	return registry.recoverResult, registry.recoverErr
 }
 
 func (launcher *recordingProfileLauncher) Launch(
