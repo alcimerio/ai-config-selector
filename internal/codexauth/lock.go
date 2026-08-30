@@ -17,14 +17,20 @@ func newFileIdentityLocker(directory string) *fileIdentityLocker {
 }
 
 func (locker *fileIdentityLocker) TryLock(name CredentialRef) (identityLock, error) {
-	if err := os.MkdirAll(locker.directory, 0o700); err != nil {
+	directoryInfo, err := os.Lstat(locker.directory)
+	if os.IsNotExist(err) {
+		if err := os.MkdirAll(locker.directory, 0o700); err != nil {
+			return nil, fmt.Errorf("lock Codex authentication identity %q: %w", name, ErrProviderUnavailable)
+		}
+		directoryInfo, err = os.Lstat(locker.directory)
+	}
+	if err != nil || !directoryInfo.IsDir() || directoryInfo.Mode()&os.ModeSymlink != 0 {
+		return nil, fmt.Errorf("lock Codex authentication identity %q: %w", name, ErrProviderUnavailable)
+	}
+	if native, ok := directoryInfo.Sys().(*syscall.Stat_t); !ok || native.Uid != uint32(os.Geteuid()) {
 		return nil, fmt.Errorf("lock Codex authentication identity %q: %w", name, ErrProviderUnavailable)
 	}
 	if err := os.Chmod(locker.directory, 0o700); err != nil {
-		return nil, fmt.Errorf("lock Codex authentication identity %q: %w", name, ErrProviderUnavailable)
-	}
-	directoryInfo, err := os.Lstat(locker.directory)
-	if err != nil || !directoryInfo.IsDir() || directoryInfo.Mode()&os.ModeSymlink != 0 {
 		return nil, fmt.Errorf("lock Codex authentication identity %q: %w", name, ErrProviderUnavailable)
 	}
 	path := filepath.Join(locker.directory, string(name)+".lock")

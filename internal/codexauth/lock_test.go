@@ -73,3 +73,26 @@ func TestFileIdentityLockerRejectsSymlinkLockFile(t *testing.T) {
 		t.Fatalf("symlink target mode changed to %o", info.Mode().Perm())
 	}
 }
+
+func TestFileIdentityLockerRejectsSymlinkDirectoryWithoutChangingTarget(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "target")
+	if err := os.Mkdir(target, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	directory := filepath.Join(root, "locks")
+	if err := os.Symlink(target, directory); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := newFileIdentityLocker(directory).TryLock("work"); !errors.Is(err, ErrProviderUnavailable) {
+		t.Fatalf("symlink directory error = %v", err)
+	}
+	info, err := os.Stat(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o755 {
+		t.Fatalf("symlink target mode changed to %o", info.Mode().Perm())
+	}
+}

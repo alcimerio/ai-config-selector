@@ -25,8 +25,9 @@ type codexLoginConfig struct {
 }
 
 type codexLoginRunner struct {
-	config  codexLoginConfig
-	sandbox launch.ProcessSandbox
+	config     codexLoginConfig
+	executable *pinnedExecutable
+	sandbox    launch.ProcessSandbox
 }
 
 const maximumVersionOutputSize = 256
@@ -56,7 +57,9 @@ func (buffer *boundedBuffer) Write(contents []byte) (int, error) {
 func newCodexLoginRunner(config codexLoginConfig, sandbox launch.ProcessSandbox) *codexLoginRunner {
 	config.RuntimeInputs = append([]string(nil), config.RuntimeInputs...)
 	config.RuntimeProbePaths = codexRuntimeProbePaths(config.RuntimeProbePaths)
-	return &codexLoginRunner{config: config, sandbox: sandbox}
+	return &codexLoginRunner{
+		config: config, executable: newPinnedExecutable(config.BinaryPath), sandbox: sandbox,
+	}
 }
 
 func codexRuntimeProbePaths(additional []string) []string {
@@ -79,9 +82,13 @@ func (runner *codexLoginRunner) Check(ctx context.Context) error {
 	if runner == nil || runner.sandbox == nil {
 		return ErrLoginFailed
 	}
+	executable, err := runner.executable.Resolve()
+	if err != nil {
+		return ErrUnsupportedVersion
+	}
 	return runner.sandbox.Check(ctx, launch.SandboxCheck{
 		Workspace: runner.config.WorkingDirectory, SessionsDirectory: runner.config.SessionsDirectory,
-		Executable: runner.config.BinaryPath, RuntimeInputs: runner.config.RuntimeInputs,
+		Executable: executable, RuntimeInputs: runner.config.RuntimeInputs,
 		RuntimeProbePaths: runner.config.RuntimeProbePaths,
 	})
 }
@@ -93,19 +100,19 @@ func (runner *codexLoginRunner) Run(
 	terminal launch.Terminal,
 ) loginRunResult {
 	if runner == nil || runner.sandbox == nil || created == nil {
-		return loginRunResult{err: ErrLoginFailed, cleanupProven: true}
+		return loginRunResult{containedRunResult: containedRunResult{err: ErrLoginFailed, cleanupProven: true}}
 	}
 
 	codexHome := filepath.Join(created.HomeDirectory(), ".codex")
 	if err := os.MkdirAll(codexHome, 0o700); err != nil {
-		return loginRunResult{err: ErrLoginFailed, cleanupProven: true}
+		return loginRunResult{containedRunResult: containedRunResult{err: ErrLoginFailed, cleanupProven: true}}
 	}
 	if err := os.Chmod(codexHome, 0o700); err != nil {
-		return loginRunResult{err: ErrLoginFailed, cleanupProven: true}
+		return loginRunResult{containedRunResult: containedRunResult{err: ErrLoginFailed, cleanupProven: true}}
 	}
 	configuration := []byte("cli_auth_credentials_store = \"file\"\nforced_login_method = \"chatgpt\"\n")
 	if err := os.WriteFile(filepath.Join(codexHome, "config.toml"), configuration, 0o600); err != nil {
-		return loginRunResult{err: ErrLoginFailed, cleanupProven: true}
+		return loginRunResult{containedRunResult: containedRunResult{err: ErrLoginFailed, cleanupProven: true}}
 	}
 
 	versionOutput := boundedBuffer{limit: maximumVersionOutputSize}
@@ -114,12 +121,11 @@ func (runner *codexLoginRunner) Run(
 	})
 	if versionRun.err != nil || !versionRun.cleanupProven {
 		return loginRunResult{
-			err: versionRun.err, cleanupProven: versionRun.cleanupProven,
-			cleanupProcess: versionRun.cleanupProcess,
+			containedRunResult: versionRun,
 		}
 	}
 	if versionOutput.overflow || strings.TrimSpace(versionOutput.String()) != "codex-cli "+runner.config.SupportedVersion {
-		return loginRunResult{err: ErrUnsupportedVersion, cleanupProven: true}
+		return loginRunResult{containedRunResult: containedRunResult{err: ErrUnsupportedVersion, cleanupProven: true}}
 	}
 
 	arguments := []string{"login"}
@@ -129,16 +135,15 @@ func (runner *codexLoginRunner) Run(
 	loginRun := runner.run(ctx, created, arguments, terminal)
 	if loginRun.err != nil || !loginRun.cleanupProven {
 		return loginRunResult{
-			err: loginRun.err, cleanupProven: loginRun.cleanupProven,
-			cleanupProcess: loginRun.cleanupProcess,
+			containedRunResult: loginRun,
 		}
 	}
 
 	auth, err := readPrivateAuthFile(filepath.Join(codexHome, "auth.json"))
 	if err != nil {
-		return loginRunResult{err: ErrUnsupportedAuth, cleanupProven: true}
+		return loginRunResult{containedRunResult: containedRunResult{err: ErrUnsupportedAuth, cleanupProven: true}}
 	}
-	return loginRunResult{auth: auth, cleanupProven: true}
+	return loginRunResult{auth: auth, containedRunResult: containedRunResult{cleanupProven: true}}
 }
 
 func readPrivateAuthFile(path string) ([]byte, error) {
@@ -181,33 +186,14 @@ func (runner *codexLoginRunner) run(
 	arguments []string,
 	terminal launch.Terminal,
 ) statusRunResult {
-	process, err := runner.sandbox.Prepare(ctx, launch.ProcessRequest{
-		Workspace: created.WorkingDirectory(), SessionsDirectory: created.SessionsDirectory(),
-		SessionDirectory: created.RootDirectory(), SessionHome: created.HomeDirectory(),
-		TemporaryDirectory: created.TemporaryDirectory(), Executable: runner.config.BinaryPath,
-		RuntimeInputs: runner.config.RuntimeInputs, RuntimeProbePaths: runner.config.RuntimeProbePaths,
-		Arguments: codexAuthRuntimeArguments("", arguments...), Terminal: terminal,
-	})
+	executable, err := runner.executable.Resolve()
 	if err != nil {
-		return statusRunResult{err: err, cleanupProven: true}
+		return containedRunResult{err: ErrUnsupportedVersion, cleanupProven: true}
 	}
-	process, err = created.RetainUntilProcessDone(process)
-	if err != nil {
-		return statusRunResult{err: ErrLoginCleanupUncertain, cleanupProven: false}
-	}
-	runErr := launch.RunAttached(process)
-	cleanupErr := launch.AwaitRetainedSessionCleanup(process)
-	if cleanupErr != nil {
-		return statusRunResult{
-			err: ErrLoginCleanupUncertain, cleanupProven: false, cleanupProcess: process,
-		}
-	}
-	if runErr != nil {
-		var sandboxFailure *launch.SandboxError
-		if errors.As(runErr, &sandboxFailure) {
-			return statusRunResult{err: sandboxFailure, cleanupProven: true}
-		}
-		return statusRunResult{err: ErrLoginFailed, cleanupProven: true}
-	}
-	return statusRunResult{cleanupProven: true}
+	config := runner.config
+	config.BinaryPath = executable
+	return runContainedCodex(
+		ctx, config, runner.sandbox, created, "", arguments, terminal,
+		ErrLoginFailed, ErrLoginCleanupUncertain,
+	)
 }

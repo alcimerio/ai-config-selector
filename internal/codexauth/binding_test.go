@@ -280,6 +280,30 @@ func TestStatusCleanupUncertaintyPreservesProjectionUntilSettlementAndRecovery(t
 	assertNoSessionDirectories(t, sessionsDirectory)
 }
 
+func TestStatusPublishedMarkerFailurePreservesRecoverableSession(t *testing.T) {
+	auth := testChatGPTAuthJSON(t, "user", "workspace")
+	registry, _, runner, sessionsDirectory := newBindingTestRegistry(t, "work", auth)
+	store := registry.quarantine
+	registry.quarantine = createErrorAfterPublishQuarantine{bindingQuarantine: store}
+
+	status, err := registry.Status(context.Background(), "work")
+	if !errors.Is(err, ErrBindingQuarantined) || status.Disposition != QuarantinedUncertain {
+		t.Fatalf("status = (%#v, %v)", status, err)
+	}
+	if runner.checkCalls != 1 {
+		t.Fatalf("sandbox checks = %d", runner.checkCalls)
+	}
+	marker, exists, err := registry.quarantine.Inspect(context.Background(), "work")
+	if err != nil || !exists || marker.Phase != quarantineRecoverable {
+		t.Fatalf("recoverable marker = (%#v, %v, %v)", marker, exists, err)
+	}
+	disposition, err := registry.Recover(context.Background(), "work")
+	if err != nil || disposition != DiscardedProjection {
+		t.Fatalf("recovery = (%q, %v)", disposition, err)
+	}
+	assertNoSessionDirectories(t, sessionsDirectory)
+}
+
 func TestRecoveryRefusesAnActiveProtectedSession(t *testing.T) {
 	auth := testChatGPTAuthJSON(t, "user", "workspace")
 	registry, _, _, sessionsDirectory := newBindingTestRegistry(t, "work", auth)
@@ -304,6 +328,25 @@ func TestRecoveryRefusesAnActiveProtectedSession(t *testing.T) {
 	disposition, err := registry.Recover(context.Background(), "work")
 	if !errors.Is(err, ErrIdentityBusy) || disposition != QuarantinedUncertain {
 		t.Fatalf("active recovery = (%q, %v)", disposition, err)
+	}
+}
+
+func TestRecoveryClearsPendingMarkerAfterSessionIsAlreadyGone(t *testing.T) {
+	auth := testChatGPTAuthJSON(t, "user", "workspace")
+	registry, _, _, _ := newBindingTestRegistry(t, "work", auth)
+	if err := registry.quarantine.Create(context.Background(), quarantineMarker{
+		Version: recordVersion, Name: "work", SessionID: "session-already-gone",
+		Phase: quarantineCleanupPending,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	disposition, err := registry.Recover(context.Background(), "work")
+	if err != nil || disposition != DiscardedProjection {
+		t.Fatalf("recovery = (%q, %v)", disposition, err)
+	}
+	if _, exists, err := registry.quarantine.Inspect(context.Background(), "work"); err != nil || exists {
+		t.Fatalf("marker after recovery = (%v, %v)", exists, err)
 	}
 }
 
@@ -447,6 +490,15 @@ type fakeStatusRunner struct {
 type pendingCleanupStatusRunner struct {
 	cleanupDone chan struct{}
 	sessionRoot string
+}
+
+type createErrorAfterPublishQuarantine struct{ bindingQuarantine }
+
+func (store createErrorAfterPublishQuarantine) Create(ctx context.Context, marker quarantineMarker) error {
+	if err := store.bindingQuarantine.Create(ctx, marker); err != nil {
+		return err
+	}
+	return ErrBindingQuarantined
 }
 
 func (*pendingCleanupStatusRunner) Check(context.Context) error { return nil }

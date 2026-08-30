@@ -17,7 +17,8 @@ import (
 func TestRegistryLoginCreatesWithoutReplacingNamedIdentity(t *testing.T) {
 	provider := newFakeProvider()
 	runner := &fakeLoginRunner{result: loginRunResult{
-		auth: testChatGPTAuthJSON(t, "user", "workspace"), cleanupProven: true,
+		auth:               testChatGPTAuthJSON(t, "user", "workspace"),
+		containedRunResult: containedRunResult{cleanupProven: true},
 	}}
 	registry, err := newRegistry(provider, runner, newFileIdentityLocker(t.TempDir()))
 	if err != nil {
@@ -44,7 +45,9 @@ func TestRegistryLoginCleanupUncertaintyQuarantinesNameAndProjection(t *testing.
 	provider := newFakeProvider()
 	cleanupDone := make(chan struct{})
 	runner := &fakeLoginRunner{
-		result:      loginRunResult{err: ErrLoginCleanupUncertain, cleanupProven: false},
+		result: loginRunResult{containedRunResult: containedRunResult{
+			err: ErrLoginCleanupUncertain, cleanupProven: false,
+		}},
 		cleanupDone: cleanupDone,
 	}
 	registry, err := newRegistry(provider, runner, newFileIdentityLocker(t.TempDir()))
@@ -85,6 +88,61 @@ func TestRegistryLoginCleanupUncertaintyQuarantinesNameAndProjection(t *testing.
 	disposition, err := registry.Recover(context.Background(), "work")
 	if err != nil || disposition != DiscardedProjection {
 		t.Fatalf("login recovery = (%q, %v)", disposition, err)
+	}
+	assertNoSessionDirectories(t, sessionsDirectory)
+}
+
+func TestRegistryLoginPublishedMarkerFailurePreservesRecoverableSession(t *testing.T) {
+	provider := newFakeProvider()
+	runner := &fakeLoginRunner{result: loginRunResult{
+		auth:               testChatGPTAuthJSON(t, "user", "workspace"),
+		containedRunResult: containedRunResult{cleanupProven: true},
+	}}
+	registry, err := newRegistry(provider, runner, newFileIdentityLocker(t.TempDir()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionsDirectory := configureRegistryTestLifecycle(t, registry)
+	registry.quarantine = createErrorAfterPublishQuarantine{bindingQuarantine: registry.quarantine}
+
+	if _, err := registry.Login(context.Background(), LoginRequest{Name: "work"}); !errors.Is(err, ErrLoginCleanupUncertain) {
+		t.Fatalf("login error = %v", err)
+	}
+	if runner.calls != 0 {
+		t.Fatalf("published marker failure ran login %d times", runner.calls)
+	}
+	marker, exists, err := registry.quarantine.Inspect(context.Background(), "work")
+	if err != nil || !exists || marker.Phase != quarantineRecoverable {
+		t.Fatalf("recoverable marker = (%#v, %v, %v)", marker, exists, err)
+	}
+	disposition, err := registry.Recover(context.Background(), "work")
+	if err != nil || disposition != DiscardedProjection {
+		t.Fatalf("recovery = (%q, %v)", disposition, err)
+	}
+	assertNoSessionDirectories(t, sessionsDirectory)
+}
+
+func TestRegistryLoginPublishedMarkerTransitionFailureRemovesUnstartedSession(t *testing.T) {
+	provider := newFakeProvider()
+	runner := &fakeLoginRunner{result: loginRunResult{
+		auth:               testChatGPTAuthJSON(t, "user", "workspace"),
+		containedRunResult: containedRunResult{cleanupProven: true},
+	}}
+	registry, err := newRegistry(provider, runner, newFileIdentityLocker(t.TempDir()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionsDirectory := configureRegistryTestLifecycle(t, registry)
+	registry.quarantine = createAndTransitionErrorQuarantine{bindingQuarantine: registry.quarantine}
+
+	if _, err := registry.Login(context.Background(), LoginRequest{Name: "work"}); !errors.Is(err, ErrLoginCleanupUncertain) {
+		t.Fatalf("login error = %v", err)
+	}
+	if runner.calls != 0 {
+		t.Fatalf("published marker failure ran login %d times", runner.calls)
+	}
+	if _, exists, err := registry.quarantine.Inspect(context.Background(), "work"); err != nil || exists {
+		t.Fatalf("marker after rollback = (%v, %v)", exists, err)
 	}
 	assertNoSessionDirectories(t, sessionsDirectory)
 }
@@ -142,6 +200,19 @@ type fakeLoginRunner struct {
 	sessionRoot string
 }
 
+type createAndTransitionErrorQuarantine struct{ bindingQuarantine }
+
+func (store createAndTransitionErrorQuarantine) Create(ctx context.Context, marker quarantineMarker) error {
+	if err := store.bindingQuarantine.Create(ctx, marker); err != nil {
+		return err
+	}
+	return ErrBindingQuarantined
+}
+
+func (createAndTransitionErrorQuarantine) MarkRecoverable(context.Context, CredentialRef) error {
+	return ErrBindingQuarantined
+}
+
 func (*fakeLoginRunner) Check(context.Context) error { return nil }
 
 func (runner *fakeLoginRunner) Run(
@@ -158,7 +229,9 @@ func (runner *fakeLoginRunner) Run(
 		runner.sessionRoot = created.RootDirectory()
 		process, err := created.RetainUntilProcessDone(pendingCleanupProcess{done: runner.cleanupDone})
 		if err != nil {
-			return loginRunResult{err: ErrLoginCleanupUncertain, cleanupProven: false}
+			return loginRunResult{containedRunResult: containedRunResult{
+				err: ErrLoginCleanupUncertain, cleanupProven: false,
+			}}
 		}
 		_ = launch.RunAttached(process)
 		result.cleanupProcess = process

@@ -227,6 +227,56 @@ func TestContainedStatusPinsAuthPolicyAtRuntimePrecedence(t *testing.T) {
 	}
 }
 
+func TestContainedLoginRejectsExecutableReplacementAfterPreflight(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "codex-v1")
+	if err := os.WriteFile(target, []byte("first executable"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	binary := filepath.Join(root, "codex")
+	if err := os.Symlink(target, binary); err != nil {
+		t.Fatal(err)
+	}
+	sandbox := &fakeLoginSandbox{
+		version: SupportedCodexVersion,
+		auth:    testChatGPTAuthJSON(t, "user", "workspace"),
+	}
+	runner := newCodexLoginRunner(codexLoginConfig{
+		BinaryPath: binary, SupportedVersion: SupportedCodexVersion,
+		SessionsDirectory: filepath.Join(root, "sessions"), WorkingDirectory: root,
+	}, sandbox)
+	if err := runner.Check(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	canonicalTarget, err := filepath.EvalSymlinks(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sandbox.check.Executable != canonicalTarget {
+		t.Fatalf("preflight executable = %q, want %q", sandbox.check.Executable, canonicalTarget)
+	}
+	replacement := filepath.Join(root, "replacement")
+	if err := os.WriteFile(replacement, []byte("second executable"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(replacement, target); err != nil {
+		t.Fatal(err)
+	}
+	created, err := session.Create(filepath.Join(root, "sessions"), root, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer created.Remove()
+
+	result := runner.Run(context.Background(), created, false, launch.Terminal{})
+	if !errors.Is(result.err, ErrUnsupportedVersion) || !result.cleanupProven {
+		t.Fatalf("result = %#v", result)
+	}
+	if len(sandbox.arguments) != 0 {
+		t.Fatalf("replacement executable reached sandbox: %#v", sandbox.arguments)
+	}
+}
+
 type fakeLoginSandbox struct {
 	version   string
 	auth      []byte

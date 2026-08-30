@@ -59,9 +59,12 @@ API-key, non-interactive token injection, and credential import are unsupported.
 
 ## Contained login and cleanup
 
-Before creating any temporary state, ACS verifies that its native Process
-Sandbox is available for the workspace, Session root, Codex executable, and
-runtime inputs. Codex also checks the optional managed-requirements file at
+Before creating any temporary state, ACS resolves and pins one canonical Codex
+executable identity, then verifies that its native Process Sandbox is available
+for the workspace, Session root, pinned executable, and runtime inputs. The
+identity is revalidated before every subprocess, so a replaced executable is
+rejected before sandbox preparation. Codex also checks the optional
+managed-requirements file at
 `/etc/codex/requirements.toml`. ACS grants an exact, read-only probe for that
 file: Codex can enforce it when present and receives the normal not-found result
 when absent, without gaining access to the rest of `/etc`. It then:
@@ -121,7 +124,8 @@ partially created second index to repair.
 
 1. validate the identity name and acquire its non-blocking lock;
 2. load and revalidate the selected Keychain record;
-3. verify native sandbox availability before Session creation;
+3. pin the canonical Codex executable identity and verify native sandbox
+   availability before Session creation;
 4. create a leased Session plus synthetic `HOME` and durably mark both the
    identity and Session as recovery-owned before writing credential bytes;
 5. write private `.codex/config.toml` and `.codex/auth.json` files with file
