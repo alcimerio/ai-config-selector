@@ -186,9 +186,12 @@ no-process proof and advances the marker to `cleanup_pending`. After the
 original ACS process proves settlement and releases the live Session guard, it
 atomically advances the marker to `recoverable`. The name remains blocked
 across ACS processes even after the original file lock is released. `auth
-recover` acquires that name, requires an inactive protected Session lease,
-revalidates a recoverable or proven pending projection against the current
-durable identity, and makes one idempotent decision:
+recover` acquires that name and revalidates a recoverable or proven pending
+projection against the current durable identity. Those phases require an
+inactive protected Session lease. A crash after publishing `prepared` but
+before recovery protection is handled only through that prepared phase: ACS
+acquires the inactive Session lease and discards the projection without reading
+or committing it. Recovery then makes one idempotent decision:
 
 - commit a different payload only when it is a valid same-identity refresh; or
 - discard missing, unchanged, invalid, deleted, or identity-changing state.
@@ -208,6 +211,12 @@ stays blocked. A pending inactive Session with valid proof can be finalized
 safely; an unlocked Session alone is not treated as proof. If prior cleanup
 already removed the Session, recovery clears the stale marker as an
 already-discarded projection.
+
+When asynchronous settlement has published `recoverable` while it still holds
+the identity lock, recovery waits for that exact marker generation to hand off
+the lock. Cancellation stops the wait, removal by another recovery is treated
+as idempotent success, and prepared, pending, malformed, or replaced generations
+remain blocked.
 
 Session removal is logical removal; ACS does not claim physical erasure from
 the filesystem or storage media.

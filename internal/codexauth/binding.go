@@ -88,8 +88,11 @@ func (registry *Registry) Recover(ctx context.Context, value string) (BindingDis
 	if err != nil {
 		return "", err
 	}
-	locked, err := registry.tryLock(ctx, name, true)
+	locked, expectedMarker, err := registry.lockRecoverableBinding(ctx, name)
 	if err != nil {
+		if expectedMarker != nil && errors.Is(err, ErrIdentityBusy) {
+			return QuarantinedUncertain, err
+		}
 		return "", err
 	}
 	defer locked.Release()
@@ -100,7 +103,14 @@ func (registry *Registry) Recover(ctx context.Context, value string) (BindingDis
 	if !exists {
 		return DiscardedProjection, nil
 	}
-	recovered, sessionExists, err := launch.RecoverSession(registry.sessionsDirectory, marker.SessionID)
+	if expectedMarker != nil && marker != *expectedMarker {
+		return QuarantinedUncertain, fmt.Errorf("%w: %q", ErrIdentityBusy, name)
+	}
+	recoverSession := launch.RecoverSession
+	if marker.Phase == quarantinePrepared {
+		recoverSession = launch.RecoverPreparedSession
+	}
+	recovered, sessionExists, err := recoverSession(registry.sessionsDirectory, marker.SessionID)
 	if errors.Is(err, launch.ErrSessionStillActive) {
 		return QuarantinedUncertain, fmt.Errorf("%w: %q", ErrIdentityBusy, name)
 	}
@@ -158,6 +168,49 @@ func (registry *Registry) Recover(ctx context.Context, value string) (BindingDis
 		return QuarantinedUncertain, ErrBindingQuarantined
 	}
 	return disposition, nil
+}
+
+func (registry *Registry) lockRecoverableBinding(
+	ctx context.Context,
+	name CredentialRef,
+) (identityLock, *quarantineMarker, error) {
+	var expected *quarantineMarker
+	for {
+		locked, err := registry.tryLock(ctx, name, true)
+		if err == nil {
+			return locked, expected, nil
+		}
+		if !errors.Is(err, ErrIdentityBusy) {
+			return nil, nil, err
+		}
+		marker, exists, inspectErr := registry.quarantine.Inspect(ctx, name)
+		if inspectErr != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return nil, nil, ctxErr
+			}
+			return nil, nil, err
+		}
+		if expected == nil {
+			if !exists || marker.Phase != quarantineRecoverable {
+				return nil, nil, err
+			}
+			expected = &marker
+		} else if exists && marker != *expected {
+			return nil, expected, err
+		}
+		timer := time.NewTimer(10 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			return nil, nil, ctx.Err()
+		case <-timer.C:
+		}
+	}
 }
 
 func (registry *Registry) transferPendingBinding(

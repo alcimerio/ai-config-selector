@@ -51,6 +51,23 @@ type RecoveredSessionLease struct {
 // RecoverSession acquires an abandoned Session by its non-secret directory
 // identifier. An active Session is never taken over.
 func RecoverSession(sessionsDirectory, sessionID string) (*RecoveredSessionLease, bool, error) {
+	return recoverSession(sessionsDirectory, sessionID, false)
+}
+
+// RecoverPreparedSession acquires an abandoned Session for a higher-level
+// prepared binding. Prepared bindings may have published their durable marker
+// immediately before recovery protection, so this seam alone accepts a valid
+// inactive Session without that protection. Active and malformed Sessions
+// remain unavailable.
+func RecoverPreparedSession(sessionsDirectory, sessionID string) (*RecoveredSessionLease, bool, error) {
+	return recoverSession(sessionsDirectory, sessionID, true)
+}
+
+func recoverSession(
+	sessionsDirectory string,
+	sessionID string,
+	allowUnprotected bool,
+) (*RecoveredSessionLease, bool, error) {
 	if filepath.Base(sessionID) != sessionID || !strings.HasPrefix(sessionID, sessionDirectoryPrefix) || len(sessionID) > 200 {
 		return nil, false, errors.New("recover ACS Session: invalid identifier")
 	}
@@ -117,7 +134,7 @@ func RecoverSession(sessionsDirectory, sessionID string) (*RecoveredSessionLease
 	if err != nil || !rootInfo.IsDir() || rootInfo.Mode()&os.ModeSymlink != 0 {
 		return nil, false, errors.New("recover ACS Session: invalid Session")
 	}
-	if !protected {
+	if !protected && !allowUnprotected {
 		return nil, false, errors.New("recover ACS Session: Session is not recovery protected")
 	}
 	guardPath := sessionLeasePath(sessionsDirectory, root)

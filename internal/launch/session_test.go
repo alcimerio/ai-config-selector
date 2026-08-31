@@ -115,6 +115,70 @@ func TestRecoverSessionRejectsActiveLeaseAndOwnsAbandonedSession(t *testing.T) {
 	}
 }
 
+func TestRecoverPreparedSessionOwnsAbandonedUnprotectedSessionButRejectsActiveLease(t *testing.T) {
+	sessionsDirectory := filepath.Join(t.TempDir(), "sessions")
+	created, err := CreateSession(sessionsDirectory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionID := filepath.Base(created.RootDir)
+	if recovered, exists, err := RecoverPreparedSession(sessionsDirectory, sessionID); recovered != nil || !exists || !errors.Is(err, ErrSessionStillActive) {
+		t.Fatalf("active prepared recovery = (%#v, %v, %v)", recovered, exists, err)
+	}
+
+	closeLockedFile(created.guard)
+	created.guard = nil
+	recovered, exists, err := RecoverPreparedSession(sessionsDirectory, sessionID)
+	if err != nil || !exists || recovered == nil {
+		t.Fatalf("abandoned prepared recovery = (%#v, %v, %v)", recovered, exists, err)
+	}
+	if err := recovered.Remove(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(created.RootDir); !os.IsNotExist(err) {
+		t.Fatalf("recovered prepared Session remains: %v", err)
+	}
+}
+
+func TestRecoverPreparedSessionRejectsMalformedUnprotectedSession(t *testing.T) {
+	sessionsDirectory := filepath.Join(t.TempDir(), "sessions")
+	for _, directory := range []string{sessionsDirectory, sessionLeasesDirectory(sessionsDirectory)} {
+		if err := os.MkdirAll(directory, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Chmod(sessionsDirectory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(sessionLeasesDirectory(sessionsDirectory), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("missing lease", func(t *testing.T) {
+		sessionID := "session-missing-lease"
+		if err := os.Mkdir(filepath.Join(sessionsDirectory, sessionID), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if recovered, _, err := RecoverPreparedSession(sessionsDirectory, sessionID); recovered != nil || err == nil {
+			t.Fatalf("missing-lease recovery = (%#v, %v)", recovered, err)
+		}
+	})
+
+	t.Run("symlink root", func(t *testing.T) {
+		sessionID := "session-symlink"
+		target := filepath.Join(t.TempDir(), "target")
+		if err := os.Mkdir(target, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(target, filepath.Join(sessionsDirectory, sessionID)); err != nil {
+			t.Fatal(err)
+		}
+		if recovered, _, err := RecoverPreparedSession(sessionsDirectory, sessionID); recovered != nil || err == nil {
+			t.Fatalf("symlink-root recovery = (%#v, %v)", recovered, err)
+		}
+	})
+}
+
 func TestRecoveryProtectionSurvivesStartupCleanupUntilExplicitRecovery(t *testing.T) {
 	sessionsDirectory := filepath.Join(t.TempDir(), "sessions")
 	created, err := CreateSession(sessionsDirectory)

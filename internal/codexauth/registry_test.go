@@ -228,6 +228,235 @@ func TestRegistryLoginCleanupUncertaintyQuarantinesNameAndProjection(t *testing.
 	assertNoSessionDirectories(t, sessionsDirectory)
 }
 
+func TestRegistryRecoverWaitsForRecoverableSettlementLockHandoff(t *testing.T) {
+	provider := newFakeProvider()
+	cleanupDone := make(chan struct{})
+	runner := &fakeLoginRunner{
+		result: loginRunResult{containedRunResult: containedRunResult{
+			err: ErrLoginCleanupUncertain, cleanupProven: false,
+		}},
+		cleanupDone: cleanupDone,
+	}
+	underlyingLocks := newFileIdentityLocker(t.TempDir())
+	lockContention := make(chan struct{})
+	registry, err := newRegistry(provider, runner, &busySignalingIdentityLocker{
+		identityLocker: underlyingLocks,
+		busy:           lockContention,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionsDirectory := configureRegistryTestLifecycle(t, registry)
+	markedRecoverable := make(chan struct{})
+	releaseSettlement := make(chan struct{})
+	registry.quarantine = &recoverableHandoffQuarantine{
+		bindingQuarantine: registry.quarantine,
+		marked:            markedRecoverable,
+		release:           releaseSettlement,
+	}
+
+	if _, err := registry.Login(context.Background(), LoginRequest{Name: "work"}); !errors.Is(err, ErrLoginCleanupUncertain) {
+		t.Fatalf("login error = %v", err)
+	}
+	close(cleanupDone)
+	select {
+	case <-markedRecoverable:
+	case <-time.After(time.Second):
+		t.Fatal("asynchronous settlement did not publish recoverable phase")
+	}
+
+	type recoveryResult struct {
+		disposition BindingDisposition
+		err         error
+	}
+	result := make(chan recoveryResult, 1)
+	go func() {
+		disposition, err := registry.Recover(context.Background(), "work")
+		result <- recoveryResult{disposition: disposition, err: err}
+	}()
+	select {
+	case <-lockContention:
+	case <-time.After(time.Second):
+		t.Fatal("recovery did not contend with settlement lock")
+	}
+	close(releaseSettlement)
+	recovered := <-result
+	if recovered.err != nil || recovered.disposition != DiscardedProjection {
+		t.Fatalf("handoff recovery = (%q, %v)", recovered.disposition, recovered.err)
+	}
+	assertNoSessionDirectories(t, sessionsDirectory)
+}
+
+func TestRegistryRecoverWaitsOnlyForTheObservedRecoverableGeneration(t *testing.T) {
+	for _, phase := range []quarantinePhase{quarantinePrepared, quarantineCleanupPending} {
+		t.Run(string(phase)+" contention remains busy", func(t *testing.T) {
+			registry, err := newRegistry(newFakeProvider(), &fakeLoginRunner{}, newFileIdentityLocker(t.TempDir()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			configureRegistryTestLifecycle(t, registry)
+			if err := registry.quarantine.Create(context.Background(), quarantineMarker{
+				Version: recordVersion, Name: "work", SessionID: "session-contended",
+				Phase: phase, ProofChallenge: testCleanupProofChallenge,
+			}); err != nil {
+				t.Fatal(err)
+			}
+			held, err := registry.locks.TryLock("work")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer held.Release()
+
+			disposition, err := registry.Recover(context.Background(), "work")
+			if !errors.Is(err, ErrIdentityBusy) || disposition != "" {
+				t.Fatalf("contended %s recovery = (%q, %v)", phase, disposition, err)
+			}
+		})
+	}
+
+	t.Run("recoverable contention respects cancellation", func(t *testing.T) {
+		registry, err := newRegistry(newFakeProvider(), &fakeLoginRunner{}, newFileIdentityLocker(t.TempDir()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		configureRegistryTestLifecycle(t, registry)
+		if err := registry.quarantine.Create(context.Background(), quarantineMarker{
+			Version: recordVersion, Name: "work", SessionID: "session-contended",
+			Phase: quarantineRecoverable, ProofChallenge: testCleanupProofChallenge,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		held, err := registry.locks.TryLock("work")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer held.Release()
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		disposition, err := registry.Recover(ctx, "work")
+		if !errors.Is(err, context.Canceled) || disposition != "" {
+			t.Fatalf("canceled recovery = (%q, %v)", disposition, err)
+		}
+	})
+
+	t.Run("removed recoverable generation is idempotent", func(t *testing.T) {
+		underlyingLocks := newFileIdentityLocker(t.TempDir())
+		registry, err := newRegistry(newFakeProvider(), &fakeLoginRunner{}, underlyingLocks)
+		if err != nil {
+			t.Fatal(err)
+		}
+		configureRegistryTestLifecycle(t, registry)
+		underlyingQuarantine := registry.quarantine
+		observedRecoverable := make(chan struct{})
+		continueRecovery := make(chan struct{})
+		registry.quarantine = &recoverableInspectGate{
+			bindingQuarantine: underlyingQuarantine,
+			observed:          observedRecoverable,
+			proceed:           continueRecovery,
+		}
+		if err := registry.quarantine.Create(context.Background(), quarantineMarker{
+			Version: recordVersion, Name: "work", SessionID: "session-contended",
+			Phase: quarantineRecoverable, ProofChallenge: testCleanupProofChallenge,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		held, err := underlyingLocks.TryLock("work")
+		if err != nil {
+			t.Fatal(err)
+		}
+		type recoveryResult struct {
+			disposition BindingDisposition
+			err         error
+		}
+		result := make(chan recoveryResult, 1)
+		go func() {
+			disposition, err := registry.Recover(context.Background(), "work")
+			result <- recoveryResult{disposition: disposition, err: err}
+		}()
+		select {
+		case <-observedRecoverable:
+		case <-time.After(time.Second):
+			t.Fatal("recovery did not observe recoverable contention")
+		}
+		if err := underlyingQuarantine.Delete(context.Background(), "work"); err != nil {
+			t.Fatal(err)
+		}
+		close(continueRecovery)
+		if err := held.Release(); err != nil {
+			t.Fatal(err)
+		}
+		recovered := <-result
+		if recovered.err != nil || recovered.disposition != DiscardedProjection {
+			t.Fatalf("removed generation recovery = (%q, %v)", recovered.disposition, recovered.err)
+		}
+	})
+
+	t.Run("replacement generation remains blocked", func(t *testing.T) {
+		underlyingLocks := newFileIdentityLocker(t.TempDir())
+		registry, err := newRegistry(newFakeProvider(), &fakeLoginRunner{}, underlyingLocks)
+		if err != nil {
+			t.Fatal(err)
+		}
+		configureRegistryTestLifecycle(t, registry)
+		underlyingQuarantine := registry.quarantine
+		observedRecoverable := make(chan struct{})
+		continueRecovery := make(chan struct{})
+		registry.quarantine = &recoverableInspectGate{
+			bindingQuarantine: underlyingQuarantine,
+			observed:          observedRecoverable,
+			proceed:           continueRecovery,
+		}
+		original := quarantineMarker{
+			Version: recordVersion, Name: "work", SessionID: "session-original",
+			Phase: quarantineRecoverable, ProofChallenge: testCleanupProofChallenge,
+		}
+		if err := registry.quarantine.Create(context.Background(), original); err != nil {
+			t.Fatal(err)
+		}
+		held, err := underlyingLocks.TryLock("work")
+		if err != nil {
+			t.Fatal(err)
+		}
+		type recoveryResult struct {
+			disposition BindingDisposition
+			err         error
+		}
+		result := make(chan recoveryResult, 1)
+		go func() {
+			disposition, err := registry.Recover(context.Background(), "work")
+			result <- recoveryResult{disposition: disposition, err: err}
+		}()
+		select {
+		case <-observedRecoverable:
+		case <-time.After(time.Second):
+			t.Fatal("recovery did not observe original recoverable generation")
+		}
+		if err := underlyingQuarantine.Delete(context.Background(), "work"); err != nil {
+			t.Fatal(err)
+		}
+		replacement := quarantineMarker{
+			Version: recordVersion, Name: "work", SessionID: "session-replacement",
+			Phase: quarantinePrepared, ProofChallenge: strings.Repeat("a", 64),
+		}
+		if err := underlyingQuarantine.Create(context.Background(), replacement); err != nil {
+			t.Fatal(err)
+		}
+		close(continueRecovery)
+		if err := held.Release(); err != nil {
+			t.Fatal(err)
+		}
+		recovered := <-result
+		if !errors.Is(recovered.err, ErrIdentityBusy) || recovered.disposition != QuarantinedUncertain {
+			t.Fatalf("replacement generation recovery = (%q, %v)", recovered.disposition, recovered.err)
+		}
+		marker, exists, err := registry.quarantine.Inspect(context.Background(), "work")
+		if err != nil || !exists || marker != replacement {
+			t.Fatalf("replacement marker = (%#v, %v, %v)", marker, exists, err)
+		}
+	})
+}
+
 func TestRegistryLoginPublishedMarkerFailurePreservesRecoverableSession(t *testing.T) {
 	provider := newFakeProvider()
 	runner := &fakeLoginRunner{result: loginRunResult{
@@ -334,6 +563,56 @@ type fakeLoginRunner struct {
 	deviceAuth  bool
 	cleanupDone chan struct{}
 	sessionRoot string
+}
+
+type busySignalingIdentityLocker struct {
+	identityLocker
+	busy chan struct{}
+	once sync.Once
+}
+
+func (locker *busySignalingIdentityLocker) TryLock(name CredentialRef) (identityLock, error) {
+	locked, err := locker.identityLocker.TryLock(name)
+	if errors.Is(err, ErrIdentityBusy) {
+		locker.once.Do(func() { close(locker.busy) })
+	}
+	return locked, err
+}
+
+type recoverableHandoffQuarantine struct {
+	bindingQuarantine
+	marked  chan struct{}
+	release chan struct{}
+}
+
+type recoverableInspectGate struct {
+	bindingQuarantine
+	observed chan struct{}
+	proceed  chan struct{}
+	once     sync.Once
+}
+
+func (store *recoverableInspectGate) Inspect(
+	ctx context.Context,
+	name CredentialRef,
+) (quarantineMarker, bool, error) {
+	marker, exists, err := store.bindingQuarantine.Inspect(ctx, name)
+	if err == nil && exists && marker.Phase == quarantineRecoverable {
+		store.once.Do(func() {
+			close(store.observed)
+			<-store.proceed
+		})
+	}
+	return marker, exists, err
+}
+
+func (store *recoverableHandoffQuarantine) MarkRecoverable(ctx context.Context, name CredentialRef) error {
+	if err := store.bindingQuarantine.MarkRecoverable(ctx, name); err != nil {
+		return err
+	}
+	close(store.marked)
+	<-store.release
+	return nil
 }
 
 type createAndTransitionErrorQuarantine struct{ bindingQuarantine }

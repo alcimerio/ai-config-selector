@@ -553,6 +553,60 @@ func TestRecoveryDiscardsInactivePreparedSessionWithoutSupervisorProof(t *testin
 	assertNoSessionDirectories(t, sessionsDirectory)
 }
 
+func TestRecoveryDiscardsPreparedSessionAbandonedBeforeRecoveryProtection(t *testing.T) {
+	original := testChatGPTAuthJSON(t, "user", "workspace")
+	refreshed := []byte(strings.Replace(
+		string(original), "2026-08-29T12:34:56Z", "2026-08-29T15:34:56Z", 1,
+	))
+	registry, provider, _, sessionsDirectory := newBindingTestRegistry(t, "work", original)
+	sessionID := "session-prepared-crash-window"
+	sessionRoot := filepath.Join(sessionsDirectory, sessionID)
+	for _, directory := range []string{
+		sessionsDirectory,
+		sessionsDirectory + ".leases",
+		sessionRoot,
+		filepath.Join(sessionRoot, "home"),
+	} {
+		if err := os.MkdirAll(directory, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(directory, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(sessionsDirectory+".leases", sessionID+".lock"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	metadata, err := validateAuthJSON("work", refreshed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := projectCredential(filepath.Join(sessionRoot, "home"), credentialRecord{Metadata: metadata, Auth: refreshed}); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.quarantine.Create(context.Background(), quarantineMarker{
+		Version: recordVersion, Name: "work", SessionID: sessionID,
+		Phase: quarantinePrepared, ProofChallenge: testCleanupProofChallenge,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	disposition, err := registry.Recover(context.Background(), "work")
+	if err != nil || disposition != DiscardedProjection {
+		t.Fatalf("prepared crash-window recovery = (%q, %v)", disposition, err)
+	}
+	if provider.replaceCalls != 0 || string(provider.records["work"].Auth) != string(original) {
+		t.Fatal("prepared crash-window recovery committed projected bytes")
+	}
+	if _, exists, err := registry.quarantine.Inspect(context.Background(), "work"); err != nil || exists {
+		t.Fatalf("marker after recovery = (%v, %v)", exists, err)
+	}
+	assertNoSessionDirectories(t, sessionsDirectory)
+	if disposition, err := registry.Recover(context.Background(), "work"); err != nil || disposition != DiscardedProjection {
+		t.Fatalf("idempotent prepared crash-window recovery = (%q, %v)", disposition, err)
+	}
+}
+
 func TestRecoveryClearsPendingMarkerAfterSessionIsAlreadyGone(t *testing.T) {
 	auth := testChatGPTAuthJSON(t, "user", "workspace")
 	registry, _, _, _ := newBindingTestRegistry(t, "work", auth)
