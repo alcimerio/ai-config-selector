@@ -250,15 +250,21 @@ service namespace, metadata-only enumeration, duplicate service/account
 collision, service/account isolation, exact record-size boundaries, and
 failed-update byte preservation.
 
-Before changing host Keychain configuration, the native gate writes a `0600`
-private durable recovery artifact inside the disposable Keychain directory. It
-records the exact original search list and default Keychain, the disposable
-paths, and recovery guidance. Cleanup attempts both restorations even if one
-fails, and deletes the disposable Keychain, artifact, and directory only after
-both succeed. If either restoration fails, cleanup reports the retained
-artifact path in the test error; an operator should open that JSON file and
-follow its guidance, leaving both it and the disposable Keychain in place until
-the recorded search list and default have been restored successfully.
+Before changing host Keychain configuration, the native gate creates a
+deterministic private recovery root and writes a `0600` locator plus a `0600`
+durable recovery artifact inside its disposable Keychain directory. The
+artifact records the exact original search list (including an explicit empty
+list), default Keychain, disposable paths, and recovery guidance. A stale,
+linked, foreign-owned, incorrectly typed, incorrectly permissioned, or
+symlink-traversed recovery path fails closed before host mutation.
+
+Cleanup attempts both restorations even if one fails. The promoted macOS jobs
+then run a separate `always()` recovery invocation, so a fresh process can find
+the deterministic locator and repeat both restorations after a test-process
+crash. The locator, artifact, disposable Keychain, directory, and recovery root
+are deleted only after restoration succeeds. A crash or restoration failure
+retains and reports the deterministic locator path; an operator should leave
+the recorded state in place until the recovery invocation succeeds.
 
 Production writes explicitly request non-synchronizable,
 when-unlocked-this-device-only items. All production queries prohibit

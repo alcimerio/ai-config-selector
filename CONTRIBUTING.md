@@ -104,8 +104,11 @@ For a local credential-free run, first use
 `scripts/fetch-codex-test-targets.sh` and
 `scripts/install-codex-test-target.sh`, then set
 `ACS_RUN_NATIVE_AUTH_GATE=1` and point `ACS_TEST_CODEX_BINARY` at that verified
-native installation. Run the two focused tests named in
-`.github/workflows/promoted-artifacts.yml` from a normal macOS terminal. The
+native installation. Also set `ACS_NATIVE_AUTH_RECOVERY_ROOT` to a deterministic
+private path, and run the separate `TestNativeKeychainRecoveryEntrypoint`
+invocation afterward even when the native test invocation fails. The promoted
+workflow does this in an `always()` step on both native runners. Run these
+focused tests only from a normal macOS terminal. The
 automated gate proves the isolated Keychain contract and contained status
 lifecycle; it does not prove interactive login completion or target-origin
 token refresh. Production Keychain queries prohibit authentication UI, and

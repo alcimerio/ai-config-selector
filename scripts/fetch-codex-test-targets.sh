@@ -26,10 +26,17 @@ fi
 count=0
 arm64_count=0
 amd64_count=0
-while IFS='|' read -r version target_os target_arch digest url extra; do
+while IFS= read -r physical_row || [ -n "$physical_row" ]; do
+  [ -n "$physical_row" ] || fail "lock contains a blank row"
+  IFS='|' read -r version target_os target_arch digest url extra <<EOF
+$physical_row
+EOF
   case "$version" in
-    ''|'#'*) continue ;;
+    '#'* ) continue ;;
   esac
+  delimiters="$(printf '%s' "$physical_row" | tr -cd '|')"
+  [ "${#delimiters}" -eq 4 ] || fail "lock entry has an unexpected field count"
+  [ -n "$version" ] && [ -n "$target_os" ] && [ -n "$target_arch" ] && [ -n "$digest" ] && [ -n "$url" ] || fail "lock entry is incomplete"
   [ -z "$extra" ] || fail "lock entry has unexpected fields"
   [ "$version" = "0.149.1" ] && [ "$target_os" = "darwin" ] || fail "lock entry has an unsupported target"
   case "$target_arch:$url" in

@@ -171,6 +171,10 @@ func TestPromotedArtifactGateUsesLockedNativeAuthenticationTargets(t *testing.T)
 		"ACS_RUN_NATIVE_AUTH_GATE: \"1\"",
 		"ACS_TEST_CODEX_BINARY:",
 		"TestNativeKeychainCredentialFreeContract|TestNativeInstalledTargetContainedStatusWithoutCredentials",
+		"ACS_NATIVE_AUTH_RECOVERY_ROOT:",
+		"ACS_RUN_NATIVE_AUTH_RECOVERY: \"1\"",
+		"TestNativeKeychainRecoveryEntrypoint",
+		"if: always()",
 	} {
 		if !strings.Contains(workflow, required) {
 			t.Errorf("promoted-artifact workflow omits native authentication guard %q", required)
@@ -221,9 +225,10 @@ func TestNamedAuthenticationDocumentationSeparatesAutomatedAndAuthenticatedEvide
 	}
 	authDocumentation := strings.Join(strings.Fields(readRepositoryFile(t, "..", "docs/codex-auth.md")), " ")
 	for _, required := range []string{
-		"private durable recovery artifact",
-		"original search list and default Keychain",
-		"reports the retained artifact path",
+		"deterministic private recovery root",
+		"explicit empty list",
+		"fresh process",
+		"retains and reports the deterministic locator path",
 	} {
 		if !strings.Contains(authDocumentation, required) {
 			t.Errorf("named-auth documentation omits isolated Keychain recovery guidance %q", required)

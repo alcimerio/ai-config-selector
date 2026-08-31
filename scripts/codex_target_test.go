@@ -151,6 +151,34 @@ func TestCodexTargetFetcherValidatesEveryLockRowBeforeDownloading(t *testing.T) 
 	}
 }
 
+func TestCodexTargetFetcherRejectsMalformedPhysicalRowsBeforeDownloading(t *testing.T) {
+	valid := readCodexTargetLock(t)
+	for name, lock := range map[string]string{
+		"empty version field":    valid + "|darwin|arm64|" + strings.Repeat("a", 64) + "|https://example.invalid/ignored.tar.gz\n",
+		"unterminated final row": valid + "malformed",
+		"blank row":              strings.Replace(valid, "\n", "\n\n", 1),
+		"incomplete row":         valid + "0.149.1|darwin|arm64\n",
+		"trailing empty field":   strings.Replace(valid, ".tar.gz\n", ".tar.gz|\n", 1),
+	} {
+		t.Run(name, func(t *testing.T) {
+			output, calls, result, err := runCodexTargetFetcherFailure(t, lock)
+			if err == nil {
+				t.Fatalf("malformed physical row succeeded: output=%q", result)
+			}
+			if len(calls) != 0 {
+				t.Fatalf("malformed physical row invoked download: %q", calls)
+			}
+			if _, statErr := os.Lstat(output); !os.IsNotExist(statErr) {
+				t.Fatalf("malformed physical row published output: %v", statErr)
+			}
+			staging, globErr := filepath.Glob(output + ".fetch.*")
+			if globErr != nil || len(staging) != 0 {
+				t.Fatalf("malformed physical row left staging outputs = (%q, %v)", staging, globErr)
+			}
+		})
+	}
+}
+
 func readCodexTargetLock(t *testing.T) string {
 	t.Helper()
 	contents, err := os.ReadFile("codex-test-targets.lock")

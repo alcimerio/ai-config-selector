@@ -74,6 +74,46 @@ func TestFileIdentityLockerRejectsSymlinkLockFile(t *testing.T) {
 	}
 }
 
+func TestFileIdentityLockerRejectsHardLinkedLockFile(t *testing.T) {
+	root := t.TempDir()
+	directory := filepath.Join(root, "locks")
+	if err := os.Mkdir(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(root, "target")
+	if err := os.WriteFile(target, []byte("sentinel"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Link(target, filepath.Join(directory, "work.lock")); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := newFileIdentityLocker(directory).TryLock("work"); !errors.Is(err, ErrProviderUnavailable) {
+		t.Fatalf("hard-linked lock error = %v", err)
+	}
+	contents, err := os.ReadFile(target)
+	if err != nil || string(contents) != "sentinel" {
+		t.Fatalf("hard-link target changed: %q, %v", contents, err)
+	}
+	info, err := os.Stat(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o644 {
+		t.Fatalf("hard-link target mode changed to %o", info.Mode().Perm())
+	}
+}
+
+func TestLockDescriptorMetadataRejectsForeignOwnership(t *testing.T) {
+	if err := validateLockDescriptorMetadata(lockDescriptorMetadata{
+		regular: true,
+		owner:   uint32(os.Geteuid() + 1),
+		links:   1,
+	}, uint32(os.Geteuid())); err == nil {
+		t.Fatal("foreign-owned lock descriptor was accepted")
+	}
+}
+
 func TestFileIdentityLockerRejectsSymlinkDirectoryWithoutChangingTarget(t *testing.T) {
 	root := t.TempDir()
 	target := filepath.Join(root, "target")

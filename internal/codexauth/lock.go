@@ -12,6 +12,12 @@ type fileIdentityLocker struct{ directory string }
 
 type fileIdentityLock struct{ file *os.File }
 
+type lockDescriptorMetadata struct {
+	regular bool
+	owner   uint32
+	links   uint64
+}
+
 func newFileIdentityLocker(directory string) *fileIdentityLocker {
 	return &fileIdentityLocker{directory: filepath.Clean(directory)}
 }
@@ -44,7 +50,16 @@ func (locker *fileIdentityLocker) TryLock(name CredentialRef) (identityLock, err
 		return nil, fmt.Errorf("lock Codex authentication identity %q: %w", name, ErrProviderUnavailable)
 	}
 	info, err := file.Stat()
-	if err != nil || !info.Mode().IsRegular() {
+	if err != nil {
+		_ = file.Close()
+		return nil, fmt.Errorf("lock Codex authentication identity %q: %w", name, ErrProviderUnavailable)
+	}
+	native, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || validateLockDescriptorMetadata(lockDescriptorMetadata{
+		regular: info.Mode().IsRegular(),
+		owner:   native.Uid,
+		links:   uint64(native.Nlink),
+	}, uint32(os.Geteuid())) != nil {
 		_ = file.Close()
 		return nil, fmt.Errorf("lock Codex authentication identity %q: %w", name, ErrProviderUnavailable)
 	}
@@ -60,6 +75,13 @@ func (locker *fileIdentityLocker) TryLock(name CredentialRef) (identityLock, err
 		return nil, fmt.Errorf("lock Codex authentication identity %q: %w", name, ErrProviderUnavailable)
 	}
 	return &fileIdentityLock{file: file}, nil
+}
+
+func validateLockDescriptorMetadata(metadata lockDescriptorMetadata, effectiveUID uint32) error {
+	if !metadata.regular || metadata.owner != effectiveUID || metadata.links != 1 {
+		return ErrProviderUnavailable
+	}
+	return nil
 }
 
 func (locked *fileIdentityLock) Release() error {

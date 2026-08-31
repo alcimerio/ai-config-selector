@@ -144,8 +144,16 @@ jobs:
       - name: Run credential-free native authentication evidence
         env:
           ACS_RUN_NATIVE_AUTH_GATE: "1"
+          ACS_NATIVE_AUTH_RECOVERY_ROOT: ${{ runner.temp }}/acs-native-auth-recovery
           ACS_TEST_CODEX_BINARY: ${{ runner.temp }}/codex-target-${{ matrix.os }}-${{ matrix.arch }}/bin/codex
         run: go test ./internal/codexauth -run 'TestNativeKeychainCredentialFreeContract|TestNativeInstalledTargetContainedStatusWithoutCredentials' -count=1
+
+      - name: Recover native authentication gate state
+        if: always()
+        env:
+          ACS_RUN_NATIVE_AUTH_RECOVERY: "1"
+          ACS_NATIVE_AUTH_RECOVERY_ROOT: ${{ runner.temp }}/acs-native-auth-recovery
+        run: go test ./internal/codexauth -run '^TestNativeKeychainRecoveryEntrypoint$' -count=1
 
       - name: Exercise installed candidate as a black box
         env:
@@ -162,7 +170,7 @@ jobs:
             printf '%s\n' "- Target: \`${{ matrix.target }}\` on its required native runner."
             printf '%s\n' "- Backend observation: required native backend is \`${{ matrix.sandbox_backend }}\`."
             printf '%s\n' '- Candidate observation: the installed black-box containment and lifecycle suite passed.'
-            printf '%s\n' '- Authentication observation: the checksum-locked native target, isolated Keychain contract, and credential-free contained status lifecycle passed.'
+            printf '%s\n' '- Authentication observation: the checksum-locked native target, isolated Keychain contract, fresh-process recovery gate, and credential-free contained status lifecycle passed.'
             printf '%s\n' '- Authentication boundary: production queries prohibit authentication UI, deterministic tests cover locked or unavailable mapping, and live locked-Keychain and ACL probes remain supplemental.'
             printf '%s\n' '- Compatibility rule: v0.4.0 release artifacts are macOS-only and use the verified system Seatbelt backend.'
             printf '%s\n' '- The candidate itself is never rebuilt in this job.'
