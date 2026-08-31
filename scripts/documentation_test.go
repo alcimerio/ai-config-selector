@@ -228,11 +228,16 @@ func TestNamedAuthenticationDocumentationSeparatesAutomatedAndAuthenticatedEvide
 		"deterministic private recovery root",
 		"explicit empty list",
 		"fresh process",
-		"retains and reports the deterministic locator path",
+		"strictly validated relative state-directory component",
+		"locator is removed last",
+		"stable recovery categories",
 	} {
 		if !strings.Contains(authDocumentation, required) {
 			t.Errorf("named-auth documentation omits isolated Keychain recovery guidance %q", required)
 		}
+	}
+	if strings.Contains(authDocumentation, "reports the deterministic locator path") {
+		t.Fatal("named-auth documentation instructs the recovery entrypoint to expose a private locator path")
 	}
 }
 

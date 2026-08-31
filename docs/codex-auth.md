@@ -254,17 +254,23 @@ Before changing host Keychain configuration, the native gate creates a
 deterministic private recovery root and writes a `0600` locator plus a `0600`
 durable recovery artifact inside its disposable Keychain directory. The
 artifact records the exact original search list (including an explicit empty
-list), default Keychain, disposable paths, and recovery guidance. A stale,
+list), default Keychain, and recovery guidance. The versioned locator records
+only a strictly validated relative state-directory component and a durable
+`recovery-required` or `cleanup-only` phase; the artifact and disposable
+Keychain use fixed leaf names. A stale,
 linked, foreign-owned, incorrectly typed, incorrectly permissioned, or
 symlink-traversed recovery path fails closed before host mutation.
 
 Cleanup attempts both restorations even if one fails. The promoted macOS jobs
 then run a separate `always()` recovery invocation, so a fresh process can find
 the deterministic locator and repeat both restorations after a test-process
-crash. The locator, artifact, disposable Keychain, directory, and recovery root
-are deleted only after restoration succeeds. A crash or restoration failure
-retains and reports the deterministic locator path; an operator should leave
-the recorded state in place until the recovery invocation succeeds.
+crash. After restoration and descriptor-relative removal of the disposable
+Keychain, recovery atomically advances to `cleanup-only`. A resumed cleanup-only
+recovery never repeats host restoration and can finish after the artifact or
+state directory is already gone. All reads, phase updates, and deletions remain
+relative to the validated open descriptors; the locator is removed last, and
+an empty recovery root is safely finalized. Entrypoint failures expose only
+stable recovery categories, not locator paths, private paths, or artifact data.
 
 Production writes explicitly request non-synchronizable,
 when-unlocked-this-device-only items. All production queries prohibit
