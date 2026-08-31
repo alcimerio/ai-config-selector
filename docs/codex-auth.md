@@ -251,15 +251,15 @@ collision, service/account isolation, exact record-size boundaries, and
 failed-update byte preservation.
 
 Production writes explicitly request non-synchronizable,
-when-unlocked-this-device-only items and all queries prohibit authentication
-UI. A file-backed temporary Keychain can omit the accessibility attribute from
-the returned attribute dictionary. The live test therefore requires the exact
-value when Security.framework returns it. Deterministic tests separately prove
-that every production query requests authentication-UI failure and that secret
-read failures map to provider-unavailable without exposing backend detail.
-Locking a disposable default Keychain can itself trigger macOS access-control
-UI, so live locked-Keychain and direct ACL inspection are not automated or
-claimed as merge evidence. This is the strongest non-interactive
+when-unlocked-this-device-only items. All production queries prohibit
+authentication UI. A file-backed temporary Keychain can omit the accessibility
+attribute from the returned attribute dictionary. The live test therefore
+requires the exact value when Security.framework returns it. Deterministic tests
+separately prove the no-UI construction and fail-closed mapping for locked or
+unavailable providers without exposing backend detail. Locking a disposable
+default Keychain can itself trigger macOS access-control UI, so live
+locked-Keychain and direct ACL inspection remain supplemental and are not
+claimed as automated merge evidence. This is the strongest non-interactive
 Security.framework evidence safely available from disposable CI state.
 
 The same gate runs the installed target's exact version and contained

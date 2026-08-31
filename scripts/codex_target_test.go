@@ -69,6 +69,130 @@ func TestCodexTargetLockPinsBothOfficialAppleArchives(t *testing.T) {
 	}
 }
 
+func TestCodexTargetFetcherAcceptsCommittedLockWithoutNetwork(t *testing.T) {
+	output, calls := runCodexTargetFetcher(t, readCodexTargetLock(t))
+	for _, archive := range []string{
+		"codex_0.149.1_darwin_arm64.tar.gz",
+		"codex_0.149.1_darwin_amd64.tar.gz",
+	} {
+		contents, err := os.ReadFile(filepath.Join(output, archive))
+		if err != nil {
+			t.Fatalf("read fetched %s: %v", archive, err)
+		}
+		if string(contents) != archive+"\n" {
+			t.Fatalf("fetched %s contents = %q", archive, contents)
+		}
+	}
+	if got := strings.Count(string(calls), "https://github.com/openai/codex/releases/download/rust-v0.149.1/"); got != 2 {
+		t.Fatalf("approved download calls = %d, want 2; calls=%q", got, calls)
+	}
+}
+
+func TestCodexTargetFetcherRejectsMalformedDigests(t *testing.T) {
+	valid := readCodexTargetLock(t)
+	for name, digest := range map[string]string{
+		"62 characters": strings.Repeat("a", 62),
+		"63 characters": strings.Repeat("a", 63),
+		"65 characters": strings.Repeat("a", 65),
+		"nonhex":        strings.Repeat("a", 63) + "g",
+	} {
+		t.Run(name, func(t *testing.T) {
+			lock := strings.Replace(valid, "ed60f475c6dda6044c2c00fd7f33273cc3f3f98900ccd1204bfdf2fe935f3405", digest, 1)
+			output, calls, result, err := runCodexTargetFetcherFailure(t, lock)
+			if err == nil || !strings.Contains(string(result), "invalid SHA-256 digest") {
+				t.Fatalf("fetch malformed digest result = (%q, %v)", result, err)
+			}
+			if len(calls) != 0 {
+				t.Fatalf("malformed digest invoked download: %q", calls)
+			}
+			entries, readErr := os.ReadDir(output)
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			if len(entries) != 0 {
+				t.Fatalf("malformed digest left output entries: %#v", entries)
+			}
+		})
+	}
+}
+
+func readCodexTargetLock(t *testing.T) string {
+	t.Helper()
+	contents, err := os.ReadFile("codex-test-targets.lock")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(contents)
+}
+
+func runCodexTargetFetcher(t *testing.T, lock string) (string, []byte) {
+	t.Helper()
+	output, calls, result, err := runCodexTargetFetcherFailure(t, lock)
+	if err != nil {
+		t.Fatalf("fetch targets: %v; output=%q", err, result)
+	}
+	return output, calls
+}
+
+func runCodexTargetFetcherFailure(t *testing.T, lock string) (string, []byte, []byte, error) {
+	t.Helper()
+	root := t.TempDir()
+	lockPath := filepath.Join(root, "targets.lock")
+	if err := os.WriteFile(lockPath, []byte(lock), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fakeBin := filepath.Join(root, "bin")
+	if err := os.Mkdir(fakeBin, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	callsPath := filepath.Join(root, "curl.calls")
+	writeFakeExecutable(t, filepath.Join(fakeBin, "curl"), `#!/bin/sh
+set -eu
+output=
+url=
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --output) output="$2"; shift 2 ;;
+    https://*) url="$1"; shift ;;
+    *) shift ;;
+  esac
+done
+archive="codex_0.149.1_darwin_arm64.tar.gz"
+case "$url" in
+  *codex-x86_64-apple-darwin.tar.gz) archive="codex_0.149.1_darwin_amd64.tar.gz" ;;
+esac
+printf '%s\n' "$url" >>"$ACS_FETCH_CALLS"
+printf '%s\n' "$archive" >"$output"
+`)
+	writeFakeExecutable(t, filepath.Join(fakeBin, "shasum"), `#!/bin/sh
+set -eu
+file=
+for argument do file="$argument"; done
+case "$file" in
+  *arm64.tar.gz) digest=ed60f475c6dda6044c2c00fd7f33273cc3f3f98900ccd1204bfdf2fe935f3405 ;;
+  *amd64.tar.gz) digest=85fe7a837eb739dd5e1cc59a9c95b7b682048e5aacdc261505bae768fb1288ef ;;
+  *) exit 1 ;;
+esac
+printf '%s  %s\n' "$digest" "$file"
+`)
+	output := filepath.Join(root, "output")
+	command := exec.Command("sh", "fetch-codex-test-targets.sh", lockPath, output)
+	command.Env = append(os.Environ(), "PATH="+fakeBin+":"+os.Getenv("PATH"), "ACS_FETCH_CALLS="+callsPath)
+	result, err := command.CombinedOutput()
+	calls, readErr := os.ReadFile(callsPath)
+	if readErr != nil && !os.IsNotExist(readErr) {
+		t.Fatal(readErr)
+	}
+	return output, calls, result, err
+}
+
+func writeFakeExecutable(t *testing.T, path, contents string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(contents), 0o700); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func nativeCodexTestTarget(t *testing.T) (string, string) {
 	t.Helper()
 	switch runtime.GOARCH {

@@ -31,9 +31,12 @@ recorded.
 
 ## Boundary
 
-This smoke does not make account-dependent behavior deterministic and must not be recorded as
-merge-gate evidence. A successful real login does not replace
-the credential-free namespace, size, collision, locked-Keychain, isolation,
-redaction, cleanup, or quarantine tests. A target-origin token refresh is
-supplemental evidence only; if it does not occur naturally, report it as not
-observed rather than altering credentials or weakening containment.
+This smoke must not be recorded as merge-gate evidence and does not make
+account-dependent behavior deterministic. A successful real login does not
+replace the credential-free namespace, size, collision, isolation, redaction,
+cleanup, or quarantine tests. Production Keychain queries prohibit
+authentication UI, and deterministic mapping tests cover locked or unavailable
+providers. Live locked-Keychain and direct ACL probes remain supplemental. A
+target-origin token refresh is supplemental evidence only; if it does not occur
+naturally, report it as not observed rather than altering credentials or
+weakening containment.

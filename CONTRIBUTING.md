@@ -108,9 +108,10 @@ native installation. Run the two focused tests named in
 `.github/workflows/promoted-artifacts.yml` from a normal macOS terminal. The
 automated gate proves the isolated Keychain contract and contained status
 lifecycle; it does not prove interactive login completion or target-origin
-token refresh. It also does not perform a live locked-Keychain or direct ACL
-probe because macOS can present access-control UI for that operation; query
-no-UI construction and fail-closed error mapping are deterministic tests.
+token refresh. Production Keychain queries prohibit authentication UI, and
+deterministic error-mapping tests cover locked or unavailable providers. Live
+locked-Keychain and direct ACL probes remain supplemental because macOS can
+present access-control UI for those operations.
 
 Authenticated login and refresh observation is supplemental trusted-host
 smoke only. Follow

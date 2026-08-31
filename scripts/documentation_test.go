@@ -193,17 +193,27 @@ func TestNamedAuthenticationDocumentationSeparatesAutomatedAndAuthenticatedEvide
 		"docs/authenticated-codex-auth-smoke.md",
 	} {
 		contents := readRepositoryFile(t, "..", document)
+		normalized := strings.Join(strings.Fields(contents), " ")
 		for _, required := range []string{
 			"credential-free",
 			"0.149.1",
+			"prohibit authentication UI",
+			"locked or unavailable",
 			"supplemental",
 		} {
-			if !strings.Contains(contents, required) {
+			if !strings.Contains(normalized, required) {
 				t.Errorf("%s omits evidence boundary %q", document, required)
 			}
 		}
 	}
+	workflow := readRepositoryFile(t, "..", filepath.Join(".github", "workflows", "promoted-artifacts.yml"))
+	if !strings.Contains(workflow, "live locked-Keychain and ACL probes remain supplemental") {
+		t.Fatal("native workflow summary omits the locked-Keychain evidence boundary")
+	}
 	smoke := readRepositoryFile(t, "..", "docs/authenticated-codex-auth-smoke.md")
+	if strings.Contains(smoke, "credential-free namespace, size, collision, locked-Keychain") {
+		t.Fatal("authenticated smoke claims live locked-Keychain coverage is automated")
+	}
 	for _, required := range []string{"must not run in CI", "target-origin token refresh", "must not be recorded"} {
 		if !strings.Contains(smoke, required) {
 			t.Errorf("authenticated named-auth smoke omits safety boundary %q", required)

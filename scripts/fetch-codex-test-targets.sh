@@ -42,9 +42,9 @@ while IFS='|' read -r version target_os target_arch digest url extra; do
     amd64:https://github.com/openai/codex/releases/download/rust-v0.149.1/codex-x86_64-apple-darwin.tar.gz) ;;
     *) fail "lock entry does not name an approved release asset" ;;
   esac
+  [ "${#digest}" -eq 64 ] || fail "lock entry has an invalid SHA-256 digest"
   case "$digest" in
-    [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) ;;
-    *) fail "lock entry has an invalid SHA-256 digest" ;;
+    *[!0-9a-f]*) fail "lock entry has an invalid SHA-256 digest" ;;
   esac
   archive="codex_${version}_${target_os}_${target_arch}.tar.gz"
   temporary="$workspace/$archive"

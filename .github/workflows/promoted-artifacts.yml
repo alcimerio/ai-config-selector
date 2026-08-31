@@ -162,7 +162,8 @@ jobs:
             printf '%s\n' "- Target: \`${{ matrix.target }}\` on its required native runner."
             printf '%s\n' "- Backend observation: required native backend is \`${{ matrix.sandbox_backend }}\`."
             printf '%s\n' '- Candidate observation: the installed black-box containment and lifecycle suite passed.'
-            printf '%s\n' '- Authentication observation: the locked native target, isolated Keychain contract, and credential-free contained status lifecycle passed.'
+            printf '%s\n' '- Authentication observation: the checksum-locked native target, isolated Keychain contract, and credential-free contained status lifecycle passed.'
+            printf '%s\n' '- Authentication boundary: production queries prohibit authentication UI, deterministic tests cover locked or unavailable mapping, and live locked-Keychain and ACL probes remain supplemental.'
             printf '%s\n' '- Compatibility rule: v0.4.0 release artifacts are macOS-only and use the verified system Seatbelt backend.'
             printf '%s\n' '- The candidate itself is never rebuilt in this job.'
             printf '%s\n' '- No credentials, account data, target output, Session contents, private paths, generated policy, environment values, or control characters are recorded.'
