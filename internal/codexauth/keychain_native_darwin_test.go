@@ -280,6 +280,7 @@ func TestIsolatedKeychainCleanupUsesDaemonAwareDelete(t *testing.T) {
 	managedArtifact := filepath.Join(directory, "securityd-managed-state")
 	fake.keychainPath = keychain
 	fake.managedArtifacts = []string{managedArtifact}
+	fake.requirePathArgument = true
 	var cleanup func()
 	var cleanupErrors []error
 	if err := configureIsolatedTestKeychain(isolatedKeychainSetup{
@@ -301,7 +302,7 @@ func TestIsolatedKeychainCleanupUsesDaemonAwareDelete(t *testing.T) {
 	if len(cleanupErrors) != 0 {
 		t.Fatalf("cleanup errors = %v", cleanupErrors)
 	}
-	if eventIndex(fake.events, "delete-keychain "+isolatedKeychainFilename) < 0 {
+	if eventIndex(fake.events, "delete-keychain ./"+isolatedKeychainFilename) < 0 {
 		t.Fatalf("cleanup did not request daemon-aware relative deletion: %q", fake.events)
 	}
 	if _, err := os.Lstat(recoveryRoot); !os.IsNotExist(err) {
@@ -447,7 +448,7 @@ func TestIsolatedKeychainRecoveryRunsInFreshProcess(t *testing.T) {
 	for _, want := range []string{
 		"list-keychains -d user -s",
 		"default-keychain -d user -s /original/login.keychain-db",
-		"delete-keychain " + isolatedKeychainFilename,
+		"delete-keychain ./" + isolatedKeychainFilename,
 	} {
 		if !strings.Contains(string(contents), want+"\n") {
 			t.Errorf("fresh-process recovery events %q omit %q", contents, want)
@@ -714,7 +715,7 @@ func TestDescriptorAnchoredKeychainDeleteIgnoresAncestorReplacement(t *testing.T
 		t.Fatal(err)
 	}
 	securityTool := filepath.Join(canonicalTestTemporaryDirectory(t), "security")
-	if err := os.WriteFile(securityTool, []byte("#!/bin/sh\nset -eu\n[ \"$1\" = delete-keychain ]\nrm -f -- \"$2\"\n"), 0o700); err != nil {
+	if err := os.WriteFile(securityTool, []byte("#!/bin/sh\nset -eu\n[ \"$1\" = delete-keychain ]\n[ \"$2\" = ./native-auth-gate.keychain-db ]\nrm -f -- \"$2\"\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 
@@ -877,7 +878,7 @@ func TestNativeKeychainDeleteEntrypoint(t *testing.T) {
 	if err := unix.Fchdir(int(directory.Fd())); err != nil {
 		t.Fatal("enter descriptor-anchored native Keychain directory")
 	}
-	if _, err := exec.Command(securityTool, "delete-keychain", name).CombinedOutput(); err != nil {
+	if _, err := exec.Command(securityTool, "delete-keychain", "./"+name).CombinedOutput(); err != nil {
 		t.Fatal("delete descriptor-anchored native Keychain")
 	}
 }
@@ -1568,6 +1569,7 @@ type fakeSecurityCommand struct {
 	keychainUseModes     []os.FileMode
 	afterCreate          func(string) error
 	managedArtifacts     []string
+	requirePathArgument  bool
 	originalSearchOutput *string
 }
 
@@ -1606,6 +1608,9 @@ func (fake *fakeSecurityCommand) run(arguments ...string) (string, error) {
 		fake.keychainUseModes = append(fake.keychainUseModes, info.Mode().Perm())
 	}
 	if strings.HasPrefix(command, "delete-keychain ") && fake.keychainPath != "" {
+		if fake.requirePathArgument && !strings.Contains(strings.TrimPrefix(command, "delete-keychain "), "/") {
+			return "", errors.New("delete-keychain requires a path argument")
+		}
 		if err := os.Remove(fake.keychainPath); err != nil && !os.IsNotExist(err) {
 			return "", err
 		}
@@ -2554,7 +2559,7 @@ func deleteDisposableKeychainIfPresent(parent *os.File, name string, deleteKeych
 
 func relativeKeychainDelete(runSecurity func(...string) (string, error)) func(*os.File, string) error {
 	return func(parent *os.File, name string) error {
-		if _, err := runSecurity("delete-keychain", name); err != nil {
+		if _, err := runSecurity("delete-keychain", "./"+name); err != nil {
 			return err
 		}
 		if err := unix.Unlinkat(int(parent.Fd()), name, 0); err != nil && !errors.Is(err, unix.ENOENT) {

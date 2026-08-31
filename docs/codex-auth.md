@@ -275,15 +275,15 @@ then run a separate `always()` recovery invocation, so a fresh process can find
 the deterministic locator and repeat both restorations after a test-process
 crash. After restoration, a helper process enters the validated state-directory
 descriptor and invokes `security delete-keychain` with only the fixed relative
-leaf name. This lets Security.framework remove daemon-managed Keychain state
-without resolving a replaceable ancestor path. Recovery then proves that the
-opened disposable Keychain inode has no remaining links before atomically
-advancing to `cleanup-only`. A resumed cleanup-only recovery never repeats host
-restoration and can finish after the artifact or state directory is already
-gone. All reads, phase updates, and filesystem deletions remain relative to the
-validated open descriptors; the locator is removed last, and an empty recovery
-root is safely finalized. Entrypoint failures expose only stable recovery
-categories, not locator paths, private paths, or artifact data.
+`./`-prefixed leaf name. This lets Security.framework remove daemon-managed
+Keychain state without resolving a replaceable ancestor path. Recovery then
+proves that the opened disposable Keychain inode has no remaining links before
+atomically advancing to `cleanup-only`. A resumed cleanup-only recovery never
+repeats host restoration and can finish after the artifact or state directory
+is already gone. All reads, phase updates, and filesystem deletions remain
+relative to the validated open descriptors; the locator is removed last, and
+an empty recovery root is safely finalized. Entrypoint failures expose only
+stable recovery categories, not locator paths, private paths, or artifact data.
 
 Production writes explicitly request non-synchronizable,
 when-unlocked-this-device-only items. All production queries prohibit
