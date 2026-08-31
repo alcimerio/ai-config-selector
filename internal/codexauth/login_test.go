@@ -464,6 +464,92 @@ func TestContainedLoginExecutesOnePrivateSnapshotAcrossBothSubprocesses(t *testi
 	}
 }
 
+func TestContainedStatusExecutesOnePrivateSnapshotAcrossBothSubprocesses(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "codex")
+	original := []byte("first-executable")
+	if err := os.WriteFile(target, original, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	auth := testChatGPTAuthJSON(t, "user", "workspace")
+	metadata, err := validateAuthJSON("work", auth)
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := session.Create(filepath.Join(root, "sessions"), root, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer created.Remove()
+	if err := projectCredential(created.HomeDirectory(), credentialRecord{Metadata: metadata, Auth: auth}); err != nil {
+		t.Fatal(err)
+	}
+
+	sandbox := &fakeLoginSandbox{version: SupportedCodexVersion, auth: auth}
+	sandbox.prepareHook = func(request launch.ProcessRequest) {
+		if request.Executable == target {
+			t.Fatalf("mutable source executable reached sandbox: %q", request.Executable)
+		}
+		contents, err := os.ReadFile(request.Executable)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(contents, original) {
+			t.Fatalf("snapshot contents = %q", contents)
+		}
+	}
+	runner := newCodexStatusRunner(codexLoginConfig{
+		BinaryPath: target, SupportedVersion: SupportedCodexVersion,
+		SessionsDirectory: filepath.Join(root, "sessions"), WorkingDirectory: testCodexWorkspace(t, root),
+	}, sandbox)
+	preparation, err := runner.Prepare(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := preparation.Run(context.Background(), created, "workspace", testCleanupProofChallenge, nil)
+	if result.err != nil || !result.cleanupProven {
+		t.Fatalf("result = %#v", result)
+	}
+	if len(sandbox.requests) != 2 || sandbox.requests[0].Executable != sandbox.requests[1].Executable {
+		t.Fatalf("request executables = %#v", sandbox.requests)
+	}
+	snapshot := sandbox.requests[0].Executable
+	if _, err := os.Stat(snapshot); err != nil {
+		t.Fatalf("snapshot disappeared before preparation close: %v", err)
+	}
+	preparation.Close()
+	if _, err := os.Stat(snapshot); !os.IsNotExist(err) {
+		t.Fatalf("snapshot remains after preparation close: %v", err)
+	}
+}
+
+func TestContainedPreparationsRemoveSnapshotWhenSandboxCheckFails(t *testing.T) {
+	for _, operation := range []string{"login", "status"} {
+		t.Run(operation, func(t *testing.T) {
+			root := t.TempDir()
+			sessionsDirectory := filepath.Join(root, "sessions")
+			sandbox := &fakeLoginSandbox{checkErr: errors.New("sandbox check failed")}
+			config := codexLoginConfig{
+				BinaryPath: "/usr/bin/true", SupportedVersion: SupportedCodexVersion,
+				SessionsDirectory: sessionsDirectory, WorkingDirectory: testCodexWorkspace(t, root),
+			}
+			var err error
+			if operation == "login" {
+				_, err = newCodexLoginRunner(config, sandbox).Prepare(context.Background())
+			} else {
+				_, err = newCodexStatusRunner(config, sandbox).Prepare(context.Background())
+			}
+			if err == nil || err.Error() != "sandbox check failed" {
+				t.Fatalf("prepare error = %v", err)
+			}
+			entries, readErr := os.ReadDir(sessionsDirectory + ".executables")
+			if readErr != nil || len(entries) != 0 {
+				t.Fatalf("snapshot cleanup = (%d entries, %v)", len(entries), readErr)
+			}
+		})
+	}
+}
+
 func TestContainedLoginRejectsSnapshotDirectoryInsideWritableWorkspace(t *testing.T) {
 	root := t.TempDir()
 	sessionsDirectory := filepath.Join(root, "sessions")
@@ -529,6 +615,7 @@ type fakeLoginSandbox struct {
 	version     string
 	auth        []byte
 	waitErr     error
+	checkErr    error
 	arguments   [][]string
 	config      string
 	check       launch.SandboxCheck
@@ -542,7 +629,7 @@ func (*fakeLoginSandbox) Readiness(context.Context) (launch.SandboxReadiness, er
 
 func (sandbox *fakeLoginSandbox) Check(_ context.Context, check launch.SandboxCheck) error {
 	sandbox.check = check
-	return nil
+	return sandbox.checkErr
 }
 
 func (sandbox *fakeLoginSandbox) Prepare(_ context.Context, request launch.ProcessRequest) (launch.Process, error) {

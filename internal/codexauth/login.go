@@ -80,22 +80,11 @@ func codexAuthRuntimeArguments(workspace string, arguments ...string) []string {
 }
 
 func (runner *codexLoginRunner) Prepare(ctx context.Context) (loginPreparation, error) {
-	if runner == nil || runner.sandbox == nil {
+	if runner == nil {
 		return loginPreparation{}, ErrLoginFailed
 	}
-	if err := validateContainedAuthWorkspace(runner.config); err != nil {
-		return loginPreparation{}, ErrLoginFailed
-	}
-	config, cleanup, err := runner.snapshotConfig()
+	operation, err := prepareContainedOperation(ctx, runner.config, runner.sandbox, ErrLoginFailed)
 	if err != nil {
-		return loginPreparation{}, ErrUnsupportedVersion
-	}
-	if err := runner.sandbox.Check(ctx, launch.SandboxCheck{
-		Workspace: runner.config.WorkingDirectory, SessionsDirectory: runner.config.SessionsDirectory,
-		Executable: config.BinaryPath, RuntimeInputs: runner.config.RuntimeInputs,
-		RuntimeProbePaths: runner.config.RuntimeProbePaths,
-	}); err != nil {
-		cleanup()
 		return loginPreparation{}, err
 	}
 	return loginPreparation{
@@ -107,9 +96,9 @@ func (runner *codexLoginRunner) Prepare(ctx context.Context) (loginPreparation, 
 			deviceAuth bool,
 			terminal launch.Terminal,
 		) loginRunResult {
-			return runner.runOperation(ctx, config, created, proofChallenge, beginProcess, deviceAuth, terminal)
+			return runner.runOperation(ctx, operation.config, created, proofChallenge, beginProcess, deviceAuth, terminal)
 		},
-		cleanup: cleanup,
+		operation: operation,
 	}, nil
 }
 
@@ -304,19 +293,4 @@ func (runner *codexLoginRunner) run(
 		ctx, config, runner.sandbox, created, "", proofChallenge, beginProcess, arguments, terminal,
 		ErrLoginFailed, ErrLoginCleanupUncertain,
 	)
-}
-
-func (runner *codexLoginRunner) snapshotConfig() (codexLoginConfig, func(), error) {
-	root, err := executableSnapshotRoot(runner.config)
-	if err != nil {
-		return codexLoginConfig{}, nil, err
-	}
-	pinned := newPinnedExecutable(runner.config.BinaryPath)
-	executable, cleanup, err := pinned.Snapshot(root)
-	if err != nil {
-		return codexLoginConfig{}, nil, err
-	}
-	config := runner.config
-	config.BinaryPath = executable
-	return config, cleanup, nil
 }

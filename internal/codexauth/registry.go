@@ -31,8 +31,8 @@ type loginRunResult struct {
 }
 
 type loginPreparation struct {
-	run     func(context.Context, *session.Session, string, func() error, bool, launch.Terminal) loginRunResult
-	cleanup func()
+	run       func(context.Context, *session.Session, string, func() error, bool, launch.Terminal) loginRunResult
+	operation *containedOperationPreparation
 }
 
 func (preparation loginPreparation) Run(
@@ -50,9 +50,7 @@ func (preparation loginPreparation) Run(
 }
 
 func (preparation loginPreparation) Close() {
-	if preparation.cleanup != nil {
-		preparation.cleanup()
-	}
+	preparation.operation.Close()
 }
 
 type loginRunner interface {
