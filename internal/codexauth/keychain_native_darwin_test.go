@@ -17,6 +17,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 func TestNativeKeychainFrameworkLoads(t *testing.T) {
@@ -121,7 +123,7 @@ func TestIsolatedKeychainSetupRestoresAfterConfigurationFailure(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			fake := newFakeSecurityCommand()
-			recoveryRoot := filepath.Join(t.TempDir(), "recovery-root")
+			recoveryRoot := filepath.Join(canonicalTestTemporaryDirectory(t), "recovery-root")
 			directory := filepath.Join(recoveryRoot, "state-test")
 			keychain := filepath.Join(directory, "native-auth-gate.keychain-db")
 			recoveryPath := filepath.Join(directory, isolatedKeychainRecoveryFilename)
@@ -217,7 +219,7 @@ func TestIsolatedKeychainCleanupRetainsStateUntilBothRestorationsSucceed(t *test
 	} {
 		t.Run(name, func(t *testing.T) {
 			fake := newFakeSecurityCommand()
-			recoveryRoot := filepath.Join(t.TempDir(), "recovery-root")
+			recoveryRoot := filepath.Join(canonicalTestTemporaryDirectory(t), "recovery-root")
 			directory := filepath.Join(recoveryRoot, "state-test")
 			keychain := filepath.Join(directory, "native-auth-gate.keychain-db")
 			recoveryPath := filepath.Join(directory, isolatedKeychainRecoveryFilename)
@@ -272,7 +274,7 @@ func TestIsolatedKeychainCleanupRetainsStateUntilBothRestorationsSucceed(t *test
 
 func TestIsolatedKeychainRecoverySurvivesLossOfInMemorySetup(t *testing.T) {
 	fake := newFakeSecurityCommand()
-	recoveryRoot := filepath.Join(t.TempDir(), "recovery-root")
+	recoveryRoot := filepath.Join(canonicalTestTemporaryDirectory(t), "recovery-root")
 	directory := filepath.Join(recoveryRoot, "state-test")
 	keychain := filepath.Join(directory, "native-auth-gate.keychain-db")
 	recoveryPath := filepath.Join(directory, isolatedKeychainRecoveryFilename)
@@ -308,7 +310,7 @@ func TestIsolatedKeychainRecoverySurvivesLossOfInMemorySetup(t *testing.T) {
 
 func TestIsolatedKeychainRecoveryRestoresOriginallyEmptySearchList(t *testing.T) {
 	fake := newFakeSecurityCommand()
-	directory := filepath.Join(t.TempDir(), "recoverable")
+	directory := filepath.Join(canonicalTestTemporaryDirectory(t), "recoverable")
 	if err := os.Mkdir(directory, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -340,7 +342,7 @@ func TestIsolatedKeychainRecoveryRestoresOriginallyEmptySearchList(t *testing.T)
 func TestIsolatedKeychainSetupPersistsOriginallyEmptySearchList(t *testing.T) {
 	fake := newFakeSecurityCommand()
 	fake.originalSearchOutput = new(string)
-	recoveryRoot := filepath.Join(t.TempDir(), "recovery-root")
+	recoveryRoot := filepath.Join(canonicalTestTemporaryDirectory(t), "recovery-root")
 	directory := filepath.Join(recoveryRoot, "state-empty")
 	keychain := filepath.Join(directory, "native-auth-gate.keychain-db")
 	fake.keychainPath = keychain
@@ -372,7 +374,7 @@ func TestIsolatedKeychainSetupPersistsOriginallyEmptySearchList(t *testing.T) {
 func TestIsolatedKeychainRecoveryRunsInFreshProcess(t *testing.T) {
 	fake := newFakeSecurityCommand()
 	fake.originalSearchOutput = new(string)
-	recoveryRoot := filepath.Join(t.TempDir(), "recovery-root")
+	recoveryRoot := filepath.Join(canonicalTestTemporaryDirectory(t), "recovery-root")
 	directory := filepath.Join(recoveryRoot, "state-fresh")
 	keychain := filepath.Join(directory, "native-auth-gate.keychain-db")
 	fake.keychainPath = keychain
@@ -421,9 +423,134 @@ func TestIsolatedKeychainRecoveryRunsInFreshProcess(t *testing.T) {
 	}
 }
 
+func TestNativeKeychainRecoveryEntrypointRejectsSymlinkedIntermediateParentWithoutHostCalls(t *testing.T) {
+	base := canonicalTestTemporaryDirectory(t)
+	parent := filepath.Join(base, "parent")
+	root := filepath.Join(parent, "recovery-root")
+	if err := os.Mkdir(parent, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	prepareFreshRecoveryState(t, root, "state-parent-link")
+	realParent := filepath.Join(base, "real-parent")
+	if err := os.Rename(parent, realParent); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(realParent, parent); err != nil {
+		t.Fatal(err)
+	}
+
+	output, events, err := runNativeRecoveryEntrypoint(t, root)
+	if err == nil {
+		t.Fatalf("fresh recovery accepted a symlinked intermediate parent; output=%q", output)
+	}
+	if len(events) != 0 {
+		t.Fatalf("unsafe fresh recovery called host security: %q", events)
+	}
+}
+
+func TestNativeKeychainRecoveryEntrypointRejectsSymlinkedStateDirectoryWithoutHostCalls(t *testing.T) {
+	base := canonicalTestTemporaryDirectory(t)
+	root := filepath.Join(base, "recovery-root")
+	directory := prepareFreshRecoveryState(t, root, "state-directory-link")
+	realDirectory := filepath.Join(base, "real-state")
+	if err := os.Rename(directory, realDirectory); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(realDirectory, directory); err != nil {
+		t.Fatal(err)
+	}
+
+	output, events, err := runNativeRecoveryEntrypoint(t, root)
+	if err == nil {
+		t.Fatalf("fresh recovery accepted a symlinked state directory; output=%q", output)
+	}
+	if len(events) != 0 {
+		t.Fatalf("unsafe fresh recovery called host security: %q", events)
+	}
+}
+
+func TestNativeKeychainRecoveryEntrypointSanitizesMalformedArtifactErrors(t *testing.T) {
+	root := filepath.Join(canonicalTestTemporaryDirectory(t), "recovery-root")
+	directory := prepareFreshRecoveryState(t, root, "state-malformed")
+	artifact := filepath.Join(directory, isolatedKeychainRecoveryFilename)
+	privateDefault := "/Users/private-person/Library/Keychains/login.keychain-db"
+	privateSearch := "/Volumes/private-search/custom.keychain-db"
+	privateContents := "artifact-secret-marker"
+	if err := os.Remove(artifact); err != nil {
+		t.Fatal(err)
+	}
+	if err := persistIsolatedKeychainRecovery(artifact, isolatedKeychainRecovery{
+		Version:         1,
+		OriginalDefault: privateDefault,
+		OriginalSearch:  []string{privateSearch},
+		Directory:       directory,
+		Keychain:        filepath.Join(directory, "native-auth-gate.keychain-db"),
+		Guidance:        privateContents,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	output, events, err := runNativeRecoveryEntrypoint(t, root)
+	if err == nil {
+		t.Fatal("fresh recovery accepted a malformed artifact")
+	}
+	if !strings.Contains(output, "isolated Keychain recovery artifact is invalid") {
+		t.Fatalf("fresh recovery returned an unstable malformed-artifact error: %q", output)
+	}
+	for _, privateValue := range []string{privateDefault, privateSearch, privateContents, directory, artifact} {
+		if strings.Contains(output, privateValue) {
+			t.Fatalf("fresh recovery error leaked private recovery data %q: %q", privateValue, output)
+		}
+	}
+	if len(events) != 0 {
+		t.Fatalf("malformed fresh recovery called host security: %q", events)
+	}
+}
+
+func prepareFreshRecoveryState(t *testing.T, root, stateName string) string {
+	t.Helper()
+	fake := newFakeSecurityCommand()
+	directory := filepath.Join(root, stateName)
+	fake.keychainPath = filepath.Join(directory, "native-auth-gate.keychain-db")
+	if err := configureIsolatedTestKeychain(isolatedKeychainSetup{
+		recoveryRoot:    root,
+		runSecurity:     fake.run,
+		makeDirectory:   func() (string, error) { return directory, os.Mkdir(directory, 0o700) },
+		removeDirectory: os.Remove,
+		registerCleanup: func(func()) {},
+		reportCleanup:   func(error) {},
+		password:        "synthetic-password",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return directory
+}
+
+func runNativeRecoveryEntrypoint(t *testing.T, root string) (string, []byte, error) {
+	t.Helper()
+	events := filepath.Join(t.TempDir(), "security.events")
+	securityTool := filepath.Join(t.TempDir(), "security")
+	if err := os.WriteFile(securityTool, []byte("#!/bin/sh\nset -eu\nprintf '%s\\n' \"$*\" >>\"$ACS_NATIVE_AUTH_SECURITY_EVENTS\"\nif [ \"$1\" = delete-keychain ]; then rm -f -- \"$2\"; fi\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	command := exec.Command(os.Args[0], "-test.run=^TestNativeKeychainRecoveryEntrypoint$", "-test.count=1")
+	command.Env = append(os.Environ(),
+		"ACS_RUN_NATIVE_AUTH_RECOVERY=1",
+		"ACS_NATIVE_AUTH_RECOVERY_ROOT="+root,
+		"ACS_NATIVE_AUTH_SECURITY_TOOL="+securityTool,
+		"ACS_NATIVE_AUTH_SECURITY_EVENTS="+events,
+	)
+	output, err := command.CombinedOutput()
+	eventContents, readErr := os.ReadFile(events)
+	if readErr != nil && !os.IsNotExist(readErr) {
+		t.Fatal(readErr)
+	}
+	return string(output), eventContents, err
+}
+
 func TestIsolatedKeychainRecoveryCompletesAfterDisposableKeychainWasDeleted(t *testing.T) {
 	setupFake := newFakeSecurityCommand()
-	root := filepath.Join(t.TempDir(), "recovery-root")
+	root := filepath.Join(canonicalTestTemporaryDirectory(t), "recovery-root")
 	directory := filepath.Join(root, "state-deleted")
 	keychain := filepath.Join(directory, "native-auth-gate.keychain-db")
 	setupFake.keychainPath = keychain
@@ -498,7 +625,7 @@ func TestIsolatedKeychainRecoveryRejectsUnsafeLocatorWithoutHostMutation(t *test
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
-			root := filepath.Join(t.TempDir(), "recovery-root")
+			root := filepath.Join(canonicalTestTemporaryDirectory(t), "recovery-root")
 			if err := os.Mkdir(root, 0o700); err != nil {
 				t.Fatal(err)
 			}
@@ -506,7 +633,7 @@ func TestIsolatedKeychainRecoveryRejectsUnsafeLocatorWithoutHostMutation(t *test
 			prepare(t, locator)
 			fake := newFakeSecurityCommand()
 			err := recoverIsolatedTestKeychainFromRoot(root, fake.run, os.Remove)
-			if err == nil || !strings.Contains(err.Error(), locator) {
+			if err == nil || err.Error() != "isolated Keychain recovery locator is invalid" {
 				t.Fatalf("unsafe locator recovery = %v", err)
 			}
 			if len(fake.events) != 0 {
@@ -523,7 +650,7 @@ func TestIsolatedKeychainRecoveryRejectsLinkedArtifactWithoutHostMutation(t *tes
 	} {
 		t.Run(name, func(t *testing.T) {
 			setupFake := newFakeSecurityCommand()
-			root := filepath.Join(t.TempDir(), "recovery-root")
+			root := filepath.Join(canonicalTestTemporaryDirectory(t), "recovery-root")
 			directory := filepath.Join(root, "state-linked")
 			keychain := filepath.Join(directory, "native-auth-gate.keychain-db")
 			setupFake.keychainPath = keychain
@@ -586,7 +713,7 @@ func TestIsolatedKeychainSetupFailsClosedOnStaleOrUnsafeRecoveryRoot(t *testing.
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
-			root := filepath.Join(t.TempDir(), "recovery-root")
+			root := filepath.Join(canonicalTestTemporaryDirectory(t), "recovery-root")
 			prepare(t, root)
 			fake := newFakeSecurityCommand()
 			madeDirectory := false
@@ -694,6 +821,15 @@ func eventIndex(events []string, wanted string) int {
 	return -1
 }
 
+func canonicalTestTemporaryDirectory(t *testing.T) string {
+	t.Helper()
+	directory, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return directory
+}
+
 func useIsolatedTestKeychain(t *testing.T) {
 	t.Helper()
 	if _, err := os.Stat("/usr/bin/security"); err != nil {
@@ -702,7 +838,11 @@ func useIsolatedTestKeychain(t *testing.T) {
 	password := fmt.Sprintf("synthetic-%d-%d", os.Getpid(), time.Now().UnixNano())
 	recoveryRoot := os.Getenv("ACS_NATIVE_AUTH_RECOVERY_ROOT")
 	if recoveryRoot == "" {
-		recoveryRoot = filepath.Join(os.TempDir(), fmt.Sprintf("acs-native-auth-recovery-%d", os.Geteuid()))
+		temporaryBase, err := filepath.EvalSymlinks(os.TempDir())
+		if err != nil {
+			t.Fatalf("canonicalize temporary recovery base: %v", err)
+		}
+		recoveryRoot = filepath.Join(temporaryBase, fmt.Sprintf("acs-native-auth-recovery-%d", os.Geteuid()))
 	}
 	if err := configureIsolatedTestKeychain(isolatedKeychainSetup{
 		recoveryRoot: recoveryRoot,
@@ -919,23 +1059,25 @@ func persistIsolatedKeychainRecoveryLocator(path string, locator isolatedKeychai
 }
 
 func persistPrivateRecoveryFile(path string, contents []byte) (resultErr error) {
-	if err := validatePrivateRecoveryPath(filepath.Dir(path), true); err != nil {
-		return err
-	}
-	temporary := path + ".tmp"
-	descriptor, err := syscall.Open(temporary, syscall.O_WRONLY|syscall.O_CREAT|syscall.O_EXCL|syscall.O_CLOEXEC|syscall.O_NOFOLLOW, 0o600)
+	parent, err := openPrivateRecoveryDirectory(filepath.Dir(path))
 	if err != nil {
 		return err
 	}
-	file := os.NewFile(uintptr(descriptor), temporary)
+	defer parent.Close()
+	temporary := filepath.Base(path) + ".tmp"
+	descriptor, err := unix.Openat(int(parent.Fd()), temporary, unix.O_WRONLY|unix.O_CREAT|unix.O_EXCL|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0o600)
+	if err != nil {
+		return err
+	}
+	file := os.NewFile(uintptr(descriptor), "private recovery temporary")
 	if file == nil {
-		_ = syscall.Close(descriptor)
+		_ = unix.Close(descriptor)
 		return errors.New("open private recovery file")
 	}
 	defer func() {
 		_ = file.Close()
 		if resultErr != nil {
-			_ = os.Remove(temporary)
+			_ = unix.Unlinkat(int(parent.Fd()), temporary, 0)
 		}
 	}()
 	if _, err := file.Write(contents); err != nil {
@@ -947,27 +1089,26 @@ func persistPrivateRecoveryFile(path string, contents []byte) (resultErr error) 
 	if err := file.Close(); err != nil {
 		return err
 	}
-	if err := os.Rename(temporary, path); err != nil {
+	if err := unix.Renameat(int(parent.Fd()), temporary, int(parent.Fd()), filepath.Base(path)); err != nil {
 		return err
 	}
-	directory, err := os.Open(filepath.Dir(path))
-	if err != nil {
-		return err
-	}
-	defer directory.Close()
-	return directory.Sync()
+	return parent.Sync()
 }
 
 func readIsolatedKeychainRecovery(path string) (isolatedKeychainRecovery, error) {
-	var recovery isolatedKeychainRecovery
 	contents, err := readPrivateRecoveryFile(path)
 	if err != nil {
-		return recovery, err
+		return isolatedKeychainRecovery{}, err
 	}
+	return decodeIsolatedKeychainRecovery(contents, path)
+}
+
+func decodeIsolatedKeychainRecovery(contents []byte, path string) (isolatedKeychainRecovery, error) {
+	var recovery isolatedKeychainRecovery
 	decoder := json.NewDecoder(bytes.NewReader(contents))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&recovery); err != nil {
-		return isolatedKeychainRecovery{}, err
+		return isolatedKeychainRecovery{}, errors.New("recovery artifact is invalid")
 	}
 	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
 		return isolatedKeychainRecovery{}, errors.New("recovery artifact has trailing data")
@@ -975,28 +1116,39 @@ func readIsolatedKeychainRecovery(path string) (isolatedKeychainRecovery, error)
 	if recovery.Version != 1 || recovery.OriginalDefault == "" || recovery.OriginalSearch == nil ||
 		recovery.Directory == "" || recovery.Keychain != filepath.Join(recovery.Directory, "native-auth-gate.keychain-db") ||
 		path != filepath.Join(recovery.Directory, isolatedKeychainRecoveryFilename) || recovery.Guidance != isolatedKeychainRecoveryGuidance {
-		return isolatedKeychainRecovery{}, fmt.Errorf("recovery artifact is invalid: path=%q state=%#v", path, recovery)
+		return isolatedKeychainRecovery{}, errors.New("recovery artifact is invalid")
 	}
 	return recovery, nil
 }
 
 func readIsolatedKeychainRecoveryLocator(root string) (isolatedKeychainRecoveryLocator, error) {
-	var locator isolatedKeychainRecoveryLocator
 	canonicalRoot, err := canonicalIsolatedKeychainRecoveryRoot(root)
 	if err != nil {
-		return locator, err
+		return isolatedKeychainRecoveryLocator{}, err
 	}
 	if err := validatePrivateRecoveryPath(canonicalRoot, true); err != nil {
-		return locator, err
+		return isolatedKeychainRecoveryLocator{}, err
 	}
 	contents, err := readPrivateRecoveryFile(filepath.Join(canonicalRoot, isolatedKeychainLocatorFilename))
 	if err != nil {
-		return locator, err
+		return isolatedKeychainRecoveryLocator{}, err
 	}
+	locator, err := decodeIsolatedKeychainRecoveryLocator(contents, canonicalRoot)
+	if err != nil {
+		return isolatedKeychainRecoveryLocator{}, err
+	}
+	if err := validatePrivateRecoveryPath(filepath.Dir(locator.RecoveryPath), true); err != nil {
+		return isolatedKeychainRecoveryLocator{}, err
+	}
+	return locator, nil
+}
+
+func decodeIsolatedKeychainRecoveryLocator(contents []byte, canonicalRoot string) (isolatedKeychainRecoveryLocator, error) {
+	var locator isolatedKeychainRecoveryLocator
 	decoder := json.NewDecoder(bytes.NewReader(contents))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&locator); err != nil {
-		return isolatedKeychainRecoveryLocator{}, err
+		return isolatedKeychainRecoveryLocator{}, errors.New("recovery locator is invalid")
 	}
 	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
 		return isolatedKeychainRecoveryLocator{}, errors.New("recovery locator has trailing data")
@@ -1007,31 +1159,50 @@ func readIsolatedKeychainRecoveryLocator(root string) (isolatedKeychainRecoveryL
 		filepath.Base(locator.RecoveryPath) != isolatedKeychainRecoveryFilename {
 		return isolatedKeychainRecoveryLocator{}, errors.New("recovery locator is invalid")
 	}
-	if err := validatePrivateRecoveryPath(directory, true); err != nil {
-		return isolatedKeychainRecoveryLocator{}, err
-	}
 	return locator, nil
 }
 
 func readPrivateRecoveryFile(path string) ([]byte, error) {
-	descriptor, err := syscall.Open(path, syscall.O_RDONLY|syscall.O_CLOEXEC|syscall.O_NOFOLLOW, 0)
+	parent, err := openRecoveryDirectoryNoFollow(filepath.Dir(path), false)
 	if err != nil {
 		return nil, err
 	}
-	file := os.NewFile(uintptr(descriptor), path)
-	if file == nil {
-		_ = syscall.Close(descriptor)
-		return nil, errors.New("open private recovery file")
+	defer parent.Close()
+	return readPrivateRecoveryFileAt(parent, filepath.Base(path))
+}
+
+func readPrivateRecoveryFileAt(parent *os.File, name string) ([]byte, error) {
+	file, err := openPrivateRecoveryFileAt(parent, name)
+	if err != nil {
+		return nil, err
 	}
 	defer file.Close()
+	return io.ReadAll(io.LimitReader(file, 64*1024))
+}
+
+func openPrivateRecoveryFileAt(parent *os.File, name string) (*os.File, error) {
+	if name == "" || name == "." || name == ".." || filepath.Base(name) != name {
+		return nil, errors.New("recovery path is unsafe")
+	}
+	descriptor, err := unix.Openat(int(parent.Fd()), name, unix.O_RDONLY|unix.O_NONBLOCK|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+	if err != nil {
+		return nil, err
+	}
+	file := os.NewFile(uintptr(descriptor), "private recovery file")
+	if file == nil {
+		_ = unix.Close(descriptor)
+		return nil, errors.New("open private recovery file")
+	}
 	info, err := file.Stat()
 	if err != nil {
+		_ = file.Close()
 		return nil, err
 	}
 	if err := validatePrivateRecoveryInfo(info, false); err != nil {
+		_ = file.Close()
 		return nil, err
 	}
-	return io.ReadAll(io.LimitReader(file, 64*1024))
+	return file, nil
 }
 
 func prepareIsolatedKeychainRecoveryRoot(root string) (string, error) {
@@ -1039,12 +1210,19 @@ func prepareIsolatedKeychainRecoveryRoot(root string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if err := os.Mkdir(canonicalRoot, 0o700); err != nil && !os.IsExist(err) {
+	parent, err := openRecoveryDirectoryNoFollow(filepath.Dir(canonicalRoot), false)
+	if err != nil {
 		return "", err
 	}
-	if err := validatePrivateRecoveryPath(canonicalRoot, true); err != nil {
+	defer parent.Close()
+	if err := unix.Mkdirat(int(parent.Fd()), filepath.Base(canonicalRoot), 0o700); err != nil && !errors.Is(err, unix.EEXIST) {
 		return "", err
 	}
+	rootDirectory, err := openPrivateRecoveryDirectoryAt(parent, filepath.Base(canonicalRoot))
+	if err != nil {
+		return "", err
+	}
+	_ = rootDirectory.Close()
 	return canonicalRoot, nil
 }
 
@@ -1052,18 +1230,100 @@ func canonicalIsolatedKeychainRecoveryRoot(root string) (string, error) {
 	if !filepath.IsAbs(root) || filepath.Clean(root) != root {
 		return "", errors.New("recovery root is not an absolute clean path")
 	}
-	if _, err := filepath.EvalSymlinks(filepath.Dir(root)); err != nil {
-		return "", err
-	}
 	return root, nil
 }
 
 func validatePrivateRecoveryPath(path string, directory bool) error {
-	info, err := os.Lstat(path)
+	parent, err := openRecoveryDirectoryNoFollow(filepath.Dir(path), false)
+	if err != nil {
+		return err
+	}
+	defer parent.Close()
+	flags := unix.O_RDONLY | unix.O_CLOEXEC | unix.O_NOFOLLOW
+	if directory {
+		flags |= unix.O_DIRECTORY
+	}
+	descriptor, err := unix.Openat(int(parent.Fd()), filepath.Base(path), flags, 0)
+	if err != nil {
+		return err
+	}
+	file := os.NewFile(uintptr(descriptor), "private recovery path")
+	if file == nil {
+		_ = unix.Close(descriptor)
+		return errors.New("open private recovery path")
+	}
+	defer file.Close()
+	info, err := file.Stat()
 	if err != nil {
 		return err
 	}
 	return validatePrivateRecoveryInfo(info, directory)
+}
+
+func openPrivateRecoveryDirectory(path string) (*os.File, error) {
+	return openRecoveryDirectoryNoFollow(path, true)
+}
+
+func openRecoveryDirectoryNoFollow(path string, private bool) (*os.File, error) {
+	if !filepath.IsAbs(path) || filepath.Clean(path) != path {
+		return nil, errors.New("recovery path is unsafe")
+	}
+	current, err := os.Open("/")
+	if err != nil {
+		return nil, err
+	}
+	for _, component := range strings.Split(strings.TrimPrefix(path, string(filepath.Separator)), string(filepath.Separator)) {
+		if component == "" {
+			continue
+		}
+		descriptor, openErr := unix.Openat(int(current.Fd()), component, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+		_ = current.Close()
+		if openErr != nil {
+			return nil, openErr
+		}
+		current = os.NewFile(uintptr(descriptor), "recovery directory")
+		if current == nil {
+			_ = unix.Close(descriptor)
+			return nil, errors.New("open recovery directory")
+		}
+	}
+	if private {
+		info, statErr := current.Stat()
+		if statErr != nil {
+			_ = current.Close()
+			return nil, statErr
+		}
+		if validationErr := validatePrivateRecoveryInfo(info, true); validationErr != nil {
+			_ = current.Close()
+			return nil, validationErr
+		}
+	}
+	return current, nil
+}
+
+func openPrivateRecoveryDirectoryAt(parent *os.File, name string) (*os.File, error) {
+	if name == "" || name == "." || name == ".." || filepath.Base(name) != name {
+		return nil, errors.New("recovery path is unsafe")
+	}
+	descriptor, err := unix.Openat(int(parent.Fd()), name, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+	if err != nil {
+		return nil, err
+	}
+	directory := os.NewFile(uintptr(descriptor), "private recovery directory")
+	if directory == nil {
+		_ = unix.Close(descriptor)
+		return nil, errors.New("open private recovery directory")
+	}
+	info, err := directory.Stat()
+	if err != nil {
+		_ = directory.Close()
+		return nil, err
+	}
+	if err := validatePrivateRecoveryInfo(info, true); err != nil {
+		_ = directory.Close()
+		return nil, err
+	}
+	return directory, nil
 }
 
 type privateRecoveryMetadata struct {
@@ -1108,7 +1368,7 @@ func recoverIsolatedTestKeychain(
 ) error {
 	recovery, err := readIsolatedKeychainRecovery(recoveryPath)
 	if err != nil {
-		return fmt.Errorf("read isolated Keychain recovery artifact: %w", err)
+		return errors.New("isolated Keychain recovery artifact is invalid")
 	}
 	state := isolatedKeychainState{
 		setup: isolatedKeychainSetup{
@@ -1134,18 +1394,46 @@ func recoverIsolatedTestKeychainFromRoot(
 ) error {
 	canonicalRoot, err := canonicalIsolatedKeychainRecoveryRoot(recoveryRoot)
 	if err != nil {
-		return err
+		return errors.New("isolated Keychain recovery root is unsafe")
 	}
-	if _, err := os.Lstat(canonicalRoot); os.IsNotExist(err) {
+	rootDirectory, err := openPrivateRecoveryDirectory(canonicalRoot)
+	if errors.Is(err, unix.ENOENT) {
 		return nil
 	}
-	locator, err := readIsolatedKeychainRecoveryLocator(canonicalRoot)
 	if err != nil {
-		return fmt.Errorf("recovery state retained at %s: %w", filepath.Join(canonicalRoot, isolatedKeychainLocatorFilename), err)
+		return errors.New("isolated Keychain recovery root is unsafe")
 	}
-	recovery, err := readIsolatedKeychainRecovery(locator.RecoveryPath)
+	defer rootDirectory.Close()
+	locatorContents, err := readPrivateRecoveryFileAt(rootDirectory, isolatedKeychainLocatorFilename)
 	if err != nil {
-		return fmt.Errorf("recovery state retained at %s: %w", filepath.Join(canonicalRoot, isolatedKeychainLocatorFilename), err)
+		return errors.New("isolated Keychain recovery locator is invalid")
+	}
+	locator, err := decodeIsolatedKeychainRecoveryLocator(locatorContents, canonicalRoot)
+	if err != nil {
+		return errors.New("isolated Keychain recovery locator is invalid")
+	}
+	stateName := filepath.Base(filepath.Dir(locator.RecoveryPath))
+	stateDirectory, err := openPrivateRecoveryDirectoryAt(rootDirectory, stateName)
+	if err != nil {
+		return errors.New("isolated Keychain recovery artifact is invalid")
+	}
+	defer stateDirectory.Close()
+	artifactContents, err := readPrivateRecoveryFileAt(stateDirectory, isolatedKeychainRecoveryFilename)
+	if err != nil {
+		return errors.New("isolated Keychain recovery artifact is invalid")
+	}
+	recovery, err := decodeIsolatedKeychainRecovery(artifactContents, locator.RecoveryPath)
+	if err != nil {
+		return errors.New("isolated Keychain recovery artifact is invalid")
+	}
+	keychainMayExist := true
+	keychainFile, err := openPrivateRecoveryFileAt(stateDirectory, filepath.Base(recovery.Keychain))
+	if errors.Is(err, unix.ENOENT) {
+		keychainMayExist = false
+	} else if err != nil {
+		return errors.New("isolated Keychain recovery artifact is invalid")
+	} else {
+		defer keychainFile.Close()
 	}
 	state := isolatedKeychainState{
 		setup: isolatedKeychainSetup{
@@ -1159,12 +1447,12 @@ func recoverIsolatedTestKeychainFromRoot(
 		recoveryPath:        locator.RecoveryPath,
 		recoveryRoot:        canonicalRoot,
 		locatorPath:         filepath.Join(canonicalRoot, isolatedKeychainLocatorFilename),
-		keychainMayExist:    true,
+		keychainMayExist:    keychainMayExist,
 		cleanupArmed:        true,
 		hostMutationStarted: true,
 	}
 	if err := state.cleanup(); err != nil {
-		return fmt.Errorf("recovery state retained at %s: %w", state.locatorPath, err)
+		return fmt.Errorf("recovery state retained at %s: recovery did not complete", state.locatorPath)
 	}
 	return nil
 }
