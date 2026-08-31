@@ -138,14 +138,10 @@ func (store *fileBindingQuarantine) Create(ctx context.Context, marker quarantin
 	if err := temporary.Close(); err != nil {
 		return ErrProviderUnavailable
 	}
-	if err := store.directory.link(temporaryName, store.name(marker.Name)); err != nil {
+	if err := store.directory.renameNoReplace(temporaryName, store.name(marker.Name)); err != nil {
 		if errors.Is(err, unix.EEXIST) {
 			return ErrIdentityBusy
 		}
-		return ErrProviderUnavailable
-	}
-	if err := store.directory.unlink(temporaryName); err != nil {
-		_ = store.directory.unlink(store.name(marker.Name))
 		return ErrProviderUnavailable
 	}
 	temporaryName = ""

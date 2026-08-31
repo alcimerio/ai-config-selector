@@ -95,6 +95,7 @@ func (registry *Registry) settleBinding(
 	ctx context.Context,
 	created *session.Session,
 	name CredentialRef,
+	proofChallenge string,
 	refreshAllowed bool,
 	cleanupProven bool,
 	cleanupProcess launch.Process,
@@ -102,7 +103,7 @@ func (registry *Registry) settleBinding(
 	if refreshAllowed {
 		if err := registry.quarantine.MarkRefreshAllowed(ctx, name); err != nil {
 			if !cleanupProven {
-				registry.transferPendingBinding(created, name, cleanupProcess)
+				registry.transferPendingBinding(created, name, proofChallenge, cleanupProcess)
 			} else {
 				_ = created.PreserveForRecovery()
 			}
@@ -110,7 +111,7 @@ func (registry *Registry) settleBinding(
 		}
 	}
 	if !cleanupProven {
-		registry.transferPendingBinding(created, name, cleanupProcess)
+		registry.transferPendingBinding(created, name, proofChallenge, cleanupProcess)
 		return ErrBindingQuarantined
 	}
 	if err := registry.quarantine.MarkRecoverable(ctx, name); err != nil {

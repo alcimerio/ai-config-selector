@@ -282,6 +282,53 @@ func TestStatusCleanupUncertaintyPreservesProjectionUntilSettlementAndRecovery(t
 	assertNoSessionDirectories(t, sessionsDirectory)
 }
 
+func TestAsyncCleanupCannotTransitionANewerMarkerGeneration(t *testing.T) {
+	auth := testChatGPTAuthJSON(t, "user", "workspace")
+	registry, _, _, _ := newBindingTestRegistry(t, "work", auth)
+	underlying := registry.locks
+	gate := &asyncCleanupLockGate{
+		identityLocker: underlying,
+		entered:        make(chan struct{}),
+		release:        make(chan struct{}),
+		completed:      make(chan struct{}),
+	}
+	registry.locks = gate
+	cleanupDone := make(chan struct{})
+	registry.status = &pendingCleanupStatusRunner{cleanupDone: cleanupDone}
+	registry.verifyCleanup = func(string, []byte) (bool, error) { return true, nil }
+
+	status, err := registry.Status(context.Background(), "work")
+	if !errors.Is(err, ErrBindingQuarantined) || status.Disposition != QuarantinedUncertain {
+		t.Fatalf("status = (%#v, %v)", status, err)
+	}
+	close(cleanupDone)
+	select {
+	case <-gate.entered:
+	case <-time.After(time.Second):
+		t.Fatal("asynchronous cleanup did not reacquire the identity lock")
+	}
+	if disposition, err := registry.Recover(context.Background(), "work"); err != nil || disposition != DiscardedProjection {
+		t.Fatalf("explicit recovery = (%q, %v)", disposition, err)
+	}
+	newMarker := quarantineMarker{
+		Version: recordVersion, Name: "work", SessionID: "session-new-generation",
+		Phase: quarantinePrepared, ProofChallenge: strings.Repeat("a", 64),
+	}
+	if err := registry.quarantine.Create(context.Background(), newMarker); err != nil {
+		t.Fatalf("create new generation: %v", err)
+	}
+	close(gate.release)
+	select {
+	case <-gate.completed:
+	case <-time.After(time.Second):
+		t.Fatal("asynchronous cleanup did not finish its generation check")
+	}
+	marker, exists, err := registry.quarantine.Inspect(context.Background(), "work")
+	if err != nil || !exists || marker != newMarker {
+		t.Fatalf("new marker after old completion = (%#v, %v, %v)", marker, exists, err)
+	}
+}
+
 func TestRecoveryNeverCommitsRefreshAfterFailedStatus(t *testing.T) {
 	original := testChatGPTAuthJSON(t, "user", "workspace")
 	refreshed := []byte(strings.Replace(
@@ -666,6 +713,42 @@ type pendingCleanupStatusRunner struct {
 	cleanupDone chan struct{}
 	sessionRoot string
 	mutate      func(string) error
+}
+
+type asyncCleanupLockGate struct {
+	identityLocker
+	mutex     sync.Mutex
+	calls     int
+	entered   chan struct{}
+	release   chan struct{}
+	completed chan struct{}
+}
+
+func (gate *asyncCleanupLockGate) TryLock(name CredentialRef) (identityLock, error) {
+	gate.mutex.Lock()
+	gate.calls++
+	call := gate.calls
+	gate.mutex.Unlock()
+	if call == 2 {
+		close(gate.entered)
+		<-gate.release
+	}
+	locked, err := gate.identityLocker.TryLock(name)
+	if err != nil || call != 2 {
+		return locked, err
+	}
+	return &completionSignalingIdentityLock{identityLock: locked, completed: gate.completed}, nil
+}
+
+type completionSignalingIdentityLock struct {
+	identityLock
+	completed chan struct{}
+}
+
+func (locked *completionSignalingIdentityLock) Release() error {
+	err := locked.identityLock.Release()
+	close(locked.completed)
+	return err
 }
 
 type createErrorAfterPublishQuarantine struct{ bindingQuarantine }

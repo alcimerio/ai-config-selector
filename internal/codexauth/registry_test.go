@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -106,6 +107,73 @@ func TestRegistryRejectsLinkedPrivateAncestorsWithoutChangingTheirTargets(t *tes
 				t.Fatalf("linked target received private child: %v", statErr)
 			}
 		})
+	}
+}
+
+func TestRegistriesDoNotShareOwnershipAcrossCanonicalACSHomeReplacement(t *testing.T) {
+	root := t.TempDir()
+	ancestor := filepath.Join(root, "canonical")
+	acsHome := filepath.Join(ancestor, "acs")
+	workspace := filepath.Join(root, "workspace")
+	if err := os.MkdirAll(ancestor, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(workspace, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	config := Config{
+		BinaryPath: "/usr/bin/true", ACSHome: acsHome,
+		SessionsDirectory: filepath.Join(acsHome, "sessions"), WorkingDirectory: workspace,
+	}
+	oldRegistry, err := New(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	moved := filepath.Join(root, "canonical-detached")
+	if err := os.Rename(ancestor, moved); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(ancestor, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	newRegistry, err := New(config)
+	if err != nil {
+		t.Fatalf("replacement registry: %v", err)
+	}
+
+	if locked, err := oldRegistry.locks.TryLock("work"); !errors.Is(err, ErrProviderUnavailable) || locked != nil {
+		t.Fatalf("detached registry lock = (%v, %v)", locked, err)
+	}
+	marker := quarantineMarker{
+		Version: recordVersion, Name: "work", SessionID: "session-replacement",
+		Phase: quarantinePrepared, ProofChallenge: strings.Repeat("b", 64),
+	}
+	if err := oldRegistry.quarantine.Create(context.Background(), marker); !errors.Is(err, ErrProviderUnavailable) {
+		t.Fatalf("detached registry marker error = %v", err)
+	}
+	for _, path := range []string{
+		filepath.Join(moved, "acs", "locks", "codex-auth", "work.lock"),
+		filepath.Join(moved, "acs", "quarantine", "codex-auth", "work.json"),
+		filepath.Join(acsHome, "locks", "codex-auth", "work.lock"),
+		filepath.Join(acsHome, "quarantine", "codex-auth", "work.json"),
+	} {
+		if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("detached registry wrote %q: %v", path, err)
+		}
+	}
+
+	locked, err := newRegistry.locks.TryLock("work")
+	if err != nil {
+		t.Fatalf("replacement registry lock: %v", err)
+	}
+	if err := locked.Release(); err != nil {
+		t.Fatal(err)
+	}
+	if err := newRegistry.quarantine.Create(context.Background(), marker); err != nil {
+		t.Fatalf("replacement registry marker: %v", err)
+	}
+	if got, exists, err := newRegistry.quarantine.Inspect(context.Background(), "work"); err != nil || !exists || got != marker {
+		t.Fatalf("replacement registry ownership = (%#v, %v, %v)", got, exists, err)
 	}
 }
 

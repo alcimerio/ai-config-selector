@@ -218,7 +218,7 @@ func (registry *Registry) Login(ctx context.Context, request LoginRequest) (Iden
 
 	beginProcess := func() error { return registry.quarantine.MarkCleanupPending(ctx, name) }
 	run := preparation.Run(ctx, created, proofChallenge, beginProcess, request.DeviceAuth, request.Terminal)
-	if err := registry.settleBinding(ctx, created, name, false, run.cleanupProven, run.cleanupProcess); err != nil {
+	if err := registry.settleBinding(ctx, created, name, proofChallenge, false, run.cleanupProven, run.cleanupProcess); err != nil {
 		clearBytes(run.auth)
 		return IdentityMetadata{}, ErrLoginCleanupUncertain
 	}

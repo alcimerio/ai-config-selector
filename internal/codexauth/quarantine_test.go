@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 )
 
@@ -19,6 +20,21 @@ func TestFileBindingQuarantineCreatesPrivateSecretFreeMarkerWithoutReplacement(t
 
 	if err := store.Create(context.Background(), marker); err != nil {
 		t.Fatal(err)
+	}
+	info, err := os.Stat(filepath.Join(directory, "work.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	native, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		t.Fatal("published marker lacks native metadata")
+	}
+	if native.Nlink != 1 {
+		t.Fatalf("published marker link count = %v, want 1", native.Nlink)
+	}
+	entries, err := os.ReadDir(directory)
+	if err != nil || len(entries) != 1 || entries[0].Name() != "work.json" {
+		t.Fatalf("published marker entries = (%v, %v)", entries, err)
 	}
 	if err := store.Create(context.Background(), marker); !errors.Is(err, ErrIdentityBusy) {
 		t.Fatalf("duplicate marker error = %v", err)
@@ -162,7 +178,7 @@ func TestFileBindingQuarantineRejectsSymlinkDirectoryWithoutChangingTarget(t *te
 	}
 }
 
-func TestFileBindingQuarantinePinsDirectoryAcrossAncestorReplacement(t *testing.T) {
+func TestFileBindingQuarantineFailsClosedAcrossAncestorReplacement(t *testing.T) {
 	root := t.TempDir()
 	ancestor := filepath.Join(root, "auth")
 	directory := filepath.Join(ancestor, "quarantine")
@@ -184,40 +200,104 @@ func TestFileBindingQuarantinePinsDirectoryAcrossAncestorReplacement(t *testing.
 		ProofChallenge: testCleanupProofChallenge,
 	}
 
-	if err := store.Create(context.Background(), marker); err != nil {
-		t.Fatal(err)
+	if err := store.Create(context.Background(), marker); !errors.Is(err, ErrProviderUnavailable) {
+		t.Fatalf("detached store create error = %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(moved, "quarantine", "work.json")); err != nil {
-		t.Fatalf("pinned marker: %v", err)
+	if _, err := os.Stat(filepath.Join(moved, "quarantine", "work.json")); !os.IsNotExist(err) {
+		t.Fatalf("detached store wrote marker: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(replacement, "work.json")); !os.IsNotExist(err) {
 		t.Fatalf("replacement marker error = %v", err)
 	}
-	if err := store.Create(context.Background(), marker); !errors.Is(err, ErrIdentityBusy) {
-		t.Fatalf("duplicate pinned marker error = %v", err)
+
+	replacementStore := newFileBindingQuarantine(replacement)
+	if err := replacementStore.Create(context.Background(), marker); err != nil {
+		t.Fatalf("replacement store create: %v", err)
 	}
-	if err := store.MarkCleanupPending(context.Background(), "work"); err != nil {
+	got, exists, err := replacementStore.Inspect(context.Background(), "work")
+	if err != nil || !exists || got != marker {
+		t.Fatalf("replacement store marker = (%#v, %v, %v)", got, exists, err)
+	}
+}
+
+func TestFileBindingQuarantineNeverFollowsSwappedAncestor(t *testing.T) {
+	root := t.TempDir()
+	ancestor := filepath.Join(root, "auth")
+	directory := filepath.Join(ancestor, "quarantine")
+	if err := os.MkdirAll(directory, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.MarkRefreshAllowed(context.Background(), "work"); err != nil {
+	store := newFileBindingQuarantine(directory)
+	moved := filepath.Join(root, "auth-detached")
+	if err := os.Rename(ancestor, moved); err != nil {
 		t.Fatal(err)
 	}
-	got, exists, err := store.Inspect(context.Background(), "work")
-	if err != nil || !exists || got.Phase != quarantineCleanupPending || !got.RefreshAllowed {
-		t.Fatalf("inspect pinned marker = (%#v, %v, %v)", got, exists, err)
-	}
-	if err := store.MarkRecoverable(context.Background(), "work"); err != nil {
+	target := filepath.Join(root, "attacker", "quarantine")
+	if err := os.MkdirAll(target, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.Delete(context.Background(), "work"); err != nil {
+	if err := os.Symlink(filepath.Dir(target), ancestor); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(moved, "quarantine", "work.json")); !os.IsNotExist(err) {
-		t.Fatalf("deleted pinned marker error = %v", err)
+	marker := quarantineMarker{
+		Version: recordVersion, Name: "work", SessionID: "session-fixture",
+		Phase: quarantinePrepared, ProofChallenge: testCleanupProofChallenge,
 	}
-	entries, err := os.ReadDir(replacement)
-	if err != nil || len(entries) != 0 {
-		t.Fatalf("replacement quarantine entries = (%v, %v)", entries, err)
+	if err := store.Create(context.Background(), marker); !errors.Is(err, ErrProviderUnavailable) {
+		t.Fatalf("swapped ancestor error = %v", err)
+	}
+	for _, path := range []string{
+		filepath.Join(moved, "quarantine", "work.json"),
+		filepath.Join(target, "work.json"),
+	} {
+		if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("swapped ancestor received marker at %q: %v", path, err)
+		}
+	}
+}
+
+func TestPrivateDirectoryExclusiveRenamePublishesOneCrashSafeLink(t *testing.T) {
+	directory := newFileBindingQuarantine(filepath.Join(t.TempDir(), "quarantine")).directory
+	temporary, temporaryName, err := directory.createTemporary(".marker-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := temporary.Write([]byte("marker")); err != nil {
+		t.Fatal(err)
+	}
+	if err := temporary.Sync(); err != nil {
+		t.Fatal(err)
+	}
+	if err := temporary.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := directory.renameNoReplace(temporaryName, "work.json"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := directory.open(temporaryName, syscall.O_RDONLY, 0); !errors.Is(err, syscall.ENOENT) {
+		t.Fatalf("temporary marker survived publication: %v", err)
+	}
+	file, err := directory.open("work.json", syscall.O_RDONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := file.Stat()
+	_ = file.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	native := info.Sys().(*syscall.Stat_t)
+	if native.Nlink != 1 {
+		t.Fatalf("published marker link count = %d, want 1", native.Nlink)
+	}
+	second, secondName, err := directory.createTemporary(".marker-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = second.Close()
+	defer directory.unlink(secondName)
+	if err := directory.renameNoReplace(secondName, "work.json"); !errors.Is(err, syscall.EEXIST) {
+		t.Fatalf("exclusive rename error = %v", err)
 	}
 }
 

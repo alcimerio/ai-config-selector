@@ -13,21 +13,28 @@ import (
 )
 
 type privateDirectory struct {
-	file *os.File
+	file         *os.File
+	physicalPath string
+	device       uint64
+	inode        uint64
 }
 
 func pinPrivateDirectory(path string) (*privateDirectory, error) {
 	if err := os.Mkdir(path, 0o700); err != nil && !errors.Is(err, os.ErrExist) {
 		return nil, err
 	}
-	descriptor, err := unix.Open(path, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_DIRECTORY, 0)
+	absolute, err := filepath.Abs(filepath.Clean(path))
 	if err != nil {
 		return nil, err
 	}
-	directory := os.NewFile(uintptr(descriptor), "private directory")
-	if directory == nil {
-		_ = unix.Close(descriptor)
-		return nil, errors.New("open private directory")
+	physicalParent, err := filepath.EvalSymlinks(filepath.Dir(absolute))
+	if err != nil {
+		return nil, err
+	}
+	physicalPath := filepath.Join(physicalParent, filepath.Base(absolute))
+	directory, err := openPrivateDirectoryPath(physicalPath)
+	if err != nil {
+		return nil, err
 	}
 	info, err := directory.Stat()
 	if err != nil || !info.IsDir() {
@@ -43,12 +50,18 @@ func pinPrivateDirectory(path string) (*privateDirectory, error) {
 		_ = directory.Close()
 		return nil, err
 	}
-	return &privateDirectory{file: directory}, nil
+	return &privateDirectory{
+		file: directory, physicalPath: physicalPath,
+		device: uint64(native.Dev), inode: uint64(native.Ino),
+	}, nil
 }
 
 func (directory *privateDirectory) open(name string, flags int, mode uint32) (*os.File, error) {
 	if directory == nil || directory.file == nil || !validPrivateLeaf(name) {
 		return nil, errors.New("invalid private file")
+	}
+	if err := directory.validateCanonicalIdentity(); err != nil {
+		return nil, err
 	}
 	descriptor, err := unix.Openat(int(directory.file.Fd()), name, flags|unix.O_CLOEXEC|unix.O_NOFOLLOW, mode)
 	if err != nil {
@@ -78,23 +91,32 @@ func (directory *privateDirectory) createTemporary(prefix string) (*os.File, str
 	return nil, "", errors.New("create private temporary file")
 }
 
-func (directory *privateDirectory) link(oldName, newName string) error {
-	if !validPrivateLeaf(oldName) || !validPrivateLeaf(newName) {
-		return errors.New("invalid private file")
-	}
-	return unix.Linkat(int(directory.file.Fd()), oldName, int(directory.file.Fd()), newName, 0)
-}
-
 func (directory *privateDirectory) rename(oldName, newName string) error {
 	if !validPrivateLeaf(oldName) || !validPrivateLeaf(newName) {
 		return errors.New("invalid private file")
 	}
+	if err := directory.validateCanonicalIdentity(); err != nil {
+		return err
+	}
 	return unix.Renameat(int(directory.file.Fd()), oldName, int(directory.file.Fd()), newName)
+}
+
+func (directory *privateDirectory) renameNoReplace(oldName, newName string) error {
+	if !validPrivateLeaf(oldName) || !validPrivateLeaf(newName) {
+		return errors.New("invalid private file")
+	}
+	if err := directory.validateCanonicalIdentity(); err != nil {
+		return err
+	}
+	return renameatNoReplace(int(directory.file.Fd()), oldName, newName)
 }
 
 func (directory *privateDirectory) unlink(name string) error {
 	if directory == nil || directory.file == nil || !validPrivateLeaf(name) {
 		return errors.New("invalid private file")
+	}
+	if err := directory.validateCanonicalIdentity(); err != nil {
+		return err
 	}
 	return unix.Unlinkat(int(directory.file.Fd()), name, 0)
 }
@@ -103,7 +125,60 @@ func (directory *privateDirectory) sync() error {
 	if directory == nil || directory.file == nil {
 		return errors.New("invalid private directory")
 	}
+	if err := directory.validateCanonicalIdentity(); err != nil {
+		return err
+	}
 	return unix.Fsync(int(directory.file.Fd()))
+}
+
+func (directory *privateDirectory) validateCanonicalIdentity() error {
+	if directory == nil || directory.file == nil || directory.physicalPath == "" {
+		return errors.New("invalid private directory")
+	}
+	current, err := openPrivateDirectoryPath(directory.physicalPath)
+	if err != nil {
+		return err
+	}
+	defer current.Close()
+	info, err := current.Stat()
+	if err != nil {
+		return err
+	}
+	native, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || uint64(native.Dev) != directory.device || uint64(native.Ino) != directory.inode {
+		return errors.New("private directory identity changed")
+	}
+	return nil
+}
+
+func openPrivateDirectoryPath(path string) (*os.File, error) {
+	path = filepath.Clean(path)
+	if !filepath.IsAbs(path) {
+		return nil, errors.New("private directory path must be absolute")
+	}
+	descriptor, err := unix.Open(string(filepath.Separator), unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_DIRECTORY, 0)
+	if err != nil {
+		return nil, err
+	}
+	current := descriptor
+	components := strings.Split(strings.TrimPrefix(path, string(filepath.Separator)), string(filepath.Separator))
+	for _, component := range components {
+		if component == "" {
+			continue
+		}
+		next, openErr := unix.Openat(current, component, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_DIRECTORY, 0)
+		_ = unix.Close(current)
+		if openErr != nil {
+			return nil, openErr
+		}
+		current = next
+	}
+	file := os.NewFile(uintptr(current), "private directory")
+	if file == nil {
+		_ = unix.Close(current)
+		return nil, errors.New("open private directory")
+	}
+	return file, nil
 }
 
 func validPrivateLeaf(name string) bool {

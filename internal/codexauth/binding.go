@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/alcimerio/ai-config-selector/internal/launch"
 	"github.com/alcimerio/ai-config-selector/internal/session"
@@ -73,7 +74,7 @@ func (registry *Registry) Status(ctx context.Context, value string) (IdentitySta
 	beginProcess := func() error { return registry.quarantine.MarkCleanupPending(ctx, name) }
 	run := preparation.Run(ctx, created, record.Metadata.Workspace, proofChallenge, beginProcess)
 	run.err = sanitizeStatusError(run.err)
-	if err := registry.settleBinding(ctx, created, name, run.err == nil, run.cleanupProven, run.cleanupProcess); err != nil {
+	if err := registry.settleBinding(ctx, created, name, proofChallenge, run.err == nil, run.cleanupProven, run.cleanupProcess); err != nil {
 		result.Disposition = QuarantinedUncertain
 		return result, ErrBindingQuarantined
 	}
@@ -162,6 +163,7 @@ func (registry *Registry) Recover(ctx context.Context, value string) (BindingDis
 func (registry *Registry) transferPendingBinding(
 	created *session.Session,
 	name CredentialRef,
+	proofChallenge string,
 	process launch.Process,
 ) {
 	if process == nil {
@@ -175,8 +177,31 @@ func (registry *Registry) transferPendingBinding(
 		if err := created.PreserveForRecovery(); err != nil {
 			return
 		}
+		locked, ok := registry.lockSettledBinding(name)
+		if !ok {
+			return
+		}
+		defer locked.Release()
+		marker, exists, err := registry.quarantine.Inspect(context.Background(), name)
+		if err != nil || !exists || marker.SessionID != filepath.Base(created.RootDirectory()) ||
+			marker.ProofChallenge != proofChallenge || marker.Phase != quarantineCleanupPending {
+			return
+		}
 		_ = registry.quarantine.MarkRecoverable(context.Background(), name)
 	}()
+}
+
+func (registry *Registry) lockSettledBinding(name CredentialRef) (identityLock, bool) {
+	for {
+		locked, err := registry.tryLock(context.Background(), name, true)
+		if err == nil {
+			return locked, true
+		}
+		if !errors.Is(err, ErrIdentityBusy) {
+			return nil, false
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }
 
 func (registry *Registry) finalizeStatus(
