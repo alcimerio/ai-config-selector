@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"sort"
 	"strings"
 	"testing"
 
@@ -110,13 +111,14 @@ func TestValidateProcessPathsResolvesInputsAndRejectsEscapes(t *testing.T) {
 	}
 
 	validated, err := validateProcessRequest(ProcessRequest{
-		Workspace:          workspace,
-		SessionsDirectory:  sessions,
-		SessionDirectory:   session,
-		SessionHome:        sessionHome,
-		TemporaryDirectory: temporary,
-		Executable:         executable,
-		RuntimeInputs:      []string{runtimeInput},
+		Workspace:              workspace,
+		SessionsDirectory:      sessions,
+		SessionDirectory:       session,
+		SessionHome:            sessionHome,
+		TemporaryDirectory:     temporary,
+		Executable:             executable,
+		RuntimeInputs:          []string{runtimeInput},
+		RecoveryProofChallenge: []byte(strings.Repeat("x", RecoveryProofChallengeSize)),
 	})
 	if err != nil {
 		t.Fatalf("valid process paths rejected: %v", err)
@@ -127,6 +129,9 @@ func TestValidateProcessPathsResolvesInputsAndRejectsEscapes(t *testing.T) {
 	}
 	if !pathWithin(resolvedRoot, validated.workspace) || filepath.Base(validated.sessionDirectory) != "session-one" || filepath.Base(validated.executable) != "devin" {
 		t.Fatalf("validated paths = %#v", validated)
+	}
+	if got := string(validated.recoveryProofChallenge); got != strings.Repeat("x", RecoveryProofChallengeSize) {
+		t.Fatalf("recovery proof challenge = %q", got)
 	}
 
 	outside := filepath.Join(root, "outside")
@@ -145,6 +150,16 @@ func TestValidateProcessPathsResolvesInputsAndRejectsEscapes(t *testing.T) {
 		t.Fatal("symlink escape accepted as the Session temporary directory")
 	}
 	assertSandboxCategory(t, err, SandboxUnsafePath)
+
+	_, err = validateProcessRequest(ProcessRequest{
+		Workspace: workspace, SessionsDirectory: sessions, SessionDirectory: session,
+		SessionHome: sessionHome, TemporaryDirectory: temporary, Executable: executable,
+		RecoveryProofChallenge: []byte("short"),
+	})
+	if err == nil {
+		t.Fatal("short recovery proof challenge accepted")
+	}
+	assertSandboxCategory(t, err, SandboxInvalidEnvironment)
 }
 
 func TestValidateSandboxCheckRejectsMissingAndUnsafeInputs(t *testing.T) {
@@ -192,6 +207,80 @@ func TestValidateSandboxCheckRejectsBroadRuntimeMounts(t *testing.T) {
 		}
 		assertSandboxCategory(t, err, SandboxUnsafePath)
 	}
+}
+
+func TestValidateSandboxCheckAllowsOnlyExactOptionalRuntimeProbeFiles(t *testing.T) {
+	root := t.TempDir()
+	workspace := filepath.Join(root, "workspace")
+	if err := os.Mkdir(workspace, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	sessions := filepath.Join(root, "sessions")
+	missing := filepath.Join(root, "optional", "requirements.toml")
+	validated, err := validateSandboxCheck(SandboxCheck{
+		Workspace: workspace, SessionsDirectory: sessions, Executable: os.Args[0],
+		RuntimeProbePaths: []string{missing, missing},
+	})
+	if err != nil {
+		t.Fatalf("missing optional runtime probe rejected: %v", err)
+	}
+	canonicalMissing, err := resolveFuturePath(missing)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := uniqueSortedPaths(filepath.Clean(missing), canonicalMissing)
+	if !reflect.DeepEqual(validated.runtimeProbePaths, want) {
+		t.Fatalf("runtime probes = %q, want %q", validated.runtimeProbePaths, want)
+	}
+
+	existing := filepath.Join(root, "requirements.toml")
+	if err := os.WriteFile(existing, []byte("fixture"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(root, "requirements-link.toml")
+	if err := os.Symlink(existing, link); err != nil {
+		t.Fatal(err)
+	}
+	validated, err = validateSandboxCheck(SandboxCheck{
+		Workspace: workspace, SessionsDirectory: sessions, Executable: os.Args[0],
+		RuntimeProbePaths: []string{link},
+	})
+	if err != nil {
+		t.Fatalf("existing runtime probe symlink rejected: %v", err)
+	}
+	canonicalExisting, err := filepath.EvalSymlinks(existing)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want = uniqueSortedPaths(filepath.Clean(link), canonicalExisting)
+	if !reflect.DeepEqual(validated.runtimeProbePaths, want) {
+		t.Fatalf("resolved runtime probes = %q, want %q", validated.runtimeProbePaths, want)
+	}
+
+	for _, probe := range []string{"relative.toml", root} {
+		_, err := validateSandboxCheck(SandboxCheck{
+			Workspace: workspace, SessionsDirectory: sessions, Executable: os.Args[0],
+			RuntimeProbePaths: []string{probe},
+		})
+		if err == nil {
+			t.Fatalf("unsafe runtime probe accepted: %q", probe)
+		}
+		assertSandboxCategory(t, err, SandboxUnsafePath)
+	}
+}
+
+func uniqueSortedPaths(paths ...string) []string {
+	seen := make(map[string]struct{}, len(paths))
+	result := make([]string, 0, len(paths))
+	for _, path := range paths {
+		if _, exists := seen[path]; exists {
+			continue
+		}
+		seen[path] = struct{}{}
+		result = append(result, path)
+	}
+	sort.Strings(result)
+	return result
 }
 
 func TestBuildProcessEnvironmentUsesOnlySessionAndSafeTerminalLocaleValues(t *testing.T) {
@@ -342,7 +431,8 @@ func TestProcessSandboxSelectsBackendAndPassesOnlyValidatedInputs(t *testing.T) 
 	process, err := sandbox.Prepare(context.Background(), ProcessRequest{
 		Workspace: workspace, SessionsDirectory: sessions, SessionDirectory: session,
 		SessionHome: home, TemporaryDirectory: temporary, Executable: executable,
-		Arguments: []string{"auth", "status"},
+		Arguments:              []string{"auth", "status"},
+		RecoveryProofChallenge: []byte(strings.Repeat("y", RecoveryProofChallengeSize)),
 	})
 	if err != nil {
 		t.Fatalf("prepare sandbox: %v", err)
@@ -352,6 +442,9 @@ func TestProcessSandboxSelectsBackendAndPassesOnlyValidatedInputs(t *testing.T) 
 	}
 	if filepath.Base(backend.request.workspace) != "workspace" || filepath.Base(backend.request.sessionDirectory) != "session-one" {
 		t.Fatalf("backend paths = %#v", backend.request)
+	}
+	if got := string(backend.request.recoveryProofChallenge); got != strings.Repeat("y", RecoveryProofChallengeSize) {
+		t.Fatalf("backend recovery proof challenge = %q", got)
 	}
 	if got := strings.Join(backend.request.environment, "\n"); strings.Contains(got, "PRIVATE_VALUE") || !strings.Contains(got, "TERM=xterm-256color") {
 		t.Fatalf("backend environment was not filtered: %q", got)

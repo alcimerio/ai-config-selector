@@ -26,6 +26,7 @@ import (
 const (
 	seatbeltExecutable           = "/usr/bin/sandbox-exec"
 	seatbeltCancellationTimeout  = 2 * time.Second
+	seatbeltStartupHandshakeTime = 2 * time.Second
 	seatbeltSettlementAttempts   = 100
 	seatbeltSettlementRetryDelay = 10 * time.Millisecond
 	seatbeltQuarantineRetryDelay = 100 * time.Millisecond
@@ -138,7 +139,9 @@ func (backend *seatbeltBackend) prepare(ctx context.Context, request validatedPr
 		return nil, sandboxError(SandboxSetupFailed, nil)
 	}
 	challenge := make([]byte, seatbeltChallengeSize)
-	if _, err := rand.Read(challenge); err != nil {
+	if len(request.recoveryProofChallenge) > 0 {
+		copy(challenge, request.recoveryProofChallenge)
+	} else if _, err := rand.Read(challenge); err != nil {
 		_ = control.Close()
 		_ = helperControl.Close()
 		_ = statusControl.Close()
@@ -148,7 +151,11 @@ func (backend *seatbeltBackend) prepare(ctx context.Context, request validatedPr
 	proxyArguments := append([]string{seatbeltStatusProxyArgument, "--", backend.executable}, arguments...)
 	command := exec.CommandContext(ctx, supervisor, proxyArguments...)
 	command.Dir = request.workspace
-	command.Env = seatbeltStatusProxyEnvironment(request.environment)
+	proxyEnvironment := request.environment
+	if len(request.recoveryProofChallenge) > 0 {
+		proxyEnvironment = append(append([]string(nil), proxyEnvironment...), seatbeltRecoveryProofEnvironment+"=1")
+	}
+	command.Env = seatbeltStatusProxyEnvironment(proxyEnvironment)
 	command.Stdin = request.terminal.Input
 	command.Stdout = request.terminal.Output
 	command.Stderr = request.terminal.ErrorOutput
@@ -244,7 +251,7 @@ func (process *seatbeltProcess) Start() error {
 		process.proxyStatus = nil
 	}
 	if err == nil && process.supervised {
-		if writeErr := process.writeControl(process.challenge); writeErr != nil {
+		if writeErr := process.startSupervisor(); writeErr != nil {
 			process.closeControl()
 			process.closeStatusControl()
 			process.quarantineUnprovenCleanup()
@@ -259,6 +266,38 @@ func (process *seatbeltProcess) Start() error {
 	process.closeStatusControl()
 	process.markCleanupDone()
 	return errors.Join(err, process.restoreForegroundTerminal())
+}
+
+func (process *seatbeltProcess) startSupervisor() error {
+	if err := process.writeControl(process.challenge); err != nil {
+		return err
+	}
+	if process.control == nil {
+		return os.ErrProcessDone
+	}
+	type handshakeResult struct {
+		ready byte
+		err   error
+	}
+	result := make(chan handshakeResult, 1)
+	go func() {
+		ready := []byte{0}
+		_, err := io.ReadFull(process.control, ready)
+		result <- handshakeResult{ready: ready[0], err: err}
+	}()
+	var handshake handshakeResult
+	select {
+	case handshake = <-result:
+	case <-time.After(seatbeltStartupHandshakeTime):
+		return context.DeadlineExceeded
+	}
+	if handshake.err != nil {
+		return handshake.err
+	}
+	if handshake.ready != seatbeltSupervisorReady {
+		return errors.New("invalid Seatbelt supervisor readiness")
+	}
+	return process.writeControl([]byte{seatbeltSupervisorStart})
 }
 
 func (process *seatbeltProcess) Wait() error {
@@ -697,6 +736,17 @@ func buildSeatbeltPolicy(request validatedProcessRequest) (string, []string, err
 		definitions = append(definitions, "-D"+name+"="+input)
 		fmt.Fprintf(&runtimeRules, "\n  (literal (param %q))\n  (subpath (param %q))", name, name)
 	}
+	var runtimeProbeRules strings.Builder
+	for index, path := range request.runtimeProbePaths {
+		name := "RUNTIME_PROBE_" + strconv.Itoa(index)
+		definitions = append(definitions, "-D"+name+"="+path)
+		fmt.Fprintf(&runtimeProbeRules, "\n  (literal (param %q))", name)
+	}
+	for index, path := range request.runtimeProbeTraversalPaths {
+		name := "RUNTIME_PROBE_TRAVERSAL_" + strconv.Itoa(index)
+		definitions = append(definitions, "-D"+name+"="+path)
+		fmt.Fprintf(&runtimeProbeRules, "\n  (literal (param %q))", name)
+	}
 	policy := `(version 1)
 (deny default)
 
@@ -729,7 +779,7 @@ func buildSeatbeltPolicy(request validatedProcessRequest) (string, []string, err
   (literal (param "SUPERVISOR"))
   (literal (param "EXECUTABLE"))
   (literal (param "WORKSPACE")) (subpath (param "WORKSPACE"))
-  (literal (param "SESSION")) (subpath (param "SESSION"))` + runtimeRules.String() + `)
+  (literal (param "SESSION")) (subpath (param "SESSION"))` + runtimeRules.String() + runtimeProbeRules.String() + `)
 
 ; Security.framework creates TLS policies by inspecting the running executable.
 ; Metadata access is restricted to the already validated executable's ancestors;

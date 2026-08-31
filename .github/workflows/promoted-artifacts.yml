@@ -37,11 +37,23 @@ jobs:
       - name: Build and verify candidate artifact set
         run: scripts/release-candidate.sh "$ACS_CANDIDATE_VERSION"
 
+      - name: Fetch and verify locked native authentication targets
+        run: scripts/fetch-codex-test-targets.sh scripts/codex-test-targets.lock dist/codex-test-targets
+
       - name: Upload immutable candidate artifact set
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: acs-candidate-${{ github.sha }}
           path: dist/release-candidate
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+
+      - name: Upload immutable native authentication targets
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: codex-test-targets-${{ github.sha }}
+          path: dist/codex-test-targets
           if-no-files-found: error
           compression-level: 0
           retention-days: 1
@@ -84,6 +96,12 @@ jobs:
           name: acs-candidate-${{ github.sha }}
           path: dist/release-candidate
 
+      - name: Download immutable native authentication targets
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: codex-test-targets-${{ github.sha }}
+          path: dist/codex-test-targets
+
       - name: Restore installer mode normalized by artifact transport
         shell: bash
         run: |
@@ -106,11 +124,36 @@ jobs:
             dist/release-candidate \
             "$install_root/bin"
 
+      - name: Install verified matching authentication target
+        shell: bash
+        run: |
+          target_root="${RUNNER_TEMP}/codex-target-${{ matrix.os }}-${{ matrix.arch }}"
+          mkdir -p "$target_root/bin"
+          scripts/install-codex-test-target.sh \
+            scripts/codex-test-targets.lock \
+            dist/codex-test-targets \
+            "${{ matrix.arch }}" \
+            "$target_root/bin/codex"
+
       - name: Run native application, Adapter, installer, and PTY regressions
         run: go test ./...
 
       - name: Run supported native race tests
         run: go test -race ./...
+
+      - name: Run credential-free native authentication evidence
+        env:
+          ACS_RUN_NATIVE_AUTH_GATE: "1"
+          ACS_NATIVE_AUTH_RECOVERY_ROOT: ${{ runner.temp }}/acs-native-auth-recovery
+          ACS_TEST_CODEX_BINARY: ${{ runner.temp }}/codex-target-${{ matrix.os }}-${{ matrix.arch }}/bin/codex
+        run: go test ./internal/codexauth -run 'TestNativeKeychainCredentialFreeContract|TestNativeInstalledTargetContainedStatusWithoutCredentials' -count=1
+
+      - name: Recover native authentication gate state
+        if: always()
+        env:
+          ACS_RUN_NATIVE_AUTH_RECOVERY: "1"
+          ACS_NATIVE_AUTH_RECOVERY_ROOT: ${{ runner.temp }}/acs-native-auth-recovery
+        run: go test ./internal/codexauth -run '^TestNativeKeychainRecoveryEntrypoint$' -count=1
 
       - name: Exercise installed candidate as a black box
         env:
@@ -127,6 +170,8 @@ jobs:
             printf '%s\n' "- Target: \`${{ matrix.target }}\` on its required native runner."
             printf '%s\n' "- Backend observation: required native backend is \`${{ matrix.sandbox_backend }}\`."
             printf '%s\n' '- Candidate observation: the installed black-box containment and lifecycle suite passed.'
+            printf '%s\n' '- Authentication observation: the checksum-locked native target, isolated Keychain contract, fresh-process recovery gate, and credential-free contained status lifecycle passed.'
+            printf '%s\n' '- Authentication boundary: production queries prohibit authentication UI, deterministic tests cover locked or unavailable mapping, and live locked-Keychain and ACL probes remain supplemental.'
             printf '%s\n' '- Compatibility rule: v0.4.0 release artifacts are macOS-only and use the verified system Seatbelt backend.'
             printf '%s\n' '- The candidate itself is never rebuilt in this job.'
             printf '%s\n' '- No credentials, account data, target output, Session contents, private paths, generated policy, environment values, or control characters are recorded.'

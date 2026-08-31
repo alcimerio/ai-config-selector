@@ -97,3 +97,15 @@ func (session *Session) RetainUntilProcessDone(process launch.Process) (launch.P
 func (session *Session) Remove() error {
 	return session.lease.Remove()
 }
+
+// ProtectForRecovery prevents generic startup cleanup from reclaiming this
+// Session while a higher-level durable recovery marker owns its projection.
+func (session *Session) ProtectForRecovery() error {
+	return session.lease.ProtectForRecovery()
+}
+
+// PreserveForRecovery releases the live guard without deleting an inactive
+// Session so a durable higher-level recovery marker can retain ownership.
+func (session *Session) PreserveForRecovery() error {
+	return session.lease.PreserveForRecovery()
+}

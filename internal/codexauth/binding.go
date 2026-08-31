@@ -1,0 +1,383 @@
+package codexauth
+
+import (
+	"bytes"
+	"context"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"time"
+
+	"github.com/alcimerio/ai-config-selector/internal/launch"
+	"github.com/alcimerio/ai-config-selector/internal/session"
+)
+
+// Status acquires one durable identity before Session creation, projects it
+// into a private synthetic home, runs contained Codex status, and finalizes the
+// projection through one typed disposition.
+func (registry *Registry) Status(ctx context.Context, value string) (IdentityStatus, error) {
+	if registry.status == nil || registry.sessionsDirectory == "" {
+		return IdentityStatus{}, ErrProviderUnavailable
+	}
+	name, err := ParseCredentialRef(value)
+	if err != nil {
+		return IdentityStatus{}, err
+	}
+	locked, err := registry.tryLock(ctx, name, false)
+	if err != nil {
+		return IdentityStatus{}, err
+	}
+
+	record, exists, err := registry.provider.Load(ctx, name)
+	if err != nil {
+		_ = locked.Release()
+		return IdentityStatus{}, fmt.Errorf("load Codex authentication identity %q: %w", name, err)
+	}
+	if !exists {
+		_ = locked.Release()
+		return IdentityStatus{}, fmt.Errorf("%w: %q", ErrIdentityNotFound, name)
+	}
+	defer clearBytes(record.Auth)
+	result := IdentityStatus{Metadata: record.Metadata}
+
+	preparation, err := registry.status.Prepare(ctx)
+	if err != nil {
+		_ = locked.Release()
+		return result, sanitizeStatusError(err)
+	}
+	defer preparation.Close()
+	created, proofChallenge, stage, err := registry.prepareBinding(ctx, name)
+	if err != nil {
+		_ = locked.Release()
+		if errors.Is(err, ErrBindingQuarantined) {
+			result.Disposition = QuarantinedUncertain
+			return result, ErrBindingQuarantined
+		}
+		if stage == bindingMarkerCreation {
+			return result, fmt.Errorf("record Codex authentication binding %q: %w", name, err)
+		}
+		return result, ErrStatusFailed
+	}
+	defer locked.Release()
+	if err := projectCredential(created.HomeDirectory(), record); err != nil {
+		_ = registry.quarantine.MarkRecoverable(ctx, name)
+		if cleanupErr := registry.removeCreatedBinding(ctx, created, name); cleanupErr != nil {
+			result.Disposition = QuarantinedUncertain
+			return result, ErrBindingQuarantined
+		}
+		result.Disposition = DiscardedProjection
+		return result, ErrProjectedAuthInvalid
+	}
+
+	beginProcess := func() error { return registry.quarantine.MarkCleanupPending(ctx, name) }
+	run := preparation.Run(ctx, created, record.Metadata.Workspace, proofChallenge, beginProcess)
+	run.err = sanitizeStatusError(run.err)
+	if err := registry.settleBinding(ctx, created, name, proofChallenge, run.err == nil, run.cleanupProven, run.cleanupProcess); err != nil {
+		result.Disposition = QuarantinedUncertain
+		return result, ErrBindingQuarantined
+	}
+	return registry.finalizeStatus(ctx, result, record, created, run.err)
+}
+
+// Recover finalizes one durable quarantine marker. It is idempotent when no
+// marker exists and never exposes projected credential bytes.
+func (registry *Registry) Recover(ctx context.Context, value string) (BindingDisposition, error) {
+	name, err := ParseCredentialRef(value)
+	if err != nil {
+		return "", err
+	}
+	locked, expectedMarker, err := registry.lockRecoverableBinding(ctx, name)
+	if err != nil {
+		if expectedMarker != nil && errors.Is(err, ErrIdentityBusy) {
+			return QuarantinedUncertain, err
+		}
+		return "", err
+	}
+	defer locked.Release()
+	marker, exists, err := registry.quarantine.Inspect(ctx, name)
+	if err != nil {
+		return QuarantinedUncertain, err
+	}
+	if !exists {
+		return DiscardedProjection, nil
+	}
+	if expectedMarker != nil && marker != *expectedMarker {
+		return QuarantinedUncertain, fmt.Errorf("%w: %q", ErrIdentityBusy, name)
+	}
+	recoverSession := launch.RecoverSession
+	if marker.Phase == quarantinePrepared {
+		recoverSession = launch.RecoverPreparedSession
+	}
+	recovered, sessionExists, err := recoverSession(registry.sessionsDirectory, marker.SessionID)
+	if errors.Is(err, launch.ErrSessionStillActive) {
+		return QuarantinedUncertain, fmt.Errorf("%w: %q", ErrIdentityBusy, name)
+	}
+	if err != nil {
+		return QuarantinedUncertain, ErrBindingQuarantined
+	}
+	if !sessionExists {
+		if err := registry.quarantine.Delete(ctx, name); err != nil {
+			return QuarantinedUncertain, ErrBindingQuarantined
+		}
+		return DiscardedProjection, nil
+	}
+	defer recovered.Preserve()
+	if marker.Phase == quarantinePrepared {
+		// No subprocess preparation began, so the projection cannot contain a
+		// target-authored refresh and must never be committed.
+		if err := recovered.Remove(); err != nil {
+			return QuarantinedUncertain, ErrBindingQuarantined
+		}
+		if err := registry.quarantine.Delete(ctx, name); err != nil {
+			return QuarantinedUncertain, ErrBindingQuarantined
+		}
+		return DiscardedProjection, nil
+	} else if marker.Phase == quarantineCleanupPending {
+		challenge, decodeErr := hex.DecodeString(marker.ProofChallenge)
+		proven, proofErr := registry.verifyCleanup(recovered.RootDir, challenge)
+		if decodeErr != nil || proofErr != nil || !proven {
+			return QuarantinedUncertain, fmt.Errorf("%w: %q", ErrIdentityBusy, name)
+		}
+	}
+
+	record, recordExists, err := registry.provider.Load(ctx, name)
+	if err != nil {
+		return QuarantinedUncertain, ErrBindingQuarantined
+	}
+	disposition := DiscardedProjection
+	if recordExists && marker.RefreshAllowed {
+		defer clearBytes(record.Auth)
+		projected, readErr := readSessionAuthFile(recovered.RootDir)
+		if readErr == nil {
+			defer clearBytes(projected)
+			metadata, validationErr := validateAuthJSON(name, projected)
+			if validationErr == nil && metadata == record.Metadata && !bytes.Equal(projected, record.Auth) {
+				if err := registry.provider.Replace(ctx, credentialRecord{Metadata: metadata, Auth: projected}); err != nil {
+					return QuarantinedUncertain, ErrBindingQuarantined
+				}
+				disposition = CommittedSameIdentityRefresh
+			}
+		}
+	}
+	if err := recovered.Remove(); err != nil {
+		return QuarantinedUncertain, ErrBindingQuarantined
+	}
+	if err := registry.quarantine.Delete(ctx, name); err != nil {
+		return QuarantinedUncertain, ErrBindingQuarantined
+	}
+	return disposition, nil
+}
+
+func (registry *Registry) lockRecoverableBinding(
+	ctx context.Context,
+	name CredentialRef,
+) (identityLock, *quarantineMarker, error) {
+	var expected *quarantineMarker
+	for {
+		locked, err := registry.tryLock(ctx, name, true)
+		if err == nil {
+			return locked, expected, nil
+		}
+		if !errors.Is(err, ErrIdentityBusy) {
+			return nil, nil, err
+		}
+		marker, exists, inspectErr := registry.quarantine.Inspect(ctx, name)
+		if inspectErr != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return nil, nil, ctxErr
+			}
+			return nil, nil, err
+		}
+		if expected == nil {
+			if !exists || marker.Phase != quarantineRecoverable {
+				return nil, nil, err
+			}
+			expected = &marker
+		} else if exists && marker != *expected {
+			return nil, expected, err
+		}
+		timer := time.NewTimer(10 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			return nil, nil, ctx.Err()
+		case <-timer.C:
+		}
+	}
+}
+
+func (registry *Registry) transferPendingBinding(
+	created *session.Session,
+	name CredentialRef,
+	proofChallenge string,
+	process launch.Process,
+) {
+	if process == nil {
+		_ = created.PreserveForRecovery()
+		return
+	}
+	go func() {
+		if err := launch.AwaitRetainedSessionCleanup(process); err != nil {
+			return
+		}
+		if err := created.PreserveForRecovery(); err != nil {
+			return
+		}
+		locked, ok := registry.lockSettledBinding(name)
+		if !ok {
+			return
+		}
+		defer locked.Release()
+		marker, exists, err := registry.quarantine.Inspect(context.Background(), name)
+		if err != nil || !exists || marker.SessionID != filepath.Base(created.RootDirectory()) ||
+			marker.ProofChallenge != proofChallenge || marker.Phase != quarantineCleanupPending {
+			return
+		}
+		_ = registry.quarantine.MarkRecoverable(context.Background(), name)
+	}()
+}
+
+func (registry *Registry) lockSettledBinding(name CredentialRef) (identityLock, bool) {
+	for {
+		locked, err := registry.tryLock(context.Background(), name, true)
+		if err == nil {
+			return locked, true
+		}
+		if !errors.Is(err, ErrIdentityBusy) {
+			return nil, false
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func (registry *Registry) finalizeStatus(
+	ctx context.Context,
+	result IdentityStatus,
+	record credentialRecord,
+	created *session.Session,
+	runErr error,
+) (IdentityStatus, error) {
+	if runErr != nil {
+		if err := registry.removeCreatedBinding(ctx, created, record.Metadata.Name); err != nil {
+			result.Disposition = QuarantinedUncertain
+			return result, ErrBindingQuarantined
+		}
+		result.Disposition = DiscardedProjection
+		return result, runErr
+	}
+
+	projected, err := readSessionAuthFile(created.RootDirectory())
+	if err != nil {
+		if cleanupErr := registry.removeCreatedBinding(ctx, created, record.Metadata.Name); cleanupErr != nil {
+			result.Disposition = QuarantinedUncertain
+			return result, ErrBindingQuarantined
+		}
+		result.Disposition = DiscardedProjection
+		return result, ErrProjectedAuthInvalid
+	}
+	defer clearBytes(projected)
+	metadata, err := validateAuthJSON(record.Metadata.Name, projected)
+	if err != nil || metadata != record.Metadata {
+		if cleanupErr := registry.removeCreatedBinding(ctx, created, record.Metadata.Name); cleanupErr != nil {
+			result.Disposition = QuarantinedUncertain
+			return result, ErrBindingQuarantined
+		}
+		result.Disposition = DiscardedProjection
+		return result, ErrProjectedAuthInvalid
+	}
+
+	disposition := DiscardedProjection
+	if !bytes.Equal(projected, record.Auth) {
+		if err := registry.provider.Replace(ctx, credentialRecord{Metadata: metadata, Auth: projected}); err != nil {
+			_ = created.PreserveForRecovery()
+			result.Disposition = QuarantinedUncertain
+			return result, ErrBindingQuarantined
+		}
+		disposition = CommittedSameIdentityRefresh
+	}
+	if err := registry.removeCreatedBinding(ctx, created, record.Metadata.Name); err != nil {
+		result.Disposition = QuarantinedUncertain
+		return result, ErrBindingQuarantined
+	}
+	result.Disposition = disposition
+	return result, nil
+}
+
+func (registry *Registry) removeCreatedBinding(
+	ctx context.Context,
+	created *session.Session,
+	name CredentialRef,
+) error {
+	if err := created.Remove(); err != nil {
+		_ = created.PreserveForRecovery()
+		return ErrBindingQuarantined
+	}
+	if err := registry.quarantine.Delete(ctx, name); err != nil {
+		return ErrBindingQuarantined
+	}
+	return nil
+}
+
+func projectCredential(home string, record credentialRecord) error {
+	if err := validateMetadata(record.Metadata); err != nil {
+		return ErrProjectedAuthInvalid
+	}
+	validated, err := validateAuthJSON(record.Metadata.Name, record.Auth)
+	if err != nil || validated != record.Metadata {
+		return ErrProjectedAuthInvalid
+	}
+	codexHome := filepath.Join(home, ".codex")
+	if err := os.Mkdir(codexHome, 0o700); err != nil {
+		return ErrProjectedAuthInvalid
+	}
+	configuration := "cli_auth_credentials_store = \"file\"\nforced_login_method = \"chatgpt\"\n"
+	if record.Metadata.Workspace != "" {
+		configuration += fmt.Sprintf("forced_chatgpt_workspace_id = %q\n", record.Metadata.Workspace)
+	}
+	if err := writeExclusivePrivateFile(filepath.Join(codexHome, "config.toml"), []byte(configuration)); err != nil {
+		return ErrProjectedAuthInvalid
+	}
+	if err := writeExclusivePrivateFile(filepath.Join(codexHome, "auth.json"), record.Auth); err != nil {
+		return ErrProjectedAuthInvalid
+	}
+	return nil
+}
+
+func writeExclusivePrivateFile(path string, contents []byte) error {
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return err
+	}
+	remove := true
+	closed := false
+	defer func() {
+		if !closed {
+			_ = file.Close()
+		}
+		if remove {
+			_ = os.Remove(path)
+		}
+	}()
+	if err := file.Chmod(0o600); err != nil {
+		return err
+	}
+	if _, err := file.Write(contents); err != nil {
+		return err
+	}
+	if err := file.Sync(); err != nil {
+		return err
+	}
+	if err := file.Close(); err != nil {
+		return err
+	}
+	closed = true
+	remove = false
+	return nil
+}

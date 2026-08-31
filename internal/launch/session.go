@@ -15,37 +15,187 @@ const (
 	sessionDirectoryPrefix = "session-"
 	legacySessionLeaseFile = ".active.lock"
 	sessionLeaseSuffix     = ".lock"
+	sessionRecoverySuffix  = ".recovery"
 	sessionLeasesSuffix    = ".leases"
 	sessionCleanupWaitTime = 5 * time.Second
 )
+
+var ErrSessionStillActive = errors.New("ACS Session is still active")
 
 // SessionLease owns one ephemeral Session directory until Remove is called.
 // A process-held file lock lets a later ACS startup distinguish an active
 // Session from one abandoned by a terminated process.
 type SessionLease struct {
-	RootDir         string
-	guard           *os.File
-	guardPath       string
-	mutex           sync.Mutex
-	references      int
-	removeRequested bool
-	cleanupErr      error
+	RootDir           string
+	guard             *os.File
+	guardPath         string
+	recoveryPath      string
+	recoveryProtected bool
+	mutex             sync.Mutex
+	references        int
+	removeRequested   bool
+	cleanupErr        error
+}
+
+// RecoveredSessionLease owns an abandoned Session while a higher-level module
+// completes recovery. Holding the external guard prevents concurrent startup
+// cleanup from deleting the Session during that decision.
+type RecoveredSessionLease struct {
+	RootDir           string
+	sessionsDirectory string
+	guard             *os.File
+	guardPath         string
+	recoveryPath      string
+}
+
+// RecoverSession acquires an abandoned Session by its non-secret directory
+// identifier. An active Session is never taken over.
+func RecoverSession(sessionsDirectory, sessionID string) (*RecoveredSessionLease, bool, error) {
+	return recoverSession(sessionsDirectory, sessionID, false)
+}
+
+// RecoverPreparedSession acquires an abandoned Session for a higher-level
+// prepared binding. Prepared bindings may have published their durable marker
+// immediately before recovery protection, so this seam alone accepts a valid
+// inactive Session without that protection. Active and malformed Sessions
+// remain unavailable.
+func RecoverPreparedSession(sessionsDirectory, sessionID string) (*RecoveredSessionLease, bool, error) {
+	return recoverSession(sessionsDirectory, sessionID, true)
+}
+
+func recoverSession(
+	sessionsDirectory string,
+	sessionID string,
+	allowUnprotected bool,
+) (*RecoveredSessionLease, bool, error) {
+	if filepath.Base(sessionID) != sessionID || !strings.HasPrefix(sessionID, sessionDirectoryPrefix) || len(sessionID) > 200 {
+		return nil, false, errors.New("recover ACS Session: invalid identifier")
+	}
+	if _, err := os.Lstat(sessionsDirectory); os.IsNotExist(err) {
+		return nil, false, nil
+	}
+	if err := validatePrivateSessionDirectory(sessionsDirectory); err != nil {
+		return nil, false, errors.New("recover ACS Session: invalid Sessions directory")
+	}
+	root := filepath.Join(sessionsDirectory, sessionID)
+	if _, err := os.Lstat(sessionLeasesDirectory(sessionsDirectory)); os.IsNotExist(err) {
+		if _, rootErr := os.Lstat(root); os.IsNotExist(rootErr) {
+			return nil, false, nil
+		}
+	}
+	if err := validatePrivateSessionDirectory(sessionLeasesDirectory(sessionsDirectory)); err != nil {
+		return nil, false, errors.New("recover ACS Session: invalid Session leases directory")
+	}
+	coordinator, err := openLockedFile(sessionsDirectory+".lock", false)
+	if err != nil {
+		return nil, false, errors.New("recover ACS Session: coordination failed")
+	}
+	defer closeLockedFile(coordinator)
+
+	recoveryPath := sessionRecoveryPath(sessionsDirectory, root)
+	protected, err := validRecoveryProtection(recoveryPath)
+	if err != nil {
+		return nil, false, errors.New("recover ACS Session: invalid recovery protection")
+	}
+	rootInfo, err := os.Lstat(root)
+	if os.IsNotExist(err) {
+		if !protected {
+			return nil, false, nil
+		}
+		guardPath := sessionLeasePath(sessionsDirectory, root)
+		guard, lockErr := openExistingLockedFile(guardPath, true)
+		if errors.Is(lockErr, os.ErrNotExist) {
+			if err := os.Remove(recoveryPath); err != nil && !os.IsNotExist(err) {
+				return nil, false, errors.New("recover ACS Session: cleanup failed")
+			}
+			if err := syncSessionLeaseDirectory(sessionsDirectory); err != nil {
+				return nil, false, errors.New("recover ACS Session: cleanup failed")
+			}
+			return nil, false, nil
+		}
+		if errors.Is(lockErr, syscall.EWOULDBLOCK) {
+			return nil, true, ErrSessionStillActive
+		}
+		if lockErr != nil {
+			return nil, false, errors.New("recover ACS Session: lease failed")
+		}
+		defer closeLockedFile(guard)
+		if err := os.Remove(guardPath); err != nil && !os.IsNotExist(err) {
+			return nil, false, errors.New("recover ACS Session: cleanup failed")
+		}
+		if err := os.Remove(recoveryPath); err != nil && !os.IsNotExist(err) {
+			return nil, false, errors.New("recover ACS Session: cleanup failed")
+		}
+		if err := syncSessionLeaseDirectory(sessionsDirectory); err != nil {
+			return nil, false, errors.New("recover ACS Session: cleanup failed")
+		}
+		return nil, false, nil
+	}
+	if err != nil || !rootInfo.IsDir() || rootInfo.Mode()&os.ModeSymlink != 0 {
+		return nil, false, errors.New("recover ACS Session: invalid Session")
+	}
+	if !protected && !allowUnprotected {
+		return nil, false, errors.New("recover ACS Session: Session is not recovery protected")
+	}
+	guardPath := sessionLeasePath(sessionsDirectory, root)
+	guard, err := openExistingLockedFile(guardPath, true)
+	if errors.Is(err, syscall.EWOULDBLOCK) {
+		return nil, true, ErrSessionStillActive
+	}
+	if err != nil {
+		return nil, false, errors.New("recover ACS Session: lease failed")
+	}
+	return &RecoveredSessionLease{
+		RootDir: root, sessionsDirectory: sessionsDirectory, guard: guard,
+		guardPath: guardPath, recoveryPath: recoveryPath,
+	}, true, nil
+}
+
+// Preserve releases recovery ownership without deleting the Session.
+func (session *RecoveredSessionLease) Preserve() {
+	if session == nil || session.guard == nil {
+		return
+	}
+	closeLockedFile(session.guard)
+	session.guard = nil
+}
+
+// Remove deletes the recovered Session while coordinating with new Session
+// startup, then releases its external guard.
+func (session *RecoveredSessionLease) Remove() error {
+	if session == nil || session.guard == nil {
+		return nil
+	}
+	coordinator, err := openLockedFile(session.sessionsDirectory+".lock", false)
+	if err != nil {
+		return errors.New("remove recovered ACS Session: coordination failed")
+	}
+	defer closeLockedFile(coordinator)
+	if err := os.RemoveAll(session.RootDir); err != nil {
+		return errors.New("remove recovered ACS Session: cleanup failed")
+	}
+	if err := os.Remove(session.guardPath); err != nil && !os.IsNotExist(err) {
+		return errors.New("remove recovered ACS Session: cleanup failed")
+	}
+	if err := os.Remove(session.recoveryPath); err != nil && !os.IsNotExist(err) {
+		return errors.New("remove recovered ACS Session: cleanup failed")
+	}
+	if err := syncSessionLeaseDirectory(session.sessionsDirectory); err != nil {
+		return errors.New("remove recovered ACS Session: cleanup failed")
+	}
+	closeLockedFile(session.guard)
+	session.guard = nil
+	return nil
 }
 
 // CreateSession removes abandoned Sessions and creates a leased Session while
 // preserving Sessions held by concurrent ACS processes.
 func CreateSession(sessionsDirectory string) (*SessionLease, error) {
-	if err := os.MkdirAll(sessionsDirectory, 0o700); err != nil {
+	if err := securePrivateSessionDirectory(sessionsDirectory); err != nil {
 		return nil, fmt.Errorf("create ACS Sessions directory: %w", err)
 	}
-	if err := os.Chmod(sessionsDirectory, 0o700); err != nil {
-		return nil, fmt.Errorf("secure ACS Sessions directory: %w", err)
-	}
-	if err := os.MkdirAll(sessionLeasesDirectory(sessionsDirectory), 0o700); err != nil {
+	if err := securePrivateSessionDirectory(sessionLeasesDirectory(sessionsDirectory)); err != nil {
 		return nil, fmt.Errorf("create ACS Session leases directory: %w", err)
-	}
-	if err := os.Chmod(sessionLeasesDirectory(sessionsDirectory), 0o700); err != nil {
-		return nil, fmt.Errorf("secure ACS Session leases directory: %w", err)
 	}
 
 	coordinator, err := openLockedFile(sessionsDirectory+".lock", false)
@@ -67,7 +217,10 @@ func CreateSession(sessionsDirectory string) (*SessionLease, error) {
 		_ = os.RemoveAll(rootDir)
 		return nil, fmt.Errorf("lease ACS Session: %w", err)
 	}
-	return &SessionLease{RootDir: rootDir, guard: guard, guardPath: guardPath, references: 1}, nil
+	return &SessionLease{
+		RootDir: rootDir, guard: guard, guardPath: guardPath,
+		recoveryPath: sessionRecoveryPath(sessionsDirectory, rootDir), references: 1,
+	}, nil
 }
 
 // Remove releases the caller's ownership and deletes the leased Session after
@@ -84,6 +237,41 @@ func (session *SessionLease) Remove() error {
 		return nil
 	}
 	return session.removeLocked()
+}
+
+// ProtectForRecovery durably marks a live Session as owned by a higher-level
+// recovery workflow. Generic startup cleanup will not reclaim it until that
+// workflow removes the protection under the Session lease.
+func (session *SessionLease) ProtectForRecovery() error {
+	session.mutex.Lock()
+	defer session.mutex.Unlock()
+	if session.guard == nil || session.removeRequested || session.references <= 0 {
+		return errors.New("protect ACS Session for recovery: Session is not active")
+	}
+	if session.recoveryProtected {
+		return nil
+	}
+	if err := createRecoveryProtection(session.recoveryPath); err != nil {
+		return errors.New("protect ACS Session for recovery: persistence failed")
+	}
+	session.recoveryProtected = true
+	return nil
+}
+
+// PreserveForRecovery transfers an inactive Session from the live in-process
+// lease to durable recovery ownership without deleting its files. It is valid
+// only after every retained process reference has settled.
+func (session *SessionLease) PreserveForRecovery() error {
+	session.mutex.Lock()
+	defer session.mutex.Unlock()
+	if session.guard == nil || !session.recoveryProtected || session.references > 1 || (!session.removeRequested && session.references != 1) || (session.removeRequested && session.references != 0) {
+		return errors.New("preserve ACS Session for recovery: Session is still active")
+	}
+	closeLockedFile(session.guard)
+	session.guard = nil
+	session.references = 0
+	session.removeRequested = true
+	return nil
 }
 
 func (session *SessionLease) retain() (func() error, error) {
@@ -119,13 +307,21 @@ func (session *SessionLease) removeLocked() error {
 		session.cleanupErr = errors.New("delete ACS Session: cleanup failed")
 		return session.cleanupErr
 	}
-	if session.guard != nil {
-		closeLockedFile(session.guard)
-		session.guard = nil
-	}
 	if err := os.Remove(session.guardPath); err != nil && !os.IsNotExist(err) {
 		session.cleanupErr = errors.New("delete ACS Session: cleanup failed")
 		return session.cleanupErr
+	}
+	if err := os.Remove(session.recoveryPath); err != nil && !os.IsNotExist(err) {
+		session.cleanupErr = errors.New("delete ACS Session: cleanup failed")
+		return session.cleanupErr
+	}
+	if err := syncDirectoryPath(filepath.Dir(session.guardPath)); err != nil {
+		session.cleanupErr = errors.New("delete ACS Session: cleanup failed")
+		return session.cleanupErr
+	}
+	if session.guard != nil {
+		closeLockedFile(session.guard)
+		session.guard = nil
 	}
 	session.cleanupErr = nil
 	return nil
@@ -247,6 +443,13 @@ func removeAbandonedSessions(sessionsDirectory string) error {
 			continue
 		}
 		sessionPath := filepath.Join(sessionsDirectory, entry.Name())
+		protected, err := validRecoveryProtection(sessionRecoveryPath(sessionsDirectory, sessionPath))
+		if err != nil {
+			return errors.New("inspect abandoned ACS Session recovery protection: invalid marker")
+		}
+		if protected {
+			continue
+		}
 		if !entry.IsDir() {
 			if err := os.RemoveAll(sessionPath); err != nil {
 				return errors.New("delete abandoned ACS Session: cleanup failed")
@@ -304,10 +507,157 @@ func sessionLeasePath(sessionsDirectory, sessionRoot string) string {
 	return filepath.Join(sessionLeasesDirectory(sessionsDirectory), filepath.Base(sessionRoot)+sessionLeaseSuffix)
 }
 
+func sessionRecoveryPath(sessionsDirectory, sessionRoot string) string {
+	return filepath.Join(sessionLeasesDirectory(sessionsDirectory), filepath.Base(sessionRoot)+sessionRecoverySuffix)
+}
+
+func createRecoveryProtection(path string) error {
+	descriptor, err := syscall.Open(path, syscall.O_WRONLY|syscall.O_CREAT|syscall.O_EXCL|syscall.O_CLOEXEC|syscall.O_NOFOLLOW, 0o600)
+	if err != nil {
+		return err
+	}
+	file := os.NewFile(uintptr(descriptor), path)
+	if file == nil {
+		_ = syscall.Close(descriptor)
+		return errors.New("create recovery protection")
+	}
+	if err := file.Chmod(0o600); err != nil {
+		_ = file.Close()
+		_ = os.Remove(path)
+		return err
+	}
+	if err := file.Sync(); err != nil {
+		_ = file.Close()
+		_ = os.Remove(path)
+		return err
+	}
+	if err := file.Close(); err != nil {
+		_ = os.Remove(path)
+		return err
+	}
+	return syncDirectoryPath(filepath.Dir(path))
+}
+
+func validRecoveryProtection(path string) (bool, error) {
+	descriptor, err := syscall.Open(path, syscall.O_RDONLY|syscall.O_CLOEXEC|syscall.O_NOFOLLOW, 0)
+	if errors.Is(err, syscall.ENOENT) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	file := os.NewFile(uintptr(descriptor), path)
+	if file == nil {
+		_ = syscall.Close(descriptor)
+		return false, errors.New("inspect recovery protection")
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 || info.Size() != 0 {
+		return false, errors.New("invalid recovery protection")
+	}
+	native, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || native.Uid != uint32(os.Geteuid()) || native.Nlink != 1 {
+		return false, errors.New("invalid recovery protection")
+	}
+	return true, nil
+}
+
+func syncSessionLeaseDirectory(sessionsDirectory string) error {
+	return syncDirectoryPath(sessionLeasesDirectory(sessionsDirectory))
+}
+
+func syncDirectoryPath(path string) error {
+	directory, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer directory.Close()
+	return directory.Sync()
+}
+
+func securePrivateSessionDirectory(path string) error {
+	info, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		if err := os.MkdirAll(path, 0o700); err != nil {
+			return err
+		}
+		info, err = os.Lstat(path)
+	}
+	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return errors.New("invalid private directory")
+	}
+	if native, ok := info.Sys().(*syscall.Stat_t); !ok || native.Uid != uint32(os.Geteuid()) {
+		return errors.New("invalid private directory")
+	}
+	return os.Chmod(path, 0o700)
+}
+
+func validatePrivateSessionDirectory(path string) error {
+	info, err := os.Lstat(path)
+	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm() != 0o700 {
+		return errors.New("invalid private directory")
+	}
+	if native, ok := info.Sys().(*syscall.Stat_t); !ok || native.Uid != uint32(os.Geteuid()) {
+		return errors.New("invalid private directory")
+	}
+	return nil
+}
+
 func openLockedFile(path string, nonblocking bool) (*os.File, error) {
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
+	descriptor, err := syscall.Open(path, syscall.O_CREAT|syscall.O_RDWR|syscall.O_CLOEXEC|syscall.O_NOFOLLOW, 0o600)
 	if err != nil {
 		return nil, err
+	}
+	file := os.NewFile(uintptr(descriptor), path)
+	if file == nil {
+		_ = syscall.Close(descriptor)
+		return nil, errors.New("open locked file")
+	}
+	info, err := file.Stat()
+	if err != nil || !info.Mode().IsRegular() {
+		_ = file.Close()
+		return nil, errors.New("invalid locked file")
+	}
+	native, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || native.Uid != uint32(os.Geteuid()) || native.Nlink != 1 {
+		_ = file.Close()
+		return nil, errors.New("invalid locked file")
+	}
+	if err := file.Chmod(0o600); err != nil {
+		_ = file.Close()
+		return nil, err
+	}
+	operation := syscall.LOCK_EX
+	if nonblocking {
+		operation |= syscall.LOCK_NB
+	}
+	if err := syscall.Flock(int(file.Fd()), operation); err != nil {
+		_ = file.Close()
+		return nil, err
+	}
+	return file, nil
+}
+
+func openExistingLockedFile(path string, nonblocking bool) (*os.File, error) {
+	descriptor, err := syscall.Open(path, syscall.O_RDWR|syscall.O_CLOEXEC|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+		return nil, err
+	}
+	file := os.NewFile(uintptr(descriptor), path)
+	if file == nil {
+		_ = syscall.Close(descriptor)
+		return nil, errors.New("open existing locked file")
+	}
+	info, err := file.Stat()
+	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 {
+		_ = file.Close()
+		return nil, errors.New("invalid existing locked file")
+	}
+	native, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || native.Uid != uint32(os.Geteuid()) || native.Nlink != 1 {
+		_ = file.Close()
+		return nil, errors.New("invalid existing locked file")
 	}
 	operation := syscall.LOCK_EX
 	if nonblocking {

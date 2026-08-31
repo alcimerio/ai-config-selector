@@ -1,0 +1,180 @@
+package codexauth
+
+import (
+	"errors"
+	"os"
+	"path/filepath"
+	"testing"
+)
+
+func TestFileIdentityLockerRejectsConcurrentUseAndReleases(t *testing.T) {
+	directory := filepath.Join(t.TempDir(), "locks")
+	locker := newFileIdentityLocker(directory)
+	first, err := locker.TryLock("work")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := locker.TryLock("work"); !errors.Is(err, ErrIdentityBusy) {
+		t.Fatalf("concurrent lock error = %v", err)
+	}
+	if err := first.Release(); err != nil {
+		t.Fatal(err)
+	}
+	second, err := locker.TryLock("work")
+	if err != nil {
+		t.Fatalf("lock after release: %v", err)
+	}
+	if err := second.Release(); err != nil {
+		t.Fatal(err)
+	}
+
+	info, err := os.Stat(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o700 {
+		t.Fatalf("lock directory mode = %o", info.Mode().Perm())
+	}
+	lockInfo, err := os.Stat(filepath.Join(directory, "work.lock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lockInfo.Mode().Perm() != 0o600 {
+		t.Fatalf("lock file mode = %o", lockInfo.Mode().Perm())
+	}
+}
+
+func TestFileIdentityLockerRejectsSymlinkLockFile(t *testing.T) {
+	root := t.TempDir()
+	directory := filepath.Join(root, "locks")
+	if err := os.Mkdir(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(root, "target")
+	if err := os.WriteFile(target, []byte("sentinel"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, filepath.Join(directory, "work.lock")); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := newFileIdentityLocker(directory).TryLock("work"); !errors.Is(err, ErrProviderUnavailable) {
+		t.Fatalf("symlink lock error = %v", err)
+	}
+	contents, err := os.ReadFile(target)
+	if err != nil || string(contents) != "sentinel" {
+		t.Fatalf("symlink target changed: %q, %v", contents, err)
+	}
+	info, err := os.Stat(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o644 {
+		t.Fatalf("symlink target mode changed to %o", info.Mode().Perm())
+	}
+}
+
+func TestFileIdentityLockerRejectsHardLinkedLockFile(t *testing.T) {
+	root := t.TempDir()
+	directory := filepath.Join(root, "locks")
+	if err := os.Mkdir(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(root, "target")
+	if err := os.WriteFile(target, []byte("sentinel"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Link(target, filepath.Join(directory, "work.lock")); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := newFileIdentityLocker(directory).TryLock("work"); !errors.Is(err, ErrProviderUnavailable) {
+		t.Fatalf("hard-linked lock error = %v", err)
+	}
+	contents, err := os.ReadFile(target)
+	if err != nil || string(contents) != "sentinel" {
+		t.Fatalf("hard-link target changed: %q, %v", contents, err)
+	}
+	info, err := os.Stat(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o644 {
+		t.Fatalf("hard-link target mode changed to %o", info.Mode().Perm())
+	}
+}
+
+func TestLockDescriptorMetadataRejectsForeignOwnership(t *testing.T) {
+	if err := validateLockDescriptorMetadata(lockDescriptorMetadata{
+		regular: true,
+		owner:   uint32(os.Geteuid() + 1),
+		links:   1,
+	}, uint32(os.Geteuid())); err == nil {
+		t.Fatal("foreign-owned lock descriptor was accepted")
+	}
+}
+
+func TestFileIdentityLockerRejectsSymlinkDirectoryWithoutChangingTarget(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "target")
+	if err := os.Mkdir(target, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	directory := filepath.Join(root, "locks")
+	if err := os.Symlink(target, directory); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := newFileIdentityLocker(directory).TryLock("work"); !errors.Is(err, ErrProviderUnavailable) {
+		t.Fatalf("symlink directory error = %v", err)
+	}
+	info, err := os.Stat(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o755 {
+		t.Fatalf("symlink target mode changed to %o", info.Mode().Perm())
+	}
+}
+
+func TestFileIdentityLockerFailsClosedAcrossAncestorReplacement(t *testing.T) {
+	root := t.TempDir()
+	ancestor := filepath.Join(root, "auth")
+	directory := filepath.Join(ancestor, "locks")
+	if err := os.MkdirAll(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	locker := newFileIdentityLocker(directory)
+
+	moved := filepath.Join(root, "auth-moved")
+	if err := os.Rename(ancestor, moved); err != nil {
+		t.Fatal(err)
+	}
+	replacement := filepath.Join(ancestor, "locks")
+	if err := os.MkdirAll(replacement, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	locked, err := locker.TryLock("work")
+	if !errors.Is(err, ErrProviderUnavailable) {
+		t.Fatalf("detached locker error = %v", err)
+	}
+	if locked != nil {
+		t.Fatal("detached locker returned a lock")
+	}
+	if _, err := os.Stat(filepath.Join(moved, "locks", "work.lock")); !os.IsNotExist(err) {
+		t.Fatalf("detached locker wrote lock file: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(replacement, "work.lock")); !os.IsNotExist(err) {
+		t.Fatalf("replacement lock file error = %v", err)
+	}
+
+	replacementLocker := newFileIdentityLocker(replacement)
+	locked, err = replacementLocker.TryLock("work")
+	if err != nil {
+		t.Fatalf("replacement locker: %v", err)
+	}
+	if err := locked.Release(); err != nil {
+		t.Fatal(err)
+	}
+}

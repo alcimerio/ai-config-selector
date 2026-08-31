@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"slices"
 	"sort"
 	"strconv"
@@ -27,6 +28,7 @@ const (
 	seatbeltHelperEnvironment         = "ACS_INTERNAL_SEATBELT_SUPERVISOR_FD"
 	seatbeltStatusProxyArgument       = "--acs-internal-seatbelt-status-proxy-v1"
 	seatbeltStatusProxyEnvironmentKey = "ACS_INTERNAL_SEATBELT_STATUS_PROXY_FD"
+	seatbeltRecoveryProofEnvironment  = "ACS_INTERNAL_SEATBELT_RECOVERY_PROOF"
 	seatbeltStatusProxyControlFD      = 4
 	seatbeltProofMagic                = "ACS-SEATBELT-CLEANUP"
 	seatbeltProofVersion              = 1
@@ -36,6 +38,8 @@ const (
 	seatbeltStatusPacketSize          = 2
 	seatbeltStatusExit                = 'E'
 	seatbeltStatusSignal              = 'S'
+	seatbeltSupervisorReady           = 'R'
+	seatbeltSupervisorStart           = 'G'
 )
 
 type seatbeltCleanupProof struct {
@@ -147,12 +151,28 @@ func runSeatbeltSupervisorWithDescriptorSealer(controlFD int, target string, arg
 	if _, err := io.ReadFull(control, challenge); err != nil {
 		return 125
 	}
+	recoveryRoot, err := seatbeltRecoveryRoot(os.Environ())
+	if err != nil {
+		return 125
+	}
+	if recoveryRoot != "" {
+		if err := clearSessionCleanupProof(recoveryRoot); err != nil {
+			return 125
+		}
+	}
+	if _, err := control.Write([]byte{seatbeltSupervisorReady}); err != nil {
+		return seatbeltNoTargetFailure(control, challenge, recoveryRoot)
+	}
+	start := []byte{0}
+	if _, err := io.ReadFull(control, start); err != nil || start[0] != seatbeltSupervisorStart {
+		return seatbeltNoTargetFailure(control, challenge, recoveryRoot)
+	}
 	api, err := loadSeatbeltProcAPI()
 	if err != nil {
-		return seatbeltNoTargetFailure(control, challenge)
+		return seatbeltNoTargetFailure(control, challenge, recoveryRoot)
 	}
 	if err := seal(api); err != nil {
-		return seatbeltNoTargetFailure(control, challenge)
+		return seatbeltNoTargetFailure(control, challenge, recoveryRoot)
 	}
 
 	command := exec.Command(target, arguments...)
@@ -168,7 +188,7 @@ func runSeatbeltSupervisorWithDescriptorSealer(controlFD int, target string, arg
 		command.SysProcAttr.Ctty = terminalFD
 	}
 	if err := command.Start(); err != nil {
-		return seatbeltNoTargetFailure(control, challenge)
+		return seatbeltNoTargetFailure(control, challenge, recoveryRoot)
 	}
 	targetPID := command.Process.Pid
 	targetGroup := targetPID
@@ -194,6 +214,11 @@ func runSeatbeltSupervisorWithDescriptorSealer(controlFD int, target string, arg
 	}
 	if err := settleSeatbeltInstance(api, identities, os.Getpid(), targetPID, time.Now().Add(seatbeltCleanupDeadline)); err != nil {
 		return 125
+	}
+	if recoveryRoot != "" {
+		if err := recordSessionCleanupProof(recoveryRoot, challenge); err != nil {
+			return 125
+		}
 	}
 
 	proof := seatbeltCleanupProof{
@@ -232,7 +257,12 @@ func runSeatbeltSupervisorWithDescriptorSealer(controlFD int, target string, arg
 	return 125
 }
 
-func seatbeltNoTargetFailure(control *os.File, challenge []byte) int {
+func seatbeltNoTargetFailure(control *os.File, challenge []byte, recoveryRoot string) int {
+	if recoveryRoot != "" {
+		if err := recordSessionCleanupProof(recoveryRoot, challenge); err != nil {
+			return 125
+		}
+	}
 	proof := seatbeltCleanupProof{
 		Magic: seatbeltProofMagic, Version: seatbeltProofVersion,
 		Challenge: hex.EncodeToString(challenge), ZeroLiveTargets: true, NoTargetStarted: true,
@@ -358,24 +388,67 @@ func seatbeltTargetEnvironment(environment []string) []string {
 }
 
 func seatbeltStatusProxyEnvironment(environment []string) []string {
+	recoveryProof := seatbeltRecoveryProofEnabled(environment)
 	clean := seatbeltEnvironmentWithoutReservedDescriptors(environment)
-	return append(clean, seatbeltStatusProxyEnvironmentKey+"=3")
+	clean = append(clean, seatbeltStatusProxyEnvironmentKey+"=3")
+	if recoveryProof {
+		clean = append(clean, seatbeltRecoveryProofEnvironment+"=1")
+	}
+	return clean
 }
 
 func seatbeltSupervisorEnvironment(environment []string) []string {
+	recoveryProof := seatbeltRecoveryProofEnabled(environment)
 	clean := seatbeltEnvironmentWithoutReservedDescriptors(environment)
-	return append(clean, seatbeltHelperEnvironment+"=3")
+	clean = append(clean, seatbeltHelperEnvironment+"=3")
+	if recoveryProof {
+		clean = append(clean, seatbeltRecoveryProofEnvironment+"=1")
+	}
+	return clean
 }
 
 func seatbeltEnvironmentWithoutReservedDescriptors(environment []string) []string {
 	clean := make([]string, 0, len(environment))
 	for _, value := range environment {
 		if !strings.HasPrefix(value, seatbeltHelperEnvironment+"=") &&
-			!strings.HasPrefix(value, seatbeltStatusProxyEnvironmentKey+"=") {
+			!strings.HasPrefix(value, seatbeltStatusProxyEnvironmentKey+"=") &&
+			!strings.HasPrefix(value, seatbeltRecoveryProofEnvironment+"=") {
 			clean = append(clean, value)
 		}
 	}
 	return clean
+}
+
+func seatbeltRecoveryProofEnabled(environment []string) bool {
+	for _, value := range environment {
+		if value == seatbeltRecoveryProofEnvironment+"=1" {
+			return true
+		}
+	}
+	return false
+}
+
+func seatbeltRecoveryRoot(environment []string) (string, error) {
+	if !seatbeltRecoveryProofEnabled(environment) {
+		return "", nil
+	}
+	var home string
+	for _, value := range environment {
+		if strings.HasPrefix(value, "HOME=") {
+			home = strings.TrimPrefix(value, "HOME=")
+			break
+		}
+	}
+	home = filepath.Clean(home)
+	if home == "." || filepath.Base(home) != "home" {
+		return "", errors.New("invalid Seatbelt recovery Session")
+	}
+	root := filepath.Dir(home)
+	info, err := os.Lstat(root)
+	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return "", errors.New("invalid Seatbelt recovery Session")
+	}
+	return root, nil
 }
 
 func seatbeltTargetStatus(data []byte) ([]byte, error) {

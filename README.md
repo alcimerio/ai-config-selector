@@ -83,6 +83,60 @@ required fail-closed sandbox and could not persist in the ephemeral synthetic
 home. This does not change Devin's permission mode. There is no unsandboxed
 fallback.
 
+## Codex authentication identities (development source)
+
+The current development source can create ACS-owned, named ChatGPT login
+identities and verify them through an isolated Codex Session:
+
+```sh
+acs codex auth login --name work
+acs codex auth login --name personal --device-auth
+acs codex auth list
+acs codex auth status --name work
+acs codex auth recover --name work
+acs codex auth logout --name work
+```
+
+Names use 1–64 lowercase ASCII letters, numbers, dots, underscores, or hyphens
+and must begin with a letter or number. Login requires interactive stdin and
+stdout and the supported `codex-cli 0.149.1`. ACS runs that login inside its
+mandatory process sandbox with a private synthetic home and file credential
+storage, validates the resulting credential, then stores one versioned record
+per name in the macOS Keychain under an ACS-specific service. Existing names
+are never replaced implicitly. `list` retrieves only non-secret Keychain
+attributes; `logout` is idempotent for an absent valid name.
+
+`status` acquires exactly one named identity before creating a Session, copies
+it into that Session's private synthetic home, forces Codex file credential
+storage plus the validated login-method/workspace restrictions, and runs the
+version-pinned `codex login status` inside the mandatory process sandbox. An
+unchanged projection is discarded. A schema-valid token refresh replaces the
+Keychain record only when its method, workspace, and identity fingerprint still
+match. Projected deletion, logout, schema changes, or identity changes never
+delete or replace the last valid durable identity.
+
+If contained-process settlement, durable replacement, or logical projection
+removal is uncertain, the Session and identity become quarantined and new use
+of that name fails closed. `recover` proves the protected Session is inactive,
+makes one commit-or-discard decision, removes the projection, and then clears
+the secret-free quarantine marker. Recovery is idempotent when no marker
+remains.
+
+These identities are separate from the invoking user's global Codex login.
+ACS never reads, imports, replaces, deletes, or falls back to global
+`~/.codex/auth.json` or Codex's global OS-store namespace. Running `codex login`
+outside ACS may change that global login, but it does not change ACS-owned
+records. A locked, unavailable, ambiguous, or corrupt Keychain fails closed;
+there is no plaintext fallback.
+
+This development slice manages durable identities and binds one identity to a
+contained status probe. It does not yet bind an identity to a Codex launch,
+expose `--auth`, persist a Codex Profile overlay, or provide the Codex target
+adapter. Deleting a Profile never deletes an identity.
+
+See [named Codex authentication and contained status](docs/codex-auth.md) for the
+storage, isolation, failure, and cleanup contracts.
+
 ## Inspect the sandbox directly
 
 Open the fixed system shell inside the selected Profile's isolated Session:
@@ -170,6 +224,10 @@ evidence.
 
 The credential-free candidate gate is authoritative. The optional authenticated
 Devin smoke is supplemental and never replaces the two native gates.
+Development named-authentication changes additionally gate the locked official
+`codex-cli 0.149.1` target on both native runners with disposable Keychain,
+synthetic-home, and mandatory Seatbelt evidence. Real login and target-origin
+refresh observation remains supplemental and is never a CI credential gate.
 
 ## Compatibility and limitations
 
@@ -185,6 +243,9 @@ Devin smoke is supplemental and never replaces the two native gates.
   immutable-release evidence.
 - ACS does not manage MCP servers, hooks, instructions, agents, or arbitrary
   target settings.
+- The development Codex authentication commands can project a named identity
+  for contained status verification, but do not yet launch an interactive Codex
+  process or expose run-time auth selection.
 - ACS has no automatic updater, package-manager distribution, or uninstaller.
 
 Read [the architecture](docs/architecture.md), [contribution guide](CONTRIBUTING.md),

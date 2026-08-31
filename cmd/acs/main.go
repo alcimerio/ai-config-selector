@@ -11,6 +11,7 @@ import (
 
 	"github.com/alcimerio/ai-config-selector/internal/adapter/devin"
 	"github.com/alcimerio/ai-config-selector/internal/cli"
+	"github.com/alcimerio/ai-config-selector/internal/codexauth"
 	"github.com/alcimerio/ai-config-selector/internal/launch"
 	"github.com/alcimerio/ai-config-selector/internal/profile"
 	"github.com/alcimerio/ai-config-selector/internal/sandboxshell"
@@ -49,6 +50,19 @@ func main() {
 		fmt.Fprintf(os.Stderr, "acs: resolve working directory: %v\n", err)
 		os.Exit(1)
 	}
+	acsHome := filepath.Join(existingHome, ".acs")
+	sessionsDirectory := filepath.Join(acsHome, "sessions")
+	codexAuth, err := codexauth.New(codexauth.Config{
+		BinaryPath:        "codex",
+		SupportedVersion:  codexauth.SupportedCodexVersion,
+		ACSHome:           acsHome,
+		SessionsDirectory: sessionsDirectory,
+		WorkingDirectory:  workingDirectory,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "acs: configure Codex authentication: %v\n", err)
+		os.Exit(1)
+	}
 	shellLauncher := sandboxshell.New()
 
 	application := cli.App{
@@ -59,8 +73,9 @@ func main() {
 		Launcher:          adapter,
 		SandboxPlanner:    shellLauncher,
 		SandboxLauncher:   shellLauncher,
-		Profiles:          profile.NewStore(filepath.Join(existingHome, ".acs"), adapter.Categories()),
-		SessionsDirectory: filepath.Join(existingHome, ".acs", "sessions"),
+		CodexAuth:         codexAuth,
+		Profiles:          profile.NewStore(acsHome, adapter.Categories()),
+		SessionsDirectory: sessionsDirectory,
 		WorkingDirectory:  workingDirectory,
 		Input:             os.Stdin,
 		Output:            os.Stdout,

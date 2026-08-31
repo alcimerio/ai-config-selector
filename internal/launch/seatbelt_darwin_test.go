@@ -33,10 +33,12 @@ import (
 
 func TestSeatbeltPolicyIsDefaultDenyAndUsesParametersForValidatedPaths(t *testing.T) {
 	request := validatedProcessRequest{
-		workspace:        `/private/tmp/workspace-\"quoted`,
-		sessionDirectory: "/private/tmp/session\nprivate",
-		executable:       "/private/tmp/bin/devin",
-		runtimeInputs:    []string{"/private/tmp/runtime/input.pem"},
+		workspace:                  `/private/tmp/workspace-\"quoted`,
+		sessionDirectory:           "/private/tmp/session\nprivate",
+		executable:                 "/private/tmp/bin/devin",
+		runtimeInputs:              []string{"/private/tmp/runtime/input.pem"},
+		runtimeProbePaths:          []string{"/private/etc/codex/requirements.toml"},
+		runtimeProbeTraversalPaths: []string{"/etc"},
 	}
 	policy, definitions, err := buildSeatbeltPolicy(request)
 	if err != nil {
@@ -45,6 +47,8 @@ func TestSeatbeltPolicyIsDefaultDenyAndUsesParametersForValidatedPaths(t *testin
 	for _, want := range []string{
 		"(version 1)", "(deny default)", `(param "WORKSPACE")`,
 		`(param "SESSION")`, `(param "EXECUTABLE")`, `(param "RUNTIME_0")`,
+		`(param "RUNTIME_PROBE_0")`,
+		`(param "RUNTIME_PROBE_TRAVERSAL_0")`,
 		`(param "EXECUTABLE_ANCESTOR_0")`, `(param "EXECUTABLE_ANCESTOR_1")`,
 		`(param "EXECUTABLE_ANCESTOR_2")`, `(param "EXECUTABLE_ANCESTOR_3")`,
 		`(remote ip)`, `(literal "/private/var/run/mDNSResponder")`,
@@ -63,6 +67,8 @@ func TestSeatbeltPolicyIsDefaultDenyAndUsesParametersForValidatedPaths(t *testin
 	for _, forbidden := range []string{
 		request.workspace, request.sessionDirectory, request.executable,
 		request.runtimeInputs[0], "(allow file-read*)\n",
+		request.runtimeProbePaths[0],
+		request.runtimeProbeTraversalPaths[0],
 		"(allow sysctl-read)\n", "(allow iokit", "(allow network*)",
 		"(subpath (param \"EXECUTABLE_ANCESTOR_",
 		`(subpath "/usr/share")`,
@@ -88,9 +94,17 @@ func TestSeatbeltPolicyIsDefaultDenyAndUsesParametersForValidatedPaths(t *testin
 		"-DEXECUTABLE_ANCESTOR_2=/private",
 		"-DEXECUTABLE_ANCESTOR_3=/",
 		"-DRUNTIME_0=" + request.runtimeInputs[0],
+		"-DRUNTIME_PROBE_0=" + request.runtimeProbePaths[0],
+		"-DRUNTIME_PROBE_TRAVERSAL_0=" + request.runtimeProbeTraversalPaths[0],
 	}
 	if strings.Join(definitions, "\n") != strings.Join(wantDefinitions, "\n") {
 		t.Fatalf("definitions = %#v, want %#v", definitions, wantDefinitions)
+	}
+	if strings.Contains(policy, `(subpath (param "RUNTIME_PROBE_0"))`) {
+		t.Fatal("runtime probe path grants descendant reads")
+	}
+	if strings.Contains(policy, `(subpath (param "RUNTIME_PROBE_TRAVERSAL_0"))`) {
+		t.Fatal("runtime probe traversal path grants descendant reads")
 	}
 }
 
@@ -241,6 +255,52 @@ func TestSeatbeltCleansDescendantAfterProcessGroupAndSessionEscape(t *testing.T)
 	}
 }
 
+func TestSeatbeltPersistsAuthenticatedRecoveryProofAfterNativeCleanup(t *testing.T) {
+	skipSeatbeltNativeTestBinaryUnderRace(t)
+	request := seatbeltTestRequest(t)
+	request.executable = "/usr/bin/true"
+	request.recoveryProofChallenge = bytes.Repeat([]byte{0x8e}, RecoveryProofChallengeSize)
+	process, err := newSeatbeltBackend(seatbeltExecutable).prepare(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := process.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if err := process.Wait(); err != nil {
+		t.Fatal(err)
+	}
+	if proven, err := VerifySessionCleanupProof(request.sessionDirectory, request.recoveryProofChallenge); err != nil || !proven {
+		t.Fatalf("native recovery proof = (%v, %v)", proven, err)
+	}
+}
+
+func TestSeatbeltClearsPreparedRecoveryProofBeforeTargetStarts(t *testing.T) {
+	skipSeatbeltNativeTestBinaryUnderRace(t)
+	request := seatbeltTestRequest(t)
+	request.recoveryProofChallenge = bytes.Repeat([]byte{0x9d}, RecoveryProofChallengeSize)
+	proofPath := filepath.Join(request.sessionDirectory, sessionCleanupProofFile)
+	if err := PrepareSessionCleanupProof(request.sessionDirectory, request.recoveryProofChallenge); err != nil {
+		t.Fatal(err)
+	}
+	request.arguments = []string{
+		"-test.run=TestSeatbeltHelperProcess", "--", "proof-cleared", proofPath,
+	}
+	process, err := newSeatbeltBackend(seatbeltExecutable).prepare(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := process.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if err := process.Wait(); err != nil {
+		t.Fatal(err)
+	}
+	if proven, err := VerifySessionCleanupProof(request.sessionDirectory, request.recoveryProofChallenge); err != nil || !proven {
+		t.Fatalf("settled recovery proof = (%v, %v)", proven, err)
+	}
+}
+
 func TestSeatbeltResolvesHostnameThroughMDNSSocketAlias(t *testing.T) {
 	skipSeatbeltNativeTestBinaryUnderRace(t)
 	request := seatbeltTestRequest(t)
@@ -358,8 +418,7 @@ func TestSeatbeltRejectsMalformedMissingAndSpoofedCleanupProof(t *testing.T) {
 			process.challenge = append([]byte(nil), challenge...)
 			go func() {
 				defer peer.Close()
-				got := make([]byte, len(challenge))
-				_, _ = io.ReadFull(peer, got)
+				_, _ = seatbeltTestAcceptTargetStart(peer, challenge)
 				if len(test.response) > 0 {
 					_, _ = peer.Write(test.response)
 				}
@@ -375,6 +434,23 @@ func TestSeatbeltRejectsMalformedMissingAndSpoofedCleanupProof(t *testing.T) {
 			default:
 			}
 		})
+	}
+}
+
+func TestSeatbeltSupervisorStartHandshake(t *testing.T) {
+	control, peer := seatbeltTestSocketPair(t)
+	challenge := bytes.Repeat([]byte{0x2a}, seatbeltChallengeSize)
+	process := &seatbeltProcess{control: control, challenge: challenge}
+	result := make(chan error, 1)
+	go func() {
+		_, err := seatbeltTestAcceptTargetStart(peer, challenge)
+		result <- err
+	}()
+	if err := process.startSupervisor(); err != nil {
+		t.Fatalf("start handshake: %T %v", err, err)
+	}
+	if err := <-result; err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -439,8 +515,7 @@ func TestSeatbeltWaitMapsAuthenticatedTargetStatusThroughProxy(t *testing.T) {
 				challenge: append([]byte(nil), challenge...), cleanupDone: make(chan struct{}),
 			}
 			go func() {
-				got := make([]byte, len(challenge))
-				_, _ = io.ReadFull(supervisorControl, got)
+				got, _ := seatbeltTestAcceptTargetStart(supervisorControl, challenge)
 				proof := test.proof
 				proof.Magic = seatbeltProofMagic
 				proof.Version = seatbeltProofVersion
@@ -478,9 +553,7 @@ func TestSeatbeltSupervisorProvesPreTargetStartFailure(t *testing.T) {
 	go func() {
 		result <- runSeatbeltSupervisor(supervisorFD, filepath.Join(t.TempDir(), "missing-target"), nil)
 	}()
-	if _, err := control.Write(challenge); err != nil {
-		t.Fatal(err)
-	}
+	seatbeltTestStartTarget(t, control, challenge)
 	proof, err := io.ReadAll(control)
 	if err != nil {
 		t.Fatal(err)
@@ -503,6 +576,135 @@ func TestSeatbeltSupervisorProvesPreTargetStartFailure(t *testing.T) {
 	}
 }
 
+func TestSeatbeltSupervisorPersistsRecoveryProofBeforeParentAcknowledgement(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "home"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", filepath.Join(root, "home"))
+	t.Setenv(seatbeltRecoveryProofEnvironment, "1")
+	control, peer := seatbeltTestSocketPair(t)
+	supervisorFD, err := unix.Dup(int(peer.Fd()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := peer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	challenge := bytes.Repeat([]byte{0x7d}, RecoveryProofChallengeSize)
+	result := make(chan int, 1)
+	go func() {
+		result <- runSeatbeltSupervisor(supervisorFD, filepath.Join(root, "missing-target"), nil)
+	}()
+	seatbeltTestStartTarget(t, control, challenge)
+	if _, err := io.ReadAll(control); err != nil {
+		t.Fatal(err)
+	}
+	if status := <-result; status != 125 {
+		t.Fatalf("pre-target supervisor status = %d, want 125", status)
+	}
+	if proven, err := VerifySessionCleanupProof(root, challenge); err != nil || !proven {
+		t.Fatalf("persisted recovery proof = (%v, %v)", proven, err)
+	}
+}
+
+func TestSeatbeltSupervisorPersistsRecoveryProofAfterOwnerConnectionLoss(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "home"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", filepath.Join(root, "home"))
+	t.Setenv(seatbeltRecoveryProofEnvironment, "1")
+	control, peer := seatbeltTestSocketPair(t)
+	supervisorFD, err := unix.Dup(int(peer.Fd()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := peer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	challenge := bytes.Repeat([]byte{0x8f}, RecoveryProofChallengeSize)
+	result := make(chan int, 1)
+	go func() {
+		result <- runSeatbeltSupervisor(supervisorFD, filepath.Join(root, "missing-target"), nil)
+	}()
+	seatbeltTestStartTarget(t, control, challenge)
+	if err := control.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if status := <-result; status != 125 {
+		t.Fatalf("disconnected supervisor status = %d, want 125", status)
+	}
+	if proven, err := VerifySessionCleanupProof(root, challenge); err != nil || !proven {
+		t.Fatalf("recovery proof after owner loss = (%v, %v)", proven, err)
+	}
+}
+
+func TestSeatbeltSupervisorWaitsForStartAfterClearingPreparedProof(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "home"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", filepath.Join(root, "home"))
+	t.Setenv(seatbeltRecoveryProofEnvironment, "1")
+	control, peer := seatbeltTestSocketPair(t)
+	supervisorFD, err := unix.Dup(int(peer.Fd()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := peer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	challenge := bytes.Repeat([]byte{0x91}, RecoveryProofChallengeSize)
+	if err := PrepareSessionCleanupProof(root, challenge); err != nil {
+		t.Fatal(err)
+	}
+	result := make(chan int, 1)
+	go func() {
+		result <- runSeatbeltSupervisor(supervisorFD, filepath.Join(root, "missing-target"), nil)
+	}()
+	if _, err := control.Write(challenge); err != nil {
+		t.Fatal(err)
+	}
+	ready := []byte{0}
+	if _, err := io.ReadFull(control, ready); err != nil || ready[0] != seatbeltSupervisorReady {
+		t.Fatalf("supervisor readiness = (%q, %v)", ready, err)
+	}
+	if proven, err := VerifySessionCleanupProof(root, challenge); err != nil || proven {
+		t.Fatalf("prepared proof after readiness = (%v, %v)", proven, err)
+	}
+	select {
+	case status := <-result:
+		t.Fatalf("supervisor exited before start decision with %d", status)
+	default:
+	}
+	if err := control.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if status := <-result; status != 125 {
+		t.Fatalf("disconnected supervisor status = %d, want 125", status)
+	}
+	if proven, err := VerifySessionCleanupProof(root, challenge); err != nil || !proven {
+		t.Fatalf("no-target proof after owner loss = (%v, %v)", proven, err)
+	}
+}
+
+func TestSeatbeltRecoveryProofControlNeverReachesTargetEnvironment(t *testing.T) {
+	proxy := seatbeltStatusProxyEnvironment([]string{
+		"HOME=/private/tmp/session/home", seatbeltRecoveryProofEnvironment + "=1",
+	})
+	if !seatbeltRecoveryProofEnabled(proxy) {
+		t.Fatal("status proxy lost recovery-proof control")
+	}
+	supervisor := seatbeltSupervisorEnvironment(proxy)
+	if !seatbeltRecoveryProofEnabled(supervisor) {
+		t.Fatal("supervisor lost recovery-proof control")
+	}
+	if seatbeltRecoveryProofEnabled(seatbeltTargetEnvironment(supervisor)) {
+		t.Fatal("target inherited recovery-proof control")
+	}
+}
+
 func TestSeatbeltSupervisorAuthenticatesDescriptorPreflightFailure(t *testing.T) {
 	control, peer := seatbeltTestSocketPair(t)
 	supervisorFD, err := unix.Dup(int(peer.Fd()))
@@ -520,9 +722,7 @@ func TestSeatbeltSupervisorAuthenticatesDescriptorPreflightFailure(t *testing.T)
 			func(seatbeltDescriptorEnumerator) error { return errors.New("injected descriptor preflight failure") },
 		)
 	}()
-	if _, err := control.Write(challenge); err != nil {
-		t.Fatal(err)
-	}
+	seatbeltTestStartTarget(t, control, challenge)
 	proof, err := io.ReadAll(control)
 	if err != nil {
 		t.Fatal(err)
@@ -708,8 +908,7 @@ func TestSeatbeltCancellationCleanupProofTimeoutFailsClosed(t *testing.T) {
 	process.proofTimeout = func() <-chan time.Time { return timedOut }
 	releasePeer := make(chan struct{})
 	go func() {
-		challenge := make([]byte, seatbeltChallengeSize)
-		_, _ = io.ReadFull(peer, challenge)
+		_, _ = seatbeltTestAcceptTargetStart(peer, process.challenge)
 		<-releasePeer
 	}()
 	if err := process.Start(); err != nil {
@@ -740,8 +939,8 @@ func TestSeatbeltNormalWaitDoesNotApplyCancellationProofTimeout(t *testing.T) {
 	process.proofTimeout = func() <-chan time.Time { return timedOut }
 
 	go func() {
-		gotChallenge := make([]byte, seatbeltChallengeSize)
-		if _, err := io.ReadFull(supervisorControl, gotChallenge); err != nil {
+		gotChallenge, err := seatbeltTestAcceptTargetStart(supervisorControl, challenge)
+		if err != nil {
 			return
 		}
 		time.Sleep(50 * time.Millisecond)
@@ -1580,6 +1779,54 @@ func TestSeatbeltContainsFilesystemNetworkEnvironmentAndDescendants(t *testing.T
 	}
 }
 
+func TestSeatbeltRuntimeProbeDistinguishesAbsentFromDenied(t *testing.T) {
+	skipSeatbeltNativeTestBinaryUnderRace(t)
+	request := seatbeltTestRequest(t)
+	root := filepath.Dir(filepath.Dir(request.workspace))
+	probeDirectory := filepath.Join(root, "runtime-probes")
+	if err := os.MkdirAll(probeDirectory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	existing := filepath.Join(probeDirectory, "requirements.toml")
+	if err := os.WriteFile(existing, []byte("managed"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	missing := filepath.Join(probeDirectory, "missing.toml")
+	denied := filepath.Join(probeDirectory, "denied.toml")
+	if err := os.WriteFile(denied, []byte("private"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	systemMissing := filepath.Join("/etc/codex", fmt.Sprintf("acs-runtime-probe-test-%d.toml", os.Getpid()))
+	if _, err := os.Stat(systemMissing); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("system probe fixture unexpectedly exists or is inaccessible: %v", err)
+	}
+	canonicalSystemMissing, err := resolveFuturePath(systemMissing)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.runtimeProbePaths = []string{existing, missing, systemMissing, canonicalSystemMissing}
+	request.runtimeProbeTraversalPaths = []string{"/etc"}
+	request.arguments = []string{
+		"-test.run=TestSeatbeltHelperProcess", "--", "runtime-probes",
+		existing, missing, denied, systemMissing, "/etc/passwd", "/etc",
+	}
+	var output bytes.Buffer
+	request.terminal = Terminal{Output: &output, ErrorOutput: &output}
+	process, err := newSeatbeltBackend(seatbeltExecutable).prepare(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := process.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if err := process.Wait(); err != nil {
+		t.Fatalf("runtime probe helper failed: %v; output=%q", err, output.String())
+	}
+	if got := strings.TrimSpace(output.String()); got != "probed" {
+		t.Fatalf("runtime probe helper output = %q", got)
+	}
+}
+
 func TestSeatbeltPreservesRawTerminalDescriptors(t *testing.T) {
 	skipSeatbeltNativeTestBinaryUnderRace(t)
 	request := seatbeltTestRequest(t)
@@ -1965,8 +2212,35 @@ func TestSeatbeltHelperProcess(t *testing.T) {
 			os.Exit(71)
 		}
 		os.Exit(0)
+	case "proof-cleared":
+		if _, err := os.Stat(arguments[1]); !errors.Is(err, os.ErrNotExist) {
+			os.Exit(120)
+		}
+		os.Exit(0)
 	case "containment":
 		runSeatbeltContainmentHelper(arguments[1:])
+	case "runtime-probes":
+		contents, err := os.ReadFile(arguments[1])
+		if err != nil || string(contents) != "managed" {
+			os.Exit(114)
+		}
+		if _, err := os.ReadFile(arguments[2]); !errors.Is(err, os.ErrNotExist) {
+			os.Exit(115)
+		}
+		if _, err := os.ReadFile(arguments[3]); !isSeatbeltPermission(err) {
+			os.Exit(116)
+		}
+		if _, err := os.ReadFile(arguments[4]); !errors.Is(err, os.ErrNotExist) {
+			os.Exit(117)
+		}
+		if _, err := os.ReadFile(arguments[5]); !isSeatbeltPermission(err) {
+			os.Exit(118)
+		}
+		if _, err := os.ReadDir(arguments[6]); !isSeatbeltPermission(err) {
+			os.Exit(119)
+		}
+		fmt.Fprintln(os.Stdout, "probed")
+		os.Exit(0)
 	case "grandchild":
 		if _, err := os.ReadFile(arguments[1]); !isSeatbeltPermission(err) {
 			os.Exit(72)
@@ -2619,6 +2893,41 @@ func seatbeltTestSocketPair(t *testing.T) (*os.File, *os.File) {
 		_ = peer.Close()
 	})
 	return parent, peer
+}
+
+func seatbeltTestStartTarget(t *testing.T, control *os.File, challenge []byte) {
+	t.Helper()
+	if _, err := control.Write(challenge); err != nil {
+		t.Fatal(err)
+	}
+	ready := []byte{0}
+	if _, err := io.ReadFull(control, ready); err != nil {
+		t.Fatal(err)
+	}
+	if ready[0] != seatbeltSupervisorReady {
+		t.Fatalf("supervisor readiness = %q", ready)
+	}
+	if _, err := control.Write([]byte{seatbeltSupervisorStart}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func seatbeltTestAcceptTargetStart(control *os.File, challenge []byte) ([]byte, error) {
+	got := make([]byte, len(challenge))
+	if _, err := io.ReadFull(control, got); err != nil {
+		return nil, err
+	}
+	if _, err := control.Write([]byte{seatbeltSupervisorReady}); err != nil {
+		return nil, err
+	}
+	start := []byte{0}
+	if _, err := io.ReadFull(control, start); err != nil {
+		return nil, err
+	}
+	if start[0] != seatbeltSupervisorStart {
+		return nil, errors.New("unexpected supervisor start signal")
+	}
+	return got, nil
 }
 
 type seatbeltTestEnumerator struct {

@@ -91,6 +91,36 @@ opt-in authenticated smoke locally as supplemental confidence; follow
 Never paste or capture account details, credential contents, target output, or
 Session contents in an issue, PR, artifact, or workflow summary.
 
+## Native named-authentication evidence
+
+The promoted-artifact PR workflow fetches the two official `codex-cli 0.149.1`
+Apple archives once, verifies their reviewed SHA-256 lock entries, and installs
+only the matching native target on macOS 26 arm64 and Intel. Its opt-in native
+tests use a disposable Keychain and synthetic home and require the real
+Seatbelt path; they use no account credentials and emit no target, account,
+device, keychain, home, Session, or credential content.
+
+For a local credential-free run, first use
+`scripts/fetch-codex-test-targets.sh` and
+`scripts/install-codex-test-target.sh`, then set
+`ACS_RUN_NATIVE_AUTH_GATE=1` and point `ACS_TEST_CODEX_BINARY` at that verified
+native installation. Also set `ACS_NATIVE_AUTH_RECOVERY_ROOT` to a deterministic
+private path, and run the separate `TestNativeKeychainRecoveryEntrypoint`
+invocation afterward even when the native test invocation fails. The promoted
+workflow does this in an `always()` step on both native runners. Run these
+focused tests only from a normal macOS terminal. The
+automated gate proves the isolated Keychain contract and contained status
+lifecycle; it does not prove interactive login completion or target-origin
+token refresh. Production Keychain queries prohibit authentication UI, and
+deterministic error-mapping tests cover locked or unavailable providers. Live
+locked-Keychain and direct ACL probes remain supplemental because macOS can
+present access-control UI for those operations.
+
+Authenticated login and refresh observation is supplemental trusted-host
+smoke only. Follow
+[docs/authenticated-codex-auth-smoke.md](docs/authenticated-codex-auth-smoke.md)
+and never add credentials or secrets to CI.
+
 ## Pull requests
 
 Before opening a PR:
