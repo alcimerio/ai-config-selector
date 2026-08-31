@@ -510,7 +510,12 @@ func TestIsolatedKeychainRecoveryResumesEveryCleanupCrashPoint(t *testing.T) {
 			fake := newFakeSecurityCommand()
 			stopAfterPhase := errors.New("stop after durable phase update")
 			err := recoverIsolatedTestKeychainFromRootWithHooks(root, fake.run, isolatedKeychainRecoveryHooks{
-				afterPhaseUpdate: func() error { return stopAfterPhase },
+				afterPhaseUpdate: func() error {
+					if _, statErr := os.Lstat(filepath.Join(directory, isolatedKeychainFilename)); !os.IsNotExist(statErr) {
+						t.Fatalf("cleanup-only phase retained disposable Keychain: %v", statErr)
+					}
+					return stopAfterPhase
+				},
 			})
 			if !errors.Is(err, stopAfterPhase) {
 				t.Fatalf("first recovery error = %v, want phase-update interruption", err)
@@ -861,11 +866,297 @@ func TestPrivateRecoveryMetadataRejectsForeignOwnership(t *testing.T) {
 	}
 }
 
+func TestIsolatedKeychainSetupNormalizesSecurityCreatedFileMode(t *testing.T) {
+	recoveryRoot := filepath.Join(canonicalTestTemporaryDirectory(t), "recovery-root")
+	directory := filepath.Join(recoveryRoot, "state-native-mode")
+	keychain := filepath.Join(directory, isolatedKeychainFilename)
+	fake := newFakeSecurityCommand()
+	fake.keychainPath = keychain
+	fake.keychainMode = 0o644
+	var cleanup func()
+	var cleanupErrors []error
+
+	err := configureIsolatedTestKeychain(isolatedKeychainSetup{
+		recoveryRoot:    recoveryRoot,
+		runSecurity:     fake.run,
+		chooseDirectory: func() (string, error) { return directory, nil },
+		registerCleanup: func(function func()) { cleanup = function },
+		reportCleanup:   func(err error) { cleanupErrors = append(cleanupErrors, err) },
+		password:        "synthetic-password",
+	})
+	if err != nil {
+		t.Fatalf("configure isolated Keychain with native file mode: %v", err)
+	}
+	info, err := os.Stat(keychain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("normalized disposable Keychain mode = %#o, want 0600", got)
+	}
+	if !reflect.DeepEqual(fake.keychainUseModes, []os.FileMode{0o600}) {
+		t.Fatalf("disposable Keychain modes at first host use = %#o, want [0600]", fake.keychainUseModes)
+	}
+
+	cleanup()
+	if len(cleanupErrors) != 0 {
+		t.Fatalf("cleanup after native file mode: %v", cleanupErrors)
+	}
+	if _, err := os.Lstat(recoveryRoot); !os.IsNotExist(err) {
+		t.Fatalf("cleanup retained recovery root: %v", err)
+	}
+	for _, want := range []string{
+		"list-keychains -d user -s /original/login.keychain-db /original/system.keychain",
+		"default-keychain -d user -s /original/login.keychain-db",
+	} {
+		if eventIndex(fake.events, want) < 0 {
+			t.Fatalf("cleanup omitted host restoration %q; events=%q", want, fake.events)
+		}
+	}
+}
+
+func TestFreshRecoveryConvergesAfterNativeKeychainModeNormalization(t *testing.T) {
+	recoveryRoot := filepath.Join(canonicalTestTemporaryDirectory(t), "recovery-root")
+	directory := filepath.Join(recoveryRoot, "state-native-recovery")
+	keychain := filepath.Join(directory, isolatedKeychainFilename)
+	setupFake := newFakeSecurityCommand()
+	setupFake.keychainPath = keychain
+	setupFake.keychainMode = 0o644
+	if err := configureIsolatedTestKeychain(isolatedKeychainSetup{
+		recoveryRoot:    recoveryRoot,
+		runSecurity:     setupFake.run,
+		chooseDirectory: func() (string, error) { return directory, nil },
+		registerCleanup: func(func()) {},
+		reportCleanup:   func(error) {},
+		password:        "synthetic-password",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	recoveryFake := newFakeSecurityCommand()
+	if err := recoverIsolatedTestKeychainFromRoot(recoveryRoot, recoveryFake.run); err != nil {
+		t.Fatalf("fresh recovery after native mode normalization: %v", err)
+	}
+	if _, err := os.Lstat(recoveryRoot); !os.IsNotExist(err) {
+		t.Fatalf("fresh recovery retained root: %v", err)
+	}
+	for _, want := range []string{
+		"list-keychains -d user -s /original/login.keychain-db /original/system.keychain",
+		"default-keychain -d user -s /original/login.keychain-db",
+	} {
+		if eventIndex(recoveryFake.events, want) < 0 {
+			t.Fatalf("fresh recovery omitted host restoration %q; events=%q", want, recoveryFake.events)
+		}
+	}
+}
+
+func TestDisposableKeychainMetadataValidationCategories(t *testing.T) {
+	effectiveUID := uint32(os.Geteuid())
+	valid := disposableKeychainMetadata{regular: true, mode: 0o600, owner: effectiveUID, links: 1}
+	for name, testCase := range map[string]struct {
+		metadata disposableKeychainMetadata
+		want     error
+	}{
+		"directory":      {disposableKeychainMetadata{directory: true, mode: 0o700, owner: effectiveUID, links: 2}, errDisposableKeychainType},
+		"foreign owner":  {disposableKeychainMetadata{regular: true, mode: 0o600, owner: effectiveUID + 1, links: 1}, errDisposableKeychainOwner},
+		"multiple links": {disposableKeychainMetadata{regular: true, mode: 0o600, owner: effectiveUID, links: 2}, errDisposableKeychainLinks},
+		"group access":   {disposableKeychainMetadata{regular: true, mode: 0o640, owner: effectiveUID, links: 1}, errDisposableKeychainMode},
+		"other access":   {disposableKeychainMetadata{regular: true, mode: 0o604, owner: effectiveUID, links: 1}, errDisposableKeychainMode},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := validateDisposableKeychainMetadata(testCase.metadata, effectiveUID, false); !errors.Is(err, testCase.want) {
+				t.Fatalf("validation error = %v, want category %v", err, testCase.want)
+			}
+		})
+	}
+	if err := validateDisposableKeychainMetadata(valid, effectiveUID, false); err != nil {
+		t.Fatalf("private disposable Keychain rejected: %v", err)
+	}
+	nativeMode := valid
+	nativeMode.mode = 0o644
+	if err := validateDisposableKeychainMetadata(nativeMode, effectiveUID, true); err != nil {
+		t.Fatalf("native security-created mode rejected before normalization: %v", err)
+	}
+	if err := validateDisposableKeychainMetadata(nativeMode, effectiveUID, false); !errors.Is(err, errDisposableKeychainMode) {
+		t.Fatalf("native mode accepted after normalization boundary: %v", err)
+	}
+}
+
+func TestFreshRecoveryRejectsUnsafeDisposableKeychainWithoutHostMutation(t *testing.T) {
+	for name, makeUnsafe := range map[string]func(*testing.T, string){
+		"symlink": func(t *testing.T, keychain string) {
+			if err := os.Remove(keychain); err != nil {
+				t.Fatal(err)
+			}
+			target := filepath.Join(t.TempDir(), "target")
+			if err := os.WriteFile(target, []byte("do not delete"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(target, keychain); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"directory": func(t *testing.T, keychain string) {
+			if err := os.Remove(keychain); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Mkdir(keychain, 0o700); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"multiple links": func(t *testing.T, keychain string) {
+			target := filepath.Join(t.TempDir(), "linked-keychain")
+			if err := os.Link(keychain, target); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"group access": func(t *testing.T, keychain string) {
+			if err := os.Chmod(keychain, 0o640); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"other access": func(t *testing.T, keychain string) {
+			if err := os.Chmod(keychain, 0o604); err != nil {
+				t.Fatal(err)
+			}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			root := filepath.Join(canonicalTestTemporaryDirectory(t), "recovery-root")
+			directory := prepareFreshRecoveryState(t, root, "state-unsafe-keychain")
+			makeUnsafe(t, filepath.Join(directory, isolatedKeychainFilename))
+			fake := newFakeSecurityCommand()
+			if err := recoverIsolatedTestKeychainFromRoot(root, fake.run); err == nil {
+				t.Fatal("fresh recovery accepted an unsafe disposable Keychain")
+			}
+			if len(fake.events) != 0 {
+				t.Fatalf("unsafe disposable Keychain caused host mutation: %q", fake.events)
+			}
+		})
+	}
+}
+
+func TestSetupRejectsUnsafeSecurityCreatedKeychainBeforeHostUse(t *testing.T) {
+	for name, testCase := range map[string]struct {
+		makeUnsafe func(*testing.T, string)
+		want       error
+	}{
+		"symlink": {
+			makeUnsafe: func(t *testing.T, keychain string) {
+				if err := os.Remove(keychain); err != nil {
+					t.Fatal(err)
+				}
+				target := filepath.Join(t.TempDir(), "target")
+				if err := os.WriteFile(target, []byte("do not use"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(target, keychain); err != nil {
+					t.Fatal(err)
+				}
+			},
+			want: errDisposableKeychainType,
+		},
+		"directory": {
+			makeUnsafe: func(t *testing.T, keychain string) {
+				if err := os.Remove(keychain); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Mkdir(keychain, 0o700); err != nil {
+					t.Fatal(err)
+				}
+			},
+			want: errDisposableKeychainType,
+		},
+		"multiple links": {
+			makeUnsafe: func(t *testing.T, keychain string) {
+				if err := os.Link(keychain, filepath.Join(t.TempDir(), "linked-keychain")); err != nil {
+					t.Fatal(err)
+				}
+			},
+			want: errDisposableKeychainLinks,
+		},
+		"unexpected mode": {
+			makeUnsafe: func(t *testing.T, keychain string) {
+				if err := os.Chmod(keychain, 0o640); err != nil {
+					t.Fatal(err)
+				}
+			},
+			want: errDisposableKeychainMode,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			root := filepath.Join(canonicalTestTemporaryDirectory(t), "recovery-root")
+			directory := filepath.Join(root, "state-unsafe-create")
+			keychain := filepath.Join(directory, isolatedKeychainFilename)
+			fake := newFakeSecurityCommand()
+			fake.keychainPath = keychain
+			fake.afterCreate = func(path string) error {
+				testCase.makeUnsafe(t, path)
+				return nil
+			}
+			var cleanup func()
+			err := configureIsolatedTestKeychain(isolatedKeychainSetup{
+				recoveryRoot:    root,
+				runSecurity:     fake.run,
+				chooseDirectory: func() (string, error) { return directory, nil },
+				registerCleanup: func(function func()) { cleanup = function },
+				reportCleanup:   func(error) {},
+				password:        "synthetic-password",
+			})
+			if !errors.Is(err, testCase.want) {
+				t.Fatalf("unsafe security-created Keychain error = %v, want category %v", err, testCase.want)
+			}
+			if len(fake.keychainUseModes) != 0 {
+				t.Fatalf("unsafe security-created Keychain was used with modes %#o", fake.keychainUseModes)
+			}
+			cleanup()
+		})
+	}
+}
+
+func TestDisposableKeychainDescriptorSwapCannotRedirectDeletion(t *testing.T) {
+	directory := filepath.Join(canonicalTestTemporaryDirectory(t), "private-state")
+	if err := os.Mkdir(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	parent, err := openPrivateRecoveryDirectory(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer parent.Close()
+	keychain := filepath.Join(directory, isolatedKeychainFilename)
+	if err := os.WriteFile(keychain, []byte("opened"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	opened, err := openDisposableKeychainAt(parent, isolatedKeychainFilename)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer opened.Close()
+	moved := filepath.Join(directory, "opened-keychain")
+	if err := os.Rename(keychain, moved); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(keychain, []byte("replacement"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := unlinkOpenedDisposableKeychainAt(parent, isolatedKeychainFilename, opened); err == nil {
+		t.Fatal("descriptor swap was accepted")
+	}
+	if contents, err := os.ReadFile(keychain); err != nil || string(contents) != "replacement" {
+		t.Fatalf("replacement was modified: contents=%q err=%v", contents, err)
+	}
+}
+
 type fakeSecurityCommand struct {
 	events               []string
 	failures             map[string]error
 	failuresAfter        map[string]error
 	keychainPath         string
+	keychainMode         os.FileMode
+	keychainUseModes     []os.FileMode
+	afterCreate          func(string) error
 	originalSearchOutput *string
 }
 
@@ -880,9 +1171,28 @@ func (fake *fakeSecurityCommand) run(arguments ...string) (string, error) {
 		return "", err
 	}
 	if strings.HasPrefix(command, "create-keychain ") && fake.keychainPath != "" {
-		if err := os.WriteFile(fake.keychainPath, []byte("synthetic disposable Keychain"), 0o600); err != nil {
+		mode := fake.keychainMode
+		if mode == 0 {
+			mode = 0o600
+		}
+		if err := os.WriteFile(fake.keychainPath, []byte("synthetic disposable Keychain"), mode); err != nil {
 			return "", err
 		}
+		if err := os.Chmod(fake.keychainPath, mode); err != nil {
+			return "", err
+		}
+		if fake.afterCreate != nil {
+			if err := fake.afterCreate(fake.keychainPath); err != nil {
+				return "", err
+			}
+		}
+	}
+	if command == "list-keychains -d user -s "+fake.keychainPath && fake.keychainPath != "" {
+		info, err := os.Stat(fake.keychainPath)
+		if err != nil {
+			return "", err
+		}
+		fake.keychainUseModes = append(fake.keychainUseModes, info.Mode().Perm())
 	}
 	if strings.HasPrefix(command, "delete-keychain ") && fake.keychainPath != "" {
 		if err := os.Remove(fake.keychainPath); err != nil && !os.IsNotExist(err) {
@@ -1122,8 +1432,13 @@ func configureIsolatedTestKeychain(setup isolatedKeychainSetup) error {
 	}
 	state.keychainMayExist = true
 	state.hostMutationStarted = true
+	if _, err := setup.runSecurity("create-keychain", "-p", setup.password, state.keychain); err != nil {
+		return errors.New("configure isolated Keychain")
+	}
+	if err := normalizeDisposableKeychainAt(state.stateDirectory, isolatedKeychainFilename); err != nil {
+		return fmt.Errorf("configure isolated Keychain: %w", err)
+	}
 	for _, command := range [][]string{
-		{"create-keychain", "-p", setup.password, state.keychain},
 		{"list-keychains", "-d", "user", "-s", state.keychain},
 		{"default-keychain", "-d", "user", "-s", state.keychain},
 		{"unlock-keychain", "-p", setup.password, state.keychain},
@@ -1153,11 +1468,11 @@ func (state *isolatedKeychainState) cleanup() error {
 		}
 	}
 	if state.keychainMayExist {
-		keychainFile, err := openPrivateRecoveryFileAt(state.stateDirectory, isolatedKeychainFilename)
+		keychainFile, err := openDisposableKeychainAt(state.stateDirectory, isolatedKeychainFilename)
 		if err != nil && !errors.Is(err, unix.ENOENT) {
-			return fmt.Errorf("recovery state retained at %s: disposable Keychain is unsafe", state.locatorPath)
+			return fmt.Errorf("recovery state retained at %s: %w", state.locatorPath, err)
 		} else if err == nil {
-			if err := unlinkOpenedRecoveryFileAt(state.stateDirectory, isolatedKeychainFilename, keychainFile); err != nil {
+			if err := unlinkOpenedDisposableKeychainAt(state.stateDirectory, isolatedKeychainFilename, keychainFile); err != nil {
 				_ = keychainFile.Close()
 				return fmt.Errorf("recovery state retained at %s: delete isolated Keychain after restoration", state.locatorPath)
 			}
@@ -1343,6 +1658,70 @@ func openPrivateRecoveryFileAt(parent *os.File, name string) (*os.File, error) {
 	return file, nil
 }
 
+var (
+	errDisposableKeychainType  = errors.New("disposable Keychain type is unsafe")
+	errDisposableKeychainOwner = errors.New("disposable Keychain owner is unsafe")
+	errDisposableKeychainLinks = errors.New("disposable Keychain link count is unsafe")
+	errDisposableKeychainMode  = errors.New("disposable Keychain mode is unsafe")
+)
+
+func normalizeDisposableKeychainAt(parent *os.File, name string) error {
+	file, err := openDisposableKeychainForNormalizationAt(parent, name)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	if err := file.Chmod(0o600); err != nil {
+		return errDisposableKeychainMode
+	}
+	if err := file.Sync(); err != nil {
+		return errors.New("sync disposable Keychain")
+	}
+	if err := verifyDisposableKeychainDescriptorContinuityAt(parent, name, file); err != nil {
+		return err
+	}
+	if err := parent.Sync(); err != nil {
+		return errors.New("sync disposable Keychain directory")
+	}
+	return nil
+}
+
+func openDisposableKeychainForNormalizationAt(parent *os.File, name string) (*os.File, error) {
+	return openDisposableKeychainWithModeAt(parent, name, true)
+}
+
+func openDisposableKeychainAt(parent *os.File, name string) (*os.File, error) {
+	return openDisposableKeychainWithModeAt(parent, name, false)
+}
+
+func openDisposableKeychainWithModeAt(parent *os.File, name string, allowNativeMode bool) (*os.File, error) {
+	if name == "" || name == "." || name == ".." || filepath.Base(name) != name {
+		return nil, errDisposableKeychainType
+	}
+	descriptor, err := unix.Openat(int(parent.Fd()), name, unix.O_RDONLY|unix.O_NONBLOCK|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+	if err != nil {
+		if errors.Is(err, unix.ELOOP) {
+			return nil, errDisposableKeychainType
+		}
+		return nil, err
+	}
+	file := os.NewFile(uintptr(descriptor), "disposable Keychain")
+	if file == nil {
+		_ = unix.Close(descriptor)
+		return nil, errors.New("open disposable Keychain")
+	}
+	info, err := file.Stat()
+	if err != nil {
+		_ = file.Close()
+		return nil, err
+	}
+	if err := validateDisposableKeychainInfo(info, allowNativeMode); err != nil {
+		_ = file.Close()
+		return nil, err
+	}
+	return file, nil
+}
+
 func canonicalIsolatedKeychainRecoveryRoot(root string) (string, error) {
 	if !filepath.IsAbs(root) || filepath.Clean(root) != root {
 		return "", errors.New("recovery root is not an absolute clean path")
@@ -1451,6 +1830,48 @@ func validatePrivateRecoveryMetadata(metadata privateRecoveryMetadata, directory
 	return nil
 }
 
+func validateDisposableKeychainInfo(info os.FileInfo, allowNativeMode bool) error {
+	native, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return errors.New("disposable Keychain metadata is unavailable")
+	}
+	return validateDisposableKeychainMetadata(disposableKeychainMetadata{
+		directory: info.IsDir(),
+		regular:   info.Mode().IsRegular(),
+		mode:      info.Mode(),
+		owner:     native.Uid,
+		links:     uint64(native.Nlink),
+	}, uint32(os.Geteuid()), allowNativeMode)
+}
+
+type disposableKeychainMetadata struct {
+	directory bool
+	regular   bool
+	mode      os.FileMode
+	owner     uint32
+	links     uint64
+}
+
+func validateDisposableKeychainMetadata(metadata disposableKeychainMetadata, effectiveUID uint32, allowNativeMode bool) error {
+	if !metadata.regular || metadata.directory {
+		return errDisposableKeychainType
+	}
+	if metadata.owner != effectiveUID {
+		return errDisposableKeychainOwner
+	}
+	if metadata.links != 1 {
+		return errDisposableKeychainLinks
+	}
+	if metadata.mode&(os.ModeSetuid|os.ModeSetgid|os.ModeSticky) != 0 {
+		return errDisposableKeychainMode
+	}
+	mode := metadata.mode.Perm()
+	if mode != 0o600 && (!allowNativeMode || mode != 0o644) {
+		return errDisposableKeychainMode
+	}
+	return nil
+}
+
 func recoverIsolatedTestKeychain(
 	recoveryPath string,
 	runSecurity func(...string) (string, error),
@@ -1473,7 +1894,7 @@ func recoverIsolatedTestKeychain(
 	if err := restoreIsolatedKeychainHost(recovery, runSecurity); err != nil {
 		return errors.New("isolated Keychain recovery did not complete")
 	}
-	if err := unlinkPrivateRecoveryFileIfPresent(directory, isolatedKeychainFilename); err != nil {
+	if err := unlinkDisposableKeychainIfPresent(directory, isolatedKeychainFilename); err != nil {
 		return errors.New("isolated Keychain recovery did not complete")
 	}
 	if err := unlinkPrivateRecoveryFileIfPresent(directory, isolatedKeychainRecoveryFilename); err != nil {
@@ -1559,7 +1980,7 @@ func recoverIsolatedTestKeychainFromRootWithHooks(
 			return errors.New("isolated Keychain recovery artifact is invalid")
 		}
 		defer artifactFile.Close()
-		keychainFile, keychainErr := openPrivateRecoveryFileAt(stateDirectory, isolatedKeychainFilename)
+		keychainFile, keychainErr := openDisposableKeychainAt(stateDirectory, isolatedKeychainFilename)
 		if keychainErr != nil && !errors.Is(keychainErr, unix.ENOENT) {
 			return errors.New("isolated Keychain recovery artifact is invalid")
 		}
@@ -1583,7 +2004,7 @@ func recoverIsolatedTestKeychainFromRootWithHooks(
 			return errors.New("isolated Keychain recovery did not complete")
 		}
 		if keychainFile != nil {
-			if err := unlinkOpenedRecoveryFileAt(stateDirectory, isolatedKeychainFilename, keychainFile); err != nil {
+			if err := unlinkOpenedDisposableKeychainAt(stateDirectory, isolatedKeychainFilename, keychainFile); err != nil {
 				return errors.New("isolated Keychain recovery did not complete")
 			}
 		}
@@ -1639,6 +2060,28 @@ func unlinkPrivateRecoveryFileIfPresent(parent *os.File, name string) error {
 	return unlinkOpenedRecoveryFileAt(parent, name, file)
 }
 
+func unlinkDisposableKeychainIfPresent(parent *os.File, name string) error {
+	file, err := openDisposableKeychainAt(parent, name)
+	if errors.Is(err, unix.ENOENT) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	return unlinkOpenedDisposableKeychainAt(parent, name, file)
+}
+
+func unlinkOpenedDisposableKeychainAt(parent *os.File, name string, opened *os.File) error {
+	if err := verifyDisposableKeychainDescriptorContinuityAt(parent, name, opened); err != nil {
+		return err
+	}
+	if err := unix.Unlinkat(int(parent.Fd()), name, 0); err != nil && !errors.Is(err, unix.ENOENT) {
+		return err
+	}
+	return parent.Sync()
+}
+
 func unlinkOpenedRecoveryFileAt(parent *os.File, name string, opened *os.File) error {
 	if err := verifyRecoveryDescriptorContinuityAt(parent, name, opened, false); err != nil {
 		return err
@@ -1673,6 +2116,22 @@ func verifyRecoveryDescriptorContinuityAt(parent *os.File, name string, opened *
 		return errors.New("recovery descriptor continuity is invalid")
 	}
 	return validatePrivateRecoveryInfo(openedInfo, directory)
+}
+
+func verifyDisposableKeychainDescriptorContinuityAt(parent *os.File, name string, opened *os.File) error {
+	openedInfo, err := opened.Stat()
+	if err != nil {
+		return err
+	}
+	var entry unix.Stat_t
+	if err := unix.Fstatat(int(parent.Fd()), name, &entry, unix.AT_SYMLINK_NOFOLLOW); err != nil {
+		return err
+	}
+	openedNative, ok := openedInfo.Sys().(*syscall.Stat_t)
+	if !ok || uint64(openedNative.Dev) != uint64(entry.Dev) || openedNative.Ino != entry.Ino {
+		return errors.New("disposable Keychain descriptor continuity is invalid")
+	}
+	return validateDisposableKeychainInfo(openedInfo, false)
 }
 
 func cleanupError(operation string, err error) error {
