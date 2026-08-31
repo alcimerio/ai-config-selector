@@ -1306,6 +1306,32 @@ func TestOpenedDisposableKeychainDeletionRequiresZeroLinks(t *testing.T) {
 	}
 }
 
+func TestOpenedRecoveryDirectoryDeletionRejectsPostOpenAbsence(t *testing.T) {
+	base := canonicalTestTemporaryDirectory(t)
+	directoryName := "private-state"
+	directory := filepath.Join(base, directoryName)
+	if err := os.Mkdir(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	parent, err := openRecoveryDirectoryNoFollow(base, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer parent.Close()
+	opened, err := openPrivateRecoveryDirectoryAt(parent, directoryName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer opened.Close()
+	if err := os.Remove(directory); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := unlinkOpenedRecoveryDirectoryAt(parent, directoryName, opened); !errors.Is(err, unix.ENOENT) {
+		t.Fatalf("post-open directory absence error = %v, want ENOENT", err)
+	}
+}
+
 func TestRecoveryRetainsRecoveryRequiredAfterValidatedKeychainRename(t *testing.T) {
 	root := filepath.Join(canonicalTestTemporaryDirectory(t), "recovery-root")
 	directory := prepareFreshRecoveryState(t, root, "state-unlink-race")
@@ -1331,6 +1357,61 @@ func TestRecoveryRetainsRecoveryRequiredAfterValidatedKeychainRename(t *testing.
 	}
 	if locator.Phase != isolatedKeychainPhaseRecovery {
 		t.Fatalf("rename-race locator phase = %q, want recovery-required", locator.Phase)
+	}
+}
+
+func TestRecoveryRetainsCleanupLocatorAfterValidatedStateDirectoryRename(t *testing.T) {
+	root := filepath.Join(canonicalTestTemporaryDirectory(t), "recovery-root")
+	directory := prepareFreshRecoveryState(t, root, "state-unlink-race")
+	moved := filepath.Join(root, "still-linked-state")
+	fake := newFakeSecurityCommand()
+	err := recoverIsolatedTestKeychainFromRootWithHooks(root, fake.run, isolatedKeychainRecoveryHooks{
+		beforeStateDirectoryUnlink: func() error { return os.Rename(directory, moved) },
+	})
+	if err == nil || err.Error() != "isolated Keychain recovery did not complete" {
+		t.Fatalf("state-directory rename recovery = %v", err)
+	}
+	if _, err := os.Stat(moved); err != nil {
+		t.Fatalf("recovery removed the still-linked opened state directory: %v", err)
+	}
+	locatorContents, err := os.ReadFile(filepath.Join(root, isolatedKeychainLocatorFilename))
+	if err != nil {
+		t.Fatal(err)
+	}
+	locator, err := decodeIsolatedKeychainRecoveryLocator(locatorContents)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if locator.Phase != isolatedKeychainPhaseCleanup {
+		t.Fatalf("rename-race locator phase = %q, want cleanup-only", locator.Phase)
+	}
+}
+
+func TestRecoveryRetainsCleanupLocatorAfterValidatedRootDirectoryRename(t *testing.T) {
+	base := canonicalTestTemporaryDirectory(t)
+	root := filepath.Join(base, "recovery-root")
+	prepareFreshRecoveryState(t, root, "state-unlink-race")
+	moved := filepath.Join(base, "still-linked-root")
+	fake := newFakeSecurityCommand()
+	err := recoverIsolatedTestKeychainFromRootWithHooks(root, fake.run, isolatedKeychainRecoveryHooks{
+		beforeRootDirectoryUnlink: func() error { return os.Rename(root, moved) },
+	})
+	if err == nil || err.Error() != "isolated Keychain recovery did not complete" {
+		t.Fatalf("root-directory rename recovery = %v", err)
+	}
+	if _, statErr := os.Stat(moved); statErr != nil {
+		t.Fatalf("recovery removed the still-linked opened root directory: %v", statErr)
+	}
+	locatorContents, err := os.ReadFile(filepath.Join(moved, isolatedKeychainLocatorFilename))
+	if err != nil {
+		t.Fatal(err)
+	}
+	locator, err := decodeIsolatedKeychainRecoveryLocator(locatorContents)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if locator.Phase != isolatedKeychainPhaseCleanup {
+		t.Fatalf("rename-race locator phase = %q, want cleanup-only", locator.Phase)
 	}
 }
 
@@ -1518,6 +1599,8 @@ type isolatedKeychainRecoveryHooks struct {
 	beforeKeychainModeNormalization func() error
 	beforeKeychainUnlink            func() error
 	afterPhaseUpdate                func() error
+	beforeStateDirectoryUnlink      func() error
+	beforeRootDirectoryUnlink       func() error
 }
 
 func configureIsolatedTestKeychain(setup isolatedKeychainSetup) error {
@@ -1678,7 +1761,7 @@ func (state *isolatedKeychainState) cleanup() error {
 			return fmt.Errorf("recovery state retained at %s: persist cleanup phase", state.locatorPath)
 		}
 	}
-	return cleanupIsolatedKeychainLocalState(state.rootParent, state.rootDirectory, state.stateDirectory, state.rootName, state.stateName)
+	return cleanupIsolatedKeychainLocalState(state.rootParent, state.rootDirectory, state.stateDirectory, state.rootName, state.stateName, isolatedKeychainRecoveryHooks{})
 }
 
 func (state *isolatedKeychainState) closeDescriptors() {
@@ -2165,10 +2248,7 @@ func recoverIsolatedTestKeychainFromRootWithHooks(
 	}
 	stateDirectory, err := openPrivateRecoveryDirectoryAt(rootDirectory, locator.StateDirectory)
 	if locator.Phase == isolatedKeychainPhaseCleanup && errors.Is(err, unix.ENOENT) {
-		if err := unlinkPrivateRecoveryFileIfPresent(rootDirectory, isolatedKeychainLocatorFilename); err != nil {
-			return errors.New("isolated Keychain recovery did not complete")
-		}
-		if err := unlinkOpenedRecoveryDirectoryAt(rootParent, rootName, rootDirectory); err != nil {
+		if err := unlinkRecoveryRootAfterLocatorAt(rootParent, rootDirectory, rootName, locator, hooks.beforeRootDirectoryUnlink); err != nil {
 			return errors.New("isolated Keychain recovery did not complete")
 		}
 		return nil
@@ -2238,7 +2318,7 @@ func recoverIsolatedTestKeychainFromRootWithHooks(
 			}
 		}
 	}
-	if err := cleanupIsolatedKeychainLocalState(rootParent, rootDirectory, stateDirectory, rootName, locator.StateDirectory); err != nil {
+	if err := cleanupIsolatedKeychainLocalState(rootParent, rootDirectory, stateDirectory, rootName, locator.StateDirectory, hooks); err != nil {
 		return errors.New("isolated Keychain recovery did not complete")
 	}
 	return nil
@@ -2252,19 +2332,34 @@ func restoreIsolatedKeychainHost(recovery isolatedKeychainRecovery, runSecurity 
 	return errors.Join(cleanupError("restore Keychain search list", searchErr), cleanupError("restore default Keychain", defaultErr))
 }
 
-func cleanupIsolatedKeychainLocalState(rootParent, rootDirectory, stateDirectory *os.File, rootName, stateName string) error {
+func cleanupIsolatedKeychainLocalState(rootParent, rootDirectory, stateDirectory *os.File, rootName, stateName string, hooks isolatedKeychainRecoveryHooks) error {
 	if stateDirectory != nil {
 		if err := unlinkPrivateRecoveryFileIfPresent(stateDirectory, isolatedKeychainRecoveryFilename); err != nil {
 			return err
 		}
-		if err := unlinkOpenedRecoveryDirectoryAt(rootDirectory, stateName, stateDirectory); err != nil {
+		if err := unlinkOpenedRecoveryDirectoryAtWithHook(rootDirectory, stateName, stateDirectory, hooks.beforeStateDirectoryUnlink); err != nil {
 			return err
 		}
 	}
+	locator := isolatedKeychainRecoveryLocator{
+		Version: 2, StateDirectory: stateName, Phase: isolatedKeychainPhaseCleanup,
+	}
+	return unlinkRecoveryRootAfterLocatorAt(rootParent, rootDirectory, rootName, locator, hooks.beforeRootDirectoryUnlink)
+}
+
+func unlinkRecoveryRootAfterLocatorAt(
+	rootParent, rootDirectory *os.File,
+	rootName string,
+	locator isolatedKeychainRecoveryLocator,
+	beforeUnlink func() error,
+) error {
 	if err := unlinkPrivateRecoveryFileIfPresent(rootDirectory, isolatedKeychainLocatorFilename); err != nil {
 		return err
 	}
-	return unlinkOpenedRecoveryDirectoryAt(rootParent, rootName, rootDirectory)
+	if err := unlinkOpenedRecoveryDirectoryAtWithHook(rootParent, rootName, rootDirectory, beforeUnlink); err != nil {
+		return errors.Join(err, persistIsolatedKeychainRecoveryLocatorAt(rootDirectory, locator))
+	}
+	return nil
 }
 
 func unlinkPrivateRecoveryFileIfPresent(parent *os.File, name string) error {
@@ -2339,10 +2434,19 @@ func requireOpenedDescriptorUnlinked(opened *os.File) error {
 }
 
 func unlinkOpenedRecoveryDirectoryAt(parent *os.File, name string, opened *os.File) error {
+	return unlinkOpenedRecoveryDirectoryAtWithHook(parent, name, opened, nil)
+}
+
+func unlinkOpenedRecoveryDirectoryAtWithHook(parent *os.File, name string, opened *os.File, beforeUnlink func() error) error {
 	if err := verifyRecoveryDescriptorContinuityAt(parent, name, opened, true); err != nil {
 		return err
 	}
-	if err := unix.Unlinkat(int(parent.Fd()), name, unix.AT_REMOVEDIR); err != nil && !errors.Is(err, unix.ENOENT) {
+	if beforeUnlink != nil {
+		if err := beforeUnlink(); err != nil {
+			return err
+		}
+	}
+	if err := unix.Unlinkat(int(parent.Fd()), name, unix.AT_REMOVEDIR); err != nil {
 		return err
 	}
 	return parent.Sync()
