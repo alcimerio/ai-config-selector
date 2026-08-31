@@ -23,10 +23,13 @@ const (
 type nativeKeychainClient struct{ api *keychainAPI }
 
 type keychainAPI struct {
-	secItemAdd          func(uintptr, uintptr) int32
-	secItemCopyMatching func(uintptr, uintptr) int32
-	secItemDelete       func(uintptr) int32
-	secItemUpdate       func(uintptr, uintptr) int32
+	secItemAdd           func(uintptr, uintptr) int32
+	secItemCopyMatching  func(uintptr, uintptr) int32
+	secItemDelete        func(uintptr) int32
+	secItemUpdate        func(uintptr, uintptr) int32
+	secKeychainOpen      func(uintptr, uintptr) int32
+	secKeychainGetStatus func(uintptr, uintptr) int32
+	secKeychainDelete    func(uintptr) int32
 
 	dictionaryCreateMutable func(uintptr, int64, uintptr, uintptr) uintptr
 	dictionarySetValue      func(uintptr, uintptr, uintptr)
@@ -100,6 +103,9 @@ func loadKeychainAPI() (*keychainAPI, error) {
 	purego.RegisterLibFunc(&api.secItemCopyMatching, security, "SecItemCopyMatching")
 	purego.RegisterLibFunc(&api.secItemDelete, security, "SecItemDelete")
 	purego.RegisterLibFunc(&api.secItemUpdate, security, "SecItemUpdate")
+	purego.RegisterLibFunc(&api.secKeychainOpen, security, "SecKeychainOpen")
+	purego.RegisterLibFunc(&api.secKeychainGetStatus, security, "SecKeychainGetStatus")
+	purego.RegisterLibFunc(&api.secKeychainDelete, security, "SecKeychainDelete")
 	purego.RegisterLibFunc(&api.dictionaryCreateMutable, coreFoundation, "CFDictionaryCreateMutable")
 	purego.RegisterLibFunc(&api.dictionarySetValue, coreFoundation, "CFDictionarySetValue")
 	purego.RegisterLibFunc(&api.dictionaryGetValue, coreFoundation, "CFDictionaryGetValue")

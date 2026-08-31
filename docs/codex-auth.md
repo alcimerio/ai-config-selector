@@ -274,9 +274,15 @@ Cleanup attempts both restorations even if one fails. The promoted macOS jobs
 then run a separate `always()` recovery invocation, so a fresh process can find
 the deterministic locator and repeat both restorations after a test-process
 crash. After restoration, a helper process enters the validated state-directory
-descriptor and invokes `security delete-keychain` with only the fixed relative
-`./`-prefixed leaf name. This lets Security.framework remove daemon-managed
-Keychain state without resolving a replaceable ancestor path. Recovery then
+descriptor and inherits the already validated disposable-Keychain descriptor.
+It asks the kernel for the current physical paths of both descriptors, requires
+the Keychain to remain the fixed leaf inside that exact directory, opens a
+`SecKeychainRef`, forces an existence/status check to materialize the lazy
+reference, revalidates the descriptor-relative leaf, and deletes through that
+retained reference. The destructive call therefore cannot be redirected by
+replacing the pathname after the reference is materialized. This lets
+Security.framework remove daemon-managed Keychain state after an ancestor is
+renamed without resolving a replacement at the original path. Recovery then
 proves that the opened disposable Keychain inode has no remaining links before
 atomically advancing to `cleanup-only`. A resumed cleanup-only recovery never
 repeats host restoration and can finish after the artifact or state directory

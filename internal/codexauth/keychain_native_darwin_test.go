@@ -12,11 +12,13 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"sort"
 	"strings"
 	"syscall"
 	"testing"
 	"time"
+	"unsafe"
 
 	"golang.org/x/sys/unix"
 )
@@ -24,6 +26,17 @@ import (
 func TestNativeKeychainFrameworkLoads(t *testing.T) {
 	if _, err := newNativeKeychainClient(); err != nil {
 		t.Fatalf("load native Keychain client: %v", err)
+	}
+}
+
+func TestNativeKeychainReferenceAPIRejectsMissingPath(t *testing.T) {
+	openReference, _, _, err := nativeKeychainReferenceFunctions()
+	if err != nil {
+		t.Fatal("load native Keychain reference API")
+	}
+	reference, err := openReference(filepath.Join(canonicalTestTemporaryDirectory(t), "missing.keychain-db"))
+	if err == nil || reference != 0 {
+		t.Fatalf("missing Keychain reference = (%d, %v)", reference, err)
 	}
 }
 
@@ -448,14 +461,11 @@ func TestIsolatedKeychainRecoveryRunsInFreshProcess(t *testing.T) {
 	for _, want := range []string{
 		"list-keychains -d user -s",
 		"default-keychain -d user -s /original/login.keychain-db",
-		"delete-keychain ./" + isolatedKeychainFilename,
+		"delete-keychain " + keychain,
 	} {
 		if !strings.Contains(string(contents), want+"\n") {
 			t.Errorf("fresh-process recovery events %q omit %q", contents, want)
 		}
-	}
-	if strings.Contains(string(contents), recoveryRoot) || strings.Contains(string(contents), keychain) {
-		t.Fatalf("fresh-process recovery exposed a private absolute deletion path: %q", contents)
 	}
 }
 
@@ -715,7 +725,7 @@ func TestDescriptorAnchoredKeychainDeleteIgnoresAncestorReplacement(t *testing.T
 		t.Fatal(err)
 	}
 	securityTool := filepath.Join(canonicalTestTemporaryDirectory(t), "security")
-	if err := os.WriteFile(securityTool, []byte("#!/bin/sh\nset -eu\n[ \"$1\" = delete-keychain ]\n[ \"$2\" = ./native-auth-gate.keychain-db ]\nrm -f -- \"$2\"\n"), 0o700); err != nil {
+	if err := os.WriteFile(securityTool, []byte("#!/bin/sh\nset -eu\n[ \"$1\" = delete-keychain ]\n[ \"${2#/}\" != \"$2\" ]\nrm -f -- \"$2\"\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 
@@ -736,6 +746,84 @@ func TestDescriptorAnchoredKeychainDeleteIgnoresAncestorReplacement(t *testing.T
 	}
 }
 
+func TestKeychainReferenceDeleteRetainsOpenedIdentityAcrossLeafSwap(t *testing.T) {
+	directory := filepath.Join(canonicalTestTemporaryDirectory(t), "private-state")
+	if err := os.Mkdir(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	keychainPath := filepath.Join(directory, isolatedKeychainFilename)
+	if err := os.WriteFile(keychainPath, []byte("opened disposable Keychain"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	parent, err := openPrivateRecoveryDirectory(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer parent.Close()
+	opened, err := openDisposableKeychainAt(parent, isolatedKeychainFilename)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer opened.Close()
+
+	var referenceFile *os.File
+	openReference := func(path string) (uintptr, error) {
+		file, err := os.Open(path)
+		if err != nil {
+			return 0, err
+		}
+		referenceFile = file
+		return 1, nil
+	}
+	deleteReference := func(uintptr) error {
+		path, err := openedDescriptorPath(referenceFile)
+		if err != nil {
+			return err
+		}
+		return os.Remove(path)
+	}
+	releaseReference := func(uintptr) {
+		if referenceFile != nil {
+			_ = referenceFile.Close()
+		}
+	}
+	replacementContents := "do not delete"
+	movedKeychain := filepath.Join(directory, "opened.keychain-db")
+	beforeReferenceDelete := func() error {
+		if err := os.Rename(keychainPath, movedKeychain); err != nil {
+			return err
+		}
+		return os.WriteFile(keychainPath, []byte(replacementContents), 0o600)
+	}
+	deleteKeychainAt := func(parent *os.File, name string, opened *os.File) error {
+		return deleteOpenedKeychainByReference(
+			parent,
+			name,
+			opened,
+			openReference,
+			deleteReference,
+			releaseReference,
+			beforeReferenceDelete,
+		)
+	}
+
+	if err := deleteOpenedDisposableKeychainAtWithHook(
+		parent,
+		isolatedKeychainFilename,
+		opened,
+		deleteKeychainAt,
+		nil,
+	); err != nil {
+		t.Fatalf("reference-anchored delete: %v", err)
+	}
+	if _, err := os.Lstat(movedKeychain); !os.IsNotExist(err) {
+		t.Fatalf("opened Keychain was not removed: %v", err)
+	}
+	if contents, err := os.ReadFile(keychainPath); err != nil || string(contents) != replacementContents {
+		t.Fatalf("replacement Keychain was modified: contents=%q err=%v", contents, err)
+	}
+}
+
 func TestDescriptorAnchoredKeychainDeleteSanitizesSecurityFailure(t *testing.T) {
 	directory := filepath.Join(canonicalTestTemporaryDirectory(t), "private-state")
 	if err := os.Mkdir(directory, 0o700); err != nil {
@@ -750,13 +838,18 @@ func TestDescriptorAnchoredKeychainDeleteSanitizesSecurityFailure(t *testing.T) 
 		t.Fatal(err)
 	}
 	defer parent.Close()
+	opened, err := openDisposableKeychainAt(parent, isolatedKeychainFilename)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer opened.Close()
 	securityTool := filepath.Join(canonicalTestTemporaryDirectory(t), "security")
 	privateOutput := "private-security-output"
 	if err := os.WriteFile(securityTool, []byte("#!/bin/sh\necho "+privateOutput+" >&2\nexit 23\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 
-	err = descriptorAnchoredKeychainDelete(securityTool)(parent, isolatedKeychainFilename)
+	err = descriptorAnchoredKeychainDelete(securityTool)(parent, isolatedKeychainFilename, opened)
 	if err == nil || err.Error() != nativeKeychainDeleteSecurityFailure {
 		t.Fatalf("security failure = %v", err)
 	}
@@ -909,26 +1002,164 @@ func TestNativeKeychainDeleteEntrypoint(t *testing.T) {
 	if err := unix.Fchdir(int(directory.Fd())); err != nil {
 		t.Fatal(nativeKeychainDeleteEnterDirectoryFailure)
 	}
-	if _, err := exec.Command(securityTool, "delete-keychain", "./"+name).CombinedOutput(); err != nil {
+	keychain := os.NewFile(4, "isolated-keychain")
+	if keychain == nil {
+		t.Fatal(nativeKeychainDeleteInvalidKeychain)
+	}
+	defer keychain.Close()
+	keychainInfo, err := keychain.Stat()
+	if err != nil || validateDisposableKeychainInfo(keychainInfo, false) != nil {
+		t.Fatal(nativeKeychainDeleteInvalidKeychain)
+	}
+	directoryPath, err := openedDescriptorPath(directory)
+	if err != nil {
+		t.Fatal(nativeKeychainDeleteResolvePathFailure)
+	}
+	keychainPath, err := openedDescriptorPath(keychain)
+	if err != nil || filepath.Dir(keychainPath) != directoryPath || filepath.Base(keychainPath) != name {
+		t.Fatal(nativeKeychainDeleteResolvePathFailure)
+	}
+	if securityTool == "/usr/bin/security" {
+		openReference, deleteReference, releaseReference, err := nativeKeychainReferenceFunctions()
+		if err != nil {
+			t.Fatal(nativeKeychainDeleteNativeAPIFailure)
+		}
+		if err := deleteOpenedKeychainByReference(
+			directory,
+			name,
+			keychain,
+			openReference,
+			deleteReference,
+			releaseReference,
+			nil,
+		); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+	if _, err := exec.Command(securityTool, "delete-keychain", keychainPath).CombinedOutput(); err != nil {
 		t.Fatal(nativeKeychainDeleteSecurityFailure)
 	}
 }
 
+func nativeKeychainReferenceFunctions() (
+	func(string) (uintptr, error),
+	func(uintptr) error,
+	func(uintptr),
+	error,
+) {
+	api, err := loadKeychainAPI()
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	openReference := func(path string) (uintptr, error) {
+		pathBytes := append([]byte(path), 0)
+		var reference uintptr
+		status := api.secKeychainOpen(
+			uintptr(unsafe.Pointer(&pathBytes[0])),
+			uintptr(unsafe.Pointer(&reference)),
+		)
+		runtime.KeepAlive(pathBytes)
+		if status != 0 || reference == 0 {
+			return 0, errors.New(nativeKeychainDeleteOpenReferenceFailure)
+		}
+		var keychainStatus uint32
+		if api.secKeychainGetStatus(
+			reference,
+			uintptr(unsafe.Pointer(&keychainStatus)),
+		) != 0 {
+			api.release(reference)
+			return 0, errors.New(nativeKeychainDeleteOpenReferenceFailure)
+		}
+		return reference, nil
+	}
+	deleteReference := func(reference uintptr) error {
+		if api.secKeychainDelete(reference) != 0 {
+			return errors.New(nativeKeychainDeleteReferenceFailure)
+		}
+		return nil
+	}
+	return openReference, deleteReference, api.release, nil
+}
+
+func deleteOpenedKeychainByReference(
+	parent *os.File,
+	name string,
+	opened *os.File,
+	openReference func(string) (uintptr, error),
+	deleteReference func(uintptr) error,
+	releaseReference func(uintptr),
+	beforeDelete func() error,
+) error {
+	if openReference == nil || deleteReference == nil || releaseReference == nil {
+		return errors.New(nativeKeychainDeleteNativeAPIFailure)
+	}
+	keychainPath, err := openedDescriptorPath(opened)
+	if err != nil {
+		return errors.New(nativeKeychainDeleteResolvePathFailure)
+	}
+	reference, err := openReference(keychainPath)
+	if err != nil || reference == 0 {
+		return errors.New(nativeKeychainDeleteOpenReferenceFailure)
+	}
+	defer releaseReference(reference)
+	if err := verifyDisposableKeychainDescriptorContinuityAt(parent, name, opened, false); err != nil {
+		return errors.New(nativeKeychainDeleteReferenceContinuityFailure)
+	}
+	if beforeDelete != nil {
+		if err := beforeDelete(); err != nil {
+			return err
+		}
+	}
+	if err := deleteReference(reference); err != nil {
+		return errors.New(nativeKeychainDeleteReferenceFailure)
+	}
+	return nil
+}
+
+func openedDescriptorPath(file *os.File) (string, error) {
+	var buffer [unix.PathMax]byte
+	_, _, errno := syscall.Syscall(
+		syscall.SYS_FCNTL,
+		file.Fd(),
+		uintptr(unix.F_GETPATH),
+		uintptr(unsafe.Pointer(&buffer[0])),
+	)
+	if errno != 0 {
+		return "", errno
+	}
+	length := bytes.IndexByte(buffer[:], 0)
+	if length <= 0 {
+		return "", errors.New("opened descriptor path is invalid")
+	}
+	path := string(buffer[:length])
+	if !filepath.IsAbs(path) || filepath.Clean(path) != path {
+		return "", errors.New("opened descriptor path is invalid")
+	}
+	return path, nil
+}
+
 const (
-	nativeKeychainDeleteInvalidInput          = "descriptor-anchored native Keychain delete input is invalid"
-	nativeKeychainDeleteInvalidDirectory      = "descriptor-anchored native Keychain directory is invalid"
-	nativeKeychainDeleteEnterDirectoryFailure = "enter descriptor-anchored native Keychain directory"
-	nativeKeychainDeleteSecurityFailure       = "delete descriptor-anchored native Keychain with security tool"
-	nativeKeychainDeleteHelperFailure         = "descriptor-anchored native Keychain delete helper failed"
+	nativeKeychainDeleteInvalidInput               = "descriptor-anchored native Keychain delete input is invalid"
+	nativeKeychainDeleteInvalidDirectory           = "descriptor-anchored native Keychain directory is invalid"
+	nativeKeychainDeleteEnterDirectoryFailure      = "enter descriptor-anchored native Keychain directory"
+	nativeKeychainDeleteInvalidKeychain            = "descriptor-anchored native Keychain file is invalid"
+	nativeKeychainDeleteResolvePathFailure         = "resolve descriptor-anchored native Keychain path"
+	nativeKeychainDeleteNativeAPIFailure           = "load native Keychain reference API"
+	nativeKeychainDeleteOpenReferenceFailure       = "open native Keychain reference"
+	nativeKeychainDeleteReferenceContinuityFailure = "native Keychain reference continuity is invalid"
+	nativeKeychainDeleteReferenceFailure           = "delete native Keychain reference"
+	nativeKeychainDeleteSecurityFailure            = "delete descriptor-anchored native Keychain with security tool"
+	nativeKeychainDeleteHelperFailure              = "descriptor-anchored native Keychain delete helper failed"
 )
 
-func descriptorAnchoredKeychainDelete(securityTool string) func(*os.File, string) error {
-	return func(parent *os.File, name string) error {
+func descriptorAnchoredKeychainDelete(securityTool string) func(*os.File, string, *os.File) error {
+	return func(parent *os.File, name string, opened *os.File) error {
 		if !filepath.IsAbs(securityTool) || name != isolatedKeychainFilename {
 			return errors.New(nativeKeychainDeleteInvalidInput)
 		}
 		command := exec.Command(os.Args[0], "-test.run=^TestNativeKeychainDeleteEntrypoint$", "-test.count=1")
-		command.ExtraFiles = []*os.File{parent}
+		command.ExtraFiles = []*os.File{parent, opened}
 		command.Env = append(os.Environ(),
 			"ACS_RUN_NATIVE_AUTH_DELETE=1",
 			"ACS_NATIVE_AUTH_SECURITY_TOOL="+securityTool,
@@ -940,6 +1171,12 @@ func descriptorAnchoredKeychainDelete(securityTool string) func(*os.File, string
 				nativeKeychainDeleteInvalidInput,
 				nativeKeychainDeleteInvalidDirectory,
 				nativeKeychainDeleteEnterDirectoryFailure,
+				nativeKeychainDeleteInvalidKeychain,
+				nativeKeychainDeleteResolvePathFailure,
+				nativeKeychainDeleteNativeAPIFailure,
+				nativeKeychainDeleteOpenReferenceFailure,
+				nativeKeychainDeleteReferenceContinuityFailure,
+				nativeKeychainDeleteReferenceFailure,
 				nativeKeychainDeleteSecurityFailure,
 			} {
 				if bytes.Contains(output, []byte(stableFailure)) {
@@ -1751,7 +1988,7 @@ func useIsolatedTestKeychain(t *testing.T) {
 type isolatedKeychainSetup struct {
 	recoveryRoot                    string
 	runSecurity                     func(...string) (string, error)
-	deleteKeychainAt                func(*os.File, string) error
+	deleteKeychainAt                func(*os.File, string, *os.File) error
 	chooseDirectory                 func() (string, error)
 	recordRecoveryPersisted         func()
 	beforeKeychainModeNormalization func() error
@@ -1805,7 +2042,7 @@ type isolatedKeychainRecoveryHooks struct {
 	afterDescriptorsOpened          func() error
 	beforeKeychainModeNormalization func() error
 	beforeKeychainUnlink            func() error
-	deleteKeychainAt                func(*os.File, string) error
+	deleteKeychainAt                func(*os.File, string, *os.File) error
 	afterPhaseUpdate                func() error
 	beforeStateDirectoryUnlink      func() error
 	beforeRootDirectoryUnlink       func() error
@@ -2595,7 +2832,7 @@ func unlinkPrivateRecoveryFileIfPresent(parent *os.File, name string) error {
 	return unlinkOpenedRecoveryFileAt(parent, name, file)
 }
 
-func deleteDisposableKeychainIfPresent(parent *os.File, name string, deleteKeychainAt func(*os.File, string) error) error {
+func deleteDisposableKeychainIfPresent(parent *os.File, name string, deleteKeychainAt func(*os.File, string, *os.File) error) error {
 	file, err := openDisposableKeychainAt(parent, name)
 	if errors.Is(err, unix.ENOENT) {
 		return nil
@@ -2607,8 +2844,8 @@ func deleteDisposableKeychainIfPresent(parent *os.File, name string, deleteKeych
 	return deleteOpenedDisposableKeychainAtWithHook(parent, name, file, deleteKeychainAt, nil)
 }
 
-func relativeKeychainDelete(runSecurity func(...string) (string, error)) func(*os.File, string) error {
-	return func(parent *os.File, name string) error {
+func relativeKeychainDelete(runSecurity func(...string) (string, error)) func(*os.File, string, *os.File) error {
+	return func(parent *os.File, name string, _ *os.File) error {
 		if _, err := runSecurity("delete-keychain", "./"+name); err != nil {
 			return err
 		}
@@ -2623,7 +2860,7 @@ func deleteOpenedDisposableKeychainAtWithHook(
 	parent *os.File,
 	name string,
 	opened *os.File,
-	deleteKeychainAt func(*os.File, string) error,
+	deleteKeychainAt func(*os.File, string, *os.File) error,
 	beforeDelete func() error,
 ) error {
 	if beforeDelete != nil {
@@ -2637,7 +2874,7 @@ func deleteOpenedDisposableKeychainAtWithHook(
 	if deleteKeychainAt == nil {
 		return errors.New("daemon-aware disposable Keychain deletion is unavailable")
 	}
-	if err := deleteKeychainAt(parent, name); err != nil {
+	if err := deleteKeychainAt(parent, name, opened); err != nil {
 		return err
 	}
 	if err := requireOpenedDescriptorUnlinked(opened); err != nil {
