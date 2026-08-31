@@ -736,6 +736,37 @@ func TestDescriptorAnchoredKeychainDeleteIgnoresAncestorReplacement(t *testing.T
 	}
 }
 
+func TestDescriptorAnchoredKeychainDeleteSanitizesSecurityFailure(t *testing.T) {
+	directory := filepath.Join(canonicalTestTemporaryDirectory(t), "private-state")
+	if err := os.Mkdir(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	keychain := filepath.Join(directory, isolatedKeychainFilename)
+	if err := os.WriteFile(keychain, []byte("private Keychain contents"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	parent, err := openPrivateRecoveryDirectory(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer parent.Close()
+	securityTool := filepath.Join(canonicalTestTemporaryDirectory(t), "security")
+	privateOutput := "private-security-output"
+	if err := os.WriteFile(securityTool, []byte("#!/bin/sh\necho "+privateOutput+" >&2\nexit 23\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	err = descriptorAnchoredKeychainDelete(securityTool)(parent, isolatedKeychainFilename)
+	if err == nil || err.Error() != nativeKeychainDeleteSecurityFailure {
+		t.Fatalf("security failure = %v", err)
+	}
+	for _, privateValue := range []string{directory, keychain, privateOutput} {
+		if strings.Contains(err.Error(), privateValue) {
+			t.Fatalf("security failure leaked private value %q: %v", privateValue, err)
+		}
+	}
+}
+
 func TestNativeKeychainRecoveryEntrypointSanitizesCleanupErrors(t *testing.T) {
 	root := filepath.Join(canonicalTestTemporaryDirectory(t), "private-recovery-root")
 	directory := prepareFreshRecoveryState(t, root, "state-private")
@@ -861,32 +892,40 @@ func TestNativeKeychainDeleteEntrypoint(t *testing.T) {
 	securityTool := os.Getenv("ACS_NATIVE_AUTH_SECURITY_TOOL")
 	name := os.Getenv("ACS_NATIVE_AUTH_KEYCHAIN_NAME")
 	if !filepath.IsAbs(securityTool) || name != isolatedKeychainFilename {
-		t.Fatal("descriptor-anchored native Keychain delete input is invalid")
+		t.Fatal(nativeKeychainDeleteInvalidInput)
 	}
 	directory := os.NewFile(3, "isolated-keychain-state")
 	if directory == nil {
-		t.Fatal("descriptor-anchored native Keychain directory is unavailable")
+		t.Fatal(nativeKeychainDeleteInvalidDirectory)
 	}
 	defer directory.Close()
 	info, err := directory.Stat()
 	if err != nil {
-		t.Fatal("descriptor-anchored native Keychain directory is invalid")
+		t.Fatal(nativeKeychainDeleteInvalidDirectory)
 	}
 	if err := validatePrivateRecoveryInfo(info, true); err != nil {
-		t.Fatal("descriptor-anchored native Keychain directory is invalid")
+		t.Fatal(nativeKeychainDeleteInvalidDirectory)
 	}
 	if err := unix.Fchdir(int(directory.Fd())); err != nil {
-		t.Fatal("enter descriptor-anchored native Keychain directory")
+		t.Fatal(nativeKeychainDeleteEnterDirectoryFailure)
 	}
 	if _, err := exec.Command(securityTool, "delete-keychain", "./"+name).CombinedOutput(); err != nil {
-		t.Fatal("delete descriptor-anchored native Keychain")
+		t.Fatal(nativeKeychainDeleteSecurityFailure)
 	}
 }
+
+const (
+	nativeKeychainDeleteInvalidInput          = "descriptor-anchored native Keychain delete input is invalid"
+	nativeKeychainDeleteInvalidDirectory      = "descriptor-anchored native Keychain directory is invalid"
+	nativeKeychainDeleteEnterDirectoryFailure = "enter descriptor-anchored native Keychain directory"
+	nativeKeychainDeleteSecurityFailure       = "delete descriptor-anchored native Keychain with security tool"
+	nativeKeychainDeleteHelperFailure         = "descriptor-anchored native Keychain delete helper failed"
+)
 
 func descriptorAnchoredKeychainDelete(securityTool string) func(*os.File, string) error {
 	return func(parent *os.File, name string) error {
 		if !filepath.IsAbs(securityTool) || name != isolatedKeychainFilename {
-			return errors.New("descriptor-anchored native Keychain delete input is invalid")
+			return errors.New(nativeKeychainDeleteInvalidInput)
 		}
 		command := exec.Command(os.Args[0], "-test.run=^TestNativeKeychainDeleteEntrypoint$", "-test.count=1")
 		command.ExtraFiles = []*os.File{parent}
@@ -895,8 +934,19 @@ func descriptorAnchoredKeychainDelete(securityTool string) func(*os.File, string
 			"ACS_NATIVE_AUTH_SECURITY_TOOL="+securityTool,
 			"ACS_NATIVE_AUTH_KEYCHAIN_NAME="+name,
 		)
-		if _, err := command.CombinedOutput(); err != nil {
-			return errors.New("delete descriptor-anchored native Keychain")
+		output, err := command.CombinedOutput()
+		if err != nil {
+			for _, stableFailure := range []string{
+				nativeKeychainDeleteInvalidInput,
+				nativeKeychainDeleteInvalidDirectory,
+				nativeKeychainDeleteEnterDirectoryFailure,
+				nativeKeychainDeleteSecurityFailure,
+			} {
+				if bytes.Contains(output, []byte(stableFailure)) {
+					return errors.New(stableFailure)
+				}
+			}
+			return errors.New(nativeKeychainDeleteHelperFailure)
 		}
 		return nil
 	}
@@ -1916,7 +1966,7 @@ func (state *isolatedKeychainState) cleanup() error {
 				nil,
 			); err != nil {
 				_ = keychainFile.Close()
-				return fmt.Errorf("recovery state retained at %s: delete isolated Keychain after restoration", state.locatorPath)
+				return fmt.Errorf("recovery state retained at %s: delete isolated Keychain after restoration: %w", state.locatorPath, err)
 			}
 			_ = keychainFile.Close()
 		}
