@@ -13,6 +13,7 @@ import (
 
 	"github.com/alcimerio/ai-config-selector/internal/launch"
 	"github.com/alcimerio/ai-config-selector/internal/session"
+	"golang.org/x/sys/unix"
 )
 
 type codexLoginConfig struct {
@@ -22,6 +23,7 @@ type codexLoginConfig struct {
 	RuntimeProbePaths []string
 	SessionsDirectory string
 	WorkingDirectory  string
+	PrivateRoot       string
 }
 
 type codexLoginRunner struct {
@@ -77,23 +79,61 @@ func codexAuthRuntimeArguments(workspace string, arguments ...string) []string {
 	return append(overrides, arguments...)
 }
 
-func (runner *codexLoginRunner) Check(ctx context.Context) error {
+func (runner *codexLoginRunner) Prepare(ctx context.Context) (loginPreparation, error) {
 	if runner == nil || runner.sandbox == nil {
-		return ErrLoginFailed
+		return loginPreparation{}, ErrLoginFailed
 	}
-	executable, err := newPinnedExecutable(runner.config.BinaryPath).Resolve()
+	if err := validateContainedAuthWorkspace(runner.config); err != nil {
+		return loginPreparation{}, ErrLoginFailed
+	}
+	config, cleanup, err := runner.snapshotConfig()
 	if err != nil {
-		return ErrUnsupportedVersion
+		return loginPreparation{}, ErrUnsupportedVersion
 	}
-	return runner.sandbox.Check(ctx, launch.SandboxCheck{
+	if err := runner.sandbox.Check(ctx, launch.SandboxCheck{
 		Workspace: runner.config.WorkingDirectory, SessionsDirectory: runner.config.SessionsDirectory,
-		Executable: executable, RuntimeInputs: runner.config.RuntimeInputs,
+		Executable: config.BinaryPath, RuntimeInputs: runner.config.RuntimeInputs,
 		RuntimeProbePaths: runner.config.RuntimeProbePaths,
-	})
+	}); err != nil {
+		cleanup()
+		return loginPreparation{}, err
+	}
+	return loginPreparation{
+		run: func(
+			ctx context.Context,
+			created *session.Session,
+			proofChallenge string,
+			beginProcess func() error,
+			deviceAuth bool,
+			terminal launch.Terminal,
+		) loginRunResult {
+			return runner.runOperation(ctx, config, created, proofChallenge, beginProcess, deviceAuth, terminal)
+		},
+		cleanup: cleanup,
+	}, nil
 }
 
-func (runner *codexLoginRunner) Run(
+func validateContainedAuthWorkspace(config codexLoginConfig) error {
+	if config.PrivateRoot == "" {
+		return nil
+	}
+	workspace, err := filepath.EvalSymlinks(config.WorkingDirectory)
+	if err != nil {
+		return err
+	}
+	privateRoot, err := filepath.EvalSymlinks(config.PrivateRoot)
+	if err != nil {
+		return err
+	}
+	if pathsOverlap(workspace, privateRoot) {
+		return errors.New("contained authentication workspace overlaps private state")
+	}
+	return nil
+}
+
+func (runner *codexLoginRunner) runOperation(
 	ctx context.Context,
+	config codexLoginConfig,
 	created *session.Session,
 	proofChallenge string,
 	beginProcess func() error,
@@ -115,12 +155,6 @@ func (runner *codexLoginRunner) Run(
 	if err := os.WriteFile(filepath.Join(codexHome, "config.toml"), configuration, 0o600); err != nil {
 		return loginRunResult{containedRunResult: containedRunResult{err: ErrLoginFailed, cleanupProven: true}}
 	}
-	config, cleanup, err := runner.snapshotConfig()
-	if err != nil {
-		return loginRunResult{containedRunResult: containedRunResult{err: ErrUnsupportedVersion, cleanupProven: true}}
-	}
-	defer cleanup()
-
 	versionOutput := boundedBuffer{limit: maximumVersionOutputSize}
 	versionRun := runner.run(ctx, config, created, proofChallenge, beginProcess, []string{"--version"}, launch.Terminal{
 		Output: &versionOutput, ErrorOutput: io.Discard,
@@ -145,7 +179,7 @@ func (runner *codexLoginRunner) Run(
 		}
 	}
 
-	auth, err := readPrivateAuthFile(filepath.Join(codexHome, "auth.json"))
+	auth, err := readSessionAuthFile(created.RootDirectory())
 	if err != nil {
 		return loginRunResult{containedRunResult: containedRunResult{err: ErrUnsupportedAuth, cleanupProven: true}}
 	}
@@ -160,6 +194,73 @@ func readPrivateAuthFile(path string) ([]byte, error) {
 	return contents, nil
 }
 
+func readSessionAuthFile(sessionRoot string) ([]byte, error) {
+	root, err := openPrivateDirectory(sessionRoot)
+	if err != nil {
+		return nil, ErrUnsupportedAuth
+	}
+	defer root.Close()
+	home, err := openPrivateChildDirectory(root, "home")
+	if err != nil {
+		return nil, ErrUnsupportedAuth
+	}
+	defer home.Close()
+	codexHome, err := openPrivateChildDirectory(home, ".codex")
+	if err != nil {
+		return nil, ErrUnsupportedAuth
+	}
+	defer codexHome.Close()
+	descriptor, err := unix.Openat(int(codexHome.Fd()), "auth.json", unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+	if err != nil {
+		return nil, ErrUnsupportedAuth
+	}
+	auth := os.NewFile(uintptr(descriptor), "auth.json")
+	if auth == nil {
+		_ = unix.Close(descriptor)
+		return nil, ErrUnsupportedAuth
+	}
+	defer auth.Close()
+	contents, err := readPrivateRegularDescriptor(auth, maximumAuthJSONSize)
+	if err != nil {
+		return nil, ErrUnsupportedAuth
+	}
+	return contents, nil
+}
+
+func openPrivateDirectory(path string) (*os.File, error) {
+	descriptor, err := unix.Open(path, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_DIRECTORY, 0)
+	if err != nil {
+		return nil, err
+	}
+	return privateDirectoryFile(descriptor, path)
+}
+
+func openPrivateChildDirectory(parent *os.File, name string) (*os.File, error) {
+	descriptor, err := unix.Openat(int(parent.Fd()), name, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_DIRECTORY, 0)
+	if err != nil {
+		return nil, err
+	}
+	return privateDirectoryFile(descriptor, name)
+}
+
+func privateDirectoryFile(descriptor int, name string) (*os.File, error) {
+	directory := os.NewFile(uintptr(descriptor), name)
+	if directory == nil {
+		_ = unix.Close(descriptor)
+		return nil, errors.New("open private directory")
+	}
+	info, err := directory.Stat()
+	if err != nil || !info.IsDir() || info.Mode().Perm()&0o077 != 0 {
+		_ = directory.Close()
+		return nil, errors.New("invalid private directory")
+	}
+	if native, ok := info.Sys().(*syscall.Stat_t); !ok || native.Uid != uint32(os.Geteuid()) {
+		_ = directory.Close()
+		return nil, errors.New("invalid private directory")
+	}
+	return directory, nil
+}
+
 func readPrivateRegularFile(path string, maximumSize int64) ([]byte, error) {
 	descriptor, err := syscall.Open(path, syscall.O_RDONLY|syscall.O_CLOEXEC|syscall.O_NOFOLLOW, 0)
 	if err != nil {
@@ -171,6 +272,10 @@ func readPrivateRegularFile(path string, maximumSize int64) ([]byte, error) {
 		return nil, errors.New("open private file")
 	}
 	defer file.Close()
+	return readPrivateRegularDescriptor(file, maximumSize)
+}
+
+func readPrivateRegularDescriptor(file *os.File, maximumSize int64) ([]byte, error) {
 	info, err := file.Stat()
 	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0o077 != 0 || info.Size() <= 0 || info.Size() > maximumSize {
 		return nil, errors.New("invalid private file")

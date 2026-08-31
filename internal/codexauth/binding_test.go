@@ -282,6 +282,51 @@ func TestStatusCleanupUncertaintyPreservesProjectionUntilSettlementAndRecovery(t
 	assertNoSessionDirectories(t, sessionsDirectory)
 }
 
+func TestRecoveryNeverCommitsRefreshAfterFailedStatus(t *testing.T) {
+	original := testChatGPTAuthJSON(t, "user", "workspace")
+	refreshed := []byte(strings.Replace(
+		string(original), "2026-08-29T12:34:56Z", "2026-08-29T16:34:56Z", 1,
+	))
+	registry, provider, _, sessionsDirectory := newBindingTestRegistry(t, "work", original)
+	cleanupDone := make(chan struct{})
+	runner := &pendingCleanupStatusRunner{
+		cleanupDone: cleanupDone,
+		mutate: func(home string) error {
+			return os.WriteFile(filepath.Join(home, ".codex", "auth.json"), refreshed, 0o600)
+		},
+	}
+	registry.status = runner
+
+	status, err := registry.Status(context.Background(), "work")
+	if !errors.Is(err, ErrBindingQuarantined) || status.Disposition != QuarantinedUncertain {
+		t.Fatalf("failed status = (%#v, %v)", status, err)
+	}
+	marker, exists, err := registry.quarantine.Inspect(context.Background(), "work")
+	if err != nil || !exists || marker.RefreshAllowed {
+		t.Fatalf("failed status marker = (%#v, %v, %v)", marker, exists, err)
+	}
+	close(cleanupDone)
+	deadline := time.Now().Add(time.Second)
+	for {
+		marker, exists, err = registry.quarantine.Inspect(context.Background(), "work")
+		if err == nil && exists && marker.Phase == quarantineRecoverable {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("failed status did not become recoverable: (%#v, %v, %v)", marker, exists, err)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	disposition, err := registry.Recover(context.Background(), "work")
+	if err != nil || disposition != DiscardedProjection {
+		t.Fatalf("failed status recovery = (%q, %v)", disposition, err)
+	}
+	if provider.replaceCalls != 0 || string(provider.records["work"].Auth) != string(original) {
+		t.Fatal("failed status recovery committed projected refresh")
+	}
+	assertNoSessionDirectories(t, sessionsDirectory)
+}
+
 func TestStatusPublishedMarkerFailurePreservesRecoverableSession(t *testing.T) {
 	auth := testChatGPTAuthJSON(t, "user", "workspace")
 	registry, _, runner, sessionsDirectory := newBindingTestRegistry(t, "work", auth)
@@ -620,6 +665,7 @@ type fakeStatusRunner struct {
 type pendingCleanupStatusRunner struct {
 	cleanupDone chan struct{}
 	sessionRoot string
+	mutate      func(string) error
 }
 
 type createErrorAfterPublishQuarantine struct{ bindingQuarantine }
@@ -631,7 +677,9 @@ func (store createErrorAfterPublishQuarantine) Create(ctx context.Context, marke
 	return ErrBindingQuarantined
 }
 
-func (*pendingCleanupStatusRunner) Check(context.Context) error { return nil }
+func (runner *pendingCleanupStatusRunner) Prepare(context.Context) (statusPreparation, error) {
+	return statusPreparation{run: runner.Run}, nil
+}
 
 func (runner *pendingCleanupStatusRunner) Run(
 	_ context.Context,
@@ -641,6 +689,11 @@ func (runner *pendingCleanupStatusRunner) Run(
 ) statusRunResult {
 	if beginProcess != nil {
 		if err := beginProcess(); err != nil {
+			return statusRunResult{err: ErrStatusFailed, cleanupProven: true}
+		}
+	}
+	if runner.mutate != nil {
+		if err := runner.mutate(created.HomeDirectory()); err != nil {
 			return statusRunResult{err: ErrStatusFailed, cleanupProven: true}
 		}
 	}
@@ -667,6 +720,13 @@ func (runner *fakeStatusRunner) Check(context.Context) error {
 	defer runner.mutex.Unlock()
 	runner.checkCalls++
 	return runner.checkErr
+}
+
+func (runner *fakeStatusRunner) Prepare(ctx context.Context) (statusPreparation, error) {
+	if err := runner.Check(ctx); err != nil {
+		return statusPreparation{}, err
+	}
+	return statusPreparation{run: runner.Run}, nil
 }
 
 func (runner *fakeStatusRunner) Run(

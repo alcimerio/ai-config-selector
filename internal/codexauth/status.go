@@ -12,9 +12,32 @@ import (
 
 type statusRunResult = containedRunResult
 
+type statusPreparation struct {
+	run     func(context.Context, *session.Session, string, string, func() error) statusRunResult
+	cleanup func()
+}
+
+func (preparation statusPreparation) Run(
+	ctx context.Context,
+	created *session.Session,
+	workspace string,
+	proofChallenge string,
+	beginProcess func() error,
+) statusRunResult {
+	if preparation.run == nil {
+		return statusRunResult{err: ErrStatusFailed, cleanupProven: true}
+	}
+	return preparation.run(ctx, created, workspace, proofChallenge, beginProcess)
+}
+
+func (preparation statusPreparation) Close() {
+	if preparation.cleanup != nil {
+		preparation.cleanup()
+	}
+}
+
 type statusRunner interface {
-	Check(context.Context) error
-	Run(context.Context, *session.Session, string, string, func() error) statusRunResult
+	Prepare(context.Context) (statusPreparation, error)
 }
 
 type codexStatusRunner struct {
@@ -30,33 +53,47 @@ func newCodexStatusRunner(config codexLoginConfig, sandbox launch.ProcessSandbox
 	}
 }
 
-func (runner *codexStatusRunner) Check(ctx context.Context) error {
+func (runner *codexStatusRunner) Prepare(ctx context.Context) (statusPreparation, error) {
 	if runner == nil || runner.sandbox == nil {
-		return ErrStatusFailed
+		return statusPreparation{}, ErrStatusFailed
 	}
-	executable, err := newPinnedExecutable(runner.config.BinaryPath).Resolve()
+	if err := validateContainedAuthWorkspace(runner.config); err != nil {
+		return statusPreparation{}, ErrStatusFailed
+	}
+	config, cleanup, err := runner.snapshotConfig()
 	if err != nil {
-		return ErrUnsupportedVersion
+		return statusPreparation{}, ErrUnsupportedVersion
 	}
-	return runner.sandbox.Check(ctx, launch.SandboxCheck{
+	if err := runner.sandbox.Check(ctx, launch.SandboxCheck{
 		Workspace: runner.config.WorkingDirectory, SessionsDirectory: runner.config.SessionsDirectory,
-		Executable: executable, RuntimeInputs: runner.config.RuntimeInputs,
+		Executable: config.BinaryPath, RuntimeInputs: runner.config.RuntimeInputs,
 		RuntimeProbePaths: runner.config.RuntimeProbePaths,
-	})
+	}); err != nil {
+		cleanup()
+		return statusPreparation{}, err
+	}
+	return statusPreparation{
+		run: func(
+			ctx context.Context,
+			created *session.Session,
+			workspace string,
+			proofChallenge string,
+			beginProcess func() error,
+		) statusRunResult {
+			return runner.runOperation(ctx, config, created, workspace, proofChallenge, beginProcess)
+		},
+		cleanup: cleanup,
+	}, nil
 }
 
-func (runner *codexStatusRunner) Run(
+func (runner *codexStatusRunner) runOperation(
 	ctx context.Context,
+	config codexLoginConfig,
 	created *session.Session,
 	workspace string,
 	proofChallenge string,
 	beginProcess func() error,
 ) statusRunResult {
-	config, cleanup, err := runner.snapshotConfig()
-	if err != nil {
-		return statusRunResult{err: ErrUnsupportedVersion, cleanupProven: true}
-	}
-	defer cleanup()
 	versionOutput := boundedBuffer{limit: maximumVersionOutputSize}
 	result := runner.run(ctx, config, created, workspace, proofChallenge, beginProcess, []string{"--version"}, launch.Terminal{
 		Output: &versionOutput, ErrorOutput: io.Discard,

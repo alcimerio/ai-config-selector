@@ -418,8 +418,7 @@ func TestSeatbeltRejectsMalformedMissingAndSpoofedCleanupProof(t *testing.T) {
 			process.challenge = append([]byte(nil), challenge...)
 			go func() {
 				defer peer.Close()
-				got := make([]byte, len(challenge))
-				_, _ = io.ReadFull(peer, got)
+				_, _ = seatbeltTestAcceptTargetStart(peer, challenge)
 				if len(test.response) > 0 {
 					_, _ = peer.Write(test.response)
 				}
@@ -435,6 +434,23 @@ func TestSeatbeltRejectsMalformedMissingAndSpoofedCleanupProof(t *testing.T) {
 			default:
 			}
 		})
+	}
+}
+
+func TestSeatbeltSupervisorStartHandshake(t *testing.T) {
+	control, peer := seatbeltTestSocketPair(t)
+	challenge := bytes.Repeat([]byte{0x2a}, seatbeltChallengeSize)
+	process := &seatbeltProcess{control: control, challenge: challenge}
+	result := make(chan error, 1)
+	go func() {
+		_, err := seatbeltTestAcceptTargetStart(peer, challenge)
+		result <- err
+	}()
+	if err := process.startSupervisor(); err != nil {
+		t.Fatalf("start handshake: %T %v", err, err)
+	}
+	if err := <-result; err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -499,8 +515,7 @@ func TestSeatbeltWaitMapsAuthenticatedTargetStatusThroughProxy(t *testing.T) {
 				challenge: append([]byte(nil), challenge...), cleanupDone: make(chan struct{}),
 			}
 			go func() {
-				got := make([]byte, len(challenge))
-				_, _ = io.ReadFull(supervisorControl, got)
+				got, _ := seatbeltTestAcceptTargetStart(supervisorControl, challenge)
 				proof := test.proof
 				proof.Magic = seatbeltProofMagic
 				proof.Version = seatbeltProofVersion
@@ -538,9 +553,7 @@ func TestSeatbeltSupervisorProvesPreTargetStartFailure(t *testing.T) {
 	go func() {
 		result <- runSeatbeltSupervisor(supervisorFD, filepath.Join(t.TempDir(), "missing-target"), nil)
 	}()
-	if _, err := control.Write(challenge); err != nil {
-		t.Fatal(err)
-	}
+	seatbeltTestStartTarget(t, control, challenge)
 	proof, err := io.ReadAll(control)
 	if err != nil {
 		t.Fatal(err)
@@ -583,9 +596,7 @@ func TestSeatbeltSupervisorPersistsRecoveryProofBeforeParentAcknowledgement(t *t
 	go func() {
 		result <- runSeatbeltSupervisor(supervisorFD, filepath.Join(root, "missing-target"), nil)
 	}()
-	if _, err := control.Write(challenge); err != nil {
-		t.Fatal(err)
-	}
+	seatbeltTestStartTarget(t, control, challenge)
 	if _, err := io.ReadAll(control); err != nil {
 		t.Fatal(err)
 	}
@@ -617,9 +628,7 @@ func TestSeatbeltSupervisorPersistsRecoveryProofAfterOwnerConnectionLoss(t *test
 	go func() {
 		result <- runSeatbeltSupervisor(supervisorFD, filepath.Join(root, "missing-target"), nil)
 	}()
-	if _, err := control.Write(challenge); err != nil {
-		t.Fatal(err)
-	}
+	seatbeltTestStartTarget(t, control, challenge)
 	if err := control.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -628,6 +637,55 @@ func TestSeatbeltSupervisorPersistsRecoveryProofAfterOwnerConnectionLoss(t *test
 	}
 	if proven, err := VerifySessionCleanupProof(root, challenge); err != nil || !proven {
 		t.Fatalf("recovery proof after owner loss = (%v, %v)", proven, err)
+	}
+}
+
+func TestSeatbeltSupervisorWaitsForStartAfterClearingPreparedProof(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "home"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", filepath.Join(root, "home"))
+	t.Setenv(seatbeltRecoveryProofEnvironment, "1")
+	control, peer := seatbeltTestSocketPair(t)
+	supervisorFD, err := unix.Dup(int(peer.Fd()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := peer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	challenge := bytes.Repeat([]byte{0x91}, RecoveryProofChallengeSize)
+	if err := PrepareSessionCleanupProof(root, challenge); err != nil {
+		t.Fatal(err)
+	}
+	result := make(chan int, 1)
+	go func() {
+		result <- runSeatbeltSupervisor(supervisorFD, filepath.Join(root, "missing-target"), nil)
+	}()
+	if _, err := control.Write(challenge); err != nil {
+		t.Fatal(err)
+	}
+	ready := []byte{0}
+	if _, err := io.ReadFull(control, ready); err != nil || ready[0] != seatbeltSupervisorReady {
+		t.Fatalf("supervisor readiness = (%q, %v)", ready, err)
+	}
+	if proven, err := VerifySessionCleanupProof(root, challenge); err != nil || proven {
+		t.Fatalf("prepared proof after readiness = (%v, %v)", proven, err)
+	}
+	select {
+	case status := <-result:
+		t.Fatalf("supervisor exited before start decision with %d", status)
+	default:
+	}
+	if err := control.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if status := <-result; status != 125 {
+		t.Fatalf("disconnected supervisor status = %d, want 125", status)
+	}
+	if proven, err := VerifySessionCleanupProof(root, challenge); err != nil || !proven {
+		t.Fatalf("no-target proof after owner loss = (%v, %v)", proven, err)
 	}
 }
 
@@ -664,9 +722,7 @@ func TestSeatbeltSupervisorAuthenticatesDescriptorPreflightFailure(t *testing.T)
 			func(seatbeltDescriptorEnumerator) error { return errors.New("injected descriptor preflight failure") },
 		)
 	}()
-	if _, err := control.Write(challenge); err != nil {
-		t.Fatal(err)
-	}
+	seatbeltTestStartTarget(t, control, challenge)
 	proof, err := io.ReadAll(control)
 	if err != nil {
 		t.Fatal(err)
@@ -852,8 +908,7 @@ func TestSeatbeltCancellationCleanupProofTimeoutFailsClosed(t *testing.T) {
 	process.proofTimeout = func() <-chan time.Time { return timedOut }
 	releasePeer := make(chan struct{})
 	go func() {
-		challenge := make([]byte, seatbeltChallengeSize)
-		_, _ = io.ReadFull(peer, challenge)
+		_, _ = seatbeltTestAcceptTargetStart(peer, process.challenge)
 		<-releasePeer
 	}()
 	if err := process.Start(); err != nil {
@@ -884,8 +939,8 @@ func TestSeatbeltNormalWaitDoesNotApplyCancellationProofTimeout(t *testing.T) {
 	process.proofTimeout = func() <-chan time.Time { return timedOut }
 
 	go func() {
-		gotChallenge := make([]byte, seatbeltChallengeSize)
-		if _, err := io.ReadFull(supervisorControl, gotChallenge); err != nil {
+		gotChallenge, err := seatbeltTestAcceptTargetStart(supervisorControl, challenge)
+		if err != nil {
 			return
 		}
 		time.Sleep(50 * time.Millisecond)
@@ -2838,6 +2893,41 @@ func seatbeltTestSocketPair(t *testing.T) (*os.File, *os.File) {
 		_ = peer.Close()
 	})
 	return parent, peer
+}
+
+func seatbeltTestStartTarget(t *testing.T, control *os.File, challenge []byte) {
+	t.Helper()
+	if _, err := control.Write(challenge); err != nil {
+		t.Fatal(err)
+	}
+	ready := []byte{0}
+	if _, err := io.ReadFull(control, ready); err != nil {
+		t.Fatal(err)
+	}
+	if ready[0] != seatbeltSupervisorReady {
+		t.Fatalf("supervisor readiness = %q", ready)
+	}
+	if _, err := control.Write([]byte{seatbeltSupervisorStart}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func seatbeltTestAcceptTargetStart(control *os.File, challenge []byte) ([]byte, error) {
+	got := make([]byte, len(challenge))
+	if _, err := io.ReadFull(control, got); err != nil {
+		return nil, err
+	}
+	if _, err := control.Write([]byte{seatbeltSupervisorReady}); err != nil {
+		return nil, err
+	}
+	start := []byte{0}
+	if _, err := io.ReadFull(control, start); err != nil {
+		return nil, err
+	}
+	if start[0] != seatbeltSupervisorStart {
+		return nil, errors.New("unexpected supervisor start signal")
+	}
+	return got, nil
 }
 
 type seatbeltTestEnumerator struct {

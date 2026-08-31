@@ -148,9 +148,17 @@ func secureExecutableSnapshotRoot(path string) error {
 }
 
 func executableSnapshotRoot(config codexLoginConfig) (string, error) {
-	sessions, err := filepath.EvalSymlinks(config.SessionsDirectory)
+	sessionsParent, err := filepath.EvalSymlinks(filepath.Dir(config.SessionsDirectory))
 	if err != nil {
 		return "", err
+	}
+	sessions := filepath.Join(sessionsParent, filepath.Base(config.SessionsDirectory))
+	if info, statErr := os.Lstat(sessions); statErr == nil {
+		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+			return "", errors.New("invalid Sessions directory")
+		}
+	} else if !os.IsNotExist(statErr) {
+		return "", statErr
 	}
 	workspace, err := filepath.EvalSymlinks(config.WorkingDirectory)
 	if err != nil {

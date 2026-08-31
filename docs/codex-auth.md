@@ -53,9 +53,11 @@ or number. An existing name causes login to fail before Codex starts; ACS does
 not silently replace it. To reuse a name, explicitly log it out first and then
 log in again.
 
-Login requires interactive stdin and stdout. The current implementation accepts
-ChatGPT authentication only and pins the exact output `codex-cli 0.149.1`.
-API-key, non-interactive token injection, and credential import are unsupported.
+Login requires stdin and stdout that are actual terminal endpoints; character
+devices such as `/dev/null` are not accepted as interactive. The current
+implementation accepts ChatGPT authentication only and pins the exact output
+`codex-cli 0.149.1`. API-key, non-interactive token injection, and credential
+import are unsupported.
 
 ## Contained login and cleanup
 
@@ -81,7 +83,8 @@ when absent, without gaining access to the rest of `/etc`. It then:
    overrides so project configuration cannot replace them;
 5. verifies the exact Codex CLI version inside the sandbox;
 6. runs `codex login`, optionally with `--device-auth`, inside the same sandbox;
-7. opens only the Session's `.codex/auth.json`, without following symlinks, and
+7. walks the Session root, `home`, and `.codex` through private directory
+   descriptors without following symlinks, then opens only `auth.json` and
    requires a private, regular, single-link file owned by the invoking user;
 8. validates the bounded JSON schema and derives non-secret metadata before the
    first durable write;
@@ -147,10 +150,12 @@ another login method. The process receives the Session's synthetic `HOME`, so
 the effective file location is that Session's `HOME/.codex/auth.json`; ACS does
 not set the process to the invoking user's global Codex home.
 
-Codex may refresh ChatGPT tokens during status. ACS atomically replaces the
-Keychain payload only when the final file remains schema-valid and its login
-method, workspace, and stable identity fingerprint equal the durable record.
-The terminal dispositions are:
+Codex may refresh ChatGPT tokens during status. ACS durably records refresh
+eligibility only after `codex login status` succeeds; crash recovery therefore
+cannot commit target-authored bytes from a failed status outcome. ACS atomically
+replaces the Keychain payload only when the final file remains schema-valid and
+its login method, workspace, and stable identity fingerprint equal the durable
+record. The terminal dispositions are:
 
 - `committed_same_identity_refresh`: a validated refresh replaced the durable
   payload;
@@ -188,8 +193,11 @@ durable identity, and makes one idempotent decision:
 - commit a different payload only when it is a valid same-identity refresh; or
 - discard missing, unchanged, invalid, deleted, or identity-changing state.
 
-The native supervisor removes the armed proof after receiving its challenge
-and before it starts each target, then writes and durably syncs the same proof
+The native supervisor removes the armed proof after receiving its challenge,
+acknowledges readiness only after that removal, and waits for an explicit start
+decision from its owner before starting the target. If the owner disappears at
+that boundary, the supervisor durably proves that no target started. After a
+target does start, the supervisor writes and durably syncs the same proof
 only after it has established zero live target processes. This ordering lets a
 crash before the first process recover from the armed proof without allowing a
 live target to reuse it. The evidence survives an ACS crash without being
@@ -212,12 +220,14 @@ error through final projection removal or quarantine; different names can
 proceed independently. Keychain creation is also atomic, so a duplicate cannot
 replace the existing record even across processes.
 
-Contained authentication refuses a working directory that overlaps ACS home.
-ACS also anchors its home to a canonical parent and opens each private lock and
-quarantine directory without following symlinks before use. This keeps the
-target from redirecting private state through a writable workspace, reading
-quarantine proof challenges, or modifying operation-scoped executable
-snapshots through workspace permissions.
+Registry and command metadata construction remain available when the current
+working directory overlaps ACS home. Contained login and status refuse that
+workspace before sandbox preflight or Session creation, where private state
+would otherwise become target-readable. ACS also anchors its home to a
+canonical parent and opens each private lock and quarantine directory without
+following symlinks before use. This keeps the target from redirecting private
+state through a writable workspace, reading quarantine proof challenges, or
+modifying operation-scoped executable snapshots through workspace permissions.
 
 Logout deletes only the selected ACS Keychain item and succeeds when a valid
 name is already absent. It refuses a quarantined name. The same binding

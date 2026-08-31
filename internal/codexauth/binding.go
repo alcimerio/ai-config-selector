@@ -41,10 +41,12 @@ func (registry *Registry) Status(ctx context.Context, value string) (IdentitySta
 	defer clearBytes(record.Auth)
 	result := IdentityStatus{Metadata: record.Metadata}
 
-	if err := registry.status.Check(ctx); err != nil {
+	preparation, err := registry.status.Prepare(ctx)
+	if err != nil {
 		_ = locked.Release()
 		return result, sanitizeStatusError(err)
 	}
+	defer preparation.Close()
 	created, proofChallenge, stage, err := registry.prepareBinding(ctx, name)
 	if err != nil {
 		_ = locked.Release()
@@ -69,9 +71,9 @@ func (registry *Registry) Status(ctx context.Context, value string) (IdentitySta
 	}
 
 	beginProcess := func() error { return registry.quarantine.MarkCleanupPending(ctx, name) }
-	run := registry.status.Run(ctx, created, record.Metadata.Workspace, proofChallenge, beginProcess)
+	run := preparation.Run(ctx, created, record.Metadata.Workspace, proofChallenge, beginProcess)
 	run.err = sanitizeStatusError(run.err)
-	if err := registry.settleBinding(ctx, created, name, run.cleanupProven, run.cleanupProcess); err != nil {
+	if err := registry.settleBinding(ctx, created, name, run.err == nil, run.cleanupProven, run.cleanupProcess); err != nil {
 		result.Disposition = QuarantinedUncertain
 		return result, ErrBindingQuarantined
 	}
@@ -134,9 +136,9 @@ func (registry *Registry) Recover(ctx context.Context, value string) (BindingDis
 		return QuarantinedUncertain, ErrBindingQuarantined
 	}
 	disposition := DiscardedProjection
-	if recordExists {
+	if recordExists && marker.RefreshAllowed {
 		defer clearBytes(record.Auth)
-		projected, readErr := readPrivateAuthFile(filepath.Join(recovered.RootDir, "home", ".codex", "auth.json"))
+		projected, readErr := readSessionAuthFile(recovered.RootDir)
 		if readErr == nil {
 			defer clearBytes(projected)
 			metadata, validationErr := validateAuthJSON(name, projected)
@@ -193,7 +195,7 @@ func (registry *Registry) finalizeStatus(
 		return result, runErr
 	}
 
-	projected, err := readPrivateAuthFile(filepath.Join(created.HomeDirectory(), ".codex", "auth.json"))
+	projected, err := readSessionAuthFile(created.RootDirectory())
 	if err != nil {
 		if cleanupErr := registry.removeCreatedBinding(ctx, created, record.Metadata.Name); cleanupErr != nil {
 			result.Disposition = QuarantinedUncertain

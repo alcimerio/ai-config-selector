@@ -102,6 +102,17 @@ func TestCodexAuthLoginRejectsNonInteractiveStreamsBeforeStarting(t *testing.T) 
 	}
 }
 
+func TestStandardStreamsInteractiveRejectsNonTerminalCharacterDevices(t *testing.T) {
+	null, err := os.OpenFile(os.DevNull, os.O_RDWR, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer null.Close()
+	if cli.StandardStreamsInteractive(null, null) {
+		t.Fatal("non-terminal character device was accepted as interactive")
+	}
+}
+
 func TestCodexAuthListPrintsOnlyNonSecretMetadata(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer

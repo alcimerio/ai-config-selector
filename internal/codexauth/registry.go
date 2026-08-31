@@ -30,9 +30,33 @@ type loginRunResult struct {
 	containedRunResult
 }
 
+type loginPreparation struct {
+	run     func(context.Context, *session.Session, string, func() error, bool, launch.Terminal) loginRunResult
+	cleanup func()
+}
+
+func (preparation loginPreparation) Run(
+	ctx context.Context,
+	created *session.Session,
+	proofChallenge string,
+	beginProcess func() error,
+	deviceAuth bool,
+	terminal launch.Terminal,
+) loginRunResult {
+	if preparation.run == nil {
+		return loginRunResult{containedRunResult: containedRunResult{err: ErrLoginFailed, cleanupProven: true}}
+	}
+	return preparation.run(ctx, created, proofChallenge, beginProcess, deviceAuth, terminal)
+}
+
+func (preparation loginPreparation) Close() {
+	if preparation.cleanup != nil {
+		preparation.cleanup()
+	}
+}
+
 type loginRunner interface {
-	Check(context.Context) error
-	Run(context.Context, *session.Session, string, func() error, bool, launch.Terminal) loginRunResult
+	Prepare(context.Context) (loginPreparation, error)
 }
 
 type identityLocker interface {
@@ -91,19 +115,7 @@ func New(config Config) (*Registry, error) {
 			return nil, fmt.Errorf("create Codex authentication registry: %s must be absolute", label)
 		}
 	}
-	workingDirectory, err := filepath.EvalSymlinks(config.WorkingDirectory)
-	if err != nil {
-		return nil, errors.New("create Codex authentication registry: working directory must exist")
-	}
 	requestedACSHome := filepath.Clean(config.ACSHome)
-	acsHomeParent, err := filepath.EvalSymlinks(filepath.Dir(requestedACSHome))
-	if err != nil {
-		return nil, errors.New("create Codex authentication registry: ACS home parent must exist")
-	}
-	canonicalACSHome := filepath.Join(acsHomeParent, filepath.Base(requestedACSHome))
-	if pathsOverlap(workingDirectory, canonicalACSHome) {
-		return nil, errors.New("create Codex authentication registry: working directory must not overlap ACS home")
-	}
 	acsHome, err := securePrivateRoot(requestedACSHome)
 	if err != nil {
 		return nil, errors.New("create Codex authentication registry: ACS home must be a private owned directory")
@@ -133,7 +145,7 @@ func New(config Config) (*Registry, error) {
 		newCodexLoginRunner(codexLoginConfig{
 			BinaryPath: config.BinaryPath, SupportedVersion: config.SupportedVersion,
 			RuntimeInputs: config.RuntimeInputs, SessionsDirectory: config.SessionsDirectory,
-			WorkingDirectory: config.WorkingDirectory,
+			WorkingDirectory: config.WorkingDirectory, PrivateRoot: acsHome,
 		}, sandbox),
 		newFileIdentityLocker(locksDirectory),
 	)
@@ -143,7 +155,7 @@ func New(config Config) (*Registry, error) {
 	registry.status = newCodexStatusRunner(codexLoginConfig{
 		BinaryPath: config.BinaryPath, SupportedVersion: config.SupportedVersion,
 		RuntimeInputs: config.RuntimeInputs, SessionsDirectory: config.SessionsDirectory,
-		WorkingDirectory: config.WorkingDirectory,
+		WorkingDirectory: config.WorkingDirectory, PrivateRoot: acsHome,
 	}, sandbox)
 	registry.quarantine = newFileBindingQuarantine(quarantineDirectory)
 	registry.sessionsDirectory = config.SessionsDirectory
@@ -182,9 +194,11 @@ func (registry *Registry) Login(ctx context.Context, request LoginRequest) (Iden
 	if registry.sessionsDirectory == "" || registry.workingDirectory == "" {
 		return IdentityMetadata{}, ErrProviderUnavailable
 	}
-	if err := registry.login.Check(ctx); err != nil {
+	preparation, err := registry.login.Prepare(ctx)
+	if err != nil {
 		return IdentityMetadata{}, err
 	}
+	defer preparation.Close()
 	created, proofChallenge, stage, err := registry.prepareBinding(ctx, name)
 	if err != nil {
 		if errors.Is(err, ErrBindingQuarantined) {
@@ -197,8 +211,8 @@ func (registry *Registry) Login(ctx context.Context, request LoginRequest) (Iden
 	}
 
 	beginProcess := func() error { return registry.quarantine.MarkCleanupPending(ctx, name) }
-	run := registry.login.Run(ctx, created, proofChallenge, beginProcess, request.DeviceAuth, request.Terminal)
-	if err := registry.settleBinding(ctx, created, name, run.cleanupProven, run.cleanupProcess); err != nil {
+	run := preparation.Run(ctx, created, proofChallenge, beginProcess, request.DeviceAuth, request.Terminal)
+	if err := registry.settleBinding(ctx, created, name, false, run.cleanupProven, run.cleanupProcess); err != nil {
 		clearBytes(run.auth)
 		return IdentityMetadata{}, ErrLoginCleanupUncertain
 	}

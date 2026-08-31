@@ -32,12 +32,14 @@ type quarantineMarker struct {
 	SessionID      string          `json:"sessionId"`
 	Phase          quarantinePhase `json:"phase"`
 	ProofChallenge string          `json:"proofChallenge"`
+	RefreshAllowed bool            `json:"refreshAllowed,omitempty"`
 }
 
 type bindingQuarantine interface {
 	Inspect(context.Context, CredentialRef) (quarantineMarker, bool, error)
 	Create(context.Context, quarantineMarker) error
 	MarkCleanupPending(context.Context, CredentialRef) error
+	MarkRefreshAllowed(context.Context, CredentialRef) error
 	MarkRecoverable(context.Context, CredentialRef) error
 	Delete(context.Context, CredentialRef) error
 }
@@ -50,6 +52,9 @@ func (noBindingQuarantine) Inspect(context.Context, CredentialRef) (quarantineMa
 
 func (noBindingQuarantine) Create(context.Context, quarantineMarker) error { return nil }
 func (noBindingQuarantine) MarkCleanupPending(context.Context, CredentialRef) error {
+	return nil
+}
+func (noBindingQuarantine) MarkRefreshAllowed(context.Context, CredentialRef) error {
 	return nil
 }
 func (noBindingQuarantine) MarkRecoverable(context.Context, CredentialRef) error { return nil }
@@ -145,10 +150,40 @@ func (store *fileBindingQuarantine) MarkCleanupPending(ctx context.Context, name
 	return store.transition(ctx, name, quarantineCleanupPending)
 }
 
+func (store *fileBindingQuarantine) MarkRefreshAllowed(ctx context.Context, name CredentialRef) error {
+	return store.update(ctx, name, func(marker *quarantineMarker) (bool, error) {
+		if marker.Phase == quarantinePrepared {
+			return false, ErrBindingQuarantined
+		}
+		if marker.RefreshAllowed {
+			return false, nil
+		}
+		marker.RefreshAllowed = true
+		return true, nil
+	})
+}
+
 func (store *fileBindingQuarantine) transition(
 	ctx context.Context,
 	name CredentialRef,
 	phase quarantinePhase,
+) error {
+	return store.update(ctx, name, func(marker *quarantineMarker) (bool, error) {
+		if marker.Phase == phase {
+			return false, nil
+		}
+		if phase == quarantineCleanupPending && marker.Phase != quarantinePrepared {
+			return false, ErrBindingQuarantined
+		}
+		marker.Phase = phase
+		return true, nil
+	})
+}
+
+func (store *fileBindingQuarantine) update(
+	ctx context.Context,
+	name CredentialRef,
+	mutate func(*quarantineMarker) (bool, error),
 ) error {
 	marker, exists, err := store.Inspect(ctx, name)
 	if err != nil {
@@ -157,13 +192,10 @@ func (store *fileBindingQuarantine) transition(
 	if !exists {
 		return ErrBindingQuarantined
 	}
-	if marker.Phase == phase {
-		return nil
+	changed, err := mutate(&marker)
+	if err != nil || !changed {
+		return err
 	}
-	if phase == quarantineCleanupPending && marker.Phase != quarantinePrepared {
-		return ErrBindingQuarantined
-	}
-	marker.Phase = phase
 	contents, err := json.Marshal(marker)
 	if err != nil {
 		return ErrProviderUnavailable

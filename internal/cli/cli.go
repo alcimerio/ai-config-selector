@@ -14,6 +14,7 @@ import (
 	"github.com/alcimerio/ai-config-selector/internal/codexauth"
 	"github.com/alcimerio/ai-config-selector/internal/launch"
 	"github.com/alcimerio/ai-config-selector/internal/profile"
+	"github.com/charmbracelet/x/term"
 )
 
 type ProfileDraftEditor interface {
@@ -71,17 +72,15 @@ type App struct {
 	Interactive       func(io.Reader, io.Writer) bool
 }
 
-// StandardStreamsInteractive reports whether both endpoints are terminal
-// devices. Callers can inject a narrower capability check in tests.
+// StandardStreamsInteractive reports whether both endpoints are actual
+// terminals. Callers can inject a narrower capability check in tests.
 func StandardStreamsInteractive(input io.Reader, output io.Writer) bool {
 	inputFile, inputIsFile := input.(*os.File)
 	outputFile, outputIsFile := output.(*os.File)
 	if !inputIsFile || !outputIsFile {
 		return false
 	}
-	inputInfo, inputErr := inputFile.Stat()
-	outputInfo, outputErr := outputFile.Stat()
-	return inputErr == nil && outputErr == nil && inputInfo.Mode()&os.ModeCharDevice != 0 && outputInfo.Mode()&os.ModeCharDevice != 0
+	return term.IsTerminal(inputFile.Fd()) && term.IsTerminal(outputFile.Fd())
 }
 
 func (app App) Run(ctx context.Context, args []string) int {

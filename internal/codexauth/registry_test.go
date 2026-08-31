@@ -41,19 +41,25 @@ func TestRegistryLoginCreatesWithoutReplacingNamedIdentity(t *testing.T) {
 	}
 }
 
-func TestRegistryRejectsWorkspaceThatCouldReadRecoveryChallenges(t *testing.T) {
+func TestRegistryDefersPrivateWorkspaceRejectionToContainedOperations(t *testing.T) {
 	root := t.TempDir()
 	acsHome := filepath.Join(root, "acs")
 	workspace := filepath.Join(acsHome, "quarantine")
 	if err := os.MkdirAll(workspace, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	_, err := New(Config{
+	registry, err := New(Config{
 		BinaryPath: "/usr/bin/true", ACSHome: acsHome,
 		SessionsDirectory: filepath.Join(acsHome, "sessions"), WorkingDirectory: workspace,
 	})
-	if err == nil {
-		t.Fatal("workspace inside ACS home was accepted")
+	if err != nil {
+		t.Fatalf("registry construction rejected current directory overlap: %v", err)
+	}
+	if _, err := registry.login.Prepare(context.Background()); !errors.Is(err, ErrLoginFailed) {
+		t.Fatalf("contained login preparation error = %v", err)
+	}
+	if _, err := registry.status.Prepare(context.Background()); !errors.Is(err, ErrStatusFailed) {
+		t.Fatalf("contained status preparation error = %v", err)
 	}
 }
 
@@ -275,7 +281,9 @@ func (createAndTransitionErrorQuarantine) MarkRecoverable(context.Context, Crede
 	return ErrBindingQuarantined
 }
 
-func (*fakeLoginRunner) Check(context.Context) error { return nil }
+func (runner *fakeLoginRunner) Prepare(context.Context) (loginPreparation, error) {
+	return loginPreparation{run: runner.Run}, nil
+}
 
 func (runner *fakeLoginRunner) Run(
 	_ context.Context,

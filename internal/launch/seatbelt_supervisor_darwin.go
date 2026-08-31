@@ -38,6 +38,8 @@ const (
 	seatbeltStatusPacketSize          = 2
 	seatbeltStatusExit                = 'E'
 	seatbeltStatusSignal              = 'S'
+	seatbeltSupervisorReady           = 'R'
+	seatbeltSupervisorStart           = 'G'
 )
 
 type seatbeltCleanupProof struct {
@@ -157,6 +159,13 @@ func runSeatbeltSupervisorWithDescriptorSealer(controlFD int, target string, arg
 		if err := clearSessionCleanupProof(recoveryRoot); err != nil {
 			return 125
 		}
+	}
+	if _, err := control.Write([]byte{seatbeltSupervisorReady}); err != nil {
+		return seatbeltNoTargetFailure(control, challenge, recoveryRoot)
+	}
+	start := []byte{0}
+	if _, err := io.ReadFull(control, start); err != nil || start[0] != seatbeltSupervisorStart {
+		return seatbeltNoTargetFailure(control, challenge, recoveryRoot)
 	}
 	api, err := loadSeatbeltProcAPI()
 	if err != nil {
