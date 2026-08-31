@@ -250,6 +250,16 @@ service namespace, metadata-only enumeration, duplicate service/account
 collision, service/account isolation, exact record-size boundaries, and
 failed-update byte preservation.
 
+Before changing host Keychain configuration, the native gate writes a `0600`
+private durable recovery artifact inside the disposable Keychain directory. It
+records the exact original search list and default Keychain, the disposable
+paths, and recovery guidance. Cleanup attempts both restorations even if one
+fails, and deletes the disposable Keychain, artifact, and directory only after
+both succeed. If either restoration fails, cleanup reports the retained
+artifact path in the test error; an operator should open that JSON file and
+follow its guidance, leaving both it and the disposable Keychain in place until
+the recorded search list and default have been restored successfully.
+
 Production writes explicitly request non-synchronizable,
 when-unlocked-this-device-only items. All production queries prohibit
 authentication UI. A file-backed temporary Keychain can omit the accessibility

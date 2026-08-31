@@ -22,15 +22,10 @@ fail() {
 if [ -e "$output_directory" ] || [ -L "$output_directory" ]; then
   fail "output directory already exists"
 fi
-mkdir -m 0700 "$output_directory" || fail "output directory could not be created"
-workspace="$(mktemp -d "$output_directory/.fetch.XXXXXX")" || fail "temporary directory could not be created"
-cleanup() {
-  find "$workspace" -type f -exec rm -f {} \;
-  rmdir "$workspace" 2>/dev/null || true
-}
-trap cleanup EXIT HUP INT TERM
 
 count=0
+arm64_count=0
+amd64_count=0
 while IFS='|' read -r version target_os target_arch digest url extra; do
   case "$version" in
     ''|'#'*) continue ;;
@@ -46,13 +41,50 @@ while IFS='|' read -r version target_os target_arch digest url extra; do
   case "$digest" in
     *[!0-9a-f]*) fail "lock entry has an invalid SHA-256 digest" ;;
   esac
-  archive="codex_${version}_${target_os}_${target_arch}.tar.gz"
+  case "$target_arch" in
+    arm64)
+      arm64_count=$((arm64_count + 1))
+      arm64_digest="$digest"
+      arm64_url="$url"
+      ;;
+    amd64)
+      amd64_count=$((amd64_count + 1))
+      amd64_digest="$digest"
+      amd64_url="$url"
+      ;;
+  esac
+  count=$((count + 1))
+done <"$lock_file"
+
+[ "$count" -eq 2 ] && [ "$arm64_count" -eq 1 ] && [ "$amd64_count" -eq 1 ] || fail "lock must contain exactly two supported targets"
+
+workspace="$(mktemp -d "${output_directory}.fetch.XXXXXX")" || fail "temporary directory could not be created"
+chmod 0700 "$workspace" || fail "temporary directory could not be made private"
+cleanup() {
+  if [ -n "$workspace" ] && [ -d "$workspace" ]; then
+    find "$workspace" -type f -exec rm -f {} \;
+    rmdir "$workspace" 2>/dev/null || true
+  fi
+}
+trap cleanup EXIT HUP INT TERM
+
+for target_arch in arm64 amd64; do
+  case "$target_arch" in
+    arm64)
+      digest="$arm64_digest"
+      url="$arm64_url"
+      ;;
+    amd64)
+      digest="$amd64_digest"
+      url="$amd64_url"
+      ;;
+  esac
+  archive="codex_0.149.1_darwin_${target_arch}.tar.gz"
   temporary="$workspace/$archive"
   curl --fail --location --silent --show-error --proto '=https' --tlsv1.2 --output "$temporary" "$url" || fail "approved release asset download failed"
   actual="$(shasum -a 256 "$temporary" | awk '{print $1}')"
   [ "$actual" = "$digest" ] || fail "approved release asset digest did not match the lock"
-  mv "$temporary" "$output_directory/$archive" || fail "verified release asset could not be placed"
-  count=$((count + 1))
-done <"$lock_file"
+done
 
-[ "$count" -eq 2 ] || fail "lock must contain exactly two supported targets"
+mv "$workspace" "$output_directory" || fail "verified release assets could not be published"
+workspace=

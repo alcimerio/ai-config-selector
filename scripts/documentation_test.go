@@ -219,6 +219,16 @@ func TestNamedAuthenticationDocumentationSeparatesAutomatedAndAuthenticatedEvide
 			t.Errorf("authenticated named-auth smoke omits safety boundary %q", required)
 		}
 	}
+	authDocumentation := strings.Join(strings.Fields(readRepositoryFile(t, "..", "docs/codex-auth.md")), " ")
+	for _, required := range []string{
+		"private durable recovery artifact",
+		"original search list and default Keychain",
+		"reports the retained artifact path",
+	} {
+		if !strings.Contains(authDocumentation, required) {
+			t.Errorf("named-auth documentation omits isolated Keychain recovery guidance %q", required)
+		}
+	}
 }
 
 func TestHistoricalReleaseRecordsRemainAvailable(t *testing.T) {

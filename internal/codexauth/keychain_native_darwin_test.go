@@ -4,8 +4,10 @@ package codexauth
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -111,7 +113,6 @@ func TestNativeKeychainCredentialFreeContract(t *testing.T) {
 }
 
 func TestIsolatedKeychainSetupRestoresAfterConfigurationFailure(t *testing.T) {
-	keychain := "/recoverable/native-auth-gate.keychain-db"
 	for name, failurePoint := range map[string]string{
 		"after search":  "list-keychains",
 		"after default": "default-keychain",
@@ -119,6 +120,17 @@ func TestIsolatedKeychainSetupRestoresAfterConfigurationFailure(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			fake := newFakeSecurityCommand()
+			directory := filepath.Join(t.TempDir(), "recoverable")
+			keychain := filepath.Join(directory, "native-auth-gate.keychain-db")
+			recoveryPath := filepath.Join(directory, isolatedKeychainRecoveryFilename)
+			fake.keychainPath = keychain
+			failedCommand := map[string]string{
+				"create-keychain":  "create-keychain -p synthetic-password " + keychain,
+				"list-keychains":   "list-keychains -d user -s " + keychain,
+				"default-keychain": "default-keychain -d user -s " + keychain,
+				"unlock-keychain":  "unlock-keychain -p synthetic-password " + keychain,
+			}[failurePoint]
+			fake.failuresAfter[failedCommand] = errors.New("injected post-mutation failure")
 			var cleanup func()
 			var cleanupErrors []error
 			removed := false
@@ -126,25 +138,23 @@ func TestIsolatedKeychainSetupRestoresAfterConfigurationFailure(t *testing.T) {
 				runSecurity: fake.run,
 				makeDirectory: func() (string, error) {
 					fake.events = append(fake.events, "mkdir")
-					return "/recoverable", nil
+					return directory, os.Mkdir(directory, 0o700)
 				},
 				removeDirectory: func(path string) error {
 					fake.events = append(fake.events, "remove "+path)
 					removed = true
-					return nil
+					return os.Remove(path)
+				},
+				persistRecovery: func(path string, recovery isolatedKeychainRecovery) error {
+					fake.events = append(fake.events, "persist recovery")
+					return persistIsolatedKeychainRecovery(path, recovery)
 				},
 				registerCleanup: func(function func()) {
 					fake.events = append(fake.events, "register cleanup")
 					cleanup = function
 				},
 				reportCleanup: func(err error) { cleanupErrors = append(cleanupErrors, err) },
-				afterMutation: func(operation string) error {
-					if operation == failurePoint {
-						return errors.New("injected post-mutation failure")
-					}
-					return nil
-				},
-				password: "synthetic-password",
+				password:      "synthetic-password",
 			})
 			if err == nil {
 				t.Fatal("setup succeeded despite injected failure")
@@ -156,6 +166,27 @@ func TestIsolatedKeychainSetupRestoresAfterConfigurationFailure(t *testing.T) {
 			assertEventBefore(t, fake.events, "list-keychains -d user", "create-keychain -p synthetic-password "+keychain)
 			assertEventBefore(t, fake.events, "register cleanup", "mkdir")
 			assertEventBefore(t, fake.events, "register cleanup", "create-keychain -p synthetic-password "+keychain)
+			assertEventBefore(t, fake.events, "persist recovery", "create-keychain -p synthetic-password "+keychain)
+
+			recovery, readErr := readIsolatedKeychainRecovery(recoveryPath)
+			if readErr != nil {
+				t.Fatalf("read recovery artifact: %v", readErr)
+			}
+			wantRecovery := isolatedKeychainRecovery{
+				Version:         1,
+				OriginalDefault: "/original/login.keychain-db",
+				OriginalSearch:  []string{"/original/login.keychain-db", "/original/system.keychain"},
+				Directory:       directory,
+				Keychain:        keychain,
+				Guidance:        isolatedKeychainRecoveryGuidance,
+			}
+			if !reflect.DeepEqual(recovery, wantRecovery) {
+				t.Fatalf("recovery artifact = %#v, want %#v", recovery, wantRecovery)
+			}
+			info, statErr := os.Stat(recoveryPath)
+			if statErr != nil || info.Mode().Perm() != 0o600 {
+				t.Fatalf("recovery artifact mode = (%v, %v), want 0600", info, statErr)
+			}
 
 			cleanup()
 			if len(cleanupErrors) != 0 {
@@ -169,28 +200,34 @@ func TestIsolatedKeychainSetupRestoresAfterConfigurationFailure(t *testing.T) {
 			if !removed {
 				t.Fatal("successful restoration did not remove disposable directory")
 			}
+			if _, statErr := os.Stat(recoveryPath); !os.IsNotExist(statErr) {
+				t.Fatalf("successful cleanup retained recovery artifact: %v", statErr)
+			}
 		})
 	}
 }
 
 func TestIsolatedKeychainCleanupRetainsStateUntilBothRestorationsSucceed(t *testing.T) {
-	keychain := "/recoverable/native-auth-gate.keychain-db"
 	for name, failedRestore := range map[string]string{
 		"search":  "list-keychains -d user -s /original/login.keychain-db /original/system.keychain",
 		"default": "default-keychain -d user -s /original/login.keychain-db",
 	} {
 		t.Run(name, func(t *testing.T) {
 			fake := newFakeSecurityCommand()
+			directory := filepath.Join(t.TempDir(), "recoverable")
+			keychain := filepath.Join(directory, "native-auth-gate.keychain-db")
+			recoveryPath := filepath.Join(directory, isolatedKeychainRecoveryFilename)
+			fake.keychainPath = keychain
 			fake.failures[failedRestore] = errors.New("injected restoration failure")
 			var cleanup func()
 			var cleanupErrors []error
 			removed := false
 			err := configureIsolatedTestKeychain(isolatedKeychainSetup{
 				runSecurity:   fake.run,
-				makeDirectory: func() (string, error) { return "/recoverable", nil },
+				makeDirectory: func() (string, error) { return directory, os.Mkdir(directory, 0o700) },
 				removeDirectory: func(string) error {
 					removed = true
-					return nil
+					return os.Remove(directory)
 				},
 				registerCleanup: func(function func()) { cleanup = function },
 				reportCleanup:   func(err error) { cleanupErrors = append(cleanupErrors, err) },
@@ -214,17 +251,62 @@ func TestIsolatedKeychainCleanupRetainsStateUntilBothRestorationsSucceed(t *test
 			if eventIndex(fake.events, "delete-keychain "+keychain) >= 0 || removed {
 				t.Fatalf("cleanup deleted recoverable state before restoration succeeded; events=%q", fake.events)
 			}
+			if _, statErr := os.Stat(recoveryPath); statErr != nil {
+				t.Fatalf("failed restoration lost recovery artifact: %v", statErr)
+			}
+			if _, statErr := os.Stat(keychain); statErr != nil {
+				t.Fatalf("failed restoration lost disposable Keychain: %v", statErr)
+			}
+			if !strings.Contains(cleanupErrors[0].Error(), recoveryPath) {
+				t.Fatalf("cleanup error does not surface retained recovery artifact: %v", cleanupErrors[0])
+			}
 		})
 	}
 }
 
+func TestIsolatedKeychainRecoverySurvivesLossOfInMemorySetup(t *testing.T) {
+	fake := newFakeSecurityCommand()
+	directory := filepath.Join(t.TempDir(), "recoverable")
+	keychain := filepath.Join(directory, "native-auth-gate.keychain-db")
+	recoveryPath := filepath.Join(directory, isolatedKeychainRecoveryFilename)
+	fake.keychainPath = keychain
+	var cleanup func()
+	err := configureIsolatedTestKeychain(isolatedKeychainSetup{
+		runSecurity:     fake.run,
+		makeDirectory:   func() (string, error) { return directory, os.Mkdir(directory, 0o700) },
+		removeDirectory: os.Remove,
+		registerCleanup: func(function func()) { cleanup = function },
+		reportCleanup:   func(error) {},
+		password:        "synthetic-password",
+	})
+	if err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	if cleanup == nil {
+		t.Fatal("setup did not register cleanup")
+	}
+
+	// Recover solely from the durable artifact, as a new process would after
+	// the original setup state and cleanup closure have disappeared.
+	if err := recoverIsolatedTestKeychain(recoveryPath, fake.run, os.Remove); err != nil {
+		t.Fatalf("recover from artifact: %v", err)
+	}
+	for _, path := range []string{recoveryPath, keychain, directory} {
+		if _, statErr := os.Stat(path); !os.IsNotExist(statErr) {
+			t.Fatalf("recovery retained %s: %v", path, statErr)
+		}
+	}
+}
+
 type fakeSecurityCommand struct {
-	events   []string
-	failures map[string]error
+	events        []string
+	failures      map[string]error
+	failuresAfter map[string]error
+	keychainPath  string
 }
 
 func newFakeSecurityCommand() *fakeSecurityCommand {
-	return &fakeSecurityCommand{failures: make(map[string]error)}
+	return &fakeSecurityCommand{failures: make(map[string]error), failuresAfter: make(map[string]error)}
 }
 
 func (fake *fakeSecurityCommand) run(arguments ...string) (string, error) {
@@ -233,14 +315,27 @@ func (fake *fakeSecurityCommand) run(arguments ...string) (string, error) {
 	if err := fake.failures[command]; err != nil {
 		return "", err
 	}
+	if strings.HasPrefix(command, "create-keychain ") && fake.keychainPath != "" {
+		if err := os.WriteFile(fake.keychainPath, []byte("synthetic disposable Keychain"), 0o600); err != nil {
+			return "", err
+		}
+	}
+	if strings.HasPrefix(command, "delete-keychain ") && fake.keychainPath != "" {
+		if err := os.Remove(fake.keychainPath); err != nil && !os.IsNotExist(err) {
+			return "", err
+		}
+	}
+	var output string
 	switch command {
 	case "default-keychain -d user":
-		return "\"/original/login.keychain-db\"\n", nil
+		output = "\"/original/login.keychain-db\"\n"
 	case "list-keychains -d user":
-		return "    \"/original/login.keychain-db\"\n    \"/original/system.keychain\"\n", nil
-	default:
-		return "", nil
+		output = "    \"/original/login.keychain-db\"\n    \"/original/system.keychain\"\n"
 	}
+	if err := fake.failuresAfter[command]; err != nil {
+		return output, err
+	}
+	return output, nil
 }
 
 func assertEventBefore(t *testing.T, events []string, first, second string) {
@@ -290,9 +385,9 @@ type isolatedKeychainSetup struct {
 	runSecurity     func(...string) (string, error)
 	makeDirectory   func() (string, error)
 	removeDirectory func(string) error
+	persistRecovery func(string, isolatedKeychainRecovery) error
 	registerCleanup func(func())
 	reportCleanup   func(error)
-	afterMutation   func(string) error
 	password        string
 }
 
@@ -302,7 +397,22 @@ type isolatedKeychainState struct {
 	originalSearch   []string
 	directory        string
 	keychain         string
+	recoveryPath     string
 	keychainMayExist bool
+}
+
+const (
+	isolatedKeychainRecoveryFilename = "native-auth-gate.recovery.json"
+	isolatedKeychainRecoveryGuidance = "Restore the user Keychain search list and default from this file with /usr/bin/security, then delete the disposable Keychain and this directory only after both restorations succeed."
+)
+
+type isolatedKeychainRecovery struct {
+	Version         int      `json:"version"`
+	OriginalDefault string   `json:"originalDefault"`
+	OriginalSearch  []string `json:"originalSearch"`
+	Directory       string   `json:"directory"`
+	Keychain        string   `json:"keychain"`
+	Guidance        string   `json:"guidance"`
 }
 
 func configureIsolatedTestKeychain(setup isolatedKeychainSetup) error {
@@ -334,6 +444,21 @@ func configureIsolatedTestKeychain(setup isolatedKeychainSetup) error {
 		return errors.New("create isolated Keychain directory")
 	}
 	state.keychain = filepath.Join(state.directory, "native-auth-gate.keychain-db")
+	state.recoveryPath = filepath.Join(state.directory, isolatedKeychainRecoveryFilename)
+	persistRecovery := setup.persistRecovery
+	if persistRecovery == nil {
+		persistRecovery = persistIsolatedKeychainRecovery
+	}
+	if err := persistRecovery(state.recoveryPath, isolatedKeychainRecovery{
+		Version:         1,
+		OriginalDefault: state.originalDefault,
+		OriginalSearch:  append([]string(nil), state.originalSearch...),
+		Directory:       state.directory,
+		Keychain:        state.keychain,
+		Guidance:        isolatedKeychainRecoveryGuidance,
+	}); err != nil {
+		return errors.New("persist isolated Keychain recovery state")
+	}
 	state.keychainMayExist = true
 	for _, command := range [][]string{
 		{"create-keychain", "-p", setup.password, state.keychain},
@@ -343,11 +468,6 @@ func configureIsolatedTestKeychain(setup isolatedKeychainSetup) error {
 	} {
 		if _, err := setup.runSecurity(command...); err != nil {
 			return errors.New("configure isolated Keychain")
-		}
-		if setup.afterMutation != nil {
-			if err := setup.afterMutation(command[0]); err != nil {
-				return errors.New("configure isolated Keychain")
-			}
 		}
 	}
 	return nil
@@ -359,10 +479,10 @@ func (state *isolatedKeychainState) cleanup() error {
 	_, searchErr := state.setup.runSecurity(searchArguments...)
 	_, defaultErr := state.setup.runSecurity("default-keychain", "-d", "user", "-s", state.originalDefault)
 	if searchErr != nil || defaultErr != nil {
-		return errors.Join(
+		return fmt.Errorf("recovery state retained at %s: %w", state.recoveryPath, errors.Join(
 			cleanupError("restore Keychain search list", searchErr),
 			cleanupError("restore default Keychain", defaultErr),
-		)
+		))
 	}
 	if state.keychainMayExist {
 		if _, err := state.setup.runSecurity("delete-keychain", state.keychain); err != nil {
@@ -370,11 +490,106 @@ func (state *isolatedKeychainState) cleanup() error {
 		}
 	}
 	if state.directory != "" {
+		if state.recoveryPath != "" {
+			if err := os.Remove(state.recoveryPath); err != nil && !os.IsNotExist(err) {
+				return fmt.Errorf("delete isolated Keychain recovery artifact %s: %w", state.recoveryPath, err)
+			}
+		}
 		if err := state.setup.removeDirectory(state.directory); err != nil {
 			return errors.New("delete isolated Keychain directory after restoration")
 		}
 	}
 	return nil
+}
+
+func persistIsolatedKeychainRecovery(path string, recovery isolatedKeychainRecovery) (resultErr error) {
+	contents, err := json.Marshal(recovery)
+	if err != nil {
+		return err
+	}
+	contents = append(contents, '\n')
+	temporary := path + ".tmp"
+	file, err := os.OpenFile(temporary, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		_ = file.Close()
+		if resultErr != nil {
+			_ = os.Remove(temporary)
+		}
+	}()
+	if _, err := file.Write(contents); err != nil {
+		return err
+	}
+	if err := file.Sync(); err != nil {
+		return err
+	}
+	if err := file.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(temporary, path); err != nil {
+		return err
+	}
+	directory, err := os.Open(filepath.Dir(path))
+	if err != nil {
+		return err
+	}
+	defer directory.Close()
+	return directory.Sync()
+}
+
+func readIsolatedKeychainRecovery(path string) (isolatedKeychainRecovery, error) {
+	var recovery isolatedKeychainRecovery
+	info, err := os.Lstat(path)
+	if err != nil {
+		return recovery, err
+	}
+	if !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 {
+		return recovery, errors.New("recovery artifact is not a private regular file")
+	}
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		return recovery, err
+	}
+	decoder := json.NewDecoder(bytes.NewReader(contents))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&recovery); err != nil {
+		return isolatedKeychainRecovery{}, err
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return isolatedKeychainRecovery{}, errors.New("recovery artifact has trailing data")
+	}
+	if recovery.Version != 1 || recovery.OriginalDefault == "" || len(recovery.OriginalSearch) == 0 ||
+		recovery.Directory == "" || recovery.Keychain != filepath.Join(recovery.Directory, "native-auth-gate.keychain-db") ||
+		path != filepath.Join(recovery.Directory, isolatedKeychainRecoveryFilename) || recovery.Guidance != isolatedKeychainRecoveryGuidance {
+		return isolatedKeychainRecovery{}, errors.New("recovery artifact is invalid")
+	}
+	return recovery, nil
+}
+
+func recoverIsolatedTestKeychain(
+	recoveryPath string,
+	runSecurity func(...string) (string, error),
+	removeDirectory func(string) error,
+) error {
+	recovery, err := readIsolatedKeychainRecovery(recoveryPath)
+	if err != nil {
+		return fmt.Errorf("read isolated Keychain recovery artifact: %w", err)
+	}
+	state := isolatedKeychainState{
+		setup: isolatedKeychainSetup{
+			runSecurity:     runSecurity,
+			removeDirectory: removeDirectory,
+		},
+		originalDefault:  recovery.OriginalDefault,
+		originalSearch:   recovery.OriginalSearch,
+		directory:        recovery.Directory,
+		keychain:         recovery.Keychain,
+		recoveryPath:     recoveryPath,
+		keychainMayExist: true,
+	}
+	return state.cleanup()
 }
 
 func cleanupError(operation string, err error) error {

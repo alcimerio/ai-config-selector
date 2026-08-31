@@ -106,11 +106,46 @@ func TestCodexTargetFetcherRejectsMalformedDigests(t *testing.T) {
 				t.Fatalf("malformed digest invoked download: %q", calls)
 			}
 			entries, readErr := os.ReadDir(output)
-			if readErr != nil {
+			if readErr != nil && !os.IsNotExist(readErr) {
 				t.Fatal(readErr)
 			}
 			if len(entries) != 0 {
 				t.Fatalf("malformed digest left output entries: %#v", entries)
+			}
+		})
+	}
+}
+
+func TestCodexTargetFetcherValidatesEveryLockRowBeforeDownloading(t *testing.T) {
+	valid := readCodexTargetLock(t)
+	for name, digest := range map[string]string{
+		"short":  strings.Repeat("b", 63),
+		"nonhex": strings.Repeat("b", 63) + "g",
+	} {
+		t.Run(name, func(t *testing.T) {
+			lock := strings.Replace(
+				valid,
+				"85fe7a837eb739dd5e1cc59a9c95b7b682048e5aacdc261505bae768fb1288ef",
+				digest,
+				1,
+			)
+			output, calls, result, err := runCodexTargetFetcherFailure(t, lock)
+			if err == nil || !strings.Contains(string(result), "invalid SHA-256 digest") {
+				t.Fatalf("fetch later malformed digest result = (%q, %v)", result, err)
+			}
+			if len(calls) != 0 {
+				t.Fatalf("later malformed digest invoked download: %q", calls)
+			}
+			entries, readErr := os.ReadDir(output)
+			if readErr != nil && !os.IsNotExist(readErr) {
+				t.Fatal(readErr)
+			}
+			if len(entries) != 0 {
+				t.Fatalf("later malformed digest left partial outputs: %#v", entries)
+			}
+			staging, globErr := filepath.Glob(output + ".fetch.*")
+			if globErr != nil || len(staging) != 0 {
+				t.Fatalf("later malformed digest left staging outputs = (%q, %v)", staging, globErr)
 			}
 		})
 	}
