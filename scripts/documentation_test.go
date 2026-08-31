@@ -162,6 +162,55 @@ func TestPromotedArtifactAcceptanceCoversSandboxShell(t *testing.T) {
 	}
 }
 
+func TestPromotedArtifactGateUsesLockedNativeAuthenticationTargets(t *testing.T) {
+	workflow := readRepositoryFile(t, "..", filepath.Join(".github", "workflows", "promoted-artifacts.yml"))
+	for _, required := range []string{
+		"scripts/fetch-codex-test-targets.sh scripts/codex-test-targets.lock dist/codex-test-targets",
+		"codex-test-targets-${{ github.sha }}",
+		"scripts/install-codex-test-target.sh",
+		"ACS_RUN_NATIVE_AUTH_GATE: \"1\"",
+		"ACS_TEST_CODEX_BINARY:",
+		"TestNativeKeychainCredentialFreeContract|TestNativeInstalledTargetContainedStatusWithoutCredentials",
+	} {
+		if !strings.Contains(workflow, required) {
+			t.Errorf("promoted-artifact workflow omits native authentication guard %q", required)
+		}
+	}
+	if strings.Count(workflow, "scripts/fetch-codex-test-targets.sh") != 1 {
+		t.Fatal("official authentication targets must be fetched exactly once in the build-once candidate job")
+	}
+	for _, forbidden := range []string{"secrets.", "actions/upload-artifact" + "@" + "master"} {
+		if strings.Contains(workflow, forbidden) {
+			t.Errorf("promoted-artifact workflow contains unsafe authentication gate content %q", forbidden)
+		}
+	}
+}
+
+func TestNamedAuthenticationDocumentationSeparatesAutomatedAndAuthenticatedEvidence(t *testing.T) {
+	for _, document := range []string{
+		"CONTRIBUTING.md",
+		"docs/codex-auth.md",
+		"docs/authenticated-codex-auth-smoke.md",
+	} {
+		contents := readRepositoryFile(t, "..", document)
+		for _, required := range []string{
+			"credential-free",
+			"0.149.1",
+			"supplemental",
+		} {
+			if !strings.Contains(contents, required) {
+				t.Errorf("%s omits evidence boundary %q", document, required)
+			}
+		}
+	}
+	smoke := readRepositoryFile(t, "..", "docs/authenticated-codex-auth-smoke.md")
+	for _, required := range []string{"must not run in CI", "target-origin token refresh", "must not be recorded"} {
+		if !strings.Contains(smoke, required) {
+			t.Errorf("authenticated named-auth smoke omits safety boundary %q", required)
+		}
+	}
+}
+
 func TestHistoricalReleaseRecordsRemainAvailable(t *testing.T) {
 	for _, version := range []string{"v0.2.0", "v0.3.0", "v0.3.1", "v0.3.2", "v0.3.3"} {
 		for _, suffix := range []string{".md", "-checklist.md"} {

@@ -238,6 +238,45 @@ target adapter in this source.
 Profiles persist neither credentials nor Keychain records. Deleting a Profile
 therefore never deletes a named Codex authentication identity.
 
+## Native evidence and its boundary
+
+The promoted-artifact PR gate downloads the official `codex-cli 0.149.1`
+Apple Silicon and Intel archives once, verifies their reviewed SHA-256 lock
+entries before extraction, rejects unsafe archive contents, and installs only
+the host's matching target. Each native job uses a temporary Keychain as its
+sole search and default Keychain, restores the original configuration, and
+deletes the temporary Keychain. The credential-free test covers the production
+service namespace, metadata-only enumeration, duplicate service/account
+collision, service/account isolation, exact record-size boundaries, and
+failed-update byte preservation.
+
+Production writes explicitly request non-synchronizable,
+when-unlocked-this-device-only items and all queries prohibit authentication
+UI. A file-backed temporary Keychain can omit the accessibility attribute from
+the returned attribute dictionary. The live test therefore requires the exact
+value when Security.framework returns it. Deterministic tests separately prove
+that every production query requests authentication-UI failure and that secret
+read failures map to provider-unavailable without exposing backend detail.
+Locking a disposable default Keychain can itself trigger macOS access-control
+UI, so live locked-Keychain and direct ACL inspection are not automated or
+claimed as merge evidence. This is the strongest non-interactive
+Security.framework evidence safely available from disposable CI state.
+
+The same gate runs the installed target's exact version and contained
+`login status` path with a synthetic durable record and home. It proves runtime
+credential-store, login-method, and workspace precedence; no global-auth
+interference; Seatbelt containment; projection disposal; quarantine cleanup;
+and sentinel redaction without real credentials. Deterministic ACS tests cover
+same-identity refresh and quarantine decisions. Interactive login completion
+and target-origin token refresh require real account credentials and remain a
+supplemental trusted-host smoke, not a PR merge criterion.
+
+The repository-wide race suite remains mandatory but leaves opt-in native
+Keychain and installed-target tests disabled. Race instrumentation can exceed
+the production supervisor's fixed settlement deadline and correctly quarantine
+the projection, so that instrumented outcome is not claimed as native target
+evidence; the ordinary native test must settle completely.
+
 ## Official Codex behavior
 
 Codex documents browser and device login, `codex login status`, `codex logout`,

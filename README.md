@@ -224,6 +224,10 @@ evidence.
 
 The credential-free candidate gate is authoritative. The optional authenticated
 Devin smoke is supplemental and never replaces the two native gates.
+Development named-authentication changes additionally gate the locked official
+`codex-cli 0.149.1` target on both native runners with disposable Keychain,
+synthetic-home, and mandatory Seatbelt evidence. Real login and target-origin
+refresh observation remains supplemental and is never a CI credential gate.
 
 ## Compatibility and limitations
 

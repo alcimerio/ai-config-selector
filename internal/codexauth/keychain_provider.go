@@ -12,6 +12,7 @@ import (
 )
 
 const keychainService = "com.alcimerio.ai-config-selector.codex-auth"
+const maximumKeychainRecordSize = maximumAuthJSONSize + 4096
 
 var (
 	errKeychainItemNotFound = errors.New("Keychain item not found")
@@ -19,8 +20,10 @@ var (
 )
 
 type keychainAttributes struct {
-	Account string
-	Comment string
+	Account        string
+	Comment        string
+	Accessible     string
+	Synchronizable bool
 }
 
 type keychainClient interface {

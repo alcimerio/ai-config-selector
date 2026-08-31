@@ -7,7 +7,11 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"reflect"
+	"sort"
+	"strings"
 	"testing"
 	"time"
 )
@@ -18,70 +22,151 @@ func TestNativeKeychainFrameworkLoads(t *testing.T) {
 	}
 }
 
-func TestNativeKeychainRoundTrip(t *testing.T) {
-	if os.Getenv("ACS_RUN_NATIVE_KEYCHAIN_TEST") != "1" {
-		t.Skip("set ACS_RUN_NATIVE_KEYCHAIN_TEST=1 to exercise a temporary Keychain item")
+func TestNativeKeychainCredentialFreeContract(t *testing.T) {
+	if os.Getenv("ACS_RUN_NATIVE_AUTH_GATE") != "1" {
+		t.Skip("set ACS_RUN_NATIVE_AUTH_GATE=1 to use an isolated temporary Keychain")
 	}
-	client, err := newNativeKeychainClient()
+	useIsolatedTestKeychain(t)
+	clientValue, err := newNativeKeychainClient()
 	if err != nil {
 		t.Fatal(err)
 	}
-	service := fmt.Sprintf("%s.test.%d.%d", keychainService, os.Getpid(), time.Now().UnixNano())
-	account := "round-trip"
-	comment := `{"version":1,"kind":"test"}`
-	secret := bytes.Repeat([]byte("s"), maximumAuthJSONSize+1024)
-	t.Cleanup(func() {
-		if err := client.Delete(service, account); err != nil && !errors.Is(err, errKeychainItemNotFound) {
-			t.Errorf("clean temporary Keychain item: %v", err)
-		}
-	})
+	client := clientValue.(*nativeKeychainClient)
+	stamp := fmt.Sprintf("%d-%d", os.Getpid(), time.Now().UnixNano())
+	accountOne := "native-one-" + stamp
+	accountTwo := "native-two-" + stamp
+	otherService := keychainService + ".test." + stamp
+	comment := `{"version":1,"kind":"credential-free-native-test"}`
+	secret := bytes.Repeat([]byte("s"), maximumKeychainRecordSize)
 
-	if err := client.Add(service, account, comment, secret); err != nil {
+	if err := client.Add(keychainService, accountOne, comment, secret); err != nil {
 		t.Fatal(err)
 	}
-	if err := client.Add(service, account, comment, secret); !errors.Is(err, ErrIdentityExists) {
+	if err := client.Add(keychainService, accountOne, comment, secret); !errors.Is(err, ErrIdentityExists) {
 		t.Fatalf("duplicate add error = %v", err)
 	}
-	attributes, err := client.Attributes(service, &account)
+	if err := client.Add(keychainService, accountTwo, comment, []byte("second-synthetic-record")); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Add(otherService, accountOne, comment, []byte("isolated-synthetic-record")); err != nil {
+		t.Fatal(err)
+	}
+
+	attributes, err := client.Attributes(keychainService, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantAttributes := []keychainAttributes{{Account: account, Comment: comment}}
-	if !reflect.DeepEqual(attributes, wantAttributes) {
-		t.Fatalf("attributes = %#v, want %#v", attributes, wantAttributes)
+	if len(attributes) != 2 {
+		t.Fatalf("production namespace item count = %d", len(attributes))
 	}
-	gotSecret, err := client.Data(service, account)
+	sort.Slice(attributes, func(left, right int) bool { return attributes[left].Account < attributes[right].Account })
+	wantAccounts := []string{accountOne, accountTwo}
+	sort.Strings(wantAccounts)
+	gotAccounts := []string{attributes[0].Account, attributes[1].Account}
+	if !reflect.DeepEqual(gotAccounts, wantAccounts) {
+		t.Fatal("production namespace accounts did not match the isolated records")
+	}
+	wantAccessibility, err := client.api.goString(client.api.secAttrAccessibleWhenUnlockedThisDeviceOnly)
+	if err != nil {
+		t.Fatal("read expected Keychain accessibility")
+	}
+	for _, item := range attributes {
+		// File-backed temporary Keychains can omit the accessibility attribute
+		// from returned metadata. When present it must be the exact policy ACS
+		// requested; query policy and error mapping are tested deterministically.
+		if (item.Accessible != "" && item.Accessible != wantAccessibility) || item.Synchronizable {
+			t.Fatal("Keychain item did not retain the required device-only accessibility")
+		}
+	}
+	otherAttributes, err := client.Attributes(otherService, nil)
+	if err != nil || len(otherAttributes) != 1 || otherAttributes[0].Account != accountOne {
+		t.Fatal("service/account isolation was not preserved")
+	}
+	gotSecret, err := client.Data(keychainService, accountOne)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer clearBytes(gotSecret)
-	if !reflect.DeepEqual(gotSecret, secret) {
-		t.Fatal("Keychain changed the opaque payload")
+	if !bytes.Equal(gotSecret, secret) {
+		t.Fatal("Keychain changed the maximum-size opaque payload")
 	}
-	updatedComment := `{"version":1,"kind":"updated-test"}`
-	updatedSecret := bytes.Repeat([]byte("u"), maximumAuthJSONSize+2048)
-	if err := client.Update(service, account, updatedComment, updatedSecret); err != nil {
-		t.Fatal(err)
+	clearBytes(gotSecret)
+
+	tooLargeAccount := "native-too-large-" + stamp
+	tooLarge := bytes.Repeat([]byte("x"), maximumKeychainRecordSize+1)
+	if err := client.Add(keychainService, tooLargeAccount, comment, tooLarge); !errors.Is(err, ErrProviderUnavailable) {
+		t.Fatalf("oversized add error = %v", err)
 	}
-	attributes, err = client.Attributes(service, &account)
+	if _, err := client.Attributes(keychainService, &tooLargeAccount); !errors.Is(err, errKeychainItemNotFound) {
+		t.Fatalf("oversized add created an item: %v", err)
+	}
+	if err := client.Update(keychainService, accountOne, comment, tooLarge); !errors.Is(err, ErrProviderUnavailable) {
+		t.Fatalf("oversized update error = %v", err)
+	}
+	gotSecret, err = client.Data(keychainService, accountOne)
+	if err != nil || !bytes.Equal(gotSecret, secret) {
+		t.Fatal("failed oversized update changed the previous payload")
+	}
+	clearBytes(gotSecret)
+
+}
+
+func useIsolatedTestKeychain(t *testing.T) {
+	t.Helper()
+	if _, err := os.Stat("/usr/bin/security"); err != nil {
+		t.Fatal("system Keychain tool is unavailable")
+	}
+	originalDefault := securityOutput(t, "default-keychain", "-d", "user")
+	originalSearch := parseSecurityKeychainList(securityOutput(t, "list-keychains", "-d", "user"))
+	keychain := filepath.Join(t.TempDir(), "native-auth-gate.keychain-db")
+	password := fmt.Sprintf("synthetic-%d-%d", os.Getpid(), time.Now().UnixNano())
+	runSecurity(t, "create-keychain", "-p", password, keychain)
+	runSecurity(t, "list-keychains", "-d", "user", "-s", keychain)
+	runSecurity(t, "default-keychain", "-d", "user", "-s", keychain)
+	runSecurity(t, "unlock-keychain", "-p", password, keychain)
+	t.Cleanup(func() {
+		arguments := []string{"list-keychains", "-d", "user", "-s"}
+		arguments = append(arguments, originalSearch...)
+		if err := runSecurityForCleanup(arguments...); err != nil {
+			t.Error("restore Keychain search list")
+		}
+		if original := strings.Trim(originalDefault, "\"\n \t\r"); original != "" {
+			if err := runSecurityForCleanup("default-keychain", "-d", "user", "-s", original); err != nil {
+				t.Error("restore default Keychain")
+			}
+		}
+		if err := runSecurityForCleanup("delete-keychain", keychain); err != nil {
+			t.Error("delete isolated Keychain")
+		}
+	})
+}
+
+func securityOutput(t *testing.T, arguments ...string) string {
+	t.Helper()
+	output, err := exec.Command("/usr/bin/security", arguments...).CombinedOutput()
 	if err != nil {
-		t.Fatal(err)
+		t.Fatal("inspect Keychain configuration")
 	}
-	if want := []keychainAttributes{{Account: account, Comment: updatedComment}}; !reflect.DeepEqual(attributes, want) {
-		t.Fatalf("updated attributes = %#v, want %#v", attributes, want)
+	return string(output)
+}
+
+func runSecurity(t *testing.T, arguments ...string) {
+	t.Helper()
+	if err := exec.Command("/usr/bin/security", arguments...).Run(); err != nil {
+		t.Fatal("configure isolated Keychain")
 	}
-	gotUpdatedSecret, err := client.Data(service, account)
-	if err != nil {
-		t.Fatal(err)
+}
+
+func runSecurityForCleanup(arguments ...string) error {
+	return exec.Command("/usr/bin/security", arguments...).Run()
+}
+
+func parseSecurityKeychainList(output string) []string {
+	var paths []string
+	for _, line := range strings.Split(output, "\n") {
+		path := strings.Trim(line, "\" \t\r")
+		if path != "" {
+			paths = append(paths, path)
+		}
 	}
-	defer clearBytes(gotUpdatedSecret)
-	if !reflect.DeepEqual(gotUpdatedSecret, updatedSecret) {
-		t.Fatal("Keychain changed the updated opaque payload")
-	}
-	if err := client.Delete(service, account); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := client.Data(service, account); !errors.Is(err, errKeychainItemNotFound) {
-		t.Fatalf("data after delete error = %v", err)
-	}
+	return paths
 }

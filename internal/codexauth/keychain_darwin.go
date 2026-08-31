@@ -41,6 +41,7 @@ type keychainAPI struct {
 	dataGetLength           func(uintptr) int64
 	dataGetBytePtr          func(uintptr) unsafe.Pointer
 	getTypeID               func(uintptr) uintptr
+	equal                   func(uintptr, uintptr) bool
 	arrayGetTypeID          func() uintptr
 	dictionaryGetTypeID     func() uintptr
 	stringGetTypeID         func() uintptr
@@ -48,19 +49,25 @@ type keychainAPI struct {
 	release                 func(uintptr)
 	copyMemory              func(unsafe.Pointer, uintptr, uintptr) unsafe.Pointer
 
-	secClass                uintptr
-	secClassGenericPassword uintptr
-	secAttrService          uintptr
-	secAttrAccount          uintptr
-	secAttrComment          uintptr
-	secAttrLabel            uintptr
-	secValueData            uintptr
-	secReturnAttributes     uintptr
-	secReturnData           uintptr
-	secMatchLimit           uintptr
-	secMatchLimitAll        uintptr
-	secMatchLimitOne        uintptr
-	cfBooleanTrue           uintptr
+	secClass                                    uintptr
+	secClassGenericPassword                     uintptr
+	secAttrService                              uintptr
+	secAttrAccount                              uintptr
+	secAttrComment                              uintptr
+	secAttrLabel                                uintptr
+	secAttrAccessible                           uintptr
+	secAttrAccessibleWhenUnlockedThisDeviceOnly uintptr
+	secAttrSynchronizable                       uintptr
+	secValueData                                uintptr
+	secReturnAttributes                         uintptr
+	secReturnData                               uintptr
+	secMatchLimit                               uintptr
+	secMatchLimitAll                            uintptr
+	secMatchLimitOne                            uintptr
+	secUseAuthenticationUI                      uintptr
+	secUseAuthenticationUIFail                  uintptr
+	cfBooleanTrue                               uintptr
+	cfBooleanFalse                              uintptr
 }
 
 var loadedKeychainAPI struct {
@@ -106,6 +113,7 @@ func loadKeychainAPI() (*keychainAPI, error) {
 	purego.RegisterLibFunc(&api.dataGetLength, coreFoundation, "CFDataGetLength")
 	purego.RegisterLibFunc(&api.dataGetBytePtr, coreFoundation, "CFDataGetBytePtr")
 	purego.RegisterLibFunc(&api.getTypeID, coreFoundation, "CFGetTypeID")
+	purego.RegisterLibFunc(&api.equal, coreFoundation, "CFEqual")
 	purego.RegisterLibFunc(&api.arrayGetTypeID, coreFoundation, "CFArrayGetTypeID")
 	purego.RegisterLibFunc(&api.dictionaryGetTypeID, coreFoundation, "CFDictionaryGetTypeID")
 	purego.RegisterLibFunc(&api.stringGetTypeID, coreFoundation, "CFStringGetTypeID")
@@ -123,13 +131,19 @@ func loadKeychainAPI() (*keychainAPI, error) {
 		&api.secAttrAccount:          {security, "kSecAttrAccount"},
 		&api.secAttrComment:          {security, "kSecAttrComment"},
 		&api.secAttrLabel:            {security, "kSecAttrLabel"},
-		&api.secValueData:            {security, "kSecValueData"},
-		&api.secReturnAttributes:     {security, "kSecReturnAttributes"},
-		&api.secReturnData:           {security, "kSecReturnData"},
-		&api.secMatchLimit:           {security, "kSecMatchLimit"},
-		&api.secMatchLimitAll:        {security, "kSecMatchLimitAll"},
-		&api.secMatchLimitOne:        {security, "kSecMatchLimitOne"},
-		&api.cfBooleanTrue:           {coreFoundation, "kCFBooleanTrue"},
+		&api.secAttrAccessible:       {security, "kSecAttrAccessible"},
+		&api.secAttrAccessibleWhenUnlockedThisDeviceOnly: {security, "kSecAttrAccessibleWhenUnlockedThisDeviceOnly"},
+		&api.secAttrSynchronizable:                       {security, "kSecAttrSynchronizable"},
+		&api.secValueData:                                {security, "kSecValueData"},
+		&api.secReturnAttributes:                         {security, "kSecReturnAttributes"},
+		&api.secReturnData:                               {security, "kSecReturnData"},
+		&api.secMatchLimit:                               {security, "kSecMatchLimit"},
+		&api.secMatchLimitAll:                            {security, "kSecMatchLimitAll"},
+		&api.secMatchLimitOne:                            {security, "kSecMatchLimitOne"},
+		&api.secUseAuthenticationUI:                      {security, "kSecUseAuthenticationUI"},
+		&api.secUseAuthenticationUIFail:                  {security, "kSecUseAuthenticationUIFail"},
+		&api.cfBooleanTrue:                               {coreFoundation, "kCFBooleanTrue"},
+		&api.cfBooleanFalse:                              {coreFoundation, "kCFBooleanFalse"},
 	} {
 		value, err := loadCFReference(api.copyMemory, source.library, source.name)
 		if err != nil {
@@ -165,6 +179,9 @@ func loadCFReference(
 }
 
 func (client *nativeKeychainClient) Add(service, account, comment string, secret []byte) error {
+	if len(secret) == 0 || len(secret) > maximumKeychainRecordSize {
+		return ErrProviderUnavailable
+	}
 	query, cleanup, err := client.api.newQuery()
 	if err != nil {
 		return ErrProviderUnavailable
@@ -182,6 +199,8 @@ func (client *nativeKeychainClient) Add(service, account, comment string, secret
 	if err := query.setString(client.api, client.api.secAttrLabel, "ACS Codex authentication: "+account); err != nil {
 		return ErrProviderUnavailable
 	}
+	client.api.dictionarySetValue(query.dictionary, client.api.secAttrAccessible, client.api.secAttrAccessibleWhenUnlockedThisDeviceOnly)
+	client.api.dictionarySetValue(query.dictionary, client.api.secAttrSynchronizable, client.api.cfBooleanFalse)
 	if err := query.setData(client.api, client.api.secValueData, secret); err != nil {
 		return ErrProviderUnavailable
 	}
@@ -198,6 +217,9 @@ func (client *nativeKeychainClient) Add(service, account, comment string, secret
 }
 
 func (client *nativeKeychainClient) Update(service, account, comment string, secret []byte) error {
+	if len(secret) == 0 || len(secret) > maximumKeychainRecordSize {
+		return ErrProviderUnavailable
+	}
 	query, cleanupQuery, err := client.api.newQuery()
 	if err != nil {
 		return ErrProviderUnavailable
@@ -283,7 +305,7 @@ func (client *nativeKeychainClient) Data(service, account string) ([]byte, error
 	}
 	defer client.api.release(result)
 	length := client.api.dataGetLength(result)
-	if length <= 0 || length > maximumAuthJSONSize+maximumMetadataSize {
+	if length <= 0 || length > maximumKeychainRecordSize {
 		return nil, ErrProviderUnavailable
 	}
 	pointer := client.api.dataGetBytePtr(result)
@@ -327,8 +349,13 @@ func (api *keychainAPI) newQuery() (*cfQuery, func(), error) {
 	if err != nil {
 		return nil, func() {}, err
 	}
-	api.dictionarySetValue(query.dictionary, api.secClass, api.secClassGenericPassword)
+	api.configureQuery(query.dictionary)
 	return query, cleanup, nil
+}
+
+func (api *keychainAPI) configureQuery(dictionary uintptr) {
+	api.dictionarySetValue(dictionary, api.secClass, api.secClassGenericPassword)
+	api.dictionarySetValue(dictionary, api.secUseAuthenticationUI, api.secUseAuthenticationUIFail)
 }
 
 func (api *keychainAPI) newDictionary() (*cfQuery, func(), error) {
@@ -416,7 +443,27 @@ func (api *keychainAPI) decodeAttributes(dictionary uintptr) (keychainAttributes
 	if err != nil {
 		return keychainAttributes{}, err
 	}
-	return keychainAttributes{Account: account, Comment: comment}, nil
+	accessible := ""
+	if reference := api.dictionaryGetValue(dictionary, api.secAttrAccessible); reference != 0 {
+		var err error
+		accessible, err = api.goString(reference)
+		if err != nil {
+			return keychainAttributes{}, err
+		}
+	}
+	synchronizable := false
+	if reference := api.dictionaryGetValue(dictionary, api.secAttrSynchronizable); reference != 0 {
+		switch {
+		case api.equal(reference, api.cfBooleanFalse):
+		case api.equal(reference, api.cfBooleanTrue):
+			synchronizable = true
+		default:
+			return keychainAttributes{}, ErrProviderUnavailable
+		}
+	}
+	return keychainAttributes{
+		Account: account, Comment: comment, Accessible: accessible, Synchronizable: synchronizable,
+	}, nil
 }
 
 func (api *keychainAPI) goString(reference uintptr) (string, error) {

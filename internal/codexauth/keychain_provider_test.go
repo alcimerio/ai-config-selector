@@ -138,6 +138,20 @@ func TestUnavailableKeychainProviderFailsClosedWithoutBlockingConstruction(t *te
 	}
 }
 
+func TestKeychainSecretReadFailureMapsToProviderUnavailable(t *testing.T) {
+	client := newFakeKeychainClient()
+	auth := testChatGPTAuthJSON(t, "user", "workspace")
+	metadata, _ := validateAuthJSON("work", auth)
+	provider := &keychainProvider{client: client}
+	if err := provider.Create(context.Background(), credentialRecord{Metadata: metadata, Auth: auth}); err != nil {
+		t.Fatal(err)
+	}
+	client.dataErr = errors.New("synthetic locked or unavailable Keychain")
+	if _, _, err := provider.Load(context.Background(), "work"); !errors.Is(err, ErrProviderUnavailable) {
+		t.Fatalf("secret-read failure error = %v", err)
+	}
+}
+
 type fakeKeychainItem struct {
 	comment string
 	secret  []byte
@@ -146,6 +160,7 @@ type fakeKeychainItem struct {
 type fakeKeychainClient struct {
 	items     map[string]fakeKeychainItem
 	dataCalls int
+	dataErr   error
 }
 
 func newFakeKeychainClient() *fakeKeychainClient {
@@ -192,6 +207,9 @@ func (client *fakeKeychainClient) Attributes(service string, account *string) ([
 
 func (client *fakeKeychainClient) Data(service, account string) ([]byte, error) {
 	client.dataCalls++
+	if client.dataErr != nil {
+		return nil, client.dataErr
+	}
 	if service != keychainService {
 		return nil, ErrProviderUnavailable
 	}
