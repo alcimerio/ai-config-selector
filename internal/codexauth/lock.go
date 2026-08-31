@@ -4,11 +4,15 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"syscall"
+
+	"golang.org/x/sys/unix"
 )
 
-type fileIdentityLocker struct{ directory string }
+type fileIdentityLocker struct {
+	directory *privateDirectory
+	initErr   error
+}
 
 type fileIdentityLock struct{ file *os.File }
 
@@ -19,34 +23,16 @@ type lockDescriptorMetadata struct {
 }
 
 func newFileIdentityLocker(directory string) *fileIdentityLocker {
-	return &fileIdentityLocker{directory: filepath.Clean(directory)}
+	pinned, err := pinPrivateDirectory(directory)
+	return &fileIdentityLocker{directory: pinned, initErr: err}
 }
 
 func (locker *fileIdentityLocker) TryLock(name CredentialRef) (identityLock, error) {
-	directoryInfo, err := os.Lstat(locker.directory)
-	if os.IsNotExist(err) {
-		if err := os.MkdirAll(locker.directory, 0o700); err != nil {
-			return nil, fmt.Errorf("lock Codex authentication identity %q: %w", name, ErrProviderUnavailable)
-		}
-		directoryInfo, err = os.Lstat(locker.directory)
-	}
-	if err != nil || !directoryInfo.IsDir() || directoryInfo.Mode()&os.ModeSymlink != 0 {
+	if locker == nil || locker.initErr != nil {
 		return nil, fmt.Errorf("lock Codex authentication identity %q: %w", name, ErrProviderUnavailable)
 	}
-	if native, ok := directoryInfo.Sys().(*syscall.Stat_t); !ok || native.Uid != uint32(os.Geteuid()) {
-		return nil, fmt.Errorf("lock Codex authentication identity %q: %w", name, ErrProviderUnavailable)
-	}
-	if err := os.Chmod(locker.directory, 0o700); err != nil {
-		return nil, fmt.Errorf("lock Codex authentication identity %q: %w", name, ErrProviderUnavailable)
-	}
-	path := filepath.Join(locker.directory, string(name)+".lock")
-	descriptor, err := syscall.Open(path, syscall.O_CREAT|syscall.O_RDWR|syscall.O_CLOEXEC|syscall.O_NOFOLLOW, 0o600)
+	file, err := locker.directory.open(string(name)+".lock", unix.O_CREAT|unix.O_RDWR, 0o600)
 	if err != nil {
-		return nil, fmt.Errorf("lock Codex authentication identity %q: %w", name, ErrProviderUnavailable)
-	}
-	file := os.NewFile(uintptr(descriptor), path)
-	if file == nil {
-		_ = syscall.Close(descriptor)
 		return nil, fmt.Errorf("lock Codex authentication identity %q: %w", name, ErrProviderUnavailable)
 	}
 	info, err := file.Stat()

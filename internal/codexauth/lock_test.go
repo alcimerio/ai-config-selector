@@ -136,3 +136,46 @@ func TestFileIdentityLockerRejectsSymlinkDirectoryWithoutChangingTarget(t *testi
 		t.Fatalf("symlink target mode changed to %o", info.Mode().Perm())
 	}
 }
+
+func TestFileIdentityLockerPinsDirectoryAcrossAncestorReplacement(t *testing.T) {
+	root := t.TempDir()
+	ancestor := filepath.Join(root, "auth")
+	directory := filepath.Join(ancestor, "locks")
+	if err := os.MkdirAll(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	locker := newFileIdentityLocker(directory)
+
+	moved := filepath.Join(root, "auth-moved")
+	if err := os.Rename(ancestor, moved); err != nil {
+		t.Fatal(err)
+	}
+	replacement := filepath.Join(ancestor, "locks")
+	if err := os.MkdirAll(replacement, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	locked, err := locker.TryLock("work")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := locker.TryLock("work"); !errors.Is(err, ErrIdentityBusy) {
+		t.Fatalf("concurrent pinned lock error = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(moved, "locks", "work.lock")); err != nil {
+		t.Fatalf("pinned lock file: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(replacement, "work.lock")); !os.IsNotExist(err) {
+		t.Fatalf("replacement lock file error = %v", err)
+	}
+	if err := locked.Release(); err != nil {
+		t.Fatal(err)
+	}
+	locked, err = locker.TryLock("work")
+	if err != nil {
+		t.Fatalf("pinned lock after release: %v", err)
+	}
+	if err := locked.Release(); err != nil {
+		t.Fatal(err)
+	}
+}

@@ -1,12 +1,114 @@
 package codexauth
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"syscall"
+
+	"golang.org/x/sys/unix"
 )
+
+type privateDirectory struct {
+	file *os.File
+}
+
+func pinPrivateDirectory(path string) (*privateDirectory, error) {
+	if err := os.Mkdir(path, 0o700); err != nil && !errors.Is(err, os.ErrExist) {
+		return nil, err
+	}
+	descriptor, err := unix.Open(path, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_DIRECTORY, 0)
+	if err != nil {
+		return nil, err
+	}
+	directory := os.NewFile(uintptr(descriptor), "private directory")
+	if directory == nil {
+		_ = unix.Close(descriptor)
+		return nil, errors.New("open private directory")
+	}
+	info, err := directory.Stat()
+	if err != nil || !info.IsDir() {
+		_ = directory.Close()
+		return nil, errors.New("invalid private directory")
+	}
+	native, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || native.Uid != uint32(os.Geteuid()) {
+		_ = directory.Close()
+		return nil, errors.New("invalid private directory owner")
+	}
+	if err := directory.Chmod(0o700); err != nil {
+		_ = directory.Close()
+		return nil, err
+	}
+	return &privateDirectory{file: directory}, nil
+}
+
+func (directory *privateDirectory) open(name string, flags int, mode uint32) (*os.File, error) {
+	if directory == nil || directory.file == nil || !validPrivateLeaf(name) {
+		return nil, errors.New("invalid private file")
+	}
+	descriptor, err := unix.Openat(int(directory.file.Fd()), name, flags|unix.O_CLOEXEC|unix.O_NOFOLLOW, mode)
+	if err != nil {
+		return nil, err
+	}
+	file := os.NewFile(uintptr(descriptor), name)
+	if file == nil {
+		_ = unix.Close(descriptor)
+		return nil, errors.New("open private file")
+	}
+	return file, nil
+}
+
+func (directory *privateDirectory) createTemporary(prefix string) (*os.File, string, error) {
+	for attempts := 0; attempts < 32; attempts++ {
+		var random [16]byte
+		if _, err := rand.Read(random[:]); err != nil {
+			return nil, "", err
+		}
+		name := prefix + hex.EncodeToString(random[:])
+		file, err := directory.open(name, unix.O_WRONLY|unix.O_CREAT|unix.O_EXCL, 0o600)
+		if errors.Is(err, unix.EEXIST) {
+			continue
+		}
+		return file, name, err
+	}
+	return nil, "", errors.New("create private temporary file")
+}
+
+func (directory *privateDirectory) link(oldName, newName string) error {
+	if !validPrivateLeaf(oldName) || !validPrivateLeaf(newName) {
+		return errors.New("invalid private file")
+	}
+	return unix.Linkat(int(directory.file.Fd()), oldName, int(directory.file.Fd()), newName, 0)
+}
+
+func (directory *privateDirectory) rename(oldName, newName string) error {
+	if !validPrivateLeaf(oldName) || !validPrivateLeaf(newName) {
+		return errors.New("invalid private file")
+	}
+	return unix.Renameat(int(directory.file.Fd()), oldName, int(directory.file.Fd()), newName)
+}
+
+func (directory *privateDirectory) unlink(name string) error {
+	if directory == nil || directory.file == nil || !validPrivateLeaf(name) {
+		return errors.New("invalid private file")
+	}
+	return unix.Unlinkat(int(directory.file.Fd()), name, 0)
+}
+
+func (directory *privateDirectory) sync() error {
+	if directory == nil || directory.file == nil {
+		return errors.New("invalid private directory")
+	}
+	return unix.Fsync(int(directory.file.Fd()))
+}
+
+func validPrivateLeaf(name string) bool {
+	return name != "" && name != "." && name != ".." && filepath.Base(name) == name && !strings.ContainsRune(name, filepath.Separator)
+}
 
 func securePrivateRoot(path string) (string, error) {
 	path = filepath.Clean(path)

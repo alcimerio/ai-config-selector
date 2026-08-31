@@ -49,8 +49,8 @@ func TestFileBindingQuarantineCreatesPrivateSecretFreeMarkerWithoutReplacement(t
 	}
 
 	for path, mode := range map[string]os.FileMode{
-		directory:          0o700,
-		store.path("work"): 0o600,
+		directory:                             0o700,
+		filepath.Join(directory, "work.json"): 0o600,
 	} {
 		info, err := os.Stat(path)
 		if err != nil {
@@ -60,7 +60,7 @@ func TestFileBindingQuarantineCreatesPrivateSecretFreeMarkerWithoutReplacement(t
 			t.Errorf("mode for %q = %o, want %o", path, info.Mode().Perm(), mode)
 		}
 	}
-	contents, err := os.ReadFile(store.path("work"))
+	contents, err := os.ReadFile(filepath.Join(directory, "work.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,46 +81,43 @@ func TestFileBindingQuarantineCreatesPrivateSecretFreeMarkerWithoutReplacement(t
 func TestFileBindingQuarantineRejectsMalformedAndLinkedMarkers(t *testing.T) {
 	tests := []struct {
 		name    string
-		prepare func(*testing.T, *fileBindingQuarantine)
+		prepare func(*testing.T, string)
 	}{
 		{
 			name: "missing phase",
-			prepare: func(t *testing.T, store *fileBindingQuarantine) {
-				writeQuarantineFixture(t, store, []byte(`{"version":1,"name":"work","sessionId":"session-fixture"}`))
+			prepare: func(t *testing.T, directory string) {
+				writeQuarantineFixture(t, directory, []byte(`{"version":1,"name":"work","sessionId":"session-fixture"}`))
 			},
 		},
 		{
 			name: "unknown field",
-			prepare: func(t *testing.T, store *fileBindingQuarantine) {
-				writeQuarantineFixture(t, store, []byte(`{"version":1,"name":"work","sessionId":"session-fixture","phase":"recoverable","secret":"no"}`))
+			prepare: func(t *testing.T, directory string) {
+				writeQuarantineFixture(t, directory, []byte(`{"version":1,"name":"work","sessionId":"session-fixture","phase":"recoverable","secret":"no"}`))
 			},
 		},
 		{
 			name: "duplicate field",
-			prepare: func(t *testing.T, store *fileBindingQuarantine) {
-				writeQuarantineFixture(t, store, []byte(`{"version":1,"name":"work","name":"work","sessionId":"session-fixture","phase":"recoverable"}`))
+			prepare: func(t *testing.T, directory string) {
+				writeQuarantineFixture(t, directory, []byte(`{"version":1,"name":"work","name":"work","sessionId":"session-fixture","phase":"recoverable"}`))
 			},
 		},
 		{
 			name: "symlink",
-			prepare: func(t *testing.T, store *fileBindingQuarantine) {
-				if err := os.MkdirAll(store.directory, 0o700); err != nil {
-					t.Fatal(err)
-				}
-				target := filepath.Join(filepath.Dir(store.directory), "target")
+			prepare: func(t *testing.T, directory string) {
+				target := filepath.Join(filepath.Dir(directory), "target")
 				if err := os.WriteFile(target, []byte(`{"version":1,"name":"work","sessionId":"session-fixture","phase":"recoverable"}`), 0o600); err != nil {
 					t.Fatal(err)
 				}
-				if err := os.Symlink(target, store.path("work")); err != nil {
+				if err := os.Symlink(target, filepath.Join(directory, "work.json")); err != nil {
 					t.Fatal(err)
 				}
 			},
 		},
 		{
 			name: "hard link",
-			prepare: func(t *testing.T, store *fileBindingQuarantine) {
-				writeQuarantineFixture(t, store, []byte(`{"version":1,"name":"work","sessionId":"session-fixture","phase":"recoverable"}`))
-				if err := os.Link(store.path("work"), filepath.Join(store.directory, "copy")); err != nil {
+			prepare: func(t *testing.T, directory string) {
+				writeQuarantineFixture(t, directory, []byte(`{"version":1,"name":"work","sessionId":"session-fixture","phase":"recoverable"}`))
+				if err := os.Link(filepath.Join(directory, "work.json"), filepath.Join(directory, "copy")); err != nil {
 					t.Fatal(err)
 				}
 			},
@@ -128,8 +125,9 @@ func TestFileBindingQuarantineRejectsMalformedAndLinkedMarkers(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			store := newFileBindingQuarantine(filepath.Join(t.TempDir(), "quarantine"))
-			test.prepare(t, store)
+			directory := filepath.Join(t.TempDir(), "quarantine")
+			store := newFileBindingQuarantine(directory)
+			test.prepare(t, directory)
 			if _, _, err := store.Inspect(context.Background(), "work"); !errors.Is(err, ErrProviderUnavailable) {
 				t.Fatalf("inspect error = %v", err)
 			}
@@ -164,12 +162,68 @@ func TestFileBindingQuarantineRejectsSymlinkDirectoryWithoutChangingTarget(t *te
 	}
 }
 
-func writeQuarantineFixture(t *testing.T, store *fileBindingQuarantine, contents []byte) {
-	t.Helper()
-	if err := os.MkdirAll(store.directory, 0o700); err != nil {
+func TestFileBindingQuarantinePinsDirectoryAcrossAncestorReplacement(t *testing.T) {
+	root := t.TempDir()
+	ancestor := filepath.Join(root, "auth")
+	directory := filepath.Join(ancestor, "quarantine")
+	if err := os.MkdirAll(directory, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(store.path("work"), contents, 0o600); err != nil {
+	store := newFileBindingQuarantine(directory)
+
+	moved := filepath.Join(root, "auth-moved")
+	if err := os.Rename(ancestor, moved); err != nil {
+		t.Fatal(err)
+	}
+	replacement := filepath.Join(ancestor, "quarantine")
+	if err := os.MkdirAll(replacement, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	marker := quarantineMarker{
+		Version: recordVersion, Name: "work", SessionID: "session-fixture", Phase: quarantinePrepared,
+		ProofChallenge: testCleanupProofChallenge,
+	}
+
+	if err := store.Create(context.Background(), marker); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(moved, "quarantine", "work.json")); err != nil {
+		t.Fatalf("pinned marker: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(replacement, "work.json")); !os.IsNotExist(err) {
+		t.Fatalf("replacement marker error = %v", err)
+	}
+	if err := store.Create(context.Background(), marker); !errors.Is(err, ErrIdentityBusy) {
+		t.Fatalf("duplicate pinned marker error = %v", err)
+	}
+	if err := store.MarkCleanupPending(context.Background(), "work"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.MarkRefreshAllowed(context.Background(), "work"); err != nil {
+		t.Fatal(err)
+	}
+	got, exists, err := store.Inspect(context.Background(), "work")
+	if err != nil || !exists || got.Phase != quarantineCleanupPending || !got.RefreshAllowed {
+		t.Fatalf("inspect pinned marker = (%#v, %v, %v)", got, exists, err)
+	}
+	if err := store.MarkRecoverable(context.Background(), "work"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Delete(context.Background(), "work"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(moved, "quarantine", "work.json")); !os.IsNotExist(err) {
+		t.Fatalf("deleted pinned marker error = %v", err)
+	}
+	entries, err := os.ReadDir(replacement)
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("replacement quarantine entries = (%v, %v)", entries, err)
+	}
+}
+
+func writeQuarantineFixture(t *testing.T, directory string, contents []byte) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(directory, "work.json"), contents, 0o600); err != nil {
 		t.Fatal(err)
 	}
 }

@@ -134,6 +134,14 @@ func New(config Config) (*Registry, error) {
 	if err != nil {
 		return nil, errors.New("create Codex authentication registry: authentication quarantine directory must be private")
 	}
+	locks := newFileIdentityLocker(locksDirectory)
+	if locks.initErr != nil {
+		return nil, errors.New("create Codex authentication registry: authentication locks directory must be private")
+	}
+	quarantine := newFileBindingQuarantine(quarantineDirectory)
+	if quarantine.initErr != nil {
+		return nil, errors.New("create Codex authentication registry: authentication quarantine directory must be private")
+	}
 	if filepath.Clean(config.SessionsDirectory) == filepath.Join(requestedACSHome, "sessions") {
 		config.SessionsDirectory = filepath.Join(acsHome, "sessions")
 	}
@@ -145,7 +153,7 @@ func New(config Config) (*Registry, error) {
 			RuntimeInputs: config.RuntimeInputs, SessionsDirectory: config.SessionsDirectory,
 			WorkingDirectory: config.WorkingDirectory, PrivateRoot: acsHome,
 		}, sandbox),
-		newFileIdentityLocker(locksDirectory),
+		locks,
 	)
 	if err != nil {
 		return nil, err
@@ -155,7 +163,7 @@ func New(config Config) (*Registry, error) {
 		RuntimeInputs: config.RuntimeInputs, SessionsDirectory: config.SessionsDirectory,
 		WorkingDirectory: config.WorkingDirectory, PrivateRoot: acsHome,
 	}, sandbox)
-	registry.quarantine = newFileBindingQuarantine(quarantineDirectory)
+	registry.quarantine = quarantine
 	registry.sessionsDirectory = config.SessionsDirectory
 	registry.workingDirectory = config.WorkingDirectory
 	return registry, nil
