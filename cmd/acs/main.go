@@ -32,7 +32,7 @@ func main() {
 		}
 		return
 	}
-	informational := cli.App{Version: buildVersion(releaseVersion, debug.ReadBuildInfo), Output: os.Stdout, ErrorOutput: os.Stderr}
+	informational := cli.App{Version: buildVersion(releaseVersion, debug.ReadBuildInfo), Input: os.Stdin, Output: os.Stdout, ErrorOutput: os.Stderr, Interactive: cli.StandardStreamsInteractive}
 	if handled, code := informational.RunInformational(os.Args[1:]); handled {
 		os.Exit(code)
 	}
@@ -42,6 +42,10 @@ func main() {
 	if handled, code := informational.RunDiagnostics(os.Args[1:], os.UserHomeDir); handled {
 		os.Exit(code)
 	}
+	if handled, code := informational.RunProfileMutations(context.Background(), os.Args[1:], os.UserHomeDir); handled {
+		os.Exit(code)
+	}
+
 	existingHome, err := os.UserHomeDir()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "acs: resolve user home: %v\n", err)

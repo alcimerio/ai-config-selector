@@ -27,6 +27,10 @@ func DiscoverSelectedSkillCatalog(ctx context.Context, home string, references [
 }
 
 func discoverSkillCatalog(ctx context.Context, home string, selected map[skills.Source]bool) ([]skills.SkillBundle, error) {
+	return discoverSkillCatalogReport(ctx, home, selected, nil)
+}
+
+func discoverSkillCatalogReport(ctx context.Context, home string, selected map[skills.Source]bool, unavailable map[skills.Source]bool) ([]skills.SkillBundle, error) {
 	catalog := make([]skills.SkillBundle, 0)
 	for _, rule := range globalSourceRules {
 		if selected != nil && !selected[rule.Source] {
@@ -50,10 +54,16 @@ func discoverSkillCatalog(ctx context.Context, home string, selected map[skills.
 			}
 			bundlePath := filepath.Join(sourceRoot, entry.Name())
 			bundleInfo, err := os.Stat(bundlePath)
+			if err != nil && !os.IsNotExist(err) && unavailable != nil {
+				unavailable[rule.Source] = true
+			}
 			if err != nil || !bundleInfo.IsDir() {
 				continue
 			}
 			skillManifest, err := os.Stat(filepath.Join(bundlePath, "SKILL.md"))
+			if err != nil && !os.IsNotExist(err) && unavailable != nil {
+				unavailable[rule.Source] = true
+			}
 			if err != nil || !skillManifest.Mode().IsRegular() {
 				continue
 			}
@@ -79,4 +89,21 @@ func discoverSkillCatalog(ctx context.Context, home string, selected map[skills.
 		return catalog[left].Reference.RelativePath < catalog[right].Reference.RelativePath
 	})
 	return catalog, nil
+}
+
+// discoverProfileSkills preserves successful sources when another source cannot
+// be inspected. Launch and passive validation retain their existing semantics.
+func (a *Adapter) discoverProfileSkills(ctx context.Context) (skills.Discovery, error) {
+	result := skills.Discovery{UnavailableSources: map[skills.Source]bool{}}
+	for _, rule := range globalSourceRules {
+		catalog, err := discoverSkillCatalogReport(ctx, a.existingHomeDir, map[skills.Source]bool{rule.Source: true}, result.UnavailableSources)
+		if ctx.Err() != nil {
+			return result, ctx.Err()
+		}
+		if err != nil {
+			result.UnavailableSources[rule.Source] = true
+		}
+		result.Bundles = append(result.Bundles, catalog...)
+	}
+	return result, nil
 }

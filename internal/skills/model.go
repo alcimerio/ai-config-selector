@@ -61,3 +61,10 @@ func catalogDiagnosticIdentities(catalog []SkillBundle) []string {
 func diagnosticIdentity(reference SkillReference) string {
 	return strconv.QuoteToASCII(string(reference.Source) + ":" + reference.RelativePath)
 }
+
+// Discovery records partial source availability for selection repair. A failed
+// source is not evidence that a saved reference is missing.
+type Discovery struct {
+	Bundles            []SkillBundle
+	UnavailableSources map[Source]bool
+}
