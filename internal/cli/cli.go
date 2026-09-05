@@ -14,6 +14,7 @@ import (
 	"github.com/alcimerio/ai-config-selector/internal/codexauth"
 	"github.com/alcimerio/ai-config-selector/internal/launch"
 	"github.com/alcimerio/ai-config-selector/internal/profile"
+	"github.com/alcimerio/ai-config-selector/internal/profileinspect"
 	"github.com/charmbracelet/x/term"
 )
 
@@ -53,7 +54,13 @@ type exitCodeError interface {
 	ExitCode() int
 }
 
+type ProfileInspector interface {
+	List() profileinspect.Result
+	Show(string) profileinspect.Result
+}
+
 type App struct {
+	Inspector         ProfileInspector
 	Version           string
 	Categories        *category.Registry
 	Builder           ProfileBuilder
@@ -89,6 +96,8 @@ func (app App) Run(ctx context.Context, args []string) int {
 	}
 	inv, _ := parseCommand(args)
 	switch inv.command.path {
+	case "profile list", "profile show":
+		return app.inspectProfiles(inv)
 	case "devin create-profile":
 		return app.createProfile(ctx, inv.value)
 	case "devin":

@@ -36,6 +36,9 @@ func main() {
 	if handled, code := informational.RunInformational(os.Args[1:]); handled {
 		os.Exit(code)
 	}
+	if handled, code := informational.RunProfileInspection(os.Args[1:], os.UserHomeDir); handled {
+		os.Exit(code)
+	}
 	existingHome, err := os.UserHomeDir()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "acs: resolve user home: %v\n", err)

@@ -13,7 +13,7 @@ import (
 )
 
 func TestContextualHelpWithoutRuntime(t *testing.T) {
-	for _, command := range []string{"", "devin", "devin create-profile", "sandbox", "codex", "codex auth", "codex auth login", "codex auth list", "codex auth status", "codex auth recover", "codex auth logout", "version"} {
+	for _, command := range []string{"", "profile", "profile list", "profile show", "devin", "devin create-profile", "sandbox", "codex", "codex auth", "codex auth login", "codex auth list", "codex auth status", "codex auth recover", "codex auth logout", "version"} {
 		for _, args := range [][]string{strings.Fields("help " + command), strings.Fields(command + " --help")} {
 			t.Run(strings.Join(args, " "), func(t *testing.T) {
 				var out, errOut bytes.Buffer
