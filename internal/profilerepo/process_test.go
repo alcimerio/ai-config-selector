@@ -280,9 +280,16 @@ func TestIndependentWritersAndLiveKernelOwnership(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	// Join both initial attempts before retrying Busy. A losing process can
+	// return before the winner releases its lock; retrying during that interval
+	// legitimately returns Busy again and does not indicate a storage failure.
+	results := make([]error, len(commands))
+	for index, cmd := range commands {
+		results[index] = cmd.Wait()
+	}
 	committed, stale := 0, 0
-	for _, cmd := range commands {
-		err = cmd.Wait()
+	for _, result := range results {
+		err = result
 		if err == nil {
 			committed++
 			continue
