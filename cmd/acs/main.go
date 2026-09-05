@@ -32,6 +32,10 @@ func main() {
 		}
 		return
 	}
+	informational := cli.App{Version: buildVersion(releaseVersion, debug.ReadBuildInfo), Output: os.Stdout, ErrorOutput: os.Stderr}
+	if handled, code := informational.RunInformational(os.Args[1:]); handled {
+		os.Exit(code)
+	}
 	existingHome, err := os.UserHomeDir()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "acs: resolve user home: %v\n", err)

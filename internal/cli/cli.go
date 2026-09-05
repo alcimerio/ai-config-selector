@@ -84,48 +84,35 @@ func StandardStreamsInteractive(input io.Reader, output io.Writer) bool {
 }
 
 func (app App) Run(ctx context.Context, args []string) int {
-	if len(args) == 1 && args[0] == "version" {
-		version := app.Version
-		if version == "" {
-			version = "devel"
+	if handled, code := app.RunInformational(args); handled {
+		return code
+	}
+	inv, _ := parseCommand(args)
+	switch inv.command.path {
+	case "devin create-profile":
+		return app.createProfile(ctx, inv.value)
+	case "devin":
+		if inv.enabled {
+			return app.dryRun(ctx, inv.value, app.Planner, "No Session was created and Devin was not started.")
 		}
-		fmt.Fprintf(app.Output, "acs %s\n", safeTerminalText(version))
-		return 0
-	}
-	if len(args) == 4 && args[0] == "devin" && args[1] == "create-profile" && args[2] == "--name" && args[3] != "" {
-		return app.createProfile(ctx, args[3])
-	}
-	if len(args) == 4 && args[0] == "devin" && args[1] == "--profile" && args[2] != "" && args[3] == "--dry-run" {
-		return app.dryRun(ctx, args[2], app.Planner, "No Session was created and Devin was not started.")
-	}
-	if len(args) == 3 && args[0] == "devin" && args[1] == "--profile" && args[2] != "" {
-		return app.launchProfile(ctx, args[2], app.Launcher, "launch")
-	}
-	if len(args) == 4 && args[0] == "sandbox" && args[1] == "--profile" && args[2] != "" && args[3] == "--dry-run" {
-		return app.dryRun(ctx, args[2], app.SandboxPlanner, "No Session was created and no sandbox shell was started.")
-	}
-	if len(args) == 3 && args[0] == "sandbox" && args[1] == "--profile" && args[2] != "" {
-		return app.launchProfile(ctx, args[2], app.SandboxLauncher, "launch sandbox")
-	}
-	if len(args) == 3 && args[0] == "codex" && args[1] == "auth" && args[2] == "list" {
+		return app.launchProfile(ctx, inv.value, app.Launcher, "launch")
+	case "sandbox":
+		if inv.enabled {
+			return app.dryRun(ctx, inv.value, app.SandboxPlanner, "No Session was created and no sandbox shell was started.")
+		}
+		return app.launchProfile(ctx, inv.value, app.SandboxLauncher, "launch sandbox")
+	case "codex auth login":
+		return app.loginCodexAuth(ctx, inv.value, inv.enabled)
+	case "codex auth list":
 		return app.listCodexAuth(ctx)
+	case "codex auth logout":
+		return app.logoutCodexAuth(ctx, inv.value)
+	case "codex auth status":
+		return app.statusCodexAuth(ctx, inv.value)
+	case "codex auth recover":
+		return app.recoverCodexAuth(ctx, inv.value)
 	}
-	if len(args) == 5 && args[0] == "codex" && args[1] == "auth" && args[2] == "logout" && args[3] == "--name" && args[4] != "" {
-		return app.logoutCodexAuth(ctx, args[4])
-	}
-	if len(args) == 5 && args[0] == "codex" && args[1] == "auth" && args[2] == "status" && args[3] == "--name" && args[4] != "" {
-		return app.statusCodexAuth(ctx, args[4])
-	}
-	if len(args) == 5 && args[0] == "codex" && args[1] == "auth" && args[2] == "recover" && args[3] == "--name" && args[4] != "" {
-		return app.recoverCodexAuth(ctx, args[4])
-	}
-	if len(args) >= 5 && len(args) <= 6 && args[0] == "codex" && args[1] == "auth" && args[2] == "login" && args[3] == "--name" && args[4] != "" {
-		deviceAuth := len(args) == 6 && args[5] == "--device-auth"
-		if len(args) == 5 || deviceAuth {
-			return app.loginCodexAuth(ctx, args[4], deviceAuth)
-		}
-	}
-	return app.fail("usage: acs devin create-profile --name <name> | acs devin --profile <name> [--dry-run] | acs sandbox --profile <name> [--dry-run] | acs codex auth login --name <name> [--device-auth] | acs codex auth list | acs codex auth status --name <name> | acs codex auth recover --name <name> | acs codex auth logout --name <name> | acs version; ACS will not start Devin without the required sandbox; ACS will not start a sandbox shell without the required sandbox; ACS will not start Codex login or status without the required sandbox")
+	return app.fail("unavailable command; try acs help")
 }
 
 func (app App) loginCodexAuth(ctx context.Context, name string, deviceAuth bool) int {
