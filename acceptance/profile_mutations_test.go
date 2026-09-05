@@ -43,7 +43,7 @@ func runMutationCandidatePTY(t *testing.T, binary, home string, args []string, i
 	if err := pty.Setsize(master, &pty.Winsize{Cols: 100, Rows: 35}); err != nil {
 		t.Fatal(err)
 	}
-	before, err := term.GetState(terminal.Fd())
+	before, err := term.GetState(master.Fd())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,7 +69,7 @@ func runMutationCandidatePTY(t *testing.T, binary, home string, args []string, i
 		_ = command.Process.Kill()
 		t.Fatalf("mutation timed out: %q", capture.String())
 	}
-	after, err := term.GetState(terminal.Fd())
+	after, err := term.GetState(master.Fd())
 	if err != nil {
 		t.Fatal(err)
 	}

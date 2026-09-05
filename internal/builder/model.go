@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
+	"syscall"
 
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
@@ -437,23 +439,65 @@ func finishRuntime(runtime programRuntime) (Outcome, error) {
 
 // Run starts the sole Bubble Tea program for a Profile Builder session.
 func Run(ctx context.Context, model Model, input io.Reader, output io.Writer) (Outcome, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	// Keep terminal shutdown orderly: Bubble Tea killed shutdown can close a
+	// macOS cancellable reader before joining it. Our context still cancels
+	// discovery and saves; the watcher requests Quit and settlement follows.
+	runContext, cancel := context.WithCancel(ctx)
+	defer cancel()
 	tracker := &saveRuntime{}
 	model.runtimeSaves = tracker
 	program := tea.NewProgram(
-		model.WithContext(ctx),
-		tea.WithContext(ctx),
+		model.WithContext(runContext),
+		tea.WithContext(context.WithoutCancel(ctx)),
+		tea.WithoutSignalHandler(),
 		tea.WithInput(input),
 		tea.WithOutput(output),
 		tea.WithEnvironment(os.Environ()),
 	)
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM)
+	defer signal.Stop(signals)
+	stopped, watcherDone := make(chan struct{}), make(chan struct{})
+	interrupted := make(chan struct{}, 1)
+	go func() {
+		defer close(watcherDone)
+		select {
+		case <-ctx.Done():
+		case <-signals:
+		case <-stopped:
+			return
+		}
+		cancel()
+		tracker.stop()
+		interrupted <- struct{}{}
+		program.Quit()
+	}()
 	outcome, err := finishRuntime(program)
+	close(stopped)
+	<-watcherDone
+	select {
+	case <-interrupted:
+		if err == nil {
+			err = context.Canceled
+		}
+	default:
+	}
+
 	settled := tracker.settle()
-	if err != nil && settled != nil {
+	if settled != nil {
 		if settled.err == nil {
 			return Outcome{Draft: settled.draft, Path: settled.path, Create: true}, nil
 		}
-		return Outcome{}, errors.Join(err, settled.err)
+		var transaction *profilerepo.OutcomeError
+		uncertain := errors.As(settled.err, &transaction) && (transaction.Outcome.State != profilerepo.NotCommitted || transaction.Outcome.RecoveryRequired)
+		if uncertain || err != nil || (!outcome.Create && !outcome.Cancelled) {
+			return Outcome{}, errors.Join(err, settled.err)
+		}
 	}
+
 	return outcome, err
 }
 

@@ -3,10 +3,10 @@ package builder
 import (
 	"context"
 	"errors"
-	"github.com/alcimerio/ai-config-selector/internal/profilerepo"
 	"sync"
 
 	"github.com/alcimerio/ai-config-selector/internal/category"
+	"github.com/alcimerio/ai-config-selector/internal/profilerepo"
 )
 
 // saveRuntime closes the gap between terminal cancellation and an in-flight
@@ -42,7 +42,7 @@ func (r *saveRuntime) execute(ctx context.Context, draft category.Draft, save Sa
 	return result
 }
 
-func (r *saveRuntime) settle() *saveCompletedMsg {
+func (r *saveRuntime) stop() *runtimeAttempt {
 	r.mutex.Lock()
 	r.closed = true
 	attempt := r.current
@@ -51,6 +51,14 @@ func (r *saveRuntime) settle() *saveCompletedMsg {
 		return nil
 	}
 	attempt.cancel()
+	return attempt
+}
+
+func (r *saveRuntime) settle() *saveCompletedMsg {
+	attempt := r.stop()
+	if attempt == nil {
+		return nil
+	}
 	<-attempt.done
 	return &attempt.result
 }
