@@ -84,9 +84,10 @@ type discoveryCompletedMsg struct {
 }
 
 type saveCompletedMsg struct {
-	draft category.Draft
-	path  string
-	err   error
+	draft   category.Draft
+	path    string
+	err     error
+	attempt *runtimeAttempt
 }
 
 type screen int
@@ -160,23 +161,17 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			if editor, ok := m.editors[index].editor.(interface{ DiscoveryFailed() Editor }); ok {
 				m.editors[index].editor = editor.DiscoveryFailed()
 			}
-			if index == m.activeCategory {
-				m.screen = loadFailureScreen
-			}
+			m.completeDiscovery(index, loadFailureScreen)
 			return m, nil
 		}
 		editor, err := m.editors[index].registration.loaded(m.editors[index].editor, message.discovered)
 		if err != nil {
 			m.editors[index].loadState, m.editors[index].loadError = loadFailed, err
-			if index == m.activeCategory {
-				m.screen = loadFailureScreen
-			}
+			m.completeDiscovery(index, loadFailureScreen)
 			return m, nil
 		}
 		m.editors[index].editor, m.editors[index].loadState, m.editors[index].loadError = editor, loaded, nil
-		if index == m.activeCategory {
-			m.screen = categoryScreen
-		}
+		m.completeDiscovery(index, categoryScreen)
 		return m, nil
 	case saveCompletedMsg:
 		if m.screen != savingScreen && m.screen != cancellingSaveScreen {
@@ -189,6 +184,9 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			// may have happened, or while cleanup still needs recovery.
 			m.terminalError = message.err
 			return m, tea.Quit
+		}
+		if m.runtimeSaves != nil {
+			m.runtimeSaves.acknowledge(message)
 		}
 		if m.screen == cancellingSaveScreen && errors.Is(message.err, context.Canceled) {
 			m.screen = overviewScreen
@@ -236,6 +234,19 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 	return m, nil
+}
+
+// Discovery updates the underlying editor, not the user's pending decision.
+// Declining discard must return to the completed state rather than loading.
+func (m *Model) completeDiscovery(index int, completed screen) {
+	if index != m.activeCategory {
+		return
+	}
+	if m.screen == loadingScreen {
+		m.screen = completed
+	} else if m.screen == discardScreen && m.returnScreen == loadingScreen {
+		m.returnScreen = completed
+	}
 }
 
 func (m Model) updateOverview(press tea.KeyPressMsg) (tea.Model, tea.Cmd) {
@@ -489,7 +500,11 @@ func Run(ctx context.Context, model Model, input io.Reader, output io.Writer) (O
 	settled := tracker.settle()
 	if settled != nil {
 		if settled.err == nil {
-			return Outcome{Draft: settled.draft, Path: settled.path, Create: true}, nil
+			committed := Outcome{Draft: settled.draft, Path: settled.path, Create: true}
+			if err != nil && !cancellationOnly(err) {
+				return committed, &profilerepo.OutcomeError{Outcome: profilerepo.Outcome{State: profilerepo.Committed}, Err: err}
+			}
+			return committed, nil
 		}
 		var transaction *profilerepo.OutcomeError
 		uncertain := errors.As(settled.err, &transaction) && (transaction.Outcome.State != profilerepo.NotCommitted || transaction.Outcome.RecoveryRequired)
@@ -499,6 +514,27 @@ func Run(ctx context.Context, model Model, input io.Reader, output io.Writer) (O
 	}
 
 	return outcome, err
+}
+
+// Suppress only cancellation after a known commit. Joined infrastructure errors
+// must remain visible even when another branch also reports cancellation.
+func cancellationOnly(err error) bool {
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		children := joined.Unwrap()
+		if len(children) == 0 {
+			return false
+		}
+		for _, child := range children {
+			if !cancellationOnly(child) {
+				return false
+			}
+		}
+		return true
+	}
+	if wrapped, ok := err.(interface{ Unwrap() error }); ok {
+		return cancellationOnly(wrapped.Unwrap())
+	}
+	return err == context.Canceled || err == context.DeadlineExceeded
 }
 
 // View renders the single alternate-screen builder UI.

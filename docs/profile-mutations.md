@@ -84,6 +84,8 @@ strict snapshot, while `N` keeps it. A fresh preview and confirmation are requir
 before another commit. Occupied clone/rename destinations, including malformed
 entries and native filesystem aliases, are never overwritten. Other ordinary
 save failures require a new preview before retrying.
+After a handled failure and reload, cancelling the current session does not
+report the old failure again.
 
 Esc returns from a preview; Ctrl+C or Ctrl+D cancels before commit, with discard
 confirmation when selections changed (exit 130). EOF, confirmation mismatch,
@@ -92,6 +94,10 @@ state is restored on completion, cancellation, signals and errors. If terminatio
 arrives during an active save, ACS waits for the repository outcome rather than
 assuming the operation failed. A committed transaction remains committed even if
 a cancellation request or later cleanup error occurs.
+An unrelated terminal I/O failure after a known commit still produces a nonzero
+exit and reports that the mutation committed but reporting failed. Source refresh
+completion keeps a pending discard confirmation visible; declining discard
+returns to the refreshed editor or its discovery error.
 
 ## Deletion authority
 
@@ -120,8 +126,10 @@ reporting failed, with a nonzero exit. An Unknown result says publication may
 have occurred and prohibits blind retry. Recovery-required results retain that
 status independently of commitment. These outcomes never become ordinary
 cancellation, including when Ctrl+C was pressed or terminal execution ended.
+When the transaction fully settled and only terminal reporting failed, ACS does
+not prescribe repository recovery; inspect the committed Profile instead.
 
-Follow the command printed in the error, for example:
+For recovery-required or Unknown outcomes, follow the printed command, for example:
 
 ```sh
 acs devin create-profile --name backend-review

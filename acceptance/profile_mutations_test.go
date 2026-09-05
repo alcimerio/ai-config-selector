@@ -4,6 +4,7 @@ package acceptance_test
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"os"
 	"os/exec"
@@ -14,9 +15,75 @@ import (
 	"testing"
 	"time"
 
+	"github.com/alcimerio/ai-config-selector/internal/profilerepo"
 	"github.com/charmbracelet/x/term"
 	"github.com/creack/pty"
 )
+
+const newerMutationProfile = `{"version":2,"name":"old","target":"devin","categories":{"skills":{"schemaVersion":1,"selection":[{"source":"shared-agents","relativePath":"newer"}]}}}`
+
+// A separate process uses the production transaction boundary while the editor
+// retains its previously captured revision. It never touches the user's home.
+func TestProfileMutationWriterHelper(t *testing.T) {
+	home := os.Getenv("ACS_MUTATION_WRITER_HOME")
+	if home == "" {
+		t.Skip("independent writer helper")
+	}
+	repository := profilerepo.New(filepath.Join(home, ".acs"))
+	snapshot, err := repository.Read(context.Background(), "old")
+	if err != nil {
+		t.Fatal(err)
+	}
+	outcome, err := repository.Apply(context.Background(), profilerepo.ReplaceRequest{Name: "old", Expected: snapshot.Revision, Bytes: []byte(newerMutationProfile)})
+	if err != nil || outcome.State != profilerepo.Committed {
+		t.Fatalf("writer: %v %v", outcome, err)
+	}
+}
+
+func TestPromotedProfileMutationReloadThenSignalReportsCurrentCancellation(t *testing.T) {
+	binary := promotedBinary(t)
+	for _, operation := range []string{"edit", "clone"} {
+		t.Run(operation, func(t *testing.T) {
+			home, path, _ := mutationCandidateHome(t)
+			args := []string{"profile", operation, "old"}
+			if operation == "clone" {
+				args = append(args, "--name", "new")
+			}
+			result := runMutationCandidatePTY(t, binary, home, args, func(master *os.File, capture *safeCapture, process *os.Process) {
+				waitForOutput(t, capture, "Profile \"")
+				writePTY(t, master, "\x1b[B", "\r")
+				waitForOutput(t, capture, "Stored v1 -> v2")
+				executable, err := os.Executable()
+				if err != nil {
+					t.Fatal(err)
+				}
+				writer := exec.Command(executable, "-test.run=^TestProfileMutationWriterHelper$", "-test.v")
+				writer.Env = append(promotedEnvironment(home, "/nonexistent"), "ACS_MUTATION_WRITER_HOME="+home)
+				if output, err := writer.CombinedOutput(); err != nil {
+					t.Fatalf("independent writer: %v %s", err, output)
+				}
+				writePTY(t, master, "\x1b[F", "a", "y")
+				waitForOutput(t, capture, "Storage changed. Your draft")
+				writePTY(t, master, "r", "\r", "l")
+				waitForOutput(t, capture, "Reload stored Profile?")
+				writePTY(t, master, "y", "\x1b[A", "\r")
+				waitForOutput(t, capture, "[x] newer")
+				if err := process.Signal(syscall.SIGTERM); err != nil {
+					t.Fatal(err)
+				}
+			})
+			if result.exitCode != 130 || strings.Contains(result.output, "storage changed; mutation not committed") {
+				t.Fatalf("retired conflict overrode current cancellation: %d %q", result.exitCode, result.output)
+			}
+			stored, err := os.ReadFile(path)
+			if err != nil || string(stored) != newerMutationProfile {
+				t.Fatal("newer Profile changed")
+			}
+			assertProfileAbsent(t, home, "new")
+			assertNoSessions(t, home)
+		})
+	}
+}
 
 func mutationCandidateHome(t *testing.T) (string, string, []byte) {
 	t.Helper()
@@ -156,12 +223,12 @@ func TestPromotedProfileMutationSeedPreviewAndCommit(t *testing.T) {
 
 func TestPromotedProfileMutationCancelSignalResizeAndDeleteConfirmation(t *testing.T) {
 	binary := promotedBinary(t)
-	for _, scenario := range []string{"cancel", "signal", "resize", "mismatch", "eof", "delete"} {
+	for _, scenario := range []string{"cancel", "signal", "resize", "mismatch", "ctrl-d", "delete"} {
 		t.Run(scenario, func(t *testing.T) {
 			home, path, raw := mutationCandidateHome(t)
 			before := snapshotInspectionHome(t, home)
 			command := "edit"
-			if scenario == "mismatch" || scenario == "delete" || scenario == "eof" {
+			if scenario == "mismatch" || scenario == "delete" || scenario == "ctrl-d" {
 				command = "delete"
 			}
 			result := runMutationCandidatePTY(t, binary, home, []string{"profile", command, "old"}, func(master *os.File, capture *safeCapture, process *os.Process) {
@@ -171,7 +238,7 @@ func TestPromotedProfileMutationCancelSignalResizeAndDeleteConfirmation(t *testi
 						writePTY(t, master, "old", "\r")
 						return
 					}
-					if scenario == "eof" {
+					if scenario == "ctrl-d" {
 						writePTY(t, master, "\x04")
 						return
 					}

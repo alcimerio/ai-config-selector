@@ -247,6 +247,9 @@ func describeSelections(output io.Writer, before, after profileinspect.Entry) {
 func (app App) mutationError(name, action string, err error) int {
 	var transaction *profilerepo.OutcomeError
 	if errors.As(err, &transaction) && (transaction.Outcome.State != profilerepo.NotCommitted || transaction.Outcome.RecoveryRequired) {
+		if transaction.Outcome.State == profilerepo.Committed && !transaction.Outcome.RecoveryRequired {
+			return app.fail("%s: Profile mutation committed; reporting failed. %s\nInspect stored Profiles before deciding what to do.", action, safeTerminalText(err.Error()))
+		}
 		state := "Outcome unknown; publication may have occurred. Do not blindly retry."
 		if transaction.Outcome.State == profilerepo.Committed {
 			state = "Profile mutation committed; cleanup or reporting failed."

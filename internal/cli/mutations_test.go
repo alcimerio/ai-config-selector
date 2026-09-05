@@ -8,6 +8,7 @@ import (
 	"github.com/alcimerio/ai-config-selector/internal/adapter/devin"
 	"github.com/alcimerio/ai-config-selector/internal/builder"
 	"github.com/alcimerio/ai-config-selector/internal/category"
+	"github.com/alcimerio/ai-config-selector/internal/profile"
 	"github.com/alcimerio/ai-config-selector/internal/profilerepo"
 	"golang.org/x/sys/unix"
 	"io"
@@ -467,6 +468,54 @@ func TestMutationTruthfulTerminalOutcomes(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestCommittedReportingFailureDoesNotInventRecovery(t *testing.T) {
+	for _, operation := range []string{"edit", "create"} {
+		t.Run(operation, func(t *testing.T) {
+			app, repository, home, output := mutationFixture(t, legacyMutationDocument)
+			args := []string{"profile", "edit", "old"}
+			name := "old"
+			app.MutationBuilder = mutationEditorFunc(func(ctx context.Context, _ string, draft category.Draft, options builder.MutationOptions, _ io.Reader, _ io.Writer) (builder.Outcome, error) {
+				prepared, err := options.Prepare(draft)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return committedReportingFailure(ctx, draft, prepared.Save)
+			})
+			if operation == "create" {
+				name = "created"
+				args = []string{"devin", "create-profile", "--name", name}
+				app.Profiles = profile.NewStore(filepath.Join(home, ".acs"), app.Categories)
+				app.Builder = reportingFailureCreationBuilder{}
+			}
+			if code := app.Run(context.Background(), args); code != 1 {
+				t.Fatalf("reporting failure exited %d: %s", code, output.String())
+			}
+			message := output.String()
+			if !strings.Contains(message, "committed") || !strings.Contains(message, "terminal reporting failed") || strings.Contains(strings.ToLower(message), "recover") || strings.Contains(message, "cancelled") {
+				t.Fatalf("invented recovery or lost committed reporting failure: %s", message)
+			}
+			snapshot, err := repository.Read(context.Background(), name)
+			if err != nil || !snapshot.Exists || bytes.Equal(snapshot.Bytes, legacyMutationDocument) {
+				t.Fatal("test did not commit real canonical Profile bytes", err)
+			}
+		})
+	}
+}
+
+func committedReportingFailure(ctx context.Context, draft category.Draft, save builder.SaveFunc) (builder.Outcome, error) {
+	path, err := save(ctx, draft)
+	if err != nil {
+		return builder.Outcome{}, err
+	}
+	return builder.Outcome{Draft: draft, Path: path, Create: true}, &profilerepo.OutcomeError{Outcome: profilerepo.Outcome{State: profilerepo.Committed}, Err: errors.New("terminal reporting failed")}
+}
+
+type reportingFailureCreationBuilder struct{}
+
+func (reportingFailureCreationBuilder) BuildProfile(ctx context.Context, _ string, draft category.Draft, save builder.SaveFunc, _ io.Reader, _ io.Writer) (builder.Outcome, error) {
+	return committedReportingFailure(ctx, draft, save)
 }
 
 func TestMutationExplicitReloadCreatesNewRevisionAndLeavesOldPreviewFrozen(t *testing.T) {

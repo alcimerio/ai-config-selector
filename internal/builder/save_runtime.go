@@ -36,10 +36,28 @@ func (r *saveRuntime) execute(ctx context.Context, draft category.Draft, save Sa
 	r.mutex.Unlock()
 	// A saver panic remains Bubble Tea's existing panic path; completion still
 	// releases the waiter. It does not fabricate a successful transaction result.
-	result = saveCompletedMsg{draft: draft, err: &profilerepo.OutcomeError{Outcome: profilerepo.Outcome{State: profilerepo.Unknown, RecoveryRequired: true}, Err: errors.New("save ended without a repository outcome")}}
+	result = saveCompletedMsg{draft: draft, attempt: attempt, err: &profilerepo.OutcomeError{Outcome: profilerepo.Outcome{State: profilerepo.Unknown, RecoveryRequired: true}, Err: errors.New("save ended without a repository outcome")}}
 	defer func() { cancel(); attempt.result = result; close(attempt.done) }()
 	result.path, result.err = save(attemptContext, draft)
 	return result
+}
+
+// Once the model has handled an ordinary noncommitted failure, it owns the
+// failure screen and any later retry/reload/cancel decision. Shutdown must not
+// resurrect that obsolete attempt. Unobserved and uncertain outcomes stay held.
+func (r *saveRuntime) acknowledge(result saveCompletedMsg) {
+	if result.err == nil || result.attempt == nil {
+		return
+	}
+	var transaction *profilerepo.OutcomeError
+	if errors.As(result.err, &transaction) && (transaction.Outcome.State != profilerepo.NotCommitted || transaction.Outcome.RecoveryRequired) {
+		return
+	}
+	r.mutex.Lock()
+	defer r.mutex.Unlock()
+	if r.current == result.attempt {
+		r.current = nil
+	}
 }
 
 func (r *saveRuntime) stop() *runtimeAttempt {
