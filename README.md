@@ -50,6 +50,110 @@ Release archives are unsigned and unnotarized. GitHub attestations and SHA-256
 prove origin and byte identity; they do not represent Apple notarization or
 malware review.
 
+## macOS quickstart (development source)
+
+Contextual help and the guidance below describe the current source build; the
+published v0.4.0 installer does not include these new help commands. Use macOS
+26 on Apple Silicon or Intel, Go 1.25 or later for the source build, and a real
+terminal for Profile creation and interactive launch. The system
+`/usr/bin/sandbox-exec` must be available; ACS checks it and fails closed.
+
+Build using the source instructions above, then make that binary available in
+this terminal (run this from the cloned repository):
+
+```sh
+export PATH="$PWD/bin:$PATH"
+acs help
+acs devin create-profile --help
+```
+
+For a Devin launch, install and authenticate Devin separately so `devin` is on
+`PATH` and its credential is available at
+`~/.local/share/devin/credentials.toml`. The sandbox-shell path below requires
+neither Devin nor a Devin account; it uses the system `/bin/zsh -f`. Named
+Codex login/status additionally require exactly `codex-cli 0.149.1` and an
+available macOS Keychain, as described in the authentication section below.
+
+ACS discovers selectable global Skills only in `~/.config/devin/skills` and
+`~/.agents/skills`. Each immediate child directory must contain a regular
+`SKILL.md`: for example, `~/.agents/skills/backend-review/SKILL.md`. A loose
+`SKILL.md` at the root or deeper nested bundles are not catalog entries.
+To add a small first Skill without overwriting an existing bundle:
+
+```sh
+mkdir -p "$HOME/.agents/skills"
+mkdir "$HOME/.agents/skills/acs-first-review" && cat > "$HOME/.agents/skills/acs-first-review/SKILL.md" <<'EOF'
+---
+name: acs-first-review
+description: Review code for correctness and useful tests.
+---
+Review the current changes for correctness and missing behavioral tests.
+EOF
+```
+
+Create the Profile:
+
+```sh
+acs devin create-profile --name backend-review
+```
+
+Press Enter on Skills, select `acs-first-review` with Space/Enter, return with
+Left/Esc, then choose Create Profile. `/` searches; Esc while searching clears
+the filter. An empty catalog explains where to add Skills; an empty search
+suggests clearing the filter. Restart creation after adding a bundle. Ctrl+C
+cancels with exit 130 (confirm discarding a changed draft); no Profile is saved.
+An empty Profile requires explicit confirmation, and existing names cannot be
+overwritten.
+
+From the workspace you want the sandboxed process to read and write, inspect
+and launch the credential-free shell:
+
+```sh
+acs sandbox --profile backend-review --dry-run
+acs sandbox --profile backend-review
+```
+
+Dry-run prints the planned selected contents and sandbox readiness without
+allocating a Session. In the shell, inspect the synthetic home with
+`find "$HOME" -maxdepth 5 -type f`, then type `exit` to return. To use Devin
+with the same Profile after its separate installation and authentication:
+
+```sh
+acs devin --profile backend-review --dry-run
+acs devin --profile backend-review
+```
+
+Devin dry-run also reports repository-local inheritance. Workspace-local
+`.devin/skills` and `.agents/skills` remain under Devin's control; they are not
+selectable global catalog roots and are not copied into the sandbox shell.
+Next, read the isolation contract below and use `acs codex auth --help` for
+named authentication or `acs sandbox --help` for shell syntax.
+
+## Command help and grammar (development source)
+
+`acs help` and `acs --help` print root help. Every command path supports both
+forms, for example `acs help codex auth login` and
+`acs codex auth login --help`. Help succeeds on stdout with exit 0, requires no
+interactive terminal, and performs no discovery, credential access, Profile
+writes, Session allocation, target launch, or recovery sweep. Invalid syntax
+fails on stderr with exit 1 and points to contextual help; an empty invocation
+also fails with root guidance.
+
+Write the complete command path first, then its flags in any order:
+
+```sh
+acs devin --dry-run --profile backend-review
+acs codex auth login --device-auth --name work
+```
+
+Values follow their flag as one separate, nonempty token; flags occur at most
+once. Help may appear among otherwise valid flags and does not require the
+command's mandatory name flag. Invalid flags or malformed values still fail
+even when `--help` is present. Positional arguments after a command, `--flag=value`,
+`--` separators, target pass-through, backend selection, and sandbox bypass
+are rejected. Existing target exit codes and Profile cancellation semantics
+are preserved.
+
 ## Profiles
 
 Create a Profile with the interactive builder:

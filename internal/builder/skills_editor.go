@@ -200,8 +200,10 @@ func (m skillsEditor) View() tea.View {
 		}
 		content.WriteString(marker + selected + " " + safe(bundle.DisplayName) + " [" + safe(string(bundle.Reference.Source)) + "]\n")
 	}
-	if len(visible) == 0 {
-		content.WriteString("  (no matching Skills)\n")
+	if len(m.catalog) == 0 {
+		content.WriteString("  No Skills discovered.\n  Add a bundle using name/SKILL.md under:\n  ~/.config/devin/skills or ~/.agents/skills\n  Then restart Profile creation to discover it.\n")
+	} else if len(visible) == 0 {
+		content.WriteString("  No matching Skills. Press Esc to clear the search.\n")
 	}
 	if len(visible) > 0 {
 		bundle := m.catalog[visible[m.cursor]]
