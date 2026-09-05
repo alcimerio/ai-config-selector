@@ -311,3 +311,40 @@ func TestInspectionEntryReplacementDoesNotFollowOrBlock(t *testing.T) {
 		}
 	}
 }
+
+func TestInspectionRejectsLossyUnicodeEscapes(t *testing.T) {
+	for _, version := range []int{1, 2} {
+		for _, tc := range []struct {
+			name, encoded, want string
+			valid               bool
+		}{
+			{"high", `corrupt-\ud800`, "", false},
+			{"low", `corrupt-\udc00`, "", false},
+			{"high followed by text", `corrupt-\ud800x`, "", false},
+			{"two high", `corrupt-\ud800\ud800`, "", false},
+			{"reversed", `corrupt-\udc00\ud800`, "", false},
+			{"escaped pair", `skill-\ud83d\ude00`, "skill-😀", true},
+			{"uppercase pair", `skill-\uD83D\uDE00`, "skill-😀", true},
+			{"literal replacement", `skill-�`, "skill-�", true},
+			{"escaped replacement", `skill-\ufffd`, "skill-�", true},
+			{"literal backslash u", `skill-\\ud800`, `skill-\ud800`, true},
+			{"escaped slash then surrogate", `corrupt-\\\ud800`, "", false},
+		} {
+			t.Run(fmt.Sprintf("v%d/%s", version, tc.name), func(t *testing.T) {
+				selection := fmt.Sprintf(`[{"source":"shared-agents","relativePath":"%s"}]`, tc.encoded)
+				body := fmt.Sprintf(`{"version":1,"name":"example","target":"devin","skillReferences":%s}`, selection)
+				if version == 2 {
+					body = fmt.Sprintf(`{"version":2,"name":"example","target":"devin","categories":{"skills":{"schemaVersion":1,"selection":%s}}}`, selection)
+				}
+				entry := decode(newEntry("example"), []byte(body))
+				if tc.valid {
+					if entry.Status != "valid" || entry.Categories[0].Selection[0].RelativePath != tc.want {
+						t.Fatalf("lost valid spelling: %+v", entry)
+					}
+				} else if entry.Status != "invalid" || entry.Diagnostic == nil || entry.Diagnostic.Code != "invalid_structure" || len(entry.Categories) != 0 || entry.Target != nil {
+					t.Fatalf("accepted lossy Unicode: %+v", entry)
+				}
+			})
+		}
+	}
+}

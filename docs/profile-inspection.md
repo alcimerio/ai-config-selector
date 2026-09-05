@@ -72,7 +72,10 @@ Supported structures are Devin Profile envelopes 1 and 2 and Skills category
 schema 1. Version 2 may have an empty categories object. Unknown fields, category
 IDs, targets, source aliases, and unsupported versions are explicitly unsupported;
 missing fields, wrong types, duplicate JSON keys, filename/body mismatch, and
-malformed references are invalid. Unknown fields are not silently discarded.
+malformed references are invalid. Unpaired JSON UTF-16 surrogate escapes are
+invalid; valid supplementary pairs, literal U+FFFD, and escaped literal backslash-u
+spellings are preserved. Invalid show names are rejected before home discovery,
+so their diagnostic does not depend on HOME. Unknown fields are not silently discarded.
 
 Stable diagnostic codes:
 

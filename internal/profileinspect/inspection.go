@@ -9,6 +9,7 @@ import (
 	"io"
 	"path"
 	"sort"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -102,7 +103,7 @@ func (result Result) ExitCode() int {
 
 func decode(entry Entry, data []byte) Entry {
 	// Reject ambiguous duplicate keys and invalid UTF-8 before map decoding.
-	if !utf8.Valid(data) || uniqueJSON(data) != nil {
+	if !utf8.Valid(data) || !pairedUnicodeEscapes(data) || uniqueJSON(data) != nil {
 		return entry.failed("invalid_structure")
 	}
 	var envelope map[string]json.RawMessage
@@ -289,4 +290,42 @@ func uniqueValue(decoder *json.Decoder, depth int) error {
 	}
 	_, err = decoder.Token()
 	return err
+}
+
+// Go's JSON decoder replaces lone UTF-16 surrogates with U+FFFD. Validate
+// escapes before decoding so inspection cannot silently change stored identity.
+// Skip every non-Unicode escape as a pair, including escaped backslashes;
+// the JSON decoder remains responsible for general syntax validation.
+func pairedUnicodeEscapes(data []byte) bool {
+	for i := 0; i < len(data); i++ {
+		if data[i] != '\\' {
+			continue
+		}
+		i++
+		if i >= len(data) || data[i] != 'u' {
+			continue
+		}
+		if i+4 >= len(data) {
+			return false
+		}
+		code, err := strconv.ParseUint(string(data[i+1:i+5]), 16, 16)
+		if err != nil {
+			return false
+		}
+		i += 4
+		if code >= 0xDC00 && code <= 0xDFFF {
+			return false
+		}
+		if code >= 0xD800 && code <= 0xDBFF {
+			if i+6 >= len(data) || data[i+1] != '\\' || data[i+2] != 'u' {
+				return false
+			}
+			low, err := strconv.ParseUint(string(data[i+3:i+7]), 16, 16)
+			if err != nil || low < 0xDC00 || low > 0xDFFF {
+				return false
+			}
+			i += 6
+		}
+	}
+	return true
 }

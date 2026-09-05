@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/alcimerio/ai-config-selector/internal/profile"
 	"github.com/alcimerio/ai-config-selector/internal/profileinspect"
 )
 
@@ -14,6 +15,12 @@ func (app App) RunProfileInspection(args []string, home func() (string, error)) 
 	inv, problem := parseCommand(args)
 	if problem != "" || inv.help || (inv.command.path != "profile list" && inv.command.path != "profile show") {
 		return false, 0
+	}
+	// Store.Show validates names without opening storage. Route invalid operands
+	// there before home discovery so their diagnostic does not depend on HOME.
+	if inv.command.path == "profile show" && profile.ValidateName(inv.value) != nil {
+		app.Inspector = profileinspect.Store{}
+		return true, app.inspectProfiles(inv)
 	}
 	directory, err := home()
 	if err == nil {

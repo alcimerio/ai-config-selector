@@ -131,3 +131,13 @@ func TestInspectionHumanGuidanceAndControlEscaping(t *testing.T) {
 		t.Fatalf("unsafe human output: %q", &out)
 	}
 }
+
+func TestInspectionInvalidNamePrecedesHomeDiscovery(t *testing.T) {
+	for _, args := range [][]string{{"profile", "show", "../private", "--json"}, {"profile", "show", "--json", "bad\x1bname"}, {"profile", "show", "../private"}} {
+		var out, errOut bytes.Buffer
+		handled, code := (cli.App{Output: &out, ErrorOutput: &errOut}).RunProfileInspection(args, func() (string, error) { t.Fatal("invalid name called home resolver"); return "", nil })
+		if !handled || code != 1 || errOut.Len() != 0 || !strings.Contains(out.String(), "invalid_name") || strings.Contains(out.String(), "private") || strings.ContainsRune(out.String(), '\x1b') {
+			t.Fatalf("invalid-name result: %d %q %q", code, &out, &errOut)
+		}
+	}
+}
