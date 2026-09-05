@@ -155,6 +155,7 @@ jobs:
           ACS_NATIVE_AUTH_RECOVERY_ROOT: ${{ runner.temp }}/acs-native-auth-recovery
         run: go test ./internal/codexauth -run '^TestNativeKeychainRecoveryEntrypoint$' -count=1
 
+      # Includes passive diagnostics, no-execution sentinels and no-write snapshots on both architectures.
       - name: Exercise installed candidate as a black box
         env:
           ACS_PROMOTED_BINARY: ${{ runner.temp }}/acs-promoted-${{ matrix.os }}-${{ matrix.arch }}/bin/acs

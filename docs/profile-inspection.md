@@ -3,7 +3,7 @@
 `acs profile list [--json]` lists direct `.json` entries in `~/.acs/profiles`.
 `acs profile show NAME [--json]` inspects one saved Profile, even when its selected
 Skills have been removed. `acs profile show --json NAME` is also accepted.
-Only `show` accepts one name operand; existing commands still accept no operands.
+`show` and `validate` accept one name operand; other existing commands still accept no operands.
 Flags occur once. Extra operands, unknown options, `=`, `--`, target pass-through,
 and sandbox bypass are rejected. Use `acs help profile`, `acs profile list --help`,
 or `acs profile show --help` for contextual help.
@@ -12,7 +12,9 @@ Inspection reads persisted structure only. It does not check source existence,
 authentication, installed targets, or launch readiness. It does not resolve
 references, normalize or migrate files, create directories or Sessions, recover
 quarantine, change permissions, or access a terminal. Launch and authentication
-contracts are unchanged. To create a Profile, use
+contracts are unchanged. For selected-source resolution, use
+`acs profile validate NAME`; for passive host prerequisites, use `acs doctor`.
+See the [passive diagnostics contract](passive-diagnostics.md). To create a Profile, use
 `acs devin create-profile --name NAME` in an interactive terminal.
 
 A missing store is an empty successful list. Entries are ordered by filename;

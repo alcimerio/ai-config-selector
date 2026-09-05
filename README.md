@@ -28,6 +28,20 @@ also accepted. See the [inspection and JSON contract](docs/profile-inspection.md
 for status codes, exit behavior, limits, and examples. Run `acs profile --help`
 for contextual help.
 
+## Passive diagnostics (development source)
+
+Run `acs doctor` for core host and trusted backend-file checks without an account
+or optional clients. Add `--target devin`, `--target sandbox`, or
+`--target codex-auth` to check only that workflow's executable availability.
+`codex-auth` describes named authentication workflows, not interactive Codex
+launch. Versions, authentication, and actual containment remain unchecked.
+
+Run `acs profile validate NAME` to validate supported stored structure and resolve
+selected Skill sources without constructing a launch plan. Unselected sources
+are not required. Both commands accept `--json`, need no terminal, execute no
+processes, and change no files. See the [passive diagnostics contract](docs/passive-diagnostics.md)
+for the separate diagnostic JSON format, check IDs, exit behavior, and limits.
+
 ## Install
 
 The latest published immutable release is v0.4.0. Download its release-specific
@@ -66,7 +80,7 @@ malware review.
 ## macOS quickstart (development source)
 
 Contextual help and the guidance below describe the current source build; the
-published v0.4.0 installer does not include these new help commands. Use macOS
+published v0.4.0 installer does not include these new help and diagnostic commands. Use macOS
 26 on Apple Silicon or Intel, Go 1.25 or later for the source build, and a real
 terminal for Profile creation and interactive launch. The system
 `/usr/bin/sandbox-exec` must be available; ACS checks it and fails closed.
@@ -78,6 +92,8 @@ this terminal (run this from the cloned repository):
 export PATH="$PWD/bin:$PATH"
 acs help
 acs devin create-profile --help
+acs doctor
+acs doctor --target sandbox
 ```
 
 For a Devin launch, install and authenticate Devin separately so `devin` is on
@@ -118,6 +134,12 @@ cancels with exit 130 (confirm discarding a changed draft); no Profile is saved.
 An empty Profile requires explicit confirmation, and existing names cannot be
 overwritten.
 
+Validate the saved Profile without runtime checks:
+
+```sh
+acs profile validate backend-review
+```
+
 From the workspace you want the sandboxed process to read and write, inspect
 and launch the credential-free shell:
 
@@ -132,6 +154,7 @@ allocating a Session. In the shell, inspect the synthetic home with
 with the same Profile after its separate installation and authentication:
 
 ```sh
+acs doctor --target devin
 acs devin --profile backend-review --dry-run
 acs devin --profile backend-review
 ```
