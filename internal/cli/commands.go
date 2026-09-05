@@ -55,7 +55,7 @@ func parseCommand(args []string) (inv invocation, problem string) {
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		if !strings.HasPrefix(arg, "-") {
-			if consumed == 0 || inv.command.group || (i == 0 && inv.command.path == "devin") {
+			if helpCommand || consumed == 0 || inv.command.group || (i == 0 && inv.command.path == "devin") {
 				return inv, "unknown command " + publicToken(arg)
 			}
 			return inv, "unsupported positional argument"

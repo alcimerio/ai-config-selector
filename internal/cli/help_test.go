@@ -102,3 +102,28 @@ func TestLaunchFlagPermutationsDispatchOnlyThePlanner(t *testing.T) {
 		}
 	}
 }
+
+func TestUnknownExplicitHelpPathIdentifiesCommandSafely(t *testing.T) {
+	for _, path := range []string{"sandbox", "devin create-profile", "codex auth login"} {
+		for _, word := range []string{"typo", "private/path", "typo\x1b[31m"} {
+			t.Run(path+"/"+word, func(t *testing.T) {
+				var out, errOut bytes.Buffer
+				args := append(strings.Fields("help "+path), word)
+				code := (cli.App{Output: &out, ErrorOutput: &errOut}).Run(context.Background(), args)
+				if code != 1 || out.Len() != 0 {
+					t.Fatalf("code=%d stdout=%q", code, &out)
+				}
+				want := `unknown command "typo"`
+				if word != "typo" {
+					want = "unknown command (unrecognized spelling)"
+				}
+				if !strings.Contains(errOut.String(), want) || !strings.Contains(errOut.String(), "acs "+path+" --help") {
+					t.Fatalf("stderr=%q", &errOut)
+				}
+				if word != "typo" && strings.Contains(errOut.String(), word) {
+					t.Fatal("unsafe command spelling was echoed")
+				}
+			})
+		}
+	}
+}
