@@ -277,3 +277,17 @@ func newDevinStore(t *testing.T, acsHome string) *profile.Store {
 	}
 	return profile.NewStore(acsHome, adapter.Categories())
 }
+
+func TestStoreCreateRejectsSymlinkRepositoryWithoutOutsideWrites(t *testing.T) {
+	acsHome, outside := t.TempDir(), t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(acsHome, "profiles")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := newDevinStore(t, acsHome).Create(devin.NewSkillsProfile("escape", nil)); err == nil {
+		t.Fatal("creation followed a repository symlink")
+	}
+	entries, err := os.ReadDir(outside)
+	if err != nil || len(entries) != 0 {
+		t.Fatal("creation wrote outside repository", err)
+	}
+}

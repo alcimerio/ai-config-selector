@@ -31,6 +31,7 @@ type ProfileStore interface {
 	Create(profile.Profile) (string, error)
 	CreateContext(context.Context, profile.Profile) (string, error)
 	Load(string) (profile.Profile, error)
+	RecoverContext(context.Context) error
 }
 
 type LaunchPlanner interface {
@@ -217,6 +218,17 @@ func (app App) createProfile(ctx context.Context, name string) int {
 	if err := profile.ValidateName(name); err != nil {
 		return app.fail("%v", err)
 	}
+	if err := ctx.Err(); err != nil {
+		return app.fail("create Profile %q: %v", name, err)
+	}
+	if app.Builder != nil && (app.Interactive == nil || !app.Interactive(app.Input, app.Output)) {
+		return app.fail("create Profile requires interactive stdin and stdout")
+	}
+	// Explicit mutation entry: settle a previous transaction before the duplicate
+	// precheck, including when that transaction published this very name.
+	if err := app.Profiles.RecoverContext(ctx); err != nil {
+		return app.fail("recover Profile repository before creation: %v", err)
+	}
 	if _, err := app.Profiles.Load(name); err == nil {
 		return app.fail("create Profile %q: %v: %q", name, profile.ErrProfileExists, name)
 	} else if !errors.Is(err, os.ErrNotExist) {
@@ -225,9 +237,6 @@ func (app App) createProfile(ctx context.Context, name string) int {
 
 	draft := app.Categories.NewDraft()
 	if app.Builder != nil {
-		if app.Interactive == nil || !app.Interactive(app.Input, app.Output) {
-			return app.fail("create Profile requires interactive stdin and stdout")
-		}
 		save := func(saveContext context.Context, snapshot category.Draft) (string, error) {
 			created, err := app.Categories.NewProfile(name, snapshot)
 			if err != nil {

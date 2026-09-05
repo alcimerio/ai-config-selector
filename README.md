@@ -394,3 +394,13 @@ and [v0.4.0 release notes](docs/releases/v0.4.0.md) for more detail.
 ## License
 
 ACS is available under the [MIT License](LICENSE).
+
+### Profile repository transactions
+
+Development-source Profile creation uses a revisioned byte repository with checked
+synchronization and explicit process-interruption recovery. Existing inspection
+and diagnostics remain passive. If creation reports an uncertain or committed
+transaction error, rerun the same create-profile command interactively to reach
+recovery before its duplicate-name check. See the [repository transaction
+contract](docs/profile-repository-transactions.md) for outcomes, byte revisions,
+filesystem limits and native evidence; no edit/rename/delete commands are added.

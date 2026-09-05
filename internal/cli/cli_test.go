@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/alcimerio/ai-config-selector/internal/profilerepo"
 	"io"
 	"os"
 	"path/filepath"
@@ -1471,4 +1472,82 @@ func assertFileContents(t *testing.T, path string, want []byte, message string) 
 
 func (catalog staticCatalog) DiscoverGlobalSkillCatalog(context.Context) ([]skills.SkillBundle, error) {
 	return catalog.bundles, catalog.err
+}
+
+type recoveringCreationStore struct {
+	*profile.Store
+	recovered   bool
+	recoveryErr error
+	saveErr     error
+}
+
+func (s *recoveringCreationStore) RecoverContext(context.Context) error {
+	s.recovered = true
+	return s.recoveryErr
+}
+func (s *recoveringCreationStore) Load(name string) (profile.Profile, error) {
+	if !s.recovered {
+		return profile.Profile{}, errors.New("load ran before explicit recovery")
+	}
+	return s.Store.Load(name)
+}
+func (s *recoveringCreationStore) CreateContext(context.Context, profile.Profile) (string, error) {
+	return "", s.saveErr
+}
+
+func TestCreationRecoversBeforeDuplicatePrecheckAndPreservesSaveOutcome(t *testing.T) {
+	fixture := newStaticCategoryFixture(t, staticCatalog{})
+	for _, state := range []profilerepo.State{profilerepo.Unknown, profilerepo.Committed} {
+		t.Run(string(state), func(t *testing.T) {
+			failure := &profilerepo.OutcomeError{Outcome: profilerepo.Outcome{State: state, RecoveryRequired: true}, Err: errors.New("sync or cleanup failed")}
+			store := &recoveringCreationStore{Store: profile.NewStore(t.TempDir(), fixture.registry), saveErr: failure}
+			draft := fixture.registry.NewDraft()
+			profileBuilder := &staticBuilder{outcome: builder.Outcome{Draft: draft, Create: true}}
+			var stdout, stderr bytes.Buffer
+			app := cli.App{Categories: fixture.registry, Builder: profileBuilder, Profiles: store, Input: strings.NewReader(""), Output: &stdout, ErrorOutput: &stderr, Interactive: func(io.Reader, io.Writer) bool { return true }}
+			code := app.Run(context.Background(), []string{"devin", "create-profile", "--name", "example"})
+			if code != 1 || !store.recovered || strings.Contains(stdout.String(), "cancelled") || !strings.Contains(stderr.String(), string(state)) {
+				t.Fatalf("outcome lost: code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+			}
+		})
+	}
+	t.Run("duplicate", func(t *testing.T) {
+		base := profile.NewStore(t.TempDir(), fixture.registry)
+		p, err := fixture.registry.NewProfile("example", fixture.registry.NewDraft())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err = base.Create(p); err != nil {
+			t.Fatal(err)
+		}
+		store := &recoveringCreationStore{Store: base}
+		var stderr bytes.Buffer
+		app := cli.App{Categories: fixture.registry, Builder: &staticBuilder{}, Profiles: store, Input: strings.NewReader(""), Output: &bytes.Buffer{}, ErrorOutput: &stderr, Interactive: func(io.Reader, io.Writer) bool { return true }}
+		if code := app.Run(context.Background(), []string{"devin", "create-profile", "--name", "example"}); code != 1 || !store.recovered || !strings.Contains(stderr.String(), "already exists") {
+			t.Fatal("duplicate bypassed recovery", stderr.String())
+		}
+	})
+	for _, mode := range []string{"invalid", "noninteractive", "precancelled"} {
+		t.Run(mode, func(t *testing.T) {
+			root := t.TempDir()
+			store := &recoveringCreationStore{Store: profile.NewStore(root, fixture.registry)}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if mode == "precancelled" {
+				cancel()
+			}
+			name := "example"
+			if mode == "invalid" {
+				name = "../escape"
+			}
+			app := cli.App{Categories: fixture.registry, Builder: &staticBuilder{}, Profiles: store, Input: strings.NewReader(""), Output: &bytes.Buffer{}, ErrorOutput: &bytes.Buffer{}, Interactive: func(io.Reader, io.Writer) bool { return mode != "noninteractive" }}
+			if code := app.Run(ctx, []string{"devin", "create-profile", "--name", name}); code != 1 || store.recovered {
+				t.Fatal("invalid mutation reached recovery")
+			}
+			entries, err := os.ReadDir(root)
+			if err != nil || len(entries) != 0 {
+				t.Fatal("rejected creation wrote persistence", err)
+			}
+		})
+	}
 }
