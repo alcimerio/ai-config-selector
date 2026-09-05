@@ -141,3 +141,7 @@ func TestInspectionInvalidNamePrecedesHomeDiscovery(t *testing.T) {
 		}
 	}
 }
+
+func (f forbiddenInspectionRuntime) RecoverContext(context.Context) error {
+	panic("passive inspection invoked Profile recovery")
+}

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"github.com/alcimerio/ai-config-selector/internal/profilerepo"
 	"io"
 	"reflect"
 	"strconv"
@@ -775,4 +776,19 @@ func updateCommand(t *testing.T, model Model, message tea.Msg) (Model, tea.Cmd) 
 	t.Helper()
 	updated, command := model.Update(message)
 	return updated.(Model), command
+}
+
+func TestModelPreservesPostDecisionSaveErrorDuringCancellation(t *testing.T) {
+	for _, state := range []profilerepo.State{profilerepo.Unknown, profilerepo.Committed, profilerepo.NotCommitted} {
+		t.Run(string(state), func(t *testing.T) {
+			binding, registry := newBuilderFixture(t)
+			model := newLoadedSkillsModel(t, "uncertain", registry.NewDraft(), registry, binding, nil)
+			model.screen = cancellingSaveScreen
+			failure := &profilerepo.OutcomeError{Outcome: profilerepo.Outcome{State: state, RecoveryRequired: true}, Err: errors.Join(context.Canceled, errors.New("directory synchronization or cleanup failed"))}
+			model, quit := updateCommand(t, model, saveCompletedMsg{draft: model.draft, err: failure})
+			if quit == nil || model.Outcome().Cancelled || model.screen == saveFailureScreen || !errors.Is(model.terminalError, failure) {
+				t.Fatal("post-decision error became cancellation or retry")
+			}
+		})
+	}
 }

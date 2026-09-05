@@ -3,6 +3,7 @@ package builder
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -14,6 +15,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/alcimerio/ai-config-selector/internal/category"
+	"github.com/alcimerio/ai-config-selector/internal/profilerepo"
 )
 
 // MinimumWidth and MinimumHeight define the smallest supported builder layout.
@@ -54,6 +56,7 @@ type Model struct {
 	sizeKnown      bool
 	saveError      error
 	outcome        Outcome
+	terminalError  error
 }
 
 type loadState int
@@ -166,7 +169,14 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.saveCancel = nil
-		if m.screen == cancellingSaveScreen && message.err != nil {
+		var transactionError *profilerepo.OutcomeError
+		if errors.As(message.err, &transactionError) && (transactionError.Outcome.State != profilerepo.NotCommitted || transactionError.Outcome.RecoveryRequired) {
+			// Never offer blind retry or report cancellation after publication
+			// may have happened, or while cleanup still needs recovery.
+			m.terminalError = message.err
+			return m, tea.Quit
+		}
+		if m.screen == cancellingSaveScreen && errors.Is(message.err, context.Canceled) {
 			m.screen = overviewScreen
 			return m.beginCancellation()
 		}
@@ -383,7 +393,7 @@ func finishRuntime(runtime programRuntime) (Outcome, error) {
 	if !ok {
 		return Outcome{}, fmt.Errorf("Profile Builder returned %T, not its root model", completed)
 	}
-	return final.Outcome(), nil
+	return final.Outcome(), final.terminalError
 }
 
 // Run starts the sole Bubble Tea program for a Profile Builder session.

@@ -141,6 +141,9 @@ jobs:
       - name: Run supported native race tests
         run: go test -race ./...
 
+      - name: Record native Profile repository filesystem and ownership evidence
+        run: go test ./internal/profilerepo -run '^(TestNativeVolumeAliasPolicy|TestIndependentWritersAndLiveKernelOwnership|TestRestrictedIdentityPermissionDenial)$' -count=1 -v
+
       - name: Run credential-free native authentication evidence
         env:
           ACS_RUN_NATIVE_AUTH_GATE: "1"

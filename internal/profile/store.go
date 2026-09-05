@@ -1,12 +1,15 @@
 package profile
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/alcimerio/ai-config-selector/internal/profilerepo"
 )
 
 var ErrProfileExists = errors.New("Profile already exists")
@@ -30,8 +33,9 @@ func (store *Store) Create(profile Profile) (string, error) {
 	return store.CreateContext(context.Background(), profile)
 }
 
-// CreateContext atomically publishes a Profile unless cancellation is observed
-// before the publish step begins.
+// CreateContext encodes canonical Profile bytes above the revisioned repository.
+// Cancellation before its commit decision leaves the named Profile unchanged;
+// post-decision errors carry an explicit outcome and recovery requirement.
 func (store *Store) CreateContext(ctx context.Context, profile Profile) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
@@ -43,53 +47,27 @@ func (store *Store) CreateContext(ctx context.Context, profile Profile) (string,
 	if err != nil {
 		return "", err
 	}
-	if err := os.MkdirAll(store.profilesDir, 0o700); err != nil {
-		return "", fmt.Errorf("create Profile directory: %w", err)
-	}
-	if err := os.Chmod(store.profilesDir, 0o700); err != nil {
-		return "", fmt.Errorf("secure Profile directory: %w", err)
-	}
-
-	temporary, err := os.CreateTemp(store.profilesDir, ".profile-*.tmp")
-	if err != nil {
-		return "", fmt.Errorf("create temporary Profile: %w", err)
-	}
-	temporaryPath := temporary.Name()
-	defer os.Remove(temporaryPath)
-
-	encoder := json.NewEncoder(temporary)
+	var canonical bytes.Buffer
+	encoder := json.NewEncoder(&canonical)
 	encoder.SetIndent("", "  ")
 	if err := encoder.Encode(normalized); err != nil {
-		_ = temporary.Close()
 		return "", fmt.Errorf("encode Profile: %w", err)
 	}
-	if err := temporary.Chmod(0o600); err != nil {
-		_ = temporary.Close()
-		return "", fmt.Errorf("secure Profile: %w", err)
-	}
-	if err := temporary.Sync(); err != nil {
-		_ = temporary.Close()
-		return "", fmt.Errorf("sync Profile: %w", err)
-	}
-	if err := temporary.Close(); err != nil {
-		return "", fmt.Errorf("close Profile: %w", err)
-	}
-	if err := ctx.Err(); err != nil {
+	repository := profilerepo.New(filepath.Dir(store.profilesDir))
+	// An absent condition is name-bound and reusable; reading an occupied name
+	// must not turn Create into replacement.
+	expected, err := profilerepo.AbsentRevision(profile.Name)
+	if err != nil {
 		return "", err
 	}
-
-	path := store.profilePath(profile.Name)
-	if err := os.Link(temporaryPath, path); err != nil {
-		if errors.Is(err, os.ErrExist) {
-			return "", fmt.Errorf("%w: %q", ErrProfileExists, profile.Name)
+	outcome, err := repository.Apply(ctx, profilerepo.CreateRequest{Name: profile.Name, Expected: expected, Bytes: canonical.Bytes()})
+	if err != nil {
+		if errors.Is(err, profilerepo.ErrConflict) || errors.Is(err, os.ErrExist) {
+			err = errors.Join(ErrProfileExists, err)
 		}
-		return "", fmt.Errorf("publish Profile: %w", err)
+		return "", &profilerepo.OutcomeError{Outcome: outcome, Err: err}
 	}
-	if directory, err := os.Open(store.profilesDir); err == nil {
-		_ = directory.Sync()
-		_ = directory.Close()
-	}
-	return path, nil
+	return store.profilePath(profile.Name), nil
 }
 
 func (store *Store) Load(name string) (Profile, error) {
@@ -109,4 +87,14 @@ func (store *Store) Load(name string) (Profile, error) {
 
 func (store *Store) profilePath(name string) string {
 	return filepath.Join(store.profilesDir, name+".json")
+}
+
+// RecoverContext is an explicit mutation-owned entry point. Loads and ordinary
+// inspection never call it. It uses the same stationary lock as CreateContext.
+func (store *Store) RecoverContext(ctx context.Context) error {
+	outcome, err := profilerepo.New(filepath.Dir(store.profilesDir)).Recover(ctx)
+	if err != nil {
+		return &profilerepo.OutcomeError{Outcome: outcome, Err: err}
+	}
+	return nil
 }
