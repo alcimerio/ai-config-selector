@@ -11,10 +11,14 @@ type commandSpec struct {
 	path, syntax, description, example string
 	valueFlag, boolFlag                string
 	group                              bool
+	nameOperand                        bool
 }
 
 var commands = []commandSpec{
 	{path: "", syntax: "acs <command> [flags]", description: "Create capability Profiles and use the required native sandbox.", example: "acs devin create-profile --name backend-review", group: true},
+	{path: "profile", syntax: "acs profile <command> [flags]", description: "Read stored Profile structure without source, authentication or runtime checks.", example: "acs profile list\n  acs profile show backend-review", group: true},
+	{path: "profile list", syntax: "acs profile list [--json]", description: "List direct stored Profiles, including per-entry structural errors. Missing storage is empty.\nNo sources, targets, credentials or Sessions are accessed. No files are changed.", example: "acs profile list\n  acs profile list --json", boolFlag: "--json"},
+	{path: "profile show", syntax: "acs profile show NAME [--json]", description: "Show persisted Profile versions and selections, even with missing Skill sources.\nSupported structure does not imply launch readiness. No files are changed.", example: "acs profile show backend-review\n  acs profile show --json backend-review", boolFlag: "--json", nameOperand: true},
 	{path: "devin", syntax: "acs devin --profile <name> [--dry-run]", description: "Launch Devin with a saved Profile. --dry-run inspects the plan without creating a Session.\nUse create-profile to open the interactive Profile Builder.", example: "acs devin --profile backend-review --dry-run\n  acs devin --profile backend-review", valueFlag: "--profile", boolFlag: "--dry-run"},
 	{path: "devin create-profile", syntax: "acs devin create-profile --name <name>", description: "Create a new Profile using interactive stdin and stdout. Existing names are never overwritten.\nSelect Skills with Space/Enter; return with Left/Esc; choose Create Profile to save.\nCtrl+C cancels without saving (exit 130).", example: "acs devin create-profile --name backend-review", valueFlag: "--name"},
 	{path: "sandbox", syntax: "acs sandbox --profile <name> [--dry-run]", description: "Open /bin/zsh -f in the Profile sandbox without Devin credentials.\n--dry-run inspects the plan without creating a Session or starting a shell.", example: "acs sandbox --dry-run --profile backend-review\n  acs sandbox --profile backend-review", valueFlag: "--profile", boolFlag: "--dry-run"},
@@ -55,6 +59,10 @@ func parseCommand(args []string) (inv invocation, problem string) {
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		if !strings.HasPrefix(arg, "-") {
+			if inv.command.nameOperand && !helpCommand && inv.value == "" && arg != "" {
+				inv.value = arg
+				continue
+			}
 			if helpCommand || consumed == 0 || inv.command.group || (i == 0 && inv.command.path == "devin") {
 				return inv, "unknown command " + publicToken(arg)
 			}
@@ -89,6 +97,9 @@ func parseCommand(args []string) (inv invocation, problem string) {
 	}
 	if inv.command.group {
 		return inv, "missing command"
+	}
+	if inv.command.nameOperand && inv.value == "" {
+		return inv, "missing required name operand"
 	}
 	if inv.command.valueFlag != "" && inv.value == "" {
 		return inv, "missing required flag " + inv.command.valueFlag
@@ -132,10 +143,17 @@ func (app App) printHelp(command commandSpec) {
 		fmt.Fprintf(app.Output, "  %s <name>  Required name\n", command.valueFlag)
 	}
 	if command.boolFlag != "" {
-		fmt.Fprintf(app.Output, "  %s  %s\n", command.boolFlag, map[string]string{"--dry-run": "Inspect without launching", "--device-auth": "Use device login"}[command.boolFlag])
+		fmt.Fprintf(app.Output, "  %s  %s\n", command.boolFlag, map[string]string{"--dry-run": "Inspect without launching", "--device-auth": "Use device login", "--json": "Emit inspection JSON format 1"}[command.boolFlag])
 	}
 	fmt.Fprintln(app.Output, "  --help  Show this help without runtime access")
-	fmt.Fprintln(app.Output, "\nGrammar: command words first, then flags in any order. Values use a separate token.\nEach flag may occur once. No positional arguments, '=' syntax, '--' separator,\ntarget pass-through, backend selection, or sandbox bypass is supported.")
+	if command.nameOperand {
+		fmt.Fprintln(app.Output, "\nGrammar: profile show accepts exactly one NAME, before or after --json.\nEach flag may occur once. No extra operands, '=' syntax, '--' separator,\ntarget pass-through, backend selection, or sandbox bypass is supported.")
+	} else {
+		fmt.Fprintln(app.Output, "\nGrammar: command words first, then flags in any order. Values use a separate token.\nEach flag may occur once. No positional arguments, '=' syntax, '--' separator,\ntarget pass-through, backend selection, or sandbox bypass is supported.")
+		if command.path == "" || command.path == "profile" {
+			fmt.Fprintln(app.Output, "Exception: profile show accepts one NAME before or after --json; see acs profile show --help.")
+		}
+	}
 	fmt.Fprintf(app.Output, "\nExamples:\n  %s\n  %s\n", command.example, helpPath(command))
 	if command.path == "" {
 		fmt.Fprintln(app.Output, "\nFirst use: add name/SKILL.md under ~/.config/devin/skills or ~/.agents/skills,\ncreate a Profile, inspect it with --dry-run, then launch from your workspace.")

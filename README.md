@@ -15,6 +15,19 @@ v0.3.3 is the final release with Linux support. The Bubblewrap implementation
 remains in the source tree for possible future work, but v0.4.0 has no Linux
 binary, installer path, native gate, or support commitment.
 
+## Inspect saved Profiles
+
+Use `acs profile list` to find stored Profiles and `acs profile show NAME` to
+inspect persisted versions and selected Skills, including references to Skills
+that no longer exist. These commands only read stored structure; source,
+authentication, and runtime readiness remain unchecked. They create no directories
+or Sessions and do not modify Profile or quarantine state.
+
+Add `--json` for deterministic output format 1; `acs profile show --json NAME` is
+also accepted. See the [inspection and JSON contract](docs/profile-inspection.md)
+for status codes, exit behavior, limits, and examples. Run `acs profile --help`
+for contextual help.
+
 ## Install
 
 The latest published immutable release is v0.4.0. Download its release-specific
