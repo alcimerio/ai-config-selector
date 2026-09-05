@@ -61,8 +61,16 @@ func TestPromotedArtifactReportsItsVersionAndCreatesAnEmptyProfileThroughAPTY(t 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 1 || entries[0].Name() != "promoted-empty.json" {
-		t.Fatalf("atomic Profile persistence left unexpected entries: %v", entries)
+	if len(entries) != 2 || entries[0].Name() != ".profile-transaction-lock" || entries[1].Name() != "promoted-empty.json" {
+		t.Fatalf("Profile persistence left unexpected entries: %v", entries)
+	}
+	lockInfo, err := os.Lstat(filepath.Join(filepath.Dir(profilePath), ".profile-transaction-lock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lockStat, ok := lockInfo.Sys().(*syscall.Stat_t)
+	if !ok || !lockInfo.Mode().IsRegular() || lockInfo.Mode().Perm() != 0o600 || lockInfo.Size() != 0 || lockStat.Uid != uint32(os.Geteuid()) || lockStat.Nlink != 1 {
+		t.Fatal("permanent Profile lock is not an owned private regular empty single-link file")
 	}
 }
 

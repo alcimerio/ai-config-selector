@@ -95,7 +95,8 @@ names, original source identity/hash/length, and staged identity/hash/length.
 The plan's metadata format is separate from all document codecs.
 
 1. **Preparation:** create `stage` exclusively, write exact bytes, check full
-   write, file sync and close, and sync the directory. Write/sync/close `pending`,
+   write, file sync and close, reread and compare with the owned desired bytes,
+   and sync the directory. Bind that verified staged identity, then write/sync/close `pending`,
    then rename it to `plan` and sync the directory. Public names are unchanged.
    Delete needs no stage. Recheck observed source/destination state and cancellation.
 2. **Decision:** hard-link `plan` to `decision`, then sync the directory. Both
@@ -112,13 +113,18 @@ The plan's metadata format is separate from all document codecs.
    synchronizes an observed complete receipt before beginning terminal cleanup.
 5. **Cleanup:** validate remaining artifacts and remove pending/swap/stage,
    decision, plan, then complete, with checked synchronization after each removal.
-   Complete is last and contains the entire plan. Interrupted terminal cleanup
+   Before terminal cleanup, account for the exact remaining stage/public links
+   and reject impossible swap artifacts or unexplained links. Complete is last
+   and contains the entire plan. Interrupted terminal cleanup
    does not require an already deleted stage or plan leaf and never restores an
    old public document. Repeated recovery converges to no in-flight artifacts.
 
 Before a decision, recovery aborts private preparation. A partial stage or an
-incomplete current-version pending prefix is recognized without requiring a
-complete plan; complete malformed or future-version pending records are preserved.
+incomplete pending prefix of the fixed canonical current-version shape is
+recognized without requiring a complete plan. The bounded prefix recognizer checks
+field order, allowed operations, names, lowercase hex, canonical bounded decimal
+values and pair aliases; a version header alone is insufficient. Impossible,
+malformed or future-version preparation bytes are preserved.
 Abort cleanup can itself be interrupted after deleting the stage. After a decision,
 recovery rolls forward or preserves evidence and reports interference/uncertainty.
 There is no post-commit backup restoration or user-facing undo. Unknown future or

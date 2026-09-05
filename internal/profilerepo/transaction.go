@@ -119,6 +119,9 @@ func (d *directory) prepare(ctx context.Context, c change) (*plan, error) {
 		if staged == nil {
 			return nil, ErrUnsafe
 		}
+		if !bytes.Equal(staged.data, c.data) {
+			return nil, ErrUnsafe
+		}
 		p.Stage = &staged.identity
 		if err = d.sync("stage.directory-sync"); err != nil {
 			return nil, err
@@ -229,8 +232,7 @@ func (d *directory) recover(ctx context.Context) (out Outcome, err error) {
 				return out, err
 			}
 		} else {
-			magic := []byte(`{"Version":1,"ID":"`)
-			if !bytes.HasPrefix(pending, magic) && !bytes.HasPrefix(magic, pending) {
+			if !preparationPrefix(pending) {
 				return out, ErrUnsafe
 			}
 		}
@@ -391,6 +393,34 @@ func (d *directory) finish(p *plan) (out Outcome, err error) {
 	return
 }
 func (d *directory) cleanup(p *plan, artifacts map[string]*object, committed bool) error {
+	// No terminal state produced by this engine retains a swap or pending leaf.
+	if committed {
+		if artifacts["swap"] != nil || artifacts["pending"] != nil {
+			return ErrUnsafe
+		}
+		if stage := artifacts["stage"]; stage != nil {
+			if p == nil || p.Stage == nil || !stage.matches(*p.Stage) {
+				return ErrUnsafe
+			}
+			targetName := p.Destination
+			if p.Operation == "replace" {
+				targetName = p.Source
+			}
+			target, err := d.read(targetName+".json", MaxDocumentBytes, 2)
+			if err != nil {
+				return err
+			}
+			links := uint64(1)
+			if target != nil && target.matches(*p.Stage) {
+				links++
+			} else if target != nil && target.links != 1 {
+				return ErrUnsafe
+			}
+			if stage.links != links {
+				return ErrUnsafe
+			}
+		}
+	}
 	// Validate all remaining artifacts before removing any. Never touch public names.
 	for n, o := range artifacts {
 		switch n {
@@ -423,7 +453,7 @@ func (d *directory) cleanup(p *plan, artifacts map[string]*object, committed boo
 		if err != nil {
 			return err
 		}
-		if current == nil || !identical(current, artifacts[n]) {
+		if current == nil || !identical(current, artifacts[n]) || (n == "stage" && current.links != artifacts[n].links) {
 			return ErrUnsafe
 		}
 		if err = d.remove(n, "cleanup."+n); err != nil {

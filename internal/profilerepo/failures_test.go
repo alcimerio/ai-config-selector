@@ -409,3 +409,90 @@ func TestRecoveryFailuresPreserveEvidenceAndConverge(t *testing.T) {
 		})
 	}
 }
+
+func TestMalformedPreparationPrefixesRemainPreserved(t *testing.T) {
+	for _, data := range []string{
+		`{"Version":1,"ID":"INVALID!`,
+		`{"Version":1,"ID":"00000000000000000000000000000000","Unknown":true,`,
+		`{"Version":1,"ID":"00000000000000000000000000000000","Operation":garbage}`,
+	} {
+		t.Run(data, func(t *testing.T) {
+			r := seeded(t)
+			path := filepath.Join(r.acsHome, "profiles", leaf("pending"))
+			if err := os.WriteFile(path, []byte(data), 0600); err != nil {
+				t.Fatal(err)
+			}
+			for i := 0; i < 2; i++ {
+				out, err := r.Recover(context.Background())
+				if err == nil || !out.RecoveryRequired {
+					t.Fatalf("malformed evidence removed: %+v %v", out, err)
+				}
+				got, e := os.ReadFile(path)
+				if e != nil || string(got) != data {
+					t.Fatal("malformed evidence changed", e)
+				}
+			}
+		})
+	}
+}
+func TestTerminalCleanupRejectsUnexplainedLinksAndSwap(t *testing.T) {
+	for _, kind := range []string{"outside-link", "impossible-swap"} {
+		t.Run(kind, func(t *testing.T) {
+			r := seeded(t)
+			runKilled(t, r, "apply", "create", "complete.publish.after")
+			directory := filepath.Join(r.acsHome, "profiles")
+			stage := filepath.Join(directory, leaf("stage"))
+			extra := filepath.Join(t.TempDir(), "outside-link")
+			if kind == "impossible-swap" {
+				extra = filepath.Join(directory, leaf("swap"))
+			}
+			if err := os.Link(stage, extra); err != nil {
+				t.Fatal(err)
+			}
+			for i := 0; i < 2; i++ {
+				out, err := r.Recover(context.Background())
+				if err == nil || !out.RecoveryRequired {
+					t.Fatalf("terminal interference accepted: %+v %v", out, err)
+				}
+				for _, name := range []string{"stage", "complete"} {
+					if _, err := os.Stat(filepath.Join(directory, leaf(name))); err != nil {
+						t.Fatal("evidence removed", err)
+					}
+				}
+			}
+			if err := os.Remove(extra); err != nil {
+				t.Fatal(err)
+			}
+			recoverFreshTwice(t, r)
+			assertSettled(t, r, "create")
+		})
+	}
+}
+func TestPreparationRejectsSubstitutedDesiredBytes(t *testing.T) {
+	for _, test := range []struct {
+		name                 string
+		desired, replacement []byte
+	}{
+		{"nonempty-desired", []byte(newBytes), []byte("outside bytes")},
+		{"empty-desired", nil, []byte("outside bytes")},
+		{"emptied-stage", []byte(newBytes), nil},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			r := seeded(t)
+			r.hook = func(point string) error {
+				if point == "stage.close.after" {
+					return os.WriteFile(filepath.Join(r.acsHome, "profiles", leaf("stage")), test.replacement, 0600)
+				}
+				return nil
+			}
+			expected, _ := AbsentRevision("destination")
+			out, err := r.Apply(context.Background(), CreateRequest{"destination", expected, test.desired})
+			if err == nil || out.State != NotCommitted {
+				t.Fatalf("substituted stage committed: %+v %v", out, err)
+			}
+			r.hook = nil
+			recoverFreshTwice(t, r)
+			assertSettled(t, r, "create")
+		})
+	}
+}
