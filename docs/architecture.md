@@ -127,6 +127,13 @@ does not disturb Sessions held by concurrent ACS processes. A prepared process
 retains the lease until its backend cleanup channel proves that the contained
 tree is gone.
 
+Devin's Skills and authentication preflights receive the live Session's process
+retention capability. A missing capability fails before process preparation.
+Each retained probe awaits bounded cleanup before its output or exit is used;
+uncertain cleanup takes precedence over the probe result and keeps the Session
+leased until the backend confirms settlement. Later Session creation cannot
+reclaim that still-owned root.
+
 The macOS backend starts a supervised process group and uses a private control
 protocol for signals and cleanup proof. Normal completion, nonzero exit,
 signals, cancellation, startup failure, and outliving descendants all converge

@@ -69,6 +69,7 @@ func (a *Adapter) Launch(
 		TemporaryDir:     createdSession.TemporaryDirectory(),
 		SessionsDir:      createdSession.SessionsDirectory(),
 		WorkingDirectory: createdSession.WorkingDirectory(),
+		retainProcess:    createdSession.RetainUntilProcessDone,
 	}
 	if err := resolved.Verify(preflightContext, createdSession.VerificationContext()); err != nil {
 		return 1, sanitizeLaunchError(err)

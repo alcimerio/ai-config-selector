@@ -200,5 +200,6 @@ func (contribution skillsContribution) Verify(ctx context.Context, verification 
 		SessionsDir:      verification.SessionsDirectory,
 		WorkingDirectory: verification.WorkingDirectory,
 		expectedCatalog:  contribution.expected,
+		retainProcess:    verification.RetainProcess,
 	})
 }

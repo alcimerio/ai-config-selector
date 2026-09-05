@@ -83,6 +83,7 @@ func (session *Session) VerificationContext() launch.VerificationContext {
 		SessionHome:        session.homeDirectory,
 		TemporaryDirectory: session.temporaryDirectory,
 		WorkingDirectory:   session.workingDirectory,
+		RetainProcess:      session.RetainUntilProcessDone,
 	}
 }
 
