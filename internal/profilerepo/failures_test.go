@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"syscall"
 	"testing"
@@ -494,5 +495,118 @@ func TestPreparationRejectsSubstitutedDesiredBytes(t *testing.T) {
 			recoverFreshTwice(t, r)
 			assertSettled(t, r, "create")
 		})
+	}
+}
+
+type repositoryObservation struct {
+	Data         string
+	Mode         os.FileMode
+	Inode, Links uint64
+	Modified     int64
+}
+
+func observeRepository(t *testing.T, r *Repository) map[string]repositoryObservation {
+	t.Helper()
+	directory := filepath.Join(r.acsHome, "profiles")
+	entries, err := os.ReadDir(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := map[string]repositoryObservation{}
+	for _, entry := range entries {
+		path := filepath.Join(directory, entry.Name())
+		info, err := os.Lstat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		stat := info.Sys().(*syscall.Stat_t)
+		result[entry.Name()] = repositoryObservation{string(data), info.Mode(), uint64(stat.Ino), uint64(stat.Nlink), info.ModTime().UnixNano()}
+	}
+	return result
+}
+func TestTerminalRecoveryValidatesSurvivingPublicLinksWithoutStage(t *testing.T) {
+	for _, op := range []string{"create", "replace", "clone", "rename"} {
+		for _, point := range []string{"cleanup.stage.after", "cleanup.plan.after"} {
+			t.Run(op+"/"+point, func(t *testing.T) {
+				r := seeded(t)
+				runKilled(t, r, "apply", op, point)
+				target := "destination"
+				if op == "replace" {
+					target = "source"
+				}
+				public := filepath.Join(r.acsHome, "profiles", target+".json")
+				outside := filepath.Join(t.TempDir(), "injected-link")
+				if err := os.Link(public, outside); err != nil {
+					t.Fatal(err)
+				}
+				before := observeRepository(t, r)
+				expected, _ := AbsentRevision("next")
+				for i := 0; i < 2; i++ {
+					out, err := r.Recover(context.Background())
+					if err == nil || !out.RecoveryRequired {
+						t.Fatalf("missing-stage interference accepted: %+v %v", out, err)
+					}
+					out, err = r.Apply(context.Background(), CreateRequest{"next", expected, []byte("next bytes")})
+					if err == nil || out.State != NotCommitted || !out.RecoveryRequired {
+						t.Fatalf("new mutation bypassed preceding interference: %+v %v", out, err)
+					}
+					if after := observeRepository(t, r); !reflect.DeepEqual(before, after) {
+						t.Fatal("refused recovery changed namespace, bytes, modes or inodes")
+					}
+				}
+				if err := os.Remove(outside); err != nil {
+					t.Fatal(err)
+				}
+				recoverFreshTwice(t, r)
+				assertSettled(t, r, op)
+				got, err := r.Read(context.Background(), target)
+				if err != nil || string(got.Bytes) != newBytes {
+					t.Fatal("recovery changed committed bytes", err)
+				}
+				if out, err := r.Apply(context.Background(), CreateRequest{"next", expected, []byte("next bytes")}); err != nil || out.State != Committed {
+					t.Fatalf("mutation did not resume: %+v %v", out, err)
+				}
+			})
+		}
+	}
+}
+func TestTerminalCleanupNeverRestoresLaterPublicDeletionOrReplacement(t *testing.T) {
+	for _, point := range []string{"cleanup.stage.after", "cleanup.plan.after"} {
+		for _, outside := range []string{"delete", "replace"} {
+			t.Run(point+"/"+outside, func(t *testing.T) {
+				r := seeded(t)
+				runKilled(t, r, "apply", "create", point)
+				path := filepath.Join(r.acsHome, "profiles", "destination.json")
+				if err := os.Remove(path); err != nil {
+					t.Fatal(err)
+				}
+				if outside == "replace" {
+					if err := os.WriteFile(path, []byte("later outside bytes"), 0600); err != nil {
+						t.Fatal(err)
+					}
+				}
+				recoverFreshTwice(t, r)
+				got, err := r.Read(context.Background(), "destination")
+				if err != nil {
+					t.Fatal(err)
+				}
+				if outside == "delete" && got.Exists || outside == "replace" && (!got.Exists || string(got.Bytes) != "later outside bytes") {
+					t.Fatal("cleanup restored old public content")
+				}
+				entries, err := os.ReadDir(filepath.Join(r.acsHome, "profiles"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, entry := range entries {
+					if strings.HasPrefix(entry.Name(), artifactPrefix) && entry.Name() != leaf("lock") {
+						t.Fatal("cleanup required a deleted private blob", entry.Name())
+					}
+				}
+			})
+		}
 	}
 }

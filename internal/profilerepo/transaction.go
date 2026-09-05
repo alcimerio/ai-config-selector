@@ -398,8 +398,12 @@ func (d *directory) cleanup(p *plan, artifacts map[string]*object, committed boo
 		if artifacts["swap"] != nil || artifacts["pending"] != nil {
 			return ErrUnsafe
 		}
-		if stage := artifacts["stage"]; stage != nil {
-			if p == nil || p.Stage == nil || !stage.matches(*p.Stage) {
+		if p != nil && p.Stage != nil {
+			// Complete retains the public identity even after stage/plan cleanup.
+			// Account all surviving owned links; a missing stage is not permission
+			// to skip an unsafe public target or retire its remaining evidence.
+			stage := artifacts["stage"]
+			if stage != nil && !stage.matches(*p.Stage) {
 				return ErrUnsafe
 			}
 			targetName := p.Destination
@@ -410,13 +414,17 @@ func (d *directory) cleanup(p *plan, artifacts map[string]*object, committed boo
 			if err != nil {
 				return err
 			}
-			links := uint64(1)
-			if target != nil && target.matches(*p.Stage) {
+			links := uint64(0)
+			if stage != nil {
+				links++
+			}
+			published := target != nil && target.matches(*p.Stage)
+			if published {
 				links++
 			} else if target != nil && target.links != 1 {
 				return ErrUnsafe
 			}
-			if stage.links != links {
+			if stage != nil && stage.links != links || published && target.links != links {
 				return ErrUnsafe
 			}
 		}

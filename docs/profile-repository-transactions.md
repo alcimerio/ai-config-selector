@@ -115,9 +115,11 @@ The plan's metadata format is separate from all document codecs.
    decision, plan, then complete, with checked synchronization after each removal.
    Before terminal cleanup, account for the exact remaining stage/public links
    and reject impossible swap artifacts or unexplained links. Complete is last
-   and contains the entire plan. Interrupted terminal cleanup
-   does not require an already deleted stage or plan leaf and never restores an
-   old public document. Repeated recovery converges to no in-flight artifacts.
+   and contains the entire plan. Validate any surviving public target using that
+   receipt even after stage or plan removal. Interrupted terminal cleanup does not
+   require an already deleted private leaf. A later outside deletion or private
+   single-link replacement is never undone; unsafe surviving public links retain
+   the receipt and block recovery and the next mutation. Repeated recovery converges to no in-flight artifacts.
 
 Before a decision, recovery aborts private preparation. A partial stage or an
 incomplete pending prefix of the fixed canonical current-version shape is
