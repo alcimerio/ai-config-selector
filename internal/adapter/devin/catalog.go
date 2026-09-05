@@ -13,12 +13,29 @@ import (
 // DiscoverGlobalSkillCatalog returns selectable Skill Bundles from only the
 // explicit Devin user-global source rules. Project-local skills are excluded.
 func (a *Adapter) DiscoverGlobalSkillCatalog(ctx context.Context) ([]skills.SkillBundle, error) {
+	return discoverSkillCatalog(ctx, a.existingHomeDir, nil)
+}
+
+// DiscoverSelectedSkillCatalog uses the same discovery rules as launch, restricted
+// to sources actually selected by validation. It creates no Adapter or Session.
+func DiscoverSelectedSkillCatalog(ctx context.Context, home string, references []skills.SkillReference) ([]skills.SkillBundle, error) {
+	selected := make(map[skills.Source]bool)
+	for _, reference := range references {
+		selected[reference.Source] = true
+	}
+	return discoverSkillCatalog(ctx, home, selected)
+}
+
+func discoverSkillCatalog(ctx context.Context, home string, selected map[skills.Source]bool) ([]skills.SkillBundle, error) {
 	catalog := make([]skills.SkillBundle, 0)
 	for _, rule := range globalSourceRules {
+		if selected != nil && !selected[rule.Source] {
+			continue
+		}
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		sourceRoot := filepath.Join(a.existingHomeDir, rule.RelativeDirectory)
+		sourceRoot := filepath.Join(home, rule.RelativeDirectory)
 		entries, err := os.ReadDir(sourceRoot)
 		if os.IsNotExist(err) {
 			continue
