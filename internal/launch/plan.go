@@ -22,6 +22,9 @@ type VerificationContext struct {
 	SessionHome        string
 	TemporaryDirectory string
 	WorkingDirectory   string
+	// RetainProcess binds a prepared probe to the live Session's ownership.
+	// Verification must not start a process when this capability is absent.
+	RetainProcess func(Process) (Process, error)
 }
 
 // Plan describes what ACS would materialize and what the target CLI may

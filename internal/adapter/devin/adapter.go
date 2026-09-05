@@ -93,7 +93,7 @@ type Session struct {
 	WorkingDirectory string
 
 	expectedCatalog []SkillReference
-	lease           *launch.SessionLease
+	retainProcess   func(launch.Process) (launch.Process, error)
 }
 
 func New(config Config) (*Adapter, error) {
@@ -140,6 +140,8 @@ func (a *Adapter) Categories() *category.Registry {
 
 // PrepareSession creates the synthetic Devin home, copies selected Skill
 // Bundles, and preserves only the allowlisted credential file.
+// The supplied directory remains caller-owned; unlike Launch, this preparation
+// helper does not acquire a Session lease or take responsibility for removal.
 func (a *Adapter) PrepareSession(rootDir, workingDirectory string, selected []SkillBundle) (*Session, error) {
 	homeDir := filepath.Join(rootDir, "home")
 	temporaryDir := filepath.Join(rootDir, "tmp")
@@ -185,6 +187,9 @@ func (a *Adapter) PrepareSession(rootDir, workingDirectory string, selected []Sk
 		SessionsDir:      filepath.Dir(filepath.Clean(rootDir)),
 		WorkingDirectory: filepath.Clean(workingDirectory),
 		expectedCatalog:  expected,
+		// This helper prepares caller-owned storage. Production Launch instead
+		// supplies the live Session's retention capability to every preflight.
+		retainProcess: func(process launch.Process) (launch.Process, error) { return process, nil },
 	}, nil
 }
 
@@ -390,6 +395,9 @@ func commandFailureReason(ctx context.Context, err error, commandFailed prefligh
 }
 
 func (a *Adapter) runSandboxed(ctx context.Context, session *Session, arguments []string, terminal launch.Terminal) error {
+	if session == nil || session.retainProcess == nil {
+		return &launch.SandboxError{Category: launch.SandboxSetupFailed}
+	}
 	process, err := a.sandbox.Prepare(ctx, launch.ProcessRequest{
 		Workspace: session.WorkingDirectory, SessionsDirectory: session.SessionsDir,
 		SessionDirectory: session.RootDir, SessionHome: session.HomeDir,
@@ -399,12 +407,18 @@ func (a *Adapter) runSandboxed(ctx context.Context, session *Session, arguments 
 	if err != nil {
 		return err
 	}
-	process, err = launch.RetainSessionUntilProcessDone(process, session.lease)
+	process, err = session.retainProcess(process)
 	if err != nil {
 		return err
 	}
-	if err := process.Start(); err != nil {
-		return err
+	runErr := process.Start()
+	if runErr == nil {
+		runErr = process.Wait()
 	}
-	return process.Wait()
+	// Cleanup failure takes precedence over probe failures and successful output.
+	// A bounded timeout leaves the Session retained until cleanup is proven.
+	if cleanupErr := launch.AwaitRetainedSessionCleanup(process); cleanupErr != nil {
+		return cleanupErr
+	}
+	return runErr
 }
