@@ -179,7 +179,10 @@ func (service *CodexAuthService) ExecuteCodex(ctx context.Context, request Codex
 	if preflightContext.Err() != nil {
 		return 1, ErrCodexFailed
 	}
-	created, challenge, err := service.createResourceBinding(ctx, binding, authRef, *request.ResolvedPlan, ErrCodexFailed)
+	// The lower authentication resource owns exclusive creation of .codex.
+	// Create and protect an otherwise empty Session first; common/target
+	// materialization follows the exact identity projection below.
+	created, challenge, err := service.createResourceBinding(ctx, binding, authRef, nil, ErrCodexFailed)
 	if err != nil {
 		return 1, sanitizeCodexExecutionError(err)
 	}
@@ -206,6 +209,13 @@ func (service *CodexAuthService) ExecuteCodex(ctx context.Context, request Codex
 			return 1, cleanupErr
 		}
 		return 1, ErrProjectedAuthInvalid
+	}
+	if err := request.ResolvedPlan.Materialize(created.HomeDirectory()); err != nil {
+		_ = binding.MarkRecoverable(ctx)
+		if cleanupErr := remove(); cleanupErr != nil {
+			return 1, cleanupErr
+		}
+		return 1, ErrCodexFailed
 	}
 	if err := writeCodexExecutionConfig(created.HomeDirectory(), metadata.Workspace, created.WorkingDirectory(), access); err != nil {
 		_ = binding.MarkRecoverable(ctx)

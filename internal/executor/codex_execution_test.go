@@ -213,6 +213,88 @@ type projectedVerificationMaterializer struct{ verified *bool }
 func (projectedVerificationMaterializer) Plan(context.Context, string, *launch.Plan) error {
 	return nil
 }
+
+type strictCodexSkillMaterializer struct {
+	observedAuth *bool
+	failure      error
+}
+
+func (strictCodexSkillMaterializer) Plan(context.Context, string, *launch.Plan) error { return nil }
+func (materializer strictCodexSkillMaterializer) Materialize(home string) error {
+	if _, err := os.Stat(filepath.Join(home, ".codex", "auth.json")); err != nil {
+		return errors.New("authentication was not projected before Skills")
+	}
+	if materializer.observedAuth != nil {
+		*materializer.observedAuth = true
+	}
+	if materializer.failure != nil {
+		return materializer.failure
+	}
+	directory := filepath.Join(home, ".codex", "skills", "shared-agents", "proof")
+	if err := os.MkdirAll(directory, 0o700); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(directory, "SKILL.md"), []byte("native proof"), 0o600)
+}
+func (strictCodexSkillMaterializer) Verify(context.Context, launch.VerificationContext) error {
+	return nil
+}
+
+func TestInteractiveCodexProjectsExclusiveAuthBeforeSelectedSkills(t *testing.T) {
+	auth := testChatGPTAuthJSON(t, "user", "workspace")
+	registry, _, _, sessionsDirectory := newBindingTestRegistry(t, "work", auth)
+	root := filepath.Dir(sessionsDirectory)
+	binary := filepath.Join(root, "codex")
+	if err := os.WriteFile(binary, []byte("target"), 0o500); err != nil {
+		t.Fatal(err)
+	}
+	observedAuth := false
+	observedSkill := false
+	sandbox := &executionSandbox{version: SupportedCodexVersion, prepareHooks: []func(){func() {
+		entries, _ := filepath.Glob(filepath.Join(sessionsDirectory, "session-*", "home", ".codex", "skills", "shared-agents", "proof", "SKILL.md"))
+		observedSkill = len(entries) == 1
+	}}}
+	registry.execution = newCodexExecutionRunner(codexLoginConfig{BinaryPath: binary, SupportedVersion: SupportedCodexVersion, SessionsDirectory: sessionsDirectory, WorkingDirectory: registry.workingDirectory}, sandbox)
+	plan := authority.New([]authority.Contribution{{ID: "strict-codex-skill", Value: strictCodexSkillMaterializer{observedAuth: &observedAuth}}}, launch.WorkspaceAccessReadOnly, 3, "codex", authority.TargetRequirements{Recipe: authority.RecipeCodex, Executable: binary}).WithAuthRef("work")
+	if code, err := registry.ExecuteCodex(context.Background(), CodexRequest{ResolvedPlan: &plan}); code != 0 || err != nil {
+		t.Fatalf("execution = (%d, %v)", code, err)
+	}
+	if !observedAuth || !observedSkill || !reflect.DeepEqual(sandbox.counts, [][2]int{{1, 1}, {1, 1}}) {
+		t.Fatalf("auth-before-Skills=%v projected-Skill=%v lifecycle=%v", observedAuth, observedSkill, sandbox.counts)
+	}
+	assertNoSessionDirectories(t, sessionsDirectory)
+}
+
+func TestInteractiveCodexMaterializationFailureCleansProjectedAuthBeforeRelease(t *testing.T) {
+	auth := testChatGPTAuthJSON(t, "user", "workspace")
+	registry, provider, _, sessionsDirectory := newBindingTestRegistry(t, "work", auth)
+	root := filepath.Dir(sessionsDirectory)
+	binary := filepath.Join(root, "codex")
+	if err := os.WriteFile(binary, []byte("target"), 0o500); err != nil {
+		t.Fatal(err)
+	}
+	observedAuth := false
+	sandbox := &executionSandbox{version: SupportedCodexVersion}
+	registry.execution = newCodexExecutionRunner(codexLoginConfig{BinaryPath: binary, SupportedVersion: SupportedCodexVersion, SessionsDirectory: sessionsDirectory, WorkingDirectory: registry.workingDirectory}, sandbox)
+	plan := authority.New([]authority.Contribution{{ID: "failing-codex-skill", Value: strictCodexSkillMaterializer{observedAuth: &observedAuth, failure: errors.New("materialization failure")}}}, launch.WorkspaceAccessReadOnly, 3, "codex", authority.TargetRequirements{Recipe: authority.RecipeCodex, Executable: binary}).WithAuthRef("work")
+	if code, err := registry.ExecuteCodex(context.Background(), CodexRequest{ResolvedPlan: &plan}); code != 1 || !errors.Is(err, ErrCodexFailed) {
+		t.Fatalf("execution = (%d, %v)", code, err)
+	}
+	if !observedAuth || len(sandbox.counts) != 0 || provider.replaceCalls != 0 || !reflect.DeepEqual(provider.records["work"].Auth, auth) {
+		t.Fatalf("auth-observed=%v processes=%d replacements=%d", observedAuth, len(sandbox.counts), provider.replaceCalls)
+	}
+	assertNoSessionDirectories(t, sessionsDirectory)
+	if _, exists, err := registryTestResources(registry).quarantine.Inspect(context.Background(), "work"); err != nil || exists {
+		t.Fatalf("materialization failure retained marker: exists=%v err=%v", exists, err)
+	}
+	binding, _, err := registry.resources.AcquireStatus(context.Background(), "work")
+	if err != nil {
+		t.Fatalf("materialization failure released unusable identity: %v", err)
+	}
+	if err := binding.Release(); err != nil {
+		t.Fatal(err)
+	}
+}
 func (projectedVerificationMaterializer) Materialize(home string) error {
 	return os.WriteFile(filepath.Join(home, "materialized"), []byte("yes"), 0o600)
 }
