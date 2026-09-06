@@ -169,6 +169,47 @@ func (binding *Binding) Name() CredentialRef {
 	}
 	return binding.name
 }
+
+// PublishPrepared records the Session identity before it is protected for
+// recovery. The caller owns the Session but never a marker writer.
+func (binding *Binding) PublishPrepared(ctx context.Context, sessionID, challenge string) error {
+	if binding == nil || binding.store == nil || binding.lock == nil {
+		return ErrProviderUnavailable
+	}
+	return binding.store.markers.Create(ctx, quarantineMarker{Version: recordVersion, Name: binding.name, SessionID: sessionID, Phase: quarantinePrepared, ProofChallenge: challenge})
+}
+
+// MarkCleanupPending is intentionally idempotent for the current generation:
+// both the version probe and the login/status operation arm a distinct proof.
+func (binding *Binding) MarkCleanupPending(ctx context.Context) error {
+	if binding == nil || binding.store == nil {
+		return ErrProviderUnavailable
+	}
+	return binding.store.markers.MarkCleanupPending(ctx, binding.name)
+}
+
+func (binding *Binding) MarkRefreshAllowed(ctx context.Context) error {
+	if binding == nil || binding.store == nil {
+		return ErrProviderUnavailable
+	}
+	return binding.store.markers.MarkRefreshAllowed(ctx, binding.name)
+}
+
+func (binding *Binding) MarkRecoverable(ctx context.Context) error {
+	if binding == nil || binding.store == nil {
+		return ErrProviderUnavailable
+	}
+	return binding.store.markers.MarkRecoverable(ctx, binding.name)
+}
+
+// DeleteMarkerAfterProjectionRemoval must be called only after the upper
+// lifecycle has physically removed the Session projection.
+func (binding *Binding) DeleteMarkerAfterProjectionRemoval(ctx context.Context) error {
+	if binding == nil || binding.store == nil {
+		return ErrProviderUnavailable
+	}
+	return binding.store.markers.Delete(ctx, binding.name)
+}
 func (binding *Binding) Release() error {
 	if binding == nil || binding.lock == nil {
 		return nil
@@ -186,6 +227,31 @@ func (binding *RecoveryBinding) Release() error {
 	locked := binding.lock
 	binding.lock = nil
 	return locked.Release()
+}
+
+// SessionID and Prepared describe only the durable recovery target; neither
+// exposes a record, provider, lock, or marker mutation capability.
+func (binding *RecoveryBinding) SessionID() string {
+	if binding == nil {
+		return ""
+	}
+	return binding.marker.SessionID
+}
+func (binding *RecoveryBinding) Prepared() bool {
+	return binding != nil && binding.marker.Phase == quarantinePrepared
+}
+func (binding *RecoveryBinding) CleanupChallenge() string {
+	if binding == nil {
+		return ""
+	}
+	return binding.marker.ProofChallenge
+}
+
+func (binding *RecoveryBinding) DeleteMarkerAfterProjectionRemoval(ctx context.Context) error {
+	if binding == nil || binding.store == nil {
+		return ErrProviderUnavailable
+	}
+	return binding.store.markers.Delete(ctx, binding.name)
 }
 
 // Project writes only a validated durable record into the supplied private
