@@ -47,6 +47,18 @@ func TestCurrentDocumentationDefinesTheV040MacOSSandboxShellContract(t *testing.
 			t.Errorf("README.md retains stale support claim %q", stale)
 		}
 	}
+
+	contributing := readRepositoryFile(t, repository, "CONTRIBUTING.md")
+	for _, required := range []string{"Apple Silicon (`darwin/arm64`)", "native Apple Silicon artifact gate"} {
+		if !strings.Contains(contributing, required) {
+			t.Errorf("CONTRIBUTING.md omits current contract %q", required)
+		}
+	}
+	for _, stale := range []string{"macOS 26 arm64 and Intel", "acs_0.4.0_darwin_amd64.tar.gz", "both macOS targets", "two native artifact gates"} {
+		if strings.Contains(contributing, stale) {
+			t.Errorf("CONTRIBUTING.md retains stale current guidance %q", stale)
+		}
+	}
 }
 
 func TestReleaseArtifactContractIsExactlyOneAppleSiliconTarget(t *testing.T) {

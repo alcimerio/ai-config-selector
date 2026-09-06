@@ -1,12 +1,13 @@
 # Contributing
 
-ACS v0.4.0 is a macOS-first project. Supported runtime behavior and release
-evidence cover macOS 26 on arm64 and Intel. Linux/Bubblewrap source is retained,
-but Linux failures are not release blockers and do not imply a support promise.
+ACS supports macOS 26 on Apple Silicon (`darwin/arm64`). Linux/Bubblewrap source
+is retained, but Linux failures are not release blockers and do not imply a
+support promise. Intel Macs are not a supported runtime or release target.
 
 ## Local setup
 
-Install Go 1.25 or later, clone the repository, and run:
+Install Go 1.25 or later, clone the repository, and run these checks on a
+supported Apple Silicon Mac:
 
 ```sh
 go mod download
@@ -97,9 +98,9 @@ Session contents in an issue, PR, artifact, or workflow summary.
 
 ## Native named-authentication evidence
 
-The promoted-artifact PR workflow fetches the two official `codex-cli 0.149.1`
-Apple archives once, verifies their reviewed SHA-256 lock entries, and installs
-only the matching native target on macOS 26 arm64 and Intel. Its opt-in native
+The promoted-artifact PR workflow fetches the official Apple Silicon
+`codex-cli 0.149.1` archive once, verifies its reviewed SHA-256 lock entry, and
+installs that native target on macOS 26. Its opt-in native
 tests use a disposable Keychain and synthetic home and require the real
 Seatbelt path; they use no account credentials and emit no target, account,
 device, keychain, home, Session, or credential content.
@@ -111,8 +112,8 @@ For a local credential-free run, first use
 native installation. Also set `ACS_NATIVE_AUTH_RECOVERY_ROOT` to a deterministic
 private path, and run the separate `TestNativeKeychainRecoveryEntrypoint`
 invocation afterward even when the native test invocation fails. The promoted
-workflow does this in an `always()` step on both native runners. Run these
-focused tests only from a normal macOS terminal. The
+workflow does this in an `always()` step on the native Apple Silicon runner.
+Run these focused tests only from a normal macOS terminal. The
 automated gate proves the isolated Keychain contract and contained status
 lifecycle; it does not prove interactive login completion or target-origin
 token refresh. Production Keychain queries prohibit authentication UI, and
@@ -135,40 +136,40 @@ Before opening a PR:
 4. Explain the user-visible contract and the tests that prove it.
 5. Confirm that no release asset, tag, or external state is changed by the PR.
 
-The PR gates install the same candidate bytes on macOS 26 arm64 and Intel. Both
-native jobs must pass before merge. The Linux compile observation is explicitly
-non-blocking.
+The PR gates install the candidate bytes on macOS 26 Apple Silicon. The native
+job must pass before merge. The Linux compile observation is explicitly
+nonblocking.
 
 ## Release preparation
 
 Release tags are immutable and created only after the release-preparation PR is
 merged to protected `main`.
 
-For v0.4.0:
+For a future release (using `v1.2.3` as an example):
 
 ```sh
-scripts/release-candidate.sh v0.4.0
-scripts/prepare-release-tag.sh v0.4.0
-git push origin refs/tags/v0.4.0
+scripts/release-candidate.sh v1.2.3
+scripts/prepare-release-tag.sh v1.2.3
+git push origin refs/tags/v1.2.3
 ```
 
 The first command requires a clean worktree and creates exactly:
 
 ```text
-acs_0.4.0_darwin_arm64.tar.gz
-acs_0.4.0_darwin_amd64.tar.gz
+acs_1.2.3_darwin_arm64.tar.gz
 SHA256SUMS
 install.sh
 ```
 
 The tag workflow validates annotated tag identity and ancestry, builds the
-candidate once, installs the exact bytes on both macOS targets, runs normal,
-race, and black-box acceptance tests, attests the archives and checksum
-manifest, and publishes through the protected `release` environment.
+candidate once, installs the exact bytes on the native Apple Silicon target,
+runs normal, race, and black-box acceptance tests, attests the archive and
+checksum manifest, and publishes through the protected `release` environment.
 
 Never move or delete a release tag. If a candidate fails, fix the source in a
 new commit and prepare a new version. Do not treat a local build or authenticated
-smoke as a replacement for the two native artifact gates.
+smoke as a replacement for the native Apple Silicon artifact gate.
 
-Record pre-tag and post-publication evidence in
+Record pre-tag and post-publication evidence in a version-specific file under
+`docs/releases/`. The published v0.4.0 evidence remains in
 [docs/releases/v0.4.0-checklist.md](docs/releases/v0.4.0-checklist.md).
