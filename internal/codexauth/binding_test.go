@@ -40,7 +40,7 @@ func TestStatusProjectsOneIdentityAndDiscardsUnchangedCredential(t *testing.T) {
 		}
 	}
 	assertNoSessionDirectories(t, sessionsDirectory)
-	if _, exists, err := registry.quarantine.Inspect(context.Background(), "work"); err != nil || exists {
+	if _, exists, err := registryTestResources(registry).quarantine.Inspect(context.Background(), "work"); err != nil || exists {
 		t.Fatalf("quarantine after success = (%v, %v)", exists, err)
 	}
 }
@@ -185,7 +185,7 @@ func TestStatusQuarantinesReplacementFailureAndRecoveryCommitsOnce(t *testing.T)
 	if !errors.Is(err, ErrBindingQuarantined) || status.Disposition != QuarantinedUncertain {
 		t.Fatalf("status = (%#v, %v)", status, err)
 	}
-	marker, exists, err := registry.quarantine.Inspect(context.Background(), "work")
+	marker, exists, err := registryTestResources(registry).quarantine.Inspect(context.Background(), "work")
 	if err != nil || !exists {
 		t.Fatalf("quarantine marker = (%v, %v)", exists, err)
 	}
@@ -214,7 +214,7 @@ func TestStatusQuarantinesReplacementFailureAndRecoveryCommitsOnce(t *testing.T)
 		t.Fatal("recovery did not commit refresh")
 	}
 	assertNoSessionDirectories(t, sessionsDirectory)
-	if _, exists, err := registry.quarantine.Inspect(context.Background(), "work"); err != nil || exists {
+	if _, exists, err := registryTestResources(registry).quarantine.Inspect(context.Background(), "work"); err != nil || exists {
 		t.Fatalf("quarantine after recovery = (%v, %v)", exists, err)
 	}
 }
@@ -249,7 +249,7 @@ func TestStatusCleanupUncertaintyPreservesProjectionUntilSettlementAndRecovery(t
 	if !errors.Is(err, ErrBindingQuarantined) || status.Disposition != QuarantinedUncertain {
 		t.Fatalf("status = (%#v, %v)", status, err)
 	}
-	marker, exists, err := registry.quarantine.Inspect(context.Background(), "work")
+	marker, exists, err := registryTestResources(registry).quarantine.Inspect(context.Background(), "work")
 	if err != nil || !exists || marker.Phase != quarantineCleanupPending {
 		t.Fatalf("pending quarantine marker = (%#v, %v, %v)", marker, exists, err)
 	}
@@ -263,7 +263,7 @@ func TestStatusCleanupUncertaintyPreservesProjectionUntilSettlementAndRecovery(t
 	close(cleanupDone)
 	deadline := time.Now().Add(time.Second)
 	for {
-		marker, exists, err = registry.quarantine.Inspect(context.Background(), "work")
+		marker, exists, err = registryTestResources(registry).quarantine.Inspect(context.Background(), "work")
 		if err == nil && exists && marker.Phase == quarantineRecoverable {
 			break
 		}
@@ -285,14 +285,14 @@ func TestStatusCleanupUncertaintyPreservesProjectionUntilSettlementAndRecovery(t
 func TestAsyncCleanupCannotTransitionANewerMarkerGeneration(t *testing.T) {
 	auth := testChatGPTAuthJSON(t, "user", "workspace")
 	registry, _, _, _ := newBindingTestRegistry(t, "work", auth)
-	underlying := registry.locks
+	underlying := registryTestResources(registry).locks
 	gate := &asyncCleanupLockGate{
 		identityLocker: underlying,
 		entered:        make(chan struct{}),
 		release:        make(chan struct{}),
 		completed:      make(chan struct{}),
 	}
-	registry.locks = gate
+	registryTestResources(registry).locks = gate
 	cleanupDone := make(chan struct{})
 	registry.status = &pendingCleanupStatusRunner{cleanupDone: cleanupDone}
 	registry.verifyCleanup = func(string, []byte) (bool, error) { return true, nil }
@@ -314,7 +314,7 @@ func TestAsyncCleanupCannotTransitionANewerMarkerGeneration(t *testing.T) {
 		Version: recordVersion, Name: "work", SessionID: "session-new-generation",
 		Phase: quarantinePrepared, ProofChallenge: strings.Repeat("a", 64),
 	}
-	if err := registry.quarantine.Create(context.Background(), newMarker); err != nil {
+	if err := registryTestResources(registry).quarantine.Create(context.Background(), newMarker); err != nil {
 		t.Fatalf("create new generation: %v", err)
 	}
 	close(gate.release)
@@ -323,7 +323,7 @@ func TestAsyncCleanupCannotTransitionANewerMarkerGeneration(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("asynchronous cleanup did not finish its generation check")
 	}
-	marker, exists, err := registry.quarantine.Inspect(context.Background(), "work")
+	marker, exists, err := registryTestResources(registry).quarantine.Inspect(context.Background(), "work")
 	if err != nil || !exists || marker != newMarker {
 		t.Fatalf("new marker after old completion = (%#v, %v, %v)", marker, exists, err)
 	}
@@ -348,14 +348,14 @@ func TestRecoveryNeverCommitsRefreshAfterFailedStatus(t *testing.T) {
 	if !errors.Is(err, ErrBindingQuarantined) || status.Disposition != QuarantinedUncertain {
 		t.Fatalf("failed status = (%#v, %v)", status, err)
 	}
-	marker, exists, err := registry.quarantine.Inspect(context.Background(), "work")
+	marker, exists, err := registryTestResources(registry).quarantine.Inspect(context.Background(), "work")
 	if err != nil || !exists || marker.RefreshAllowed {
 		t.Fatalf("failed status marker = (%#v, %v, %v)", marker, exists, err)
 	}
 	close(cleanupDone)
 	deadline := time.Now().Add(time.Second)
 	for {
-		marker, exists, err = registry.quarantine.Inspect(context.Background(), "work")
+		marker, exists, err = registryTestResources(registry).quarantine.Inspect(context.Background(), "work")
 		if err == nil && exists && marker.Phase == quarantineRecoverable {
 			break
 		}
@@ -377,8 +377,8 @@ func TestRecoveryNeverCommitsRefreshAfterFailedStatus(t *testing.T) {
 func TestStatusPublishedMarkerFailurePreservesRecoverableSession(t *testing.T) {
 	auth := testChatGPTAuthJSON(t, "user", "workspace")
 	registry, _, runner, sessionsDirectory := newBindingTestRegistry(t, "work", auth)
-	store := registry.quarantine
-	registry.quarantine = createErrorAfterPublishQuarantine{bindingQuarantine: store}
+	store := registryTestResources(registry).quarantine
+	registryTestResources(registry).quarantine = createErrorAfterPublishQuarantine{bindingQuarantine: store}
 
 	status, err := registry.Status(context.Background(), "work")
 	if !errors.Is(err, ErrBindingQuarantined) || status.Disposition != QuarantinedUncertain {
@@ -387,7 +387,7 @@ func TestStatusPublishedMarkerFailurePreservesRecoverableSession(t *testing.T) {
 	if runner.checkCalls != 1 {
 		t.Fatalf("sandbox checks = %d", runner.checkCalls)
 	}
-	marker, exists, err := registry.quarantine.Inspect(context.Background(), "work")
+	marker, exists, err := registryTestResources(registry).quarantine.Inspect(context.Background(), "work")
 	if err != nil || !exists || marker.Phase != quarantineRecoverable {
 		t.Fatalf("recoverable marker = (%#v, %v, %v)", marker, exists, err)
 	}
@@ -408,7 +408,7 @@ func TestRecoveryRefusesAnActiveProtectedSession(t *testing.T) {
 	if err := created.ProtectForRecovery(); err != nil {
 		t.Fatal(err)
 	}
-	if err := registry.quarantine.Create(context.Background(), quarantineMarker{
+	if err := registryTestResources(registry).quarantine.Create(context.Background(), quarantineMarker{
 		Version: recordVersion, Name: "work", SessionID: filepath.Base(created.RootDirectory()),
 		Phase: quarantineRecoverable, ProofChallenge: testCleanupProofChallenge,
 	}); err != nil {
@@ -416,7 +416,7 @@ func TestRecoveryRefusesAnActiveProtectedSession(t *testing.T) {
 	}
 	t.Cleanup(func() {
 		_ = created.Remove()
-		_ = registry.quarantine.Delete(context.Background(), "work")
+		_ = registryTestResources(registry).quarantine.Delete(context.Background(), "work")
 	})
 
 	disposition, err := registry.Recover(context.Background(), "work")
@@ -439,10 +439,10 @@ func TestRecoveryAcceptsSupervisorProofForInactivePendingSession(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := projectCredential(created.HomeDirectory(), credentialRecord{Metadata: metadata, Auth: auth}); err != nil {
+	if err := projectCredentialForTest(created.HomeDirectory(), credentialRecord{Metadata: metadata, Auth: auth}); err != nil {
 		t.Fatal(err)
 	}
-	if err := registry.quarantine.Create(context.Background(), quarantineMarker{
+	if err := registryTestResources(registry).quarantine.Create(context.Background(), quarantineMarker{
 		Version: recordVersion, Name: "work", SessionID: filepath.Base(created.RootDirectory()),
 		Phase: quarantineCleanupPending, ProofChallenge: testCleanupProofChallenge,
 	}); err != nil {
@@ -482,7 +482,7 @@ func TestRecoveryAcceptsPreparedProofWhenCrashPrecedesFirstProcess(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := projectCredential(created.HomeDirectory(), credentialRecord{Metadata: metadata, Auth: auth}); err != nil {
+	if err := projectCredentialForTest(created.HomeDirectory(), credentialRecord{Metadata: metadata, Auth: auth}); err != nil {
 		t.Fatal(err)
 	}
 	challenge, err := hex.DecodeString(testCleanupProofChallenge)
@@ -492,7 +492,7 @@ func TestRecoveryAcceptsPreparedProofWhenCrashPrecedesFirstProcess(t *testing.T)
 	if err := launch.PrepareSessionCleanupProof(created.RootDirectory(), challenge); err != nil {
 		t.Fatal(err)
 	}
-	if err := registry.quarantine.Create(context.Background(), quarantineMarker{
+	if err := registryTestResources(registry).quarantine.Create(context.Background(), quarantineMarker{
 		Version: recordVersion, Name: "work", SessionID: filepath.Base(created.RootDirectory()),
 		Phase: quarantineCleanupPending, ProofChallenge: testCleanupProofChallenge,
 	}); err != nil {
@@ -526,10 +526,10 @@ func TestRecoveryDiscardsInactivePreparedSessionWithoutSupervisorProof(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := projectCredential(created.HomeDirectory(), credentialRecord{Metadata: metadata, Auth: refreshed}); err != nil {
+	if err := projectCredentialForTest(created.HomeDirectory(), credentialRecord{Metadata: metadata, Auth: refreshed}); err != nil {
 		t.Fatal(err)
 	}
-	if err := registry.quarantine.Create(context.Background(), quarantineMarker{
+	if err := registryTestResources(registry).quarantine.Create(context.Background(), quarantineMarker{
 		Version: recordVersion, Name: "work", SessionID: filepath.Base(created.RootDirectory()),
 		Phase: quarantinePrepared, ProofChallenge: testCleanupProofChallenge,
 	}); err != nil {
@@ -581,10 +581,10 @@ func TestRecoveryDiscardsPreparedSessionAbandonedBeforeRecoveryProtection(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := projectCredential(filepath.Join(sessionRoot, "home"), credentialRecord{Metadata: metadata, Auth: refreshed}); err != nil {
+	if err := projectCredentialForTest(filepath.Join(sessionRoot, "home"), credentialRecord{Metadata: metadata, Auth: refreshed}); err != nil {
 		t.Fatal(err)
 	}
-	if err := registry.quarantine.Create(context.Background(), quarantineMarker{
+	if err := registryTestResources(registry).quarantine.Create(context.Background(), quarantineMarker{
 		Version: recordVersion, Name: "work", SessionID: sessionID,
 		Phase: quarantinePrepared, ProofChallenge: testCleanupProofChallenge,
 	}); err != nil {
@@ -598,7 +598,7 @@ func TestRecoveryDiscardsPreparedSessionAbandonedBeforeRecoveryProtection(t *tes
 	if provider.replaceCalls != 0 || string(provider.records["work"].Auth) != string(original) {
 		t.Fatal("prepared crash-window recovery committed projected bytes")
 	}
-	if _, exists, err := registry.quarantine.Inspect(context.Background(), "work"); err != nil || exists {
+	if _, exists, err := registryTestResources(registry).quarantine.Inspect(context.Background(), "work"); err != nil || exists {
 		t.Fatalf("marker after recovery = (%v, %v)", exists, err)
 	}
 	assertNoSessionDirectories(t, sessionsDirectory)
@@ -610,7 +610,7 @@ func TestRecoveryDiscardsPreparedSessionAbandonedBeforeRecoveryProtection(t *tes
 func TestRecoveryClearsPendingMarkerAfterSessionIsAlreadyGone(t *testing.T) {
 	auth := testChatGPTAuthJSON(t, "user", "workspace")
 	registry, _, _, _ := newBindingTestRegistry(t, "work", auth)
-	if err := registry.quarantine.Create(context.Background(), quarantineMarker{
+	if err := registryTestResources(registry).quarantine.Create(context.Background(), quarantineMarker{
 		Version: recordVersion, Name: "work", SessionID: "session-already-gone",
 		Phase: quarantineCleanupPending, ProofChallenge: testCleanupProofChallenge,
 	}); err != nil {
@@ -621,7 +621,7 @@ func TestRecoveryClearsPendingMarkerAfterSessionIsAlreadyGone(t *testing.T) {
 	if err != nil || disposition != DiscardedProjection {
 		t.Fatalf("recovery = (%q, %v)", disposition, err)
 	}
-	if _, exists, err := registry.quarantine.Inspect(context.Background(), "work"); err != nil || exists {
+	if _, exists, err := registryTestResources(registry).quarantine.Inspect(context.Background(), "work"); err != nil || exists {
 		t.Fatalf("marker after recovery = (%v, %v)", exists, err)
 	}
 }
@@ -640,7 +640,7 @@ func TestRecoveryDiscardsAnIdentityChangingProjection(t *testing.T) {
 	if err != nil || !exists {
 		t.Fatalf("load = (%v, %v)", exists, err)
 	}
-	if err := projectCredential(created.HomeDirectory(), record); err != nil {
+	if err := projectCredentialForTest(created.HomeDirectory(), record); err != nil {
 		t.Fatal(err)
 	}
 	clearBytes(record.Auth)
@@ -650,7 +650,7 @@ func TestRecoveryDiscardsAnIdentityChangingProjection(t *testing.T) {
 	); err != nil {
 		t.Fatal(err)
 	}
-	if err := registry.quarantine.Create(context.Background(), quarantineMarker{
+	if err := registryTestResources(registry).quarantine.Create(context.Background(), quarantineMarker{
 		Version: recordVersion, Name: "work", SessionID: filepath.Base(created.RootDirectory()),
 		Phase: quarantineRecoverable, ProofChallenge: testCleanupProofChallenge,
 	}); err != nil {
@@ -746,7 +746,7 @@ func newBindingTestRegistry(
 	}
 	runner := &fakeStatusRunner{result: statusRunResult{cleanupProven: true}}
 	registry.status = runner
-	registry.quarantine = newFileBindingQuarantine(filepath.Join(root, "quarantine"))
+	registryTestResources(registry).quarantine = newFileBindingQuarantine(filepath.Join(root, "quarantine"))
 	registry.sessionsDirectory = filepath.Join(root, "sessions")
 	registry.workingDirectory = workingDirectory
 	return registry, provider, runner, registry.sessionsDirectory

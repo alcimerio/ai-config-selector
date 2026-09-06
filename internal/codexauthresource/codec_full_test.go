@@ -1,4 +1,4 @@
-package codexauth
+package codexauthresource
 
 import (
 	"encoding/base64"
@@ -23,8 +23,8 @@ func TestParseCredentialRefAcceptsOnlyCanonicalNames(t *testing.T) {
 }
 
 func TestValidateAuthJSONDerivesStableNonSecretIdentityMetadata(t *testing.T) {
-	auth := testChatGPTAuthJSON(t, "user-123", "workspace-456")
-	metadata, err := validateAuthJSON("work", auth)
+	auth := codecTestChatGPTAuthJSON(t, "user-123", "workspace-456")
+	metadata, err := ValidateAuthJSON("work", auth)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,7 +42,7 @@ func TestValidateAuthJSONDerivesStableNonSecretIdentityMetadata(t *testing.T) {
 }
 
 func TestValidateAuthJSONRejectsAmbiguousOrUnsupportedSchemas(t *testing.T) {
-	valid := string(testChatGPTAuthJSON(t, "user-123", "workspace-456"))
+	valid := string(codecTestChatGPTAuthJSON(t, "user-123", "workspace-456"))
 	tests := []struct {
 		name string
 		auth string
@@ -58,7 +58,7 @@ func TestValidateAuthJSONRejectsAmbiguousOrUnsupportedSchemas(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			if _, err := validateAuthJSON("work", []byte(test.auth)); !errors.Is(err, ErrUnsupportedAuth) {
+			if _, err := ValidateAuthJSON("work", []byte(test.auth)); !errors.Is(err, ErrUnsupportedAuth) {
 				t.Fatalf("error = %v, want ErrUnsupportedAuth", err)
 			}
 		})
@@ -66,7 +66,7 @@ func TestValidateAuthJSONRejectsAmbiguousOrUnsupportedSchemas(t *testing.T) {
 }
 
 func TestCredentialEnvelopeRoundTripDoesNotExposeMetadataAsSecretStorage(t *testing.T) {
-	auth := testChatGPTAuthJSON(t, "user", "workspace")
+	auth := codecTestChatGPTAuthJSON(t, "user", "workspace")
 	payload, err := encodeEnvelope(auth)
 	if err != nil {
 		t.Fatal(err)
@@ -92,7 +92,7 @@ func TestCredentialEnvelopeRejectsUnknownDuplicateAndTrailingFields(t *testing.T
 	}
 }
 
-func testChatGPTAuthJSON(t *testing.T, userID, workspace string) []byte {
+func codecTestChatGPTAuthJSON(t *testing.T, userID, workspace string) []byte {
 	t.Helper()
 	claims, err := json.Marshal(map[string]any{
 		"sub": "subject-fallback",

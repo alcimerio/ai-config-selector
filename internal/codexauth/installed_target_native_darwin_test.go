@@ -70,7 +70,7 @@ func TestNativeInstalledTargetContainedStatusWithoutCredentials(t *testing.T) {
 	}
 	registry.sessionsDirectory = filepath.Join(privateRoot, "sessions")
 	registry.workingDirectory = workspace
-	registry.quarantine = newFileBindingQuarantine(filepath.Join(privateRoot, "quarantine"))
+	registryTestResources(registry).quarantine = newFileBindingQuarantine(filepath.Join(privateRoot, "quarantine"))
 	registry.status = newCodexStatusRunner(codexLoginConfig{
 		BinaryPath: binary, SupportedVersion: SupportedCodexVersion,
 		SessionsDirectory: registry.sessionsDirectory, WorkingDirectory: workspace, PrivateRoot: privateRoot,
@@ -93,7 +93,7 @@ func TestNativeInstalledTargetContainedStatusWithoutCredentials(t *testing.T) {
 		t.Fatal("installed status changed global authentication state")
 	}
 	assertNoSessionDirectories(t, registry.sessionsDirectory)
-	if _, exists, err := registry.quarantine.Inspect(context.Background(), name); err != nil || exists {
+	if _, exists, err := registryTestResources(registry).quarantine.Inspect(context.Background(), name); err != nil || exists {
 		t.Fatalf("installed status quarantine = (%v, %v)", exists, err)
 	}
 }

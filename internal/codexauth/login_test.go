@@ -47,9 +47,9 @@ func TestContainedLoginPinsVersionUsesSyntheticHomeAndCleansSession(t *testing.T
 	if result.err != nil || !result.cleanupProven {
 		t.Fatalf("login result = %#v", result)
 	}
-	defer clearBytes(result.auth)
-	if string(result.auth) != string(auth) {
-		t.Fatal("login changed auth payload")
+	stored, err := os.ReadFile(filepath.Join(created.HomeDirectory(), ".codex", "auth.json"))
+	if err != nil || string(stored) != string(auth) {
+		t.Fatalf("synthetic auth projection = %q, %v", stored, err)
 	}
 	wantArguments := [][]string{
 		{"-c", `cli_auth_credentials_store="file"`, "-c", `forced_login_method="chatgpt"`, "--version"},
@@ -96,7 +96,6 @@ func TestContainedLoginUsesDefaultBrowserFlowWithoutDeviceFlag(t *testing.T) {
 	if result.err != nil || !result.cleanupProven {
 		t.Fatalf("login result = %#v", result)
 	}
-	defer clearBytes(result.auth)
 	defer created.Remove()
 	wantArguments := [][]string{
 		{"-c", `cli_auth_credentials_store="file"`, "-c", `forced_login_method="chatgpt"`, "--version"},
@@ -309,7 +308,7 @@ func TestContainedStatusPinsAuthPolicyAtRuntimePrecedence(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer created.Remove()
-	if err := projectCredential(created.HomeDirectory(), credentialRecord{Metadata: metadata, Auth: auth}); err != nil {
+	if err := projectCredentialForTest(created.HomeDirectory(), credentialRecord{Metadata: metadata, Auth: auth}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -481,7 +480,7 @@ func TestContainedStatusExecutesOnePrivateSnapshotAcrossBothSubprocesses(t *test
 		t.Fatal(err)
 	}
 	defer created.Remove()
-	if err := projectCredential(created.HomeDirectory(), credentialRecord{Metadata: metadata, Auth: auth}); err != nil {
+	if err := projectCredentialForTest(created.HomeDirectory(), credentialRecord{Metadata: metadata, Auth: auth}); err != nil {
 		t.Fatal(err)
 	}
 

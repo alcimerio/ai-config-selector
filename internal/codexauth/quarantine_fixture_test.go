@@ -261,9 +261,6 @@ func (store *fileBindingQuarantine) Delete(ctx context.Context, name CredentialR
 func (store *fileBindingQuarantine) name(name CredentialRef) string { return string(name) + ".json" }
 
 func decodeQuarantineMarker(contents []byte) (quarantineMarker, error) {
-	if err := rejectDuplicateJSONKeys(contents); err != nil {
-		return quarantineMarker{}, err
-	}
 	decoder := json.NewDecoder(bytes.NewReader(contents))
 	decoder.DisallowUnknownFields()
 	var marker quarantineMarker

@@ -149,14 +149,16 @@ jobs:
           ACS_RUN_NATIVE_AUTH_GATE: "1"
           ACS_NATIVE_AUTH_RECOVERY_ROOT: ${{ runner.temp }}/acs-native-auth-recovery
           ACS_TEST_CODEX_BINARY: ${{ runner.temp }}/codex-target-${{ matrix.os }}-${{ matrix.arch }}/bin/codex
-        run: go test ./internal/codexauth -run 'TestNativeKeychainCredentialFreeContract|TestNativeInstalledTargetContainedStatusWithoutCredentials' -count=1
+        run: |
+          go test ./internal/codexauthresource -run '^(TestNativeKeychainCredentialFreeContract|TestNativeRealStoreInstalledTargetComposition)$' -count=1
+          go test ./internal/codexauth -run '^TestNativeInstalledTargetContainedStatusWithoutCredentials$' -count=1
 
       - name: Recover native authentication gate state
         if: always()
         env:
           ACS_RUN_NATIVE_AUTH_RECOVERY: "1"
           ACS_NATIVE_AUTH_RECOVERY_ROOT: ${{ runner.temp }}/acs-native-auth-recovery
-        run: go test ./internal/codexauth -run '^TestNativeKeychainRecoveryEntrypoint$' -count=1
+        run: go test ./internal/codexauthresource -run '^TestNativeKeychainRecoveryEntrypoint$' -count=1
 
       # Includes passive diagnostics, no-execution sentinels and no-write snapshots on both architectures.
       - name: Exercise installed candidate as a black box

@@ -1,5 +1,5 @@
 //go:build !darwin
 
-package codexauth
+package codexauthresource
 
 func newNativeKeychainClient() (keychainClient, error) { return unavailableKeychainClient{}, nil }

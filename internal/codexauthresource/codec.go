@@ -1,4 +1,4 @@
-package codexauth
+package codexauthresource
 
 import (
 	"bytes"
@@ -219,7 +219,7 @@ func consumeJSONValue(decoder *json.Decoder) error {
 }
 
 func encodeEnvelope(auth []byte) ([]byte, error) {
-	return json.Marshal(authEnvelope{Version: recordVersion, Auth: append(json.RawMessage(nil), auth...)})
+	return json.Marshal(authEnvelope{Version: RecordVersion, Auth: append(json.RawMessage(nil), auth...)})
 }
 
 func decodeEnvelope(payload []byte) ([]byte, error) {
@@ -229,7 +229,7 @@ func decodeEnvelope(payload []byte) ([]byte, error) {
 	decoder := json.NewDecoder(bytes.NewReader(payload))
 	decoder.DisallowUnknownFields()
 	var envelope authEnvelope
-	if err := decoder.Decode(&envelope); err != nil || envelope.Version != recordVersion || len(envelope.Auth) == 0 {
+	if err := decoder.Decode(&envelope); err != nil || envelope.Version != RecordVersion || len(envelope.Auth) == 0 {
 		return nil, ErrUnsupportedAuth
 	}
 	var additional any
