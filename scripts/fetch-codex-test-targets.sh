@@ -25,7 +25,6 @@ fi
 
 count=0
 arm64_count=0
-amd64_count=0
 while IFS= read -r physical_row || [ -n "$physical_row" ]; do
   [ -n "$physical_row" ] || fail "lock contains a blank row"
   IFS='|' read -r version target_os target_arch digest url extra <<EOF
@@ -41,7 +40,6 @@ EOF
   [ "$version" = "0.149.1" ] && [ "$target_os" = "darwin" ] || fail "lock entry has an unsupported target"
   case "$target_arch:$url" in
     arm64:https://github.com/openai/codex/releases/download/rust-v0.149.1/codex-aarch64-apple-darwin.tar.gz) ;;
-    amd64:https://github.com/openai/codex/releases/download/rust-v0.149.1/codex-x86_64-apple-darwin.tar.gz) ;;
     *) fail "lock entry does not name an approved release asset" ;;
   esac
   [ "${#digest}" -eq 64 ] || fail "lock entry has an invalid SHA-256 digest"
@@ -54,16 +52,11 @@ EOF
       arm64_digest="$digest"
       arm64_url="$url"
       ;;
-    amd64)
-      amd64_count=$((amd64_count + 1))
-      amd64_digest="$digest"
-      amd64_url="$url"
-      ;;
   esac
   count=$((count + 1))
 done <"$lock_file"
 
-[ "$count" -eq 2 ] && [ "$arm64_count" -eq 1 ] && [ "$amd64_count" -eq 1 ] || fail "lock must contain exactly two supported targets"
+[ "$count" -eq 1 ] && [ "$arm64_count" -eq 1 ] || fail "lock must contain exactly one supported target"
 
 workspace="$(mktemp -d "${output_directory}.fetch.XXXXXX")" || fail "temporary directory could not be created"
 chmod 0700 "$workspace" || fail "temporary directory could not be made private"
@@ -75,17 +68,9 @@ cleanup() {
 }
 trap cleanup EXIT HUP INT TERM
 
-for target_arch in arm64 amd64; do
-  case "$target_arch" in
-    arm64)
-      digest="$arm64_digest"
-      url="$arm64_url"
-      ;;
-    amd64)
-      digest="$amd64_digest"
-      url="$amd64_url"
-      ;;
-  esac
+for target_arch in arm64; do
+  digest="$arm64_digest"
+  url="$arm64_url"
   archive="codex_0.149.1_darwin_${target_arch}.tar.gz"
   temporary="$workspace/$archive"
   curl --fail --location --silent --show-error --proto '=https' --tlsv1.2 --output "$temporary" "$url" || fail "approved release asset download failed"

@@ -63,9 +63,9 @@ func doctor(target string, host func() (launch.Platform, error), backend func() 
 	r := result("doctor", target)
 	p, err := host()
 	if err != nil {
-		r.set("host.platform", "fail", "platform_unavailable", "Native host version could not be read; use a supported macOS 26 arm64 or Intel host.")
+		r.set("host.platform", "fail", "platform_unavailable", "Native host version could not be read; use a supported macOS 26 Apple Silicon host.")
 	} else if launch.ValidatePlatform(p) != nil {
-		r.set("host.platform", "fail", "unsupported_platform", "Use supported macOS 26 on arm64 or Intel; Linux and other platforms are unsupported.")
+		r.set("host.platform", "fail", "unsupported_platform", "Use supported macOS 26 on Apple Silicon (arm64); Intel, Linux, and other platforms are unsupported.")
 	} else {
 		r.set("host.platform", "pass", "supported_platform", "The host matches the supported platform policy.")
 	}

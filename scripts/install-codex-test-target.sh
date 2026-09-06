@@ -6,7 +6,7 @@ LC_ALL=C
 export LC_ALL
 
 if [ "$#" -ne 4 ]; then
-  printf '%s\n' "usage: scripts/install-codex-test-target.sh <lock-file> <bundle-directory> <arm64|amd64> <output-path>" >&2
+  printf '%s\n' "usage: scripts/install-codex-test-target.sh <lock-file> <bundle-directory> <arm64> <output-path>" >&2
   exit 2
 fi
 
@@ -25,7 +25,6 @@ fail() {
 [ ! -e "$output_path" ] && [ ! -L "$output_path" ] || fail "output path already exists"
 case "$(uname -s):$(uname -m):$target_arch" in
   Darwin:arm64:arm64|Darwin:aarch64:arm64) member="codex-aarch64-apple-darwin" ;;
-  Darwin:x86_64:amd64|Darwin:amd64:amd64) member="codex-x86_64-apple-darwin" ;;
   *) fail "native host does not match the requested target" ;;
 esac
 

@@ -6,12 +6,11 @@ required native process sandbox.
 
 ## Supported runtime
 
-The v0.4.0 runtime and release matrix is:
+The current development and future release matrix is:
 
 | OS | Architecture | Native backend |
 | --- | --- | --- |
 | macOS 26 | `darwin/arm64` | verified system Seatbelt |
-| macOS 26 | `darwin/amd64` | verified system Seatbelt |
 
 Linux and Bubblewrap code remains in the repository but is unsupported. v0.3.3
 is the final Linux release. v0.4.0 does not produce Linux assets or run Linux
@@ -198,10 +197,10 @@ runtime and artifact matrix.
 ## Release evidence
 
 The candidate is built once. The exact supplied bytes are installed and tested
-on macOS 26 arm64 and Intel. Each native job runs the repository suite, race
+on macOS 26 Apple Silicon. The native job runs the repository suite, race
 suite, and installed-artifact acceptance, including sandbox shell Skills,
 credential absence, allowed and denied paths, terminal lifecycle, descendants,
-and cleanup. Attestation and immutable publication depend on both native jobs.
+and cleanup. Attestation and immutable publication depend on that native job.
 
 The optional authenticated Devin smoke uses local maintainer credentials and is
 supplemental. It cannot replace the credential-free native candidate gates.

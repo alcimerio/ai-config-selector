@@ -30,7 +30,7 @@ func TestCurrentDocumentationDefinesTheV040MacOSSandboxShellContract(t *testing.
 		"/bin/zsh -f",
 		"macOS 26",
 		"darwin/arm64",
-		"darwin/amd64",
+		"Apple Silicon",
 		"v0.3.3 is the final release with Linux support",
 		"There is no unsandboxed fallback",
 		"ACS is not an egress firewall",
@@ -49,22 +49,21 @@ func TestCurrentDocumentationDefinesTheV040MacOSSandboxShellContract(t *testing.
 	}
 }
 
-func TestReleaseArtifactContractIsExactlyTwoMacOSTargets(t *testing.T) {
+func TestReleaseArtifactContractIsExactlyOneAppleSiliconTarget(t *testing.T) {
 	repository := ".."
 	for _, workflow := range []string{"promoted-artifacts.yml", "release.yml"} {
 		text := readRepositoryFile(t, repository, filepath.Join(".github", "workflows", workflow))
 		for _, row := range []string{
 			"target: darwin/arm64\n            runner: macos-26\n            os: darwin\n            arch: arm64\n            sandbox_backend: available",
-			"target: darwin/amd64\n            runner: macos-26-intel\n            os: darwin\n            arch: amd64\n            sandbox_backend: available",
 		} {
 			if !strings.Contains(text, row) {
 				t.Errorf("%s omits native row %q", workflow, row)
 			}
 		}
-		if strings.Count(text, "sandbox_backend: available") != 2 {
-			t.Errorf("%s does not declare exactly two native targets", workflow)
+		if strings.Count(text, "sandbox_backend: available") != 1 {
+			t.Errorf("%s does not declare exactly one native target", workflow)
 		}
-		for _, forbidden := range []string{"target: linux/", "ubuntu-24.04-arm", "Install and verify Ubuntu Bubblewrap", "bwrap-userns-restrict"} {
+		for _, forbidden := range []string{"target: darwin/amd64", "macos-26-intel", "target: linux/", "ubuntu-24.04-arm", "Install and verify Ubuntu Bubblewrap", "bwrap-userns-restrict"} {
 			if strings.Contains(text, forbidden) {
 				t.Errorf("%s retains Linux release-gate content %q", workflow, forbidden)
 			}
@@ -86,10 +85,13 @@ func TestReleaseArtifactContractIsExactlyTwoMacOSTargets(t *testing.T) {
 		t.Fatal("GoReleaser target matrix is not macOS-only")
 	}
 	candidate := readRepositoryFile(t, repository, filepath.Join("scripts", "release-candidate.sh"))
-	for _, archive := range []string{"darwin_arm64.tar.gz", "darwin_amd64.tar.gz"} {
+	for _, archive := range []string{"darwin_arm64.tar.gz"} {
 		if !strings.Contains(candidate, archive) {
 			t.Errorf("release candidate script omits %s", archive)
 		}
+	}
+	if strings.Contains(candidate, "darwin_amd64.tar.gz") {
+		t.Fatal("release candidate script still stages an Intel archive")
 	}
 	if strings.Contains(candidate, "linux_") {
 		t.Fatal("release candidate script still publishes a Linux archive")
@@ -119,7 +121,7 @@ func TestLinuxIsOnlyANonBlockingCompileObservation(t *testing.T) {
 	}
 }
 
-func TestImmutableReleaseSafetyStillDependsOnBothMacsAndAttestation(t *testing.T) {
+func TestImmutableReleaseSafetyStillDependsOnNativeAppleSiliconAndAttestation(t *testing.T) {
 	release := readRepositoryFile(t, "..", filepath.Join(".github", "workflows", "release.yml"))
 	for _, required := range []string{
 		"tags:\n      - \"v*\"",
@@ -142,7 +144,7 @@ func TestImmutableReleaseSafetyStillDependsOnBothMacsAndAttestation(t *testing.T
 		!strings.Contains(release[attest:publish], "- native") ||
 		!strings.Contains(release[publish:], "- native") ||
 		!strings.Contains(release[publish:], "- attest") {
-		t.Fatal("attestation and publication do not depend on the two-target native gate")
+		t.Fatal("attestation and publication do not depend on the native Apple Silicon gate")
 	}
 }
 

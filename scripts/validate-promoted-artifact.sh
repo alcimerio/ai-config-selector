@@ -6,7 +6,7 @@ LC_ALL=C
 export LC_ALL
 
 if [ "$#" -ne 5 ]; then
-  printf '%s\n' "usage: scripts/validate-promoted-artifact.sh <vMAJOR.MINOR.PATCH> <darwin> <amd64|arm64> <candidate-directory> <install-directory>" >&2
+  printf '%s\n' "usage: scripts/validate-promoted-artifact.sh <vMAJOR.MINOR.PATCH> <darwin> <arm64> <candidate-directory> <install-directory>" >&2
   exit 2
 fi
 
@@ -50,7 +50,7 @@ for component in "$@"; do
 done
 
 case "$target_os/$target_arch" in
-  darwin/arm64 | darwin/amd64) ;;
+  darwin/arm64) ;;
   *) fail "unsupported validation target" ;;
 esac
 

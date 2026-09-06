@@ -23,7 +23,7 @@ func TestValidatePlatformCoversSupportedMatrix(t *testing.T) {
 		accepted bool
 	}{
 		{name: "macOS 26 arm64", platform: Platform{OS: "darwin", Architecture: "arm64", Release: "26.0"}, accepted: true},
-		{name: "macOS 26 amd64", platform: Platform{OS: "darwin", Architecture: "amd64", Release: "26.9.1"}, accepted: true},
+		{name: "unsupported macOS 26 Intel", platform: Platform{OS: "darwin", Architecture: "amd64", Release: "26.9.1"}},
 		{name: "formerly supported Ubuntu 24.04 amd64", platform: Platform{OS: "linux", Architecture: "amd64", Distribution: "ubuntu", Release: "24.04"}},
 		{name: "formerly supported Ubuntu 24.04 arm64", platform: Platform{OS: "linux", Architecture: "arm64", Distribution: "ubuntu", Release: "24.04.3"}},
 		{name: "old macOS", platform: Platform{OS: "darwin", Architecture: "arm64", Release: "15.6"}},
@@ -456,7 +456,7 @@ func TestProcessSandboxSanitizesBackendFailures(t *testing.T) {
 	backend := &capturingBackend{checkErr: errors.New(secret)}
 	sandbox := newNativeProcessSandbox(
 		func() (Platform, error) {
-			return Platform{OS: "darwin", Architecture: "amd64", Release: "26.1"}, nil
+			return Platform{OS: "darwin", Architecture: "arm64", Release: "26.1"}, nil
 		},
 		map[string]sandboxBackend{"darwin": backend},
 	)

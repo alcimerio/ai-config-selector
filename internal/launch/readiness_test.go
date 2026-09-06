@@ -73,11 +73,35 @@ func TestSandboxReadinessReportsUnsupportedPlatformWithoutCheckingABackend(t *te
 	}
 }
 
+func TestSandboxReadinessRejectsIntelMacWithoutCheckingSeatbelt(t *testing.T) {
+	backend := &capturingBackend{}
+	sandbox := newNativeProcessSandbox(
+		func() (Platform, error) {
+			return Platform{OS: "darwin", Architecture: "amd64", Release: "26.1"}, nil
+		},
+		map[string]sandboxBackend{"darwin": backend},
+	)
+
+	readiness, err := sandbox.Readiness(context.Background())
+	if err != nil {
+		t.Fatalf("readiness: %v", err)
+	}
+	if readiness.Supported || readiness.Ready {
+		t.Fatalf("Intel Mac readiness = %+v, want unsupported and not ready", readiness)
+	}
+	if got, want := readiness.Failure.Category, SandboxUnsupportedPlatform; got != want {
+		t.Errorf("failure category = %q, want %q", got, want)
+	}
+	if backend.checks != 0 {
+		t.Fatalf("backend checks = %d, want 0", backend.checks)
+	}
+}
+
 func TestSandboxReadinessSanitizesBackendVerificationFailure(t *testing.T) {
 	backend := &capturingBackend{checkErr: errors.New("PRIVATE_BACKEND_OUTPUT\n\x1b[31m")}
 	sandbox := newNativeProcessSandbox(
 		func() (Platform, error) {
-			return Platform{OS: "darwin", Architecture: "amd64", Release: "26.1"}, nil
+			return Platform{OS: "darwin", Architecture: "arm64", Release: "26.1"}, nil
 		},
 		map[string]sandboxBackend{"darwin": backend},
 	)

@@ -21,8 +21,6 @@ jobs:
         include:
           - target: darwin/arm64
             runner: macos-26
-          - target: darwin/amd64
-            runner: macos-26-intel
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 10
 
@@ -54,7 +52,7 @@ jobs:
 
   verify:
     name: Verify (macOS)
-    runs-on: macos-latest
+    runs-on: macos-26
     timeout-minutes: 10
 
     steps:

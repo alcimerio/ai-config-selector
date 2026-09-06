@@ -1,8 +1,8 @@
 # Optional authenticated Devin smoke
 
 This is a local maintainer confidence check. It is supplemental to the
-credential-free candidate gates on macOS 26 `darwin/arm64` and
-`darwin/amd64`; it never waives, replaces, or weakens those gates.
+credential-free candidate gate on macOS 26 `darwin/arm64`; it never waives,
+replaces, or weakens that gate.
 
 The smoke may copy the existing Devin credential into an ephemeral Session and
 start the real Devin CLI inside Seatbelt. Run it only on a trusted macOS host
@@ -10,7 +10,7 @@ from a normal terminal. Do not run it in CI or with a shared account.
 
 ## Preconditions
 
-- The host is macOS 26 on arm64 or Intel.
+- The host is macOS 26 on Apple Silicon (`arm64`).
 - `/usr/bin/sandbox-exec` is the verified system executable.
 - Devin is installed and already authenticated.
 - The repository worktree is clean and checked out at the candidate commit.

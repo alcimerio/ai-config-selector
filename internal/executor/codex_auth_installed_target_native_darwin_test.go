@@ -227,7 +227,7 @@ func TestNativeDirectInstalledTargetInteractiveLifecycle(t *testing.T) {
 	}
 	// The harness retains its slave descriptor while ExecuteCodex is running.
 	// Close that descriptor before the master so Darwin reliably delivers EOF
-	// to the capture goroutine, including when the x86_64 target used Rosetta.
+	// to the capture goroutine before the Apple Silicon target exits.
 	_ = terminal.Close()
 	_ = master.Close()
 	select {

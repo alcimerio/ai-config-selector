@@ -286,10 +286,10 @@ therefore never deletes a named Codex authentication identity.
 
 ## Native evidence and its boundary
 
-The promoted-artifact PR gate downloads the official `codex-cli 0.149.1`
-Apple Silicon and Intel archives once, verifies their reviewed SHA-256 lock
-entries before extraction, rejects unsafe archive contents, and installs only
-the host's matching target. Each native job uses a temporary Keychain as its
+The promoted-artifact PR gate downloads the official Apple Silicon
+`codex-cli 0.149.1` archive once, verifies its reviewed SHA-256 lock entry before
+extraction, rejects unsafe archive contents, and installs that locked target.
+The native job uses a temporary Keychain as its
 sole search and default Keychain, restores the original configuration, and
 deletes the temporary Keychain. The credential-free test covers the production
 service namespace, metadata-only enumeration, duplicate service/account
