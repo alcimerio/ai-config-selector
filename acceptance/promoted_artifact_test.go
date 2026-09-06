@@ -600,6 +600,18 @@ func writeVersionThreeProfile(t *testing.T, home, name, workspaceAccess string) 
 	}
 }
 
+func writeSharedTargetProfile(t *testing.T, home, name, workspaceAccess string) {
+	t.Helper()
+	directory := filepath.Join(home, ".acs", "profiles")
+	if err := os.MkdirAll(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	contents := fmt.Sprintf(`{"version":3,"name":%q,"common":{"skills":{"version":1,"selection":[{"source":"devin-config","relativePath":"review"},{"source":"shared-agents","relativePath":"delivery"}]},"workspace":{"version":1,"selection":{"access":%q}}},"overlays":{"devin":{"version":1},"codex":{"version":1,"authRef":"work"}}}`, name, workspaceAccess)
+	if err := os.WriteFile(filepath.Join(directory, name+".json"), []byte(contents), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func writeFakeDevin(t *testing.T, path, contents string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(contents), 0o700); err != nil {
