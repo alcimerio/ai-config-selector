@@ -18,8 +18,9 @@ var errInvalidProfileInput = errors.New("input must be one bounded regular file 
 
 // readProfileDocument opens with O_NONBLOCK before inspecting the descriptor,
 // so a FIFO or device cannot stall the command. Symlinks are deliberately
-// followed; the opened descriptor is the single immutable input snapshot even
-// if the pathname is replaced later.
+// followed; pathname replacement after open cannot redirect that read. The
+// returned captured bytes, not the descriptor, begin the immutable candidate
+// guarantee because concurrent in-place writes remain a filesystem possibility.
 func readProfileDocument(path string) ([]byte, error) {
 	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NONBLOCK, 0)
 	if err != nil {
