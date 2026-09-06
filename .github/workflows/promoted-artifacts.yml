@@ -149,6 +149,7 @@ jobs:
           ACS_RUN_NATIVE_AUTH_GATE: "1"
           ACS_NATIVE_AUTH_RECOVERY_ROOT: ${{ runner.temp }}/acs-native-auth-recovery
           ACS_TEST_CODEX_BINARY: ${{ runner.temp }}/codex-target-${{ matrix.os }}-${{ matrix.arch }}/bin/codex
+          ACS_TEST_CODEX_ARCHIVE: ${{ github.workspace }}/dist/codex-test-targets/codex_0.149.1_${{ matrix.os }}_${{ matrix.arch }}.tar.gz
           ACS_PROMOTED_BINARY: ${{ runner.temp }}/acs-promoted-${{ matrix.os }}-${{ matrix.arch }}/bin/acs
         run: |
           # Each disposable Keychain gets a fresh process for native framework state.

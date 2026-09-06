@@ -75,6 +75,31 @@ func (materializer executionMaterializer) Verify(context.Context, launch.Verific
 	return materializer.verifyErr
 }
 
+type projectedVerificationMaterializer struct{ verified *bool }
+
+func (projectedVerificationMaterializer) Plan(context.Context, string, *launch.Plan) error {
+	return nil
+}
+func (projectedVerificationMaterializer) Materialize(home string) error {
+	return os.WriteFile(filepath.Join(home, "materialized"), []byte("yes"), 0o600)
+}
+func (materializer projectedVerificationMaterializer) Verify(_ context.Context, verification launch.VerificationContext) error {
+	if verification.RetainProcess != nil || verification.SessionHome == "" || verification.SessionDirectory == "" || verification.TemporaryDirectory == "" || verification.WorkingDirectory == "" {
+		return errors.New("verification context is incomplete or grants a process")
+	}
+	for _, path := range []string{
+		filepath.Join(verification.SessionHome, "materialized"),
+		filepath.Join(verification.SessionHome, ".codex", "auth.json"),
+		filepath.Join(verification.SessionHome, ".codex", "config.toml"),
+	} {
+		if _, err := os.Stat(path); err != nil {
+			return err
+		}
+	}
+	*materializer.verified = true
+	return errors.New("reject after observing completed projection")
+}
+
 func TestInteractiveCodexBindsOneIdentityBeforeSessionAndUsesFixedRecipe(t *testing.T) {
 	auth := testChatGPTAuthJSON(t, "user", "workspace")
 	registry, provider, _, sessionsDirectory := newBindingTestRegistry(t, "work", auth)
@@ -187,18 +212,24 @@ func TestInteractiveCodexRunsRegisteredVerificationBeforeAnyTargetProcess(t *tes
 	}
 	sandbox := &executionSandbox{version: SupportedCodexVersion}
 	registry.execution = newCodexExecutionRunner(codexLoginConfig{BinaryPath: binary, SupportedVersion: SupportedCodexVersion, SessionsDirectory: sessionsDirectory, WorkingDirectory: registry.workingDirectory}, sandbox)
-	plan := authority.New([]authority.Contribution{{ID: "rejecting", Value: executionMaterializer{verifyErr: errors.New("private verification detail")}}}, launch.WorkspaceAccessReadOnly, 3, "codex", authority.TargetRequirements{Recipe: authority.RecipeCodex, Executable: binary}).WithAuthRef("work")
+	verified := false
+	plan := authority.New([]authority.Contribution{{ID: "rejecting", Value: projectedVerificationMaterializer{verified: &verified}}}, launch.WorkspaceAccessReadOnly, 3, "codex", authority.TargetRequirements{Recipe: authority.RecipeCodex, Executable: binary}).WithAuthRef("work")
 	if code, err := registry.ExecuteCodex(context.Background(), CodexRequest{ResolvedPlan: &plan}); code != 1 || !errors.Is(err, ErrCodexFailed) {
 		t.Fatalf("execution = (%d, %v)", code, err)
 	}
-	if sandbox.checks != 0 || len(sandbox.counts) != 0 {
-		t.Fatalf("verification failure performed %d checks and prepared %d target processes", sandbox.checks, len(sandbox.counts))
+	if !verified || sandbox.checks != 1 || len(sandbox.counts) != 0 {
+		t.Fatalf("verified=%v, sandbox checks=%d, prepared target processes=%d", verified, sandbox.checks, len(sandbox.counts))
 	}
 	if provider.replaceCalls != 0 || !reflect.DeepEqual(provider.records["work"].Auth, auth) {
 		t.Fatal("verification failure replaced identity")
 	}
-	if _, err := os.Stat(sessionsDirectory); !os.IsNotExist(err) {
-		t.Fatalf("verification failure touched Sessions: %v", err)
+	assertNoSessionDirectories(t, sessionsDirectory)
+	binding, _, err := registry.resources.AcquireStatus(context.Background(), "work")
+	if err != nil {
+		t.Fatalf("verification failure left identity unavailable: %v", err)
+	}
+	if err := binding.Release(); err != nil {
+		t.Fatal(err)
 	}
 }
 

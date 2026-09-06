@@ -3,11 +3,14 @@
 package codexauthresource_test
 
 import (
+	"archive/tar"
 	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -15,10 +18,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -39,10 +44,11 @@ func TestNativeInstalledACSExecutesLockedCodexToolThroughNamedIdentity(t *testin
 	}
 	candidate := os.Getenv("ACS_PROMOTED_BINARY")
 	target := os.Getenv("ACS_TEST_CODEX_BINARY")
-	if !filepath.IsAbs(candidate) || !filepath.IsAbs(target) {
-		t.Fatal("ACS_PROMOTED_BINARY and ACS_TEST_CODEX_BINARY must be absolute")
+	archive := os.Getenv("ACS_TEST_CODEX_ARCHIVE")
+	if !filepath.IsAbs(candidate) || !filepath.IsAbs(target) || !filepath.IsAbs(archive) {
+		t.Fatal("ACS_PROMOTED_BINARY, ACS_TEST_CODEX_BINARY and ACS_TEST_CODEX_ARCHIVE must be absolute")
 	}
-	assertLockedCodexDigest(t, target)
+	assertLockedCodexIdentity(t, archive, target)
 	codexauthresource.UseIsolatedTestKeychainForComposition(t)
 
 	root := t.TempDir()
@@ -64,21 +70,40 @@ func TestNativeInstalledACSExecutesLockedCodexToolThroughNamedIdentity(t *testin
 	seedNativeIdentity(t, home, workspace, "interactive")
 	writeNativeCodexProfile(t, home, "coding", "interactive", "read-write")
 	writeNativeCodexProfile(t, home, "readonly", "interactive", "read-only")
+	grantedTarget := filepath.Join(workspace, "locked-codex-target")
+	copyLockedTarget(t, target, grantedTarget)
+	outside, err := os.MkdirTemp("/tmp", "acs-codex-unrelated-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(outside)
+	outsideSecret, outsideWrite := filepath.Join(outside, "secret"), filepath.Join(outside, "write")
+	if err := os.WriteFile(outsideSecret, []byte("unrelated"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	isolationProbe := fmt.Sprintf(`; printf private > "$HOME/codex-private-proof" && printf private-ok; if cat %s >/dev/null 2>&1; then printf outside-read-bad; else printf outside-read-denied; fi; if printf bad > %s 2>/dev/null; then printf outside-write-bad; else printf outside-write-denied; fi; sleep 30 </dev/null >/dev/null 2>&1 & printf descendant-pid:%%s "$!"`, strconv.Quote(outsideSecret), strconv.Quote(outsideWrite))
 	for _, test := range []struct {
 		name, profile, command, marker string
 		wantWrite                      bool
 	}{
-		{name: "coding write", profile: "coding", command: "printf codex-native-tool-ok > ./codex-native-write; printf codex-native-tool-output", marker: "codex-native-write", wantWrite: true},
-		{name: "read-only denial", profile: "readonly", command: "printf forbidden > ./codex-native-readonly-write; printf codex-native-tool-output", marker: "codex-native-readonly-write", wantWrite: false},
+		{name: "coding write", profile: "coding", command: "printf codex-native-tool-ok > ./codex-native-write; printf codex-native-tool-output" + isolationProbe, marker: "codex-native-write", wantWrite: true},
+		{name: "read-only denial", profile: "readonly", command: "printf forbidden > ./codex-native-readonly-write; printf codex-native-tool-output" + isolationProbe, marker: "codex-native-readonly-write", wantWrite: false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			fixture := newNativeResponsesFixture(t, test.command)
 			defer fixture.server.Close()
 			trampoline := filepath.Join(tools, "codex")
-			buildFixedCodexTrampoline(t, target, fixture.server.URL+"/backend-api", trampoline)
-			t.Logf("harness executable sha256=%s; locked target sha256=%s", fileSHA256(t, trampoline), fileSHA256(t, target))
+			buildFixedCodexTrampoline(t, grantedTarget, fixture.server.URL+"/backend-api", trampoline)
+			t.Logf("harness executable sha256=%s; locked target member sha256=%s", fileSHA256(t, trampoline), fileSHA256(t, grantedTarget))
 			runInstalledCodexPTY(t, candidate, home, tools, workspace, test.profile, fixture.completed)
-			fixture.assert(t)
+			descendantPID := fixture.assert(t)
+			deadline := time.Now().Add(3 * time.Second)
+			for time.Now().Before(deadline) && syscall.Kill(descendantPID, 0) == nil {
+				time.Sleep(20 * time.Millisecond)
+			}
+			if err := syscall.Kill(descendantPID, 0); !errors.Is(err, syscall.ESRCH) {
+				t.Fatalf("Codex tool descendant %d survived settlement: %v", descendantPID, err)
+			}
 			contents, err := os.ReadFile(filepath.Join(workspace, test.marker))
 			if test.wantWrite && (err != nil || string(contents) != "codex-native-tool-ok") {
 				t.Fatalf("real Codex shell tool result=%q err=%v", contents, err)
@@ -90,7 +115,10 @@ func TestNativeInstalledACSExecutesLockedCodexToolThroughNamedIdentity(t *testin
 		})
 	}
 	if contents, err := os.ReadFile(globalAuth); err != nil || string(contents) != "unrelated-global-auth" {
-		t.Fatal("interactive launch read or changed global Codex authentication state")
+		t.Fatal("interactive launch changed global Codex authentication state")
+	}
+	if _, err := os.Stat(outsideWrite); !os.IsNotExist(err) {
+		t.Fatalf("interactive launch wrote unrelated host path: %v", err)
 	}
 }
 
@@ -109,7 +137,8 @@ func runInstalledCodexPTY(t *testing.T, candidate, home, tools, workspace, profi
 	command.Dir = workspace
 	command.Env = []string{"HOME=" + home, "PATH=" + tools + ":/usr/bin:/bin", "LANG=C", "LC_ALL=C", "TERM=xterm", "COLORTERM=truecolor"}
 	command.Stdin, command.Stdout, command.Stderr = terminal, terminal, terminal
-	var output bytes.Buffer
+	command.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true, Ctty: int(terminal.Fd())}
+	var output nativeSafeCapture
 	copyDone := make(chan struct{})
 	go func() { _, _ = io.Copy(&output, master); close(copyDone) }()
 	if err := command.Start(); err != nil {
@@ -117,6 +146,23 @@ func runInstalledCodexPTY(t *testing.T, candidate, home, tools, workspace, profi
 	}
 	wait := make(chan error, 1)
 	go func() { wait <- command.Wait() }()
+	finished := false
+	defer func() {
+		if !finished {
+			_ = command.Process.Kill()
+			select {
+			case <-wait:
+			case <-time.After(10 * time.Second):
+				t.Error("PTY fixture did not reap the installed ACS process")
+			}
+		}
+		_ = master.Close()
+		select {
+		case <-copyDone:
+		case <-time.After(time.Second):
+			t.Error("PTY fixture did not drain terminal capture")
+		}
+	}()
 	time.Sleep(1500 * time.Millisecond)
 	if _, err := master.Write([]byte("Use the shell tool exactly once as requested by the fixture.\r")); err != nil {
 		t.Fatal(err)
@@ -133,6 +179,7 @@ func runInstalledCodexPTY(t *testing.T, candidate, home, tools, workspace, profi
 	_, _ = master.Write([]byte{3})
 	select {
 	case err := <-wait:
+		finished = true
 		if err != nil {
 			t.Fatalf("installed ACS interactive Codex exit: %v; terminal=%q", err, output.String())
 		}
@@ -140,13 +187,24 @@ func runInstalledCodexPTY(t *testing.T, candidate, home, tools, workspace, profi
 		_ = command.Process.Kill()
 		t.Fatal("interactive Codex did not terminate after PTY cancellation")
 	}
-	master.Close()
-	select {
-	case <-copyDone:
-	case <-time.After(time.Second):
-	}
-
 	return output.String()
+}
+
+type nativeSafeCapture struct {
+	mu     sync.Mutex
+	buffer bytes.Buffer
+}
+
+func (capture *nativeSafeCapture) Write(contents []byte) (int, error) {
+	capture.mu.Lock()
+	defer capture.mu.Unlock()
+	return capture.buffer.Write(contents)
+}
+
+func (capture *nativeSafeCapture) String() string {
+	capture.mu.Lock()
+	defer capture.mu.Unlock()
+	return capture.buffer.String()
 }
 
 type nativeResponsesFixture struct {
@@ -201,7 +259,7 @@ func newNativeResponsesFixture(t *testing.T, shellCommand string) *nativeRespons
 	return fixture
 }
 
-func (fixture *nativeResponsesFixture) assert(t *testing.T) {
+func (fixture *nativeResponsesFixture) assert(t *testing.T) int {
 	t.Helper()
 	fixture.mu.Lock()
 	defer fixture.mu.Unlock()
@@ -218,9 +276,23 @@ func (fixture *nativeResponsesFixture) assert(t *testing.T) {
 			t.Fatalf("first request omitted Skill discovery sentinel %q", sentinel)
 		}
 	}
-	if !strings.Contains(fixture.bodies[1], "acs-call-1") || !strings.Contains(fixture.bodies[1], "codex-native-tool-output") {
+	for _, sentinel := range []string{"acs-call-1", "codex-native-tool-output", "private-ok", "outside-read-denied", "outside-write-denied"} {
+		if !strings.Contains(fixture.bodies[1], sentinel) {
+			t.Fatalf("second request omitted real shell result %q", sentinel)
+		}
+	}
+	if strings.Contains(fixture.bodies[1], "outside-read-bad") || strings.Contains(fixture.bodies[1], "outside-write-bad") {
 		t.Fatal("second request omitted real shell function output")
 	}
+	match := regexp.MustCompile(`descendant-pid:(\d+)`).FindStringSubmatch(fixture.bodies[1])
+	if len(match) != 2 {
+		t.Fatal("second request omitted descendant process identity")
+	}
+	pid, err := strconv.Atoi(match[1])
+	if err != nil || pid < 2 {
+		t.Fatal("second request contained invalid descendant process identity")
+	}
+	return pid
 }
 
 func completedEvent(id string) map[string]any {
@@ -336,11 +408,54 @@ func writeNativeCodexProfile(t *testing.T, home, profileName, authRef, access st
 	}
 }
 
-func assertLockedCodexDigest(t *testing.T, path string) {
+func assertLockedCodexIdentity(t *testing.T, archivePath, installedPath string) {
 	t.Helper()
 	want := map[string]string{"arm64": "ed60f475c6dda6044c2c00fd7f33273cc3f3f98900ccd1204bfdf2fe935f3405", "amd64": "85fe7a837eb739dd5e1cc59a9c95b7b682048e5aacdc261505bae768fb1288ef"}[runtime.GOARCH]
-	if want == "" || fileSHA256(t, path) != want {
-		t.Fatal("installed Codex target does not match the reviewed architecture lock")
+	if want == "" || fileSHA256(t, archivePath) != want {
+		t.Fatal("Codex release archive does not match the reviewed architecture lock")
+	}
+	archive, err := os.Open(archivePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer archive.Close()
+	compressed, err := gzip.NewReader(archive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer compressed.Close()
+	reader := tar.NewReader(compressed)
+	header, err := reader.Next()
+	if err != nil || header.Typeflag != tar.TypeReg || filepath.Base(header.Name) != map[string]string{"arm64": "codex-aarch64-apple-darwin", "amd64": "codex-x86_64-apple-darwin"}[runtime.GOARCH] {
+		t.Fatal("locked archive member is not the expected regular target")
+	}
+	member, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := reader.Next(); err != io.EOF {
+		t.Fatal("locked archive contains more than one member")
+	}
+	installed, err := os.ReadFile(installedPath)
+	if err != nil || !bytes.Equal(member, installed) {
+		t.Fatal("installed Codex bytes differ from the independently extracted locked member")
+	}
+	if output, err := exec.Command(installedPath, "--version").Output(); err != nil || strings.TrimSpace(string(output)) != "codex-cli 0.149.1" {
+		t.Fatal("installed Codex member reports an unsupported version")
+	}
+}
+
+func copyLockedTarget(t *testing.T, source, destination string) {
+	t.Helper()
+	contents, err := os.ReadFile(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(destination, contents, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	if fileSHA256(t, source) != fileSHA256(t, destination) {
+		t.Fatal("granted fixture target differs from installed locked target")
 	}
 }
 

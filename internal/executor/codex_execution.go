@@ -126,12 +126,6 @@ func (service *CodexAuthService) ExecuteCodex(ctx context.Context, request Codex
 		return 1, ErrCodexFailed
 	}
 	requirements := request.ResolvedPlan.Requirements()
-	// Reject contribution authority before authentication, sandbox checks, or
-	// Session allocation. No process-retention capability exists at this phase,
-	// so a verifier cannot start a target probe here.
-	if err := request.ResolvedPlan.Verify(ctx, launch.VerificationContext{WorkingDirectory: service.workingDirectory}); err != nil {
-		return 1, ErrCodexFailed
-	}
 	authRef, err := ParseCredentialRef(request.ResolvedPlan.AuthRef())
 	if err != nil {
 		return 1, err
@@ -173,6 +167,19 @@ func (service *CodexAuthService) ExecuteCodex(ctx context.Context, request Codex
 		return 1, ErrProjectedAuthInvalid
 	}
 	if err := writeCodexExecutionConfig(created.HomeDirectory(), metadata.Workspace, created.WorkingDirectory(), access); err != nil {
+		_ = binding.MarkRecoverable(ctx)
+		if cleanupErr := remove(); cleanupErr != nil {
+			return 1, cleanupErr
+		}
+		return 1, ErrCodexFailed
+	}
+	// Verification observes the completed common/target/auth projection. It has
+	// no process-retention capability: actual target discovery belongs to the
+	// fixed native acceptance path, not arbitrary contribution subprocesses.
+	if err := request.ResolvedPlan.Verify(ctx, launch.VerificationContext{
+		SessionsDirectory: created.SessionsDirectory(), SessionDirectory: created.RootDirectory(),
+		SessionHome: created.HomeDirectory(), TemporaryDirectory: created.TemporaryDirectory(), WorkingDirectory: created.WorkingDirectory(),
+	}); err != nil {
 		_ = binding.MarkRecoverable(ctx)
 		if cleanupErr := remove(); cleanupErr != nil {
 			return 1, cleanupErr
