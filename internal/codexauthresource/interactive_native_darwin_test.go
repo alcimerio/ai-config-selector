@@ -158,15 +158,26 @@ func runInstalledSyntheticLogin(t *testing.T, candidate, home, tools, workspace,
 	}
 	wait := make(chan error, 1)
 	go func() { wait <- command.Wait() }()
+	var runErr error
+	timedOut := false
+	settlementTimedOut := false
+	diagnostic := ""
 	select {
-	case err := <-wait:
-		if err != nil {
-			t.Fatalf("installed ACS synthetic login seed failed: %v; terminal=%q", err, output.String())
-		}
+	case runErr = <-wait:
 	case <-time.After(20 * time.Second):
-		_ = command.Process.Kill()
-		<-wait
-		t.Fatalf("installed ACS synthetic login seed timed out; terminal=%q", output.String())
+		timedOut = true
+		diagnostic = syntheticLoginDiagnostic(home, command.Process.Pid)
+		_ = syscall.Kill(-command.Process.Pid, syscall.SIGKILL)
+		select {
+		case runErr = <-wait:
+		case <-time.After(5 * time.Second):
+			_ = command.Process.Kill()
+			select {
+			case runErr = <-wait:
+			case <-time.After(5 * time.Second):
+				settlementTimedOut = true
+			}
+		}
 	}
 	_ = master.Close()
 	select {
@@ -174,9 +185,59 @@ func runInstalledSyntheticLogin(t *testing.T, candidate, home, tools, workspace,
 	case <-time.After(time.Second):
 		t.Fatal("installed ACS synthetic login capture did not drain")
 	}
+	if settlementTimedOut {
+		t.Fatalf("installed ACS synthetic login process group did not settle; terminal=%q; diagnostic=%s", output.String(), diagnostic)
+	}
+	if timedOut {
+		t.Fatalf("installed ACS synthetic login seed timed out; terminal=%q; diagnostic=%s; settlement=%v", output.String(), diagnostic, runErr)
+	}
+	if runErr != nil {
+		t.Fatalf("installed ACS synthetic login seed failed: %v; terminal=%q", runErr, output.String())
+	}
 	if !strings.Contains(output.String(), `Stored Codex authentication identity "`+name+`".`) {
 		t.Fatalf("installed ACS did not confirm synthetic identity creation: terminal=%q", output.String())
 	}
+}
+
+// syntheticLoginDiagnostic reports only non-secret lifecycle state. Process
+// arguments and projected credential bytes are deliberately never included.
+func syntheticLoginDiagnostic(home string, processGroup int) string {
+	processes := make([]string, 0)
+	if output, err := exec.Command("/bin/ps", "-axo", "pid=,ppid=,pgid=,state=,comm=").Output(); err == nil {
+		for _, line := range strings.Split(string(output), "\n") {
+			fields := strings.Fields(line)
+			if len(fields) < 5 {
+				continue
+			}
+			pid, pidErr := strconv.Atoi(fields[0])
+			parent, parentErr := strconv.Atoi(fields[1])
+			group, groupErr := strconv.Atoi(fields[2])
+			if pidErr != nil || parentErr != nil || groupErr != nil || (pid != processGroup && parent != processGroup && group != processGroup) {
+				continue
+			}
+			processes = append(processes, fmt.Sprintf("%d/%d/%d/%s/%s", pid, parent, group, fields[3], filepath.Base(fields[4])))
+		}
+	}
+	sessions, authProjections, cleanupProofs := 0, 0, 0
+	entries, _ := os.ReadDir(filepath.Join(home, ".acs", "sessions"))
+	for _, entry := range entries {
+		if !entry.IsDir() || !strings.HasPrefix(entry.Name(), "session-") {
+			continue
+		}
+		sessions++
+		root := filepath.Join(home, ".acs", "sessions", entry.Name())
+		if _, err := os.Stat(filepath.Join(root, "home", ".codex", "auth.json")); err == nil {
+			authProjections++
+		}
+		if _, err := os.Stat(filepath.Join(root, ".acs-cleanup-proof-v1")); err == nil {
+			cleanupProofs++
+		}
+	}
+	recoveryMarkers := 0
+	if entries, err := os.ReadDir(filepath.Join(home, ".acs", "quarantine", "codex-auth")); err == nil {
+		recoveryMarkers = len(entries)
+	}
+	return fmt.Sprintf("processes=%v sessions=%d auth-projections=%d cleanup-proofs=%d recovery-markers=%d", processes, sessions, authProjections, cleanupProofs, recoveryMarkers)
 }
 
 func assertInstalledIdentityVisible(t *testing.T, candidate, home, tools, workspace, name string) {
@@ -473,6 +534,8 @@ int main(int argc, char **argv) {
   for (int i = 1; i < argc; i++) {
     if (strcmp(argv[i], "--version") == 0) { puts("codex-cli 0.149.1"); return 0; }
   }
+  fputs("synthetic-login-target:started\n", stderr);
+  fflush(stderr);
   const char *home = getenv("HOME");
   if (!home) return 10;
   char path[4096];
@@ -480,6 +543,8 @@ int main(int argc, char **argv) {
   int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
   if (fd < 0) return 12;
   if (write(fd, auth, sizeof(auth)) != sizeof(auth) || fsync(fd) != 0 || close(fd) != 0) return 13;
+  fputs("synthetic-login-target:auth-written\n", stderr);
+  fflush(stderr);
   return 0;
 }
 `
