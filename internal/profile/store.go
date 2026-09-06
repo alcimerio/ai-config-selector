@@ -41,26 +41,11 @@ func (store *Store) CreateContext(ctx context.Context, profile Profile) (string,
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
-	if err := ValidateName(profile.Name); err != nil {
-		return "", err
-	}
-	normalized, err := store.codec.Normalize(profile)
+	normalized, canonical, err := Canonicalize(store.codec, profile)
 	if err != nil {
 		return "", err
 	}
-	var canonical bytes.Buffer
-	encoder := json.NewEncoder(&canonical)
-	encoder.SetIndent("", "  ")
-	if err := encoder.Encode(normalized); err != nil {
-		return "", fmt.Errorf("encode Profile: %w", err)
-	}
-	if strict, ok := store.codec.(interface {
-		DecodeNamed(string, []byte) (Profile, error)
-	}); ok {
-		if _, err := strict.DecodeNamed(profile.Name, canonical.Bytes()); err != nil {
-			return "", fmt.Errorf("admit canonical Profile %q: %w", profile.Name, err)
-		}
-	}
+	profile = normalized
 	repository := profilerepo.New(filepath.Dir(store.profilesDir))
 	// An absent condition is name-bound and reusable; reading an occupied name
 	// must not turn Create into replacement.
@@ -68,7 +53,7 @@ func (store *Store) CreateContext(ctx context.Context, profile Profile) (string,
 	if err != nil {
 		return "", err
 	}
-	outcome, err := repository.Apply(ctx, profilerepo.CreateRequest{Name: profile.Name, Expected: expected, Bytes: canonical.Bytes()})
+	outcome, err := repository.Apply(ctx, profilerepo.CreateRequest{Name: profile.Name, Expected: expected, Bytes: canonical})
 	if err != nil {
 		if errors.Is(err, profilerepo.ErrConflict) || errors.Is(err, os.ErrExist) {
 			err = errors.Join(ErrProfileExists, err)
@@ -76,6 +61,33 @@ func (store *Store) CreateContext(ctx context.Context, profile Profile) (string,
 		return "", &profilerepo.OutcomeError{Outcome: outcome, Err: err}
 	}
 	return store.profilePath(profile.Name), nil
+}
+
+// Canonicalize applies the Store codec's normalization, deterministic JSON
+// formatting and strict canonical re-admission. Declarative preview and Store
+// publication share this function so their bytes cannot drift.
+func Canonicalize(codec Codec, profile Profile) (Profile, []byte, error) {
+	if err := ValidateName(profile.Name); err != nil {
+		return Profile{}, nil, err
+	}
+	normalized, err := codec.Normalize(profile)
+	if err != nil {
+		return Profile{}, nil, err
+	}
+	var canonical bytes.Buffer
+	encoder := json.NewEncoder(&canonical)
+	encoder.SetIndent("", "  ")
+	if err := encoder.Encode(normalized); err != nil {
+		return Profile{}, nil, fmt.Errorf("encode Profile: %w", err)
+	}
+	if strict, ok := codec.(interface {
+		DecodeNamed(string, []byte) (Profile, error)
+	}); ok {
+		if _, err := strict.DecodeNamed(profile.Name, canonical.Bytes()); err != nil {
+			return Profile{}, nil, fmt.Errorf("admit canonical Profile %q: %w", profile.Name, err)
+		}
+	}
+	return normalized, append([]byte(nil), canonical.Bytes()...), nil
 }
 
 func (store *Store) Load(name string) (Profile, error) {

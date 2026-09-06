@@ -13,7 +13,7 @@ import (
 
 func TestPromotedHelpWithoutHomeOrTargets(t *testing.T) {
 	binary := promotedBinary(t)
-	for _, command := range []string{"", "profile", "profile list", "profile show", "devin", "devin create-profile", "sandbox", "codex", "codex create-profile", "codex auth", "codex auth login", "codex auth list", "codex auth status", "codex auth recover", "codex auth logout", "version"} {
+	for _, command := range []string{"", "profile", "profile list", "profile show", "profile create", "devin", "devin create-profile", "sandbox", "codex", "codex create-profile", "codex auth", "codex auth login", "codex auth list", "codex auth status", "codex auth recover", "codex auth logout", "version"} {
 		for _, args := range [][]string{strings.Fields("help " + command), strings.Fields(command + " --help")} {
 			t.Run(strings.Join(args, " "), func(t *testing.T) {
 				cmd := exec.Command(binary, args...)
@@ -57,6 +57,65 @@ func TestPromotedCodexDryRunReadsOnlyTheProfileAndLeavesAuthenticationUnchecked(
 	after := snapshotHome(t, home)
 	if strings.Join(before, "\n") != strings.Join(after, "\n") {
 		t.Fatalf("dry-run changed HOME: before=%v after=%v", before, after)
+	}
+}
+
+func TestPromotedDeclarativeProfileCreationNeedsNoTTYTargetOrCredentials(t *testing.T) {
+	binary := promotedBinary(t)
+	home := realTemporaryDirectory(t)
+	inputDirectory := realTemporaryDirectory(t)
+	input := filepath.Join(inputDirectory, "candidate.json")
+	document := `{"version":3,"name":"declarative","common":{"skills":{"version":1,"selection":[{"source":"shared-agents","relativePath":"missing-but-valid"}]},"workspace":{"version":1,"selection":{"access":"read-only"}}},"overlays":{"codex":{"version":1,"authRef":"absent-identity"},"devin":{"version":1}}}`
+	if err := os.WriteFile(input, []byte(document), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	alias := filepath.Join(inputDirectory, "candidate-link.json")
+	if err := os.Symlink(input, alias); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.Stat(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	command := exec.Command(binary, "profile", "create", "--file", alias, "--dry-run")
+	command.Env = promotedEnvironment(home, "/nonexistent")
+	var out, errOut bytes.Buffer
+	command.Stdout, command.Stderr = &out, &errOut
+	if err := command.Run(); err != nil || errOut.Len() != 0 {
+		t.Fatalf("dry-run failed without targets: %v stderr=%q", err, errOut.String())
+	}
+	for _, want := range []string{`Dry run for Profile "declarative"`, `"authRef": "absent-identity"`, "readiness was not checked", "No Profile storage"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("dry-run missing %q: %s", want, out.String())
+		}
+	}
+	if _, err := os.Stat(filepath.Join(home, ".acs")); !os.IsNotExist(err) {
+		t.Fatalf("dry-run created ACS storage: %v", err)
+	}
+	command = exec.Command(binary, "profile", "create", "--file", alias)
+	command.Env = promotedEnvironment(home, "/nonexistent")
+	out.Reset()
+	errOut.Reset()
+	command.Stdout, command.Stderr = &out, &errOut
+	if err := command.Run(); err != nil || errOut.Len() != 0 || out.String() != "Created Profile \"declarative\".\n" {
+		t.Fatalf("create failed without targets: %v stdout=%q stderr=%q", err, out.String(), errOut.String())
+	}
+	stored, err := os.ReadFile(filepath.Join(home, ".acs", "profiles", "declarative.json"))
+	if err != nil || !bytes.Contains(stored, []byte(`"source": "shared-agents"`)) || !bytes.Contains(stored, []byte(`"codex"`)) || !bytes.Contains(stored, []byte(`"devin"`)) {
+		t.Fatalf("stored Profile is incomplete: %v %s", err, stored)
+	}
+	after, err := os.Stat(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unchanged, err := os.ReadFile(input)
+	if err != nil || string(unchanged) != document || before.Mode() != after.Mode() {
+		t.Fatal("declarative creation changed its source input")
+	}
+	command = exec.Command(binary, "profile", "create", "--file", input)
+	command.Env = promotedEnvironment(home, "/nonexistent")
+	if output, err := command.CombinedOutput(); err == nil || !strings.Contains(string(output), "occupied") {
+		t.Fatalf("collision did not fail closed: %v %s", err, output)
 	}
 }
 

@@ -38,6 +38,21 @@ func main() {
 	if handled, code := informational.RunInformational(os.Args[1:]); handled {
 		os.Exit(code)
 	}
+	if cli.ProfileCreateRequested(os.Args[1:]) {
+		existingHome, err := os.UserHomeDir()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "acs: resolve user home for Profile creation")
+			os.Exit(1)
+		}
+		editor, err := devin.NewProfileEditor(existingHome)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "acs: configure declarative Profile codec")
+			os.Exit(1)
+		}
+		acsHome := filepath.Join(existingHome, ".acs")
+		application := cli.App{Categories: editor.Categories(), Profiles: profile.NewStore(acsHome, editor.Categories()), Input: os.Stdin, Output: os.Stdout, ErrorOutput: os.Stderr}
+		os.Exit(application.Run(context.Background(), os.Args[1:]))
+	}
 	if handled, code := informational.RunProfileInspection(os.Args[1:], os.UserHomeDir); handled {
 		os.Exit(code)
 	}

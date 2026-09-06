@@ -95,6 +95,9 @@ type App struct {
 	Output            io.Writer
 	ErrorOutput       io.Writer
 	Interactive       func(io.Reader, io.Writer) bool
+	// ReadProfileDocument is a test seam. Production uses the descriptor-backed
+	// bounded regular-file reader when this is nil.
+	ReadProfileDocument func(string) ([]byte, error)
 }
 
 // StandardStreamsInteractive reports whether both endpoints are actual
@@ -120,6 +123,8 @@ func (app App) Run(ctx context.Context, args []string) int {
 	}
 	inv, _ := parseCommand(args)
 	switch inv.command.path {
+	case "profile create":
+		return app.createProfileFromDocument(ctx, inv.value, inv.enabled)
 	case "profile list", "profile show":
 		return app.inspectProfiles(inv)
 	case "devin create-profile":
