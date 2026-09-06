@@ -430,6 +430,9 @@ type nativeResponsesFixture struct {
 	headers               []http.Header
 	sessionObservationErr string
 	observations          []nativeRequestObservation
+	websocketFallbacks    int
+	modelRequests         int
+	protocolErr           string
 }
 
 type nativeRequestObservation struct {
@@ -447,20 +450,66 @@ func newNativeResponsesFixture(t *testing.T, shellCommand, launcherHome string) 
 			hasAuthorization: request.Header.Get("Authorization") != "",
 			hasAccount:       request.Header.Get("ChatGPT-Account-ID") != "",
 		})
+		if fixture.protocolErr == "" && (request.Header.Get("Authorization") != "Bearer synthetic-access" || request.Header.Get("ChatGPT-Account-ID") != "synthetic-workspace") {
+			fixture.protocolErr = "loopback request did not retain the exact named identity headers"
+		}
 		fixture.mu.Unlock()
-		if request.URL.Path != "/backend-api/codex/responses" {
+		switch request.URL.Path {
+		case "/backend-api/codex/models":
+			if request.Method != http.MethodGet {
+				fixture.rejectProtocol(response, "models endpoint used a non-GET method")
+				return
+			}
+			fixture.mu.Lock()
+			fixture.modelRequests++
+			fixture.mu.Unlock()
+			response.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(response, `{"models":[]}`)
+			return
+		case "/backend-api/codex/responses":
+			if request.Method == http.MethodGet && strings.EqualFold(request.Header.Get("Upgrade"), "websocket") {
+				fixture.mu.Lock()
+				fixture.websocketFallbacks++
+				fixture.mu.Unlock()
+				response.Header().Set("Upgrade", "websocket")
+				response.WriteHeader(http.StatusUpgradeRequired)
+				return
+			}
+			if request.Method != http.MethodPost {
+				fixture.rejectProtocol(response, "Responses endpoint used neither WebSocket upgrade nor POST")
+				return
+			}
+		case "/backend-api/wham/rate-limit-reset-credits", "/backend-api/wham/usage":
+			if request.Method != http.MethodGet {
+				fixture.rejectProtocol(response, "usage endpoint used a non-GET method")
+				return
+			}
 			response.Header().Set("Content-Type", "application/json")
 			_, _ = io.WriteString(response, `{}`)
 			return
+		case "/backend-api/codex/analytics-events/events":
+			if request.Method != http.MethodPost {
+				fixture.rejectProtocol(response, "analytics endpoint used a non-POST method")
+				return
+			}
+			response.WriteHeader(http.StatusNoContent)
+			return
+		default:
+			fixture.rejectProtocol(response, "locked target requested an unexpected loopback path")
+			return
 		}
-		body, _ := io.ReadAll(io.LimitReader(request.Body, 2<<20))
+		body, err := decodeNativeResponsesBody(request.Body, request.Header.Get("Content-Encoding"))
+		if err != nil {
+			fixture.rejectProtocol(response, err.Error())
+			return
+		}
 		fixture.mu.Lock()
 		fixture.requests++
 		index := fixture.requests
-		fixture.bodies = append(fixture.bodies, string(body))
+		fixture.bodies = append(fixture.bodies, body)
 		fixture.headers = append(fixture.headers, request.Header.Clone())
 		if index == 2 {
-			fixture.sessionObservationErr = observeNativeSessionProjection(string(body), launcherHome)
+			fixture.sessionObservationErr = observeNativeSessionProjection(body, launcherHome)
 		}
 		fixture.mu.Unlock()
 		response.Header().Set("Content-Type", "text/event-stream")
@@ -490,15 +539,73 @@ func newNativeResponsesFixture(t *testing.T, shellCommand, launcherHome string) 
 	return fixture
 }
 
+func TestNativeResponsesFixtureSeparatesModelDiscoveryAndWebSocketFallback(t *testing.T) {
+	fixture := newNativeResponsesFixture(t, "printf fixture", t.TempDir())
+	defer fixture.server.Close()
+	for _, test := range []struct {
+		name, path, upgrade string
+		wantStatus          int
+		wantBody            string
+	}{
+		{name: "model discovery", path: "/backend-api/codex/models", wantStatus: http.StatusOK, wantBody: `{"models":[]}`},
+		{name: "Responses WebSocket fallback", path: "/backend-api/codex/responses", upgrade: "websocket", wantStatus: http.StatusUpgradeRequired},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			request, err := http.NewRequest(http.MethodGet, fixture.server.URL+test.path, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			request.Header.Set("Authorization", "Bearer synthetic-access")
+			request.Header.Set("ChatGPT-Account-ID", "synthetic-workspace")
+			if test.upgrade != "" {
+				request.Header.Set("Connection", "upgrade")
+				request.Header.Set("Upgrade", test.upgrade)
+			}
+			response, err := fixture.server.Client().Do(request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			body, readErr := io.ReadAll(response.Body)
+			closeErr := response.Body.Close()
+			if readErr != nil || closeErr != nil {
+				t.Fatalf("read fixture response = (%v, %v)", readErr, closeErr)
+			}
+			if response.StatusCode != test.wantStatus || (test.wantBody != "" && string(body) != test.wantBody) {
+				t.Fatalf("fixture response = status %d body %q", response.StatusCode, body)
+			}
+		})
+	}
+	fixture.mu.Lock()
+	defer fixture.mu.Unlock()
+	if fixture.protocolErr != "" || fixture.requests != 0 || fixture.modelRequests != 1 || fixture.websocketFallbacks != 1 {
+		t.Fatalf("fixture routing = protocol=%q responses=%d models=%d fallbacks=%d", fixture.protocolErr, fixture.requests, fixture.modelRequests, fixture.websocketFallbacks)
+	}
+}
+
+func (fixture *nativeResponsesFixture) rejectProtocol(response http.ResponseWriter, message string) {
+	fixture.mu.Lock()
+	if fixture.protocolErr == "" {
+		fixture.protocolErr = message
+	}
+	fixture.mu.Unlock()
+	http.Error(response, "fixture protocol rejected", http.StatusBadRequest)
+}
+
 func (fixture *nativeResponsesFixture) assert(t *testing.T) int {
 	t.Helper()
 	fixture.mu.Lock()
 	defer fixture.mu.Unlock()
+	if fixture.protocolErr != "" {
+		t.Fatalf("fixture protocol error: %s; loopback=%s", fixture.protocolErr, fixture.summaryLocked())
+	}
 	if fixture.requests != 2 || len(fixture.bodies) != 2 {
 		t.Fatalf("responses requests=%d; loopback=%s", fixture.requests, fixture.summaryLocked())
 	}
-	if len(fixture.observations) != 2 {
-		t.Fatalf("loopback request count=%d, want exactly two inference requests; loopback=%s", len(fixture.observations), fixture.summaryLocked())
+	if fixture.websocketFallbacks != 1 {
+		t.Fatalf("Responses WebSocket fallbacks=%d, want one; loopback=%s", fixture.websocketFallbacks, fixture.summaryLocked())
+	}
+	if fixture.modelRequests < 1 {
+		t.Fatalf("authenticated model requests=%d, want at least one; loopback=%s", fixture.modelRequests, fixture.summaryLocked())
 	}
 	if fixture.sessionObservationErr != "" {
 		t.Fatal(fixture.sessionObservationErr)
