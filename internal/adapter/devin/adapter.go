@@ -14,6 +14,7 @@ import (
 	"github.com/alcimerio/ai-config-selector/internal/builder"
 	"github.com/alcimerio/ai-config-selector/internal/category"
 	"github.com/alcimerio/ai-config-selector/internal/devinruntime"
+	"github.com/alcimerio/ai-config-selector/internal/executor"
 	"github.com/alcimerio/ai-config-selector/internal/launch"
 	"github.com/alcimerio/ai-config-selector/internal/skills"
 )
@@ -56,6 +57,7 @@ type Adapter struct {
 	editors         *builder.EditorRegistry
 	skillsCategory  category.Binding[[]skills.SkillReference, []skills.SkillBundle, skillsContribution]
 	sandbox         launch.ProcessSandbox
+	executor        *executor.Executor
 	runtimeInputs   []string
 }
 
@@ -77,7 +79,13 @@ type Session struct {
 }
 
 func New(config Config) (*Adapter, error) {
-	return newAdapter(config, launch.NewProcessSandbox())
+	adapter, err := newAdapter(config, launch.NewProcessSandbox())
+	if err != nil {
+		return nil, err
+	}
+	// Production always selects the native backend inside executor.New.
+	adapter.executor = executor.New()
+	return adapter, nil
 }
 
 // newAdapter is the package-private assembly seam. Production callers always
@@ -98,6 +106,7 @@ func newAdapter(config Config, sandbox launch.ProcessSandbox) (*Adapter, error) 
 	if adapter.sandbox == nil {
 		return nil, errors.New("create Devin Adapter: process sandbox is required")
 	}
+	adapter.executor = executor.NewForDevinPackageTests(adapter.sandbox)
 	registry, binding, err := newCategoryRegistry(adapter)
 	if err != nil {
 		return nil, fmt.Errorf("create Devin Adapter categories: %w", err)

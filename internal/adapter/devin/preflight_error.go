@@ -37,11 +37,15 @@ const (
 type PreflightError struct {
 	Capability Capability
 	reason     preflightFailureReason
+	runtime    *devinruntime.PreflightError
 }
 
 func (e *PreflightError) Category() PreflightErrorCategory {
 	if e == nil {
 		return devinruntime.NewPreflightError("", 0).Category()
+	}
+	if e.runtime != nil {
+		return e.runtime.Category()
 	}
 	return devinruntime.NewPreflightError(e.Capability, e.reason).Category()
 }
@@ -49,6 +53,9 @@ func (e *PreflightError) Category() PreflightErrorCategory {
 func (e *PreflightError) Error() string {
 	if e == nil {
 		return devinruntime.NewPreflightError("", 0).Error()
+	}
+	if e.runtime != nil {
+		return e.runtime.Error()
 	}
 	return devinruntime.NewPreflightError(e.Capability, e.reason).Error()
 }

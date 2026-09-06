@@ -11,6 +11,7 @@ import (
 
 	"github.com/alcimerio/ai-config-selector/internal/launch"
 	"github.com/alcimerio/ai-config-selector/internal/profile"
+	"github.com/alcimerio/ai-config-selector/internal/skills"
 )
 
 var categoryIDPattern = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
@@ -433,6 +434,23 @@ type ResolvedProfile struct {
 type resolvedContribution struct {
 	id           string
 	contribution launch.Contribution
+}
+
+// DevinCatalogExpectation is declarative selected-Skills data. It deliberately
+// has no process, Session, backend, or callback authority.
+type DevinCatalogExpectation interface {
+	DevinExpectedCatalog() []skills.SkillReference
+}
+
+// DevinExpectedCatalog returns the selected catalog identity supplied by the
+// Devin Skills contribution before materialization. It never scans a Session.
+func (resolved ResolvedProfile) DevinExpectedCatalog() []skills.SkillReference {
+	for _, entry := range resolved.contributions {
+		if expected, ok := entry.contribution.(DevinCatalogExpectation); ok {
+			return append([]skills.SkillReference(nil), expected.DevinExpectedCatalog()...)
+		}
+	}
+	return nil
 }
 
 // Resolve validates and resolves every saved category in Registry order.

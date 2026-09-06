@@ -1,9 +1,9 @@
 # Contained process executor
 
-`internal/executor` currently owns the protected Session lifecycle for the one
-implemented shared operation: the fixed interactive shell. Its production
+`internal/executor` owns the protected Session lifecycle for the fixed
+interactive shell and the registered Devin lifecycle. Its production
 constructor selects the required native sandbox internally; adapters cannot
-provide a backend, executable, arguments, probes, or Session projection.
+provide a backend, probe ordering, Session retention, or cleanup policy.
 
 `RunShell` accepts only Session and working directories, target-independent
 Profile materialization, and terminal streams. It checks the native sandbox,
@@ -17,6 +17,19 @@ and Session finalization failures take precedence over an ordinary shell exit,
 so the facade reports infrastructure status rather than a potentially unsafe
 target status. Passive readiness and shell planning remain side-effect free.
 
-This is only the shell foundation. Devin and Codex process lifecycles still use
-their existing ownership paths and are intentionally not represented by a
-generic executor API yet.
+`RunDevin` accepts validated Devin configuration, resolved Profile
+materialization, the independently selected Skills catalog, directories, and
+terminal streams. The executor captures termination and resize signals before
+the sandbox check, creates and materializes the Session, copies only Devin's
+fixed allowlisted credential file, runs `skills list --json` followed by `auth
+status`, and attaches the fixed interactive Devin invocation only after both
+observations are interpreted. Catalog parsing remains in `devinruntime`; it
+keeps project and built-in treatment, canonical managed identities, and safe
+redacted capability failures without exposing process output or credentials.
+
+Each probe and target is retained before Start. A failed Start is not waited;
+a successful Start is waited exactly once, and cleanup uncertainty blocks the
+next probe or target and retains the Session. The Devin adapter translates the
+lower redacted preflight error to its existing public compatibility wrapper and
+does not regain process lifecycle authority. Codex authentication remains on
+its existing lifecycle in this stage.

@@ -194,13 +194,12 @@ func (contribution skillsContribution) Materialize(sessionHome string) error {
 }
 
 func (contribution skillsContribution) Verify(ctx context.Context, verification launch.VerificationContext) error {
-	return contribution.adapter.verifySkillIsolation(ctx, &Session{
-		RootDir:          verification.SessionDirectory,
-		HomeDir:          verification.SessionHome,
-		TemporaryDir:     verification.TemporaryDirectory,
-		SessionsDir:      verification.SessionsDirectory,
-		WorkingDirectory: verification.WorkingDirectory,
-		expectedCatalog:  contribution.expected,
-		retainProcess:    verification.RetainProcess,
-	})
+	// Process execution belongs to executor.RunDevin. Keeping verification
+	// declarative here prevents a category from retaining a process or changing
+	// probe order after the Session is materialized.
+	return nil
+}
+
+func (contribution skillsContribution) DevinExpectedCatalog() []skills.SkillReference {
+	return append([]skills.SkillReference(nil), contribution.expected...)
 }
