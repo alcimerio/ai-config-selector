@@ -12,6 +12,7 @@ import (
 	"sort"
 
 	"github.com/alcimerio/ai-config-selector/internal/category"
+	"github.com/alcimerio/ai-config-selector/internal/devinruntime"
 	"github.com/alcimerio/ai-config-selector/internal/launch"
 	"github.com/alcimerio/ai-config-selector/internal/profile"
 	"github.com/alcimerio/ai-config-selector/internal/skills"
@@ -79,7 +80,7 @@ func newCategoryRegistry(adapter *Adapter) (*category.Registry, category.Binding
 				}
 				expected = append(expected, reference)
 			}
-			sortSkillReferences(expected)
+			devinruntime.SortSkillReferences(expected)
 			return skillsContribution{adapter: adapter, selected: selected, expected: expected}, nil
 		},
 		Count: func(references []skills.SkillReference) int { return len(references) },
@@ -170,7 +171,7 @@ func (contribution skillsContribution) Plan(ctx context.Context, _ string, plan 
 }
 
 func (contribution skillsContribution) Materialize(sessionHome string) error {
-	for _, rule := range globalSourceRules {
+	for _, rule := range devinruntime.GlobalSourceRules() {
 		if err := os.MkdirAll(filepath.Join(sessionHome, rule.RelativeDirectory), 0o700); err != nil {
 			return fmt.Errorf("prepare Devin Session global source %q: %w", rule.Source, err)
 		}

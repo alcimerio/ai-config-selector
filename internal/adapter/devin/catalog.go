@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sort"
 
+	"github.com/alcimerio/ai-config-selector/internal/devinruntime"
 	"github.com/alcimerio/ai-config-selector/internal/skills"
 )
 
@@ -32,7 +33,7 @@ func discoverSkillCatalog(ctx context.Context, home string, selected map[skills.
 
 func discoverSkillCatalogReport(ctx context.Context, home string, selected map[skills.Source]bool, unavailable map[skills.Source]bool) ([]skills.SkillBundle, error) {
 	catalog := make([]skills.SkillBundle, 0)
-	for _, rule := range globalSourceRules {
+	for _, rule := range devinruntime.GlobalSourceRules() {
 		if selected != nil && !selected[rule.Source] {
 			continue
 		}
@@ -95,7 +96,7 @@ func discoverSkillCatalogReport(ctx context.Context, home string, selected map[s
 // be inspected. Launch and passive validation retain their existing semantics.
 func (a *Adapter) discoverProfileSkills(ctx context.Context) (skills.Discovery, error) {
 	result := skills.Discovery{UnavailableSources: map[skills.Source]bool{}}
-	for _, rule := range globalSourceRules {
+	for _, rule := range devinruntime.GlobalSourceRules() {
 		catalog, err := discoverSkillCatalogReport(ctx, a.existingHomeDir, map[skills.Source]bool{rule.Source: true}, result.UnavailableSources)
 		if ctx.Err() != nil {
 			return result, ctx.Err()

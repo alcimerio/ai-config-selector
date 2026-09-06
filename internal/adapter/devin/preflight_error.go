@@ -1,78 +1,54 @@
 package devin
 
-type Capability string
+import "github.com/alcimerio/ai-config-selector/internal/devinruntime"
+
+type Capability = devinruntime.Capability
 
 const (
-	CapabilitySkillIsolation Capability = "skill isolation"
-	CapabilityAuthentication Capability = "authentication"
+	CapabilitySkillIsolation = devinruntime.CapabilitySkillIsolation
+	CapabilityAuthentication = devinruntime.CapabilityAuthentication
 )
 
 // PreflightErrorCategory is a stable, redacted class of existing-Devin
 // capability failure. It deliberately does not include command output,
 // account data, credentials, paths, or environment entries.
-type PreflightErrorCategory string
+type PreflightErrorCategory = devinruntime.PreflightErrorCategory
 
 const (
-	SkillPreflightFailed          PreflightErrorCategory = "skill_preflight_failed"
-	AuthenticationPreflightFailed PreflightErrorCategory = "authentication_preflight_failed"
-	DevinPreflightFailed          PreflightErrorCategory = "devin_preflight_failed"
+	SkillPreflightFailed          = devinruntime.SkillPreflightFailed
+	AuthenticationPreflightFailed = devinruntime.AuthenticationPreflightFailed
+	DevinPreflightFailed          = devinruntime.DevinPreflightFailed
 )
 
-type preflightFailureReason uint8
+type preflightFailureReason = devinruntime.PreflightFailureReason
 
 const (
-	reasonExecutableUnavailable preflightFailureReason = iota + 1
-	reasonVerificationInterrupted
-	reasonSkillInspectionCommandFailed
-	reasonSkillInspectionOutputInvalid
-	reasonCatalogMismatch
-	reasonAuthenticationCommandFailed
-	reasonAuthenticationUnavailable
+	reasonExecutableUnavailable        = devinruntime.ReasonExecutableUnavailable
+	reasonVerificationInterrupted      = devinruntime.ReasonVerificationInterrupted
+	reasonSkillInspectionCommandFailed = devinruntime.ReasonSkillInspectionCommandFailed
+	reasonSkillInspectionOutputInvalid = devinruntime.ReasonSkillInspectionOutputInvalid
+	reasonCatalogMismatch              = devinruntime.ReasonCatalogMismatch
+	reasonAuthenticationCommandFailed  = devinruntime.ReasonAuthenticationCommandFailed
+	reasonAuthenticationUnavailable    = devinruntime.ReasonAuthenticationUnavailable
 )
 
-// PreflightError is safe to present to users. It never includes subprocess
-// output, environment values, credential contents, or account details.
+// PreflightError remains the Devin Adapter's compatibility error shape while
+// delegating its redacted category and diagnostic mapping to devinruntime.
 type PreflightError struct {
 	Capability Capability
 	reason     preflightFailureReason
 }
 
-const requiredSandboxNotice = "ACS will not start Devin without the required sandbox"
-
 func (e *PreflightError) Category() PreflightErrorCategory {
 	if e == nil {
-		return DevinPreflightFailed
+		return devinruntime.NewPreflightError("", 0).Category()
 	}
-	switch e.Capability {
-	case CapabilitySkillIsolation:
-		return SkillPreflightFailed
-	case CapabilityAuthentication:
-		return AuthenticationPreflightFailed
-	default:
-		return DevinPreflightFailed
-	}
+	return devinruntime.NewPreflightError(e.Capability, e.reason).Category()
 }
 
 func (e *PreflightError) Error() string {
-	prefix := string(e.Category()) + ": Devin Adapter Preflight failed: "
-	message := ""
-	switch e.reason {
-	case reasonExecutableUnavailable:
-		message = "the Devin executable could not be started; verify Devin is installed and the configured executable path is valid"
-	case reasonVerificationInterrupted:
-		message = "verification was canceled or timed out; retry with a live Session"
-	case reasonSkillInspectionCommandFailed:
-		message = "the skill isolation probe failed; run `devin skills list --json` outside ACS and resolve the reported CLI error"
-	case reasonSkillInspectionOutputInvalid:
-		message = "Devin returned an incompatible global Skill Catalog response; update Devin or ACS before retrying"
-	case reasonCatalogMismatch:
-		message = "skill isolation could not be verified because the global Skill Catalog did not match; the installed Devin CLI is incompatible with ACS isolation"
-	case reasonAuthenticationCommandFailed:
-		message = "the authentication probe failed; run `devin auth status` outside ACS and resolve the reported CLI error"
-	case reasonAuthenticationUnavailable:
-		message = "usable existing authentication could not be verified; run `devin auth login` outside ACS and retry"
-	default:
-		message = "preflight could not be completed"
+	if e == nil {
+		return devinruntime.NewPreflightError("", 0).Error()
 	}
-	return prefix + message + "; " + requiredSandboxNotice
+	return devinruntime.NewPreflightError(e.Capability, e.reason).Error()
 }

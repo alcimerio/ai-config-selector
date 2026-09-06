@@ -221,7 +221,11 @@ func (process *preflightRetentionProcess) Wait() error {
 	}
 	switch process.stage {
 	case "skills":
-		return json.NewEncoder(process.output).Encode([]observedSkill{{
+		return json.NewEncoder(process.output).Encode([]struct {
+			Name     string `json:"name"`
+			Provider string `json:"provider"`
+			BaseDir  string `json:"base_dir"`
+		}{{
 			Name: "review", Provider: "Devin", BaseDir: filepath.Join(process.home, ".config", "devin", "skills", "review"),
 		}})
 	case "auth":

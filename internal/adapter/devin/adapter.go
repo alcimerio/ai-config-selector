@@ -4,63 +4,43 @@ package devin
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sort"
-	"strconv"
-	"strings"
 
 	"github.com/alcimerio/ai-config-selector/internal/builder"
 	"github.com/alcimerio/ai-config-selector/internal/category"
+	"github.com/alcimerio/ai-config-selector/internal/devinruntime"
 	"github.com/alcimerio/ai-config-selector/internal/launch"
 	"github.com/alcimerio/ai-config-selector/internal/skills"
 )
 
 // GlobalSource identifies one explicit Devin user-global Skill Bundle source.
-type GlobalSource = skills.Source
+type GlobalSource = devinruntime.GlobalSource
 
 const (
-	GlobalSourceDevinConfig  GlobalSource = "devin-config"
-	GlobalSourceSharedAgents GlobalSource = "shared-agents"
+	GlobalSourceDevinConfig  = devinruntime.GlobalSourceDevinConfig
+	GlobalSourceSharedAgents = devinruntime.GlobalSourceSharedAgents
 )
 
 // SourceRule records a Devin discovery rule relative to the Session home.
-type SourceRule struct {
-	Source            GlobalSource
-	RelativeDirectory string
-}
-
-var globalSourceRules = []SourceRule{
-	{Source: GlobalSourceDevinConfig, RelativeDirectory: filepath.Join(".config", "devin", "skills")},
-	{Source: GlobalSourceSharedAgents, RelativeDirectory: filepath.Join(".agents", "skills")},
-}
-
-var projectSourceDirectories = []string{
-	filepath.Join(".devin", "skills"),
-	filepath.Join(".agents", "skills"),
-}
+type SourceRule = devinruntime.SourceRule
 
 const credentialsRelativePath = ".local/share/devin/credentials.toml"
 
 // GlobalSourceRules returns the complete set of global Skill Catalog sources
 // managed by the Devin Adapter. Project-local sources are deliberately absent.
 func GlobalSourceRules() []SourceRule {
-	rules := make([]SourceRule, len(globalSourceRules))
-	copy(rules, globalSourceRules)
-	return rules
+	return devinruntime.GlobalSourceRules()
 }
 
 // ProjectSourceDirectories returns Devin's known repository-local skill roots.
 // ACS observes but does not materialize or filter these roots.
 func ProjectSourceDirectories() []string {
-	directories := make([]string, len(projectSourceDirectories))
-	copy(directories, projectSourceDirectories)
-	return directories
+	return devinruntime.ProjectSourceDirectories()
 }
 
 type Config struct {
@@ -148,7 +128,7 @@ func (a *Adapter) PrepareSession(rootDir, workingDirectory string, selected []Sk
 	if err := os.MkdirAll(temporaryDir, 0o700); err != nil {
 		return nil, fmt.Errorf("prepare Devin Session temporary directory: %w", err)
 	}
-	for _, rule := range globalSourceRules {
+	for _, rule := range devinruntime.GlobalSourceRules() {
 		if err := os.MkdirAll(filepath.Join(homeDir, rule.RelativeDirectory), 0o700); err != nil {
 			return nil, fmt.Errorf("prepare Devin Session global source %q: %w", rule.Source, err)
 		}
@@ -172,7 +152,7 @@ func (a *Adapter) PrepareSession(rootDir, workingDirectory string, selected []Sk
 			return nil, fmt.Errorf("prepare Devin Session Skill Bundle %q: %w", identity, err)
 		}
 	}
-	sortSkillReferences(expected)
+	devinruntime.SortSkillReferences(expected)
 
 	credentialSource := filepath.Join(a.existingHomeDir, filepath.FromSlash(credentialsRelativePath))
 	credentialDestination := filepath.Join(homeDir, filepath.FromSlash(credentialsRelativePath))
@@ -212,7 +192,7 @@ func (a *Adapter) verifyAuthentication(ctx context.Context, session *Session) er
 		}
 		return &PreflightError{Capability: CapabilityAuthentication, reason: commandFailureReason(ctx, err, reasonAuthenticationCommandFailed)}
 	}
-	if !strings.HasPrefix(strings.TrimSpace(output.String()), "Logged in") {
+	if !devinruntime.AuthenticationLoggedIn(output.Bytes()) {
 		return &PreflightError{Capability: CapabilityAuthentication, reason: reasonAuthenticationUnavailable}
 	}
 	return nil
@@ -226,7 +206,7 @@ func (a *Adapter) verifySkillIsolation(ctx context.Context, session *Session) er
 	if failure != 0 {
 		return &PreflightError{Capability: CapabilitySkillIsolation, reason: failure}
 	}
-	if observed.unmanaged || !equalSkillReferences(session.expectedCatalog, observed.managed) {
+	if observed.HasUnmanagedSource() || !devinruntime.EqualSkillReferences(session.expectedCatalog, observed.ManagedReferences()) {
 		return &PreflightError{
 			Capability: CapabilitySkillIsolation,
 			reason:     reasonCatalogMismatch,
@@ -236,151 +216,29 @@ func (a *Adapter) verifySkillIsolation(ctx context.Context, session *Session) er
 	return nil
 }
 
-type observedSkill struct {
-	Name     string `json:"name"`
-	Provider string `json:"provider"`
-	BaseDir  string `json:"base_dir"`
-}
-
-type catalogObservation struct {
-	managed   []SkillReference
-	unmanaged bool
-}
-
-func (a *Adapter) observeGlobalCatalog(ctx context.Context, session *Session) (catalogObservation, preflightFailureReason, error) {
+func (a *Adapter) observeGlobalCatalog(ctx context.Context, session *Session) (devinruntime.CatalogObservation, preflightFailureReason, error) {
 	var stdout bytes.Buffer
 	if err := a.runSandboxed(ctx, session, []string{"skills", "list", "--json"}, launch.Terminal{Output: &stdout, ErrorOutput: io.Discard}); err != nil {
 		var sandboxFailure *launch.SandboxError
 		if errors.As(err, &sandboxFailure) {
-			return catalogObservation{}, 0, err
+			return devinruntime.CatalogObservation{}, 0, err
 		}
-		return catalogObservation{}, commandFailureReason(ctx, err, reasonSkillInspectionCommandFailed), nil
+		return devinruntime.CatalogObservation{}, commandFailureReason(ctx, err, reasonSkillInspectionCommandFailed), nil
 	}
-
-	var skills []observedSkill
-	if err := json.Unmarshal(stdout.Bytes(), &skills); err != nil {
-		return catalogObservation{}, reasonSkillInspectionOutputInvalid, nil
-	}
-
-	projectBundles := discoverProjectBundles(session.WorkingDirectory)
-	observed := catalogObservation{managed: make([]SkillReference, 0, len(skills))}
-	for _, skill := range skills {
-		if skill.Provider == "Builtin" {
-			continue
-		}
-		if projectBundles[filepath.Clean(skill.BaseDir)] {
-			continue
-		}
-
-		reference, managed := managedReference(session.HomeDir, skill.BaseDir)
-		if managed {
-			observed.managed = append(observed.managed, reference)
-			continue
-		}
-
-		// Any non-built-in skill outside the two known project roots is a new
-		// global source that ACS cannot safely claim to isolate.
-		observed.unmanaged = true
-	}
-	sortSkillReferences(observed.managed)
-	return observed, 0, nil
-}
-
-func managedReference(homeDir, baseDir string) (SkillReference, bool) {
-	resolvedHomeDir, err := filepath.EvalSymlinks(filepath.Clean(homeDir))
-	if err != nil {
-		return SkillReference{}, false
-	}
-	resolvedBaseDir, err := filepath.EvalSymlinks(filepath.Clean(baseDir))
-	if err != nil {
-		return SkillReference{}, false
-	}
-	for _, rule := range globalSourceRules {
-		expectedRoot := filepath.Join(resolvedHomeDir, rule.RelativeDirectory)
-		resolvedRoot, err := filepath.EvalSymlinks(expectedRoot)
-		if err != nil || resolvedRoot != expectedRoot {
-			continue
-		}
-		relative, ok := relativeWithin(resolvedRoot, resolvedBaseDir)
-		if ok && relative != "." {
-			return SkillReference{Source: rule.Source, RelativePath: relative}, true
-		}
-	}
-	return SkillReference{}, false
-}
-
-func discoverProjectBundles(workingDirectory string) map[string]bool {
-	bundles := make(map[string]bool)
-	for _, relativeRoot := range projectSourceDirectories {
-		root := filepath.Join(workingDirectory, relativeRoot)
-		entries, err := os.ReadDir(root)
-		if err != nil {
-			continue
-		}
-		for _, entry := range entries {
-			bundlePath := filepath.Join(root, entry.Name())
-			bundles[filepath.Clean(bundlePath)] = true
-			if resolved, err := filepath.EvalSymlinks(bundlePath); err == nil {
-				bundles[filepath.Clean(resolved)] = true
-			}
-		}
-	}
-	return bundles
+	observed, failure := devinruntime.InterpretCatalog(session.HomeDir, session.WorkingDirectory, stdout.Bytes())
+	return observed, failure, nil
 }
 
 func sourceRule(source GlobalSource) (SourceRule, bool) {
-	for _, rule := range globalSourceRules {
-		if rule.Source == source {
-			return rule, true
-		}
-	}
-	return SourceRule{}, false
+	return devinruntime.SourceRuleFor(source)
 }
 
 func cleanBundleRelativePath(path string) (string, error) {
-	cleaned := filepath.Clean(path)
-	if path == "" || cleaned == "." || filepath.IsAbs(cleaned) || cleaned == ".." || strings.HasPrefix(cleaned, ".."+string(filepath.Separator)) {
-		return "", fmt.Errorf("invalid Skill Bundle-relative path %q", path)
-	}
-	return cleaned, nil
+	return devinruntime.CleanBundleRelativePath(path)
 }
 
 func diagnosticIdentity(reference SkillReference) string {
-	return escapedDiagnosticIdentity(string(reference.Source) + ":" + filepath.ToSlash(reference.RelativePath))
-}
-
-func relativeWithin(root, candidate string) (string, bool) {
-	relative, err := filepath.Rel(filepath.Clean(root), filepath.Clean(candidate))
-	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
-		return "", false
-	}
-	return relative, true
-}
-
-func escapedDiagnosticIdentity(value string) string {
-	quoted := strconv.QuoteToASCII(value)
-	return quoted[1 : len(quoted)-1]
-}
-
-func equalSkillReferences(left, right []SkillReference) bool {
-	if len(left) != len(right) {
-		return false
-	}
-	for index := range left {
-		if left[index] != right[index] {
-			return false
-		}
-	}
-	return true
-}
-
-func sortSkillReferences(references []SkillReference) {
-	sort.Slice(references, func(left, right int) bool {
-		if references[left].Source != references[right].Source {
-			return references[left].Source < references[right].Source
-		}
-		return references[left].RelativePath < references[right].RelativePath
-	})
+	return devinruntime.DiagnosticIdentity(reference)
 }
 
 func commandFailureReason(ctx context.Context, err error, commandFailed preflightFailureReason) preflightFailureReason {
