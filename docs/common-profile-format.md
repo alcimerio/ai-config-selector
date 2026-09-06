@@ -91,4 +91,6 @@ roll publication forward and is not a universal rollback or backup feature.
 migrate, canonicalize, discover inactive overlays, inspect target readiness,
 access authentication, allocate a Session or write files. Structural support,
 selected source availability, overlay execution support and native enforcement
-are separate observations.
+are separate observations. See the [shared Devin/Codex behavior and evidence
+guide](shared-target-conformance.md) for the maintained cross-target contract,
+native fixture boundary and pending real-use checklist.

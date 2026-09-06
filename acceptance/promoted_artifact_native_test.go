@@ -127,6 +127,118 @@ func TestPromotedArtifactNativeContainmentContract(t *testing.T) {
 	t.Run("missing backend OR invalid policy cannot start a marker", assertPromotedArtifactMissingBackendFailsClosed)
 }
 
+// TestPromotedArtifactSharedTargetConformance exercises the common Profile
+// contract through the exact installed ACS candidate. Target execution and
+// credential-bearing Codex observations remain in their dedicated gates.
+func TestPromotedArtifactSharedTargetConformance(t *testing.T) {
+	binary := promotedBinary(t)
+	home, path := prepareRuntimeHome(t)
+	writeSkillBundle(t, home, "unselected")
+	sharedRoot := filepath.Join(home, ".agents", "skills", "delivery")
+	if err := os.MkdirAll(sharedRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sharedRoot, "SKILL.md"), []byte("# delivery\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	workspace := realTemporaryDirectory(t)
+	for _, relative := range []string{".agents/skills/project-agent", ".devin/skills/project-devin"} {
+		root := filepath.Join(workspace, filepath.FromSlash(relative))
+		if err := os.MkdirAll(root, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, "SKILL.md"), []byte("# project local\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	globalAuth := filepath.Join(home, ".codex", "auth.json")
+	if err := os.MkdirAll(filepath.Dir(globalAuth), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(globalAuth, []byte("global-auth-sentinel\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, access := range []string{"read-only", "read-write"} {
+		name := "shared-" + strings.ReplaceAll(access, "-", "")
+		writeSharedTargetProfile(t, home, name, access)
+		outputs := map[string]string{}
+		for _, target := range []string{"devin", "codex"} {
+			arguments := []string{target, "--profile", name, "--dry-run"}
+			if target == "codex" && access == "read-write" {
+				arguments = append(arguments, "--auth", "override")
+			}
+			command := exec.Command(binary, arguments...)
+			command.Env = nativeCandidateEnvironment(home, path, nil)
+			command.Dir = workspace
+			output, err := command.CombinedOutput()
+			if err != nil {
+				t.Fatalf("installed candidate %s shared contract: %v; output=%s", target, err, output)
+			}
+			outputs[target] = string(output)
+			for _, marker := range []string{
+				"identity: devin-config:review",
+				"identity: shared-agents:delivery",
+				"access: " + access,
+				filepath.Join("<session>", "home", ".acs", "common", "v1", "skills", "devin-config", "review"),
+				filepath.Join("<session>", "home", ".acs", "common", "v1", "skills", "shared-agents", "delivery"),
+				"No Session was created",
+			} {
+				if !strings.Contains(outputs[target], marker) {
+					t.Fatalf("%s shared dry-run omitted %q: %s", target, marker, output)
+				}
+			}
+			if strings.Contains(outputs[target], "unselected") {
+				t.Fatalf("%s shared dry-run included an unselected global Skill: %s", target, output)
+			}
+			assertNoSessions(t, home)
+		}
+		for _, marker := range []string{
+			filepath.Join("<session>", "home", ".config", "devin", "skills", "review"),
+			filepath.Join("<session>", "home", ".agents", "skills", "delivery"),
+			filepath.Join(workspace, ".agents", "skills", "project-agent"),
+			filepath.Join(workspace, ".devin", "skills", "project-devin"),
+		} {
+			if !strings.Contains(outputs["devin"], marker) {
+				t.Fatalf("Devin shared dry-run omitted projection or project-local boundary %q", marker)
+			}
+		}
+		codexReference := "work"
+		if access == "read-write" {
+			codexReference = "override"
+		}
+		for _, marker := range []string{
+			filepath.Join("<session>", "home", ".codex", "skills", "devin-config", "review"),
+			filepath.Join("<session>", "home", ".codex", "skills", "shared-agents", "delivery"),
+			"reference: " + codexReference,
+		} {
+			if !strings.Contains(outputs["codex"], marker) {
+				t.Fatalf("Codex shared dry-run omitted projection or opaque identity %q", marker)
+			}
+		}
+		for _, project := range []string{"project-agent", "project-devin"} {
+			if strings.Contains(outputs["codex"], project) {
+				t.Fatalf("Codex represented project-local Skill %q as ACS-managed material", project)
+			}
+		}
+		profileBytes, err := os.ReadFile(filepath.Join(home, ".acs", "profiles", name+".json"))
+		if err != nil || !bytes.Contains(profileBytes, []byte(`"authRef":"work"`)) || bytes.Contains(profileBytes, []byte("override")) {
+			t.Fatalf("Codex dry-run override changed the stored opaque reference: %q, %v", profileBytes, err)
+		}
+	}
+
+	legacy := exec.Command(binary, "codex", "--profile", "reviews", "--auth", "work", "--dry-run")
+	legacy.Env, legacy.Dir = nativeCandidateEnvironment(home, path, nil), workspace
+	if output, err := legacy.CombinedOutput(); err == nil || !strings.Contains(string(output), "unsupported schema version 1") {
+		t.Fatalf("installed Codex reinterpreted legacy Devin Profile: err=%v output=%s", err, output)
+	}
+	contents, err := os.ReadFile(globalAuth)
+	if err != nil || string(contents) != "global-auth-sentinel\n" {
+		t.Fatalf("dry-run accessed or changed global Codex auth: %q, %v", contents, err)
+	}
+	assertNoSessions(t, home)
+}
+
 func assertPromotedArtifactV3WorkspaceModes(t *testing.T) {
 	binary := promotedBinary(t)
 	home, path := prepareRuntimeHome(t)

@@ -149,6 +149,12 @@ jobs:
       - name: Run native application, Adapter, installer, and PTY regressions
         run: go test ./...
 
+      - name: Exercise shared target contract through supplied candidate
+        env:
+          ACS_PROMOTED_BINARY: ${{ runner.temp }}/acs-promoted-${{ matrix.os }}-${{ matrix.arch }}/bin/acs
+          ACS_PROMOTED_SANDBOX_BACKEND: ${{ matrix.sandbox_backend }}
+        run: go test ./acceptance -run '^TestPromotedArtifactSharedTargetConformance$' -count=1 -v
+
       - name: Run supported native race tests
         run: go test -race ./...
 

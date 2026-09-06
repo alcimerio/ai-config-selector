@@ -60,3 +60,6 @@ boundary; ACS Profile grants and lifecycle proofs are.
 An output other than exact `codex-cli 0.149.1` is an actionable compatibility
 error. Real account login and target-origin refresh remain supplemental
 trusted-host observations rather than credential-bearing CI requirements.
+The [shared Devin/Codex behavior and evidence guide](shared-target-conformance.md)
+defines the common contract, intentional projection differences and the pending
+week-long real-use observation.

@@ -30,7 +30,9 @@ for contextual help.
 
 New development-source Profiles use independently versioned common Skills,
 workspace intent, and explicit target overlays. See the [common Profile format,
-migration, grants and projection contract](docs/common-profile-format.md).
+migration, grants and projection contract](docs/common-profile-format.md) and
+the [shared Devin/Codex behavior, evidence boundaries and daily-use
+checklist](docs/shared-target-conformance.md).
 
 ## Edit and repair Profiles (development source)
 

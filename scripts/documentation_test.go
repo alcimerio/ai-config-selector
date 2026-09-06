@@ -257,6 +257,44 @@ func TestNamedAuthenticationDocumentationSeparatesAutomatedAndAuthenticatedEvide
 	}
 }
 
+func TestSharedTargetConformanceDocumentationAndNativeGateStayExplicit(t *testing.T) {
+	guide := readRepositoryFile(t, "..", "docs/shared-target-conformance.md")
+	normalizedGuide := strings.Join(strings.Fields(guide), " ")
+	for _, required := range []string{
+		"source` plus `relativePath",
+		"read-only or explicit read-write",
+		"TestMaintainedTargetsShareCommonSkillsAndWorkspaceContract",
+		"TestPromotedArtifactSharedTargetConformance",
+		"supplied ACS candidate without rebuilding it",
+		"ten minutes",
+		"two real projects",
+		"one week",
+		"unperformed/pending",
+		"ACS artifact version and SHA-256",
+		"Target version:",
+		"no credentials, account data, target output, paths or Session contents",
+	} {
+		if !strings.Contains(normalizedGuide, required) {
+			t.Errorf("shared target guide omits %q", required)
+		}
+	}
+	for _, document := range []string{"README.md", "docs/common-profile-format.md", "docs/interactive-codex.md"} {
+		if !strings.Contains(readRepositoryFile(t, "..", document), "shared-target-conformance.md") {
+			t.Errorf("%s does not link the shared target guide", document)
+		}
+	}
+	workflow := readRepositoryFile(t, "..", filepath.Join(".github", "workflows", "promoted-artifacts.yml"))
+	for _, required := range []string{
+		"Exercise shared target contract through supplied candidate",
+		"go test ./acceptance -run '^TestPromotedArtifactSharedTargetConformance$' -count=1 -v",
+		"ACS_PROMOTED_BINARY:",
+	} {
+		if !strings.Contains(workflow, required) {
+			t.Errorf("promoted artifact workflow omits shared target gate %q", required)
+		}
+	}
+}
+
 func TestHistoricalReleaseRecordsRemainAvailable(t *testing.T) {
 	for _, version := range []string{"v0.2.0", "v0.3.0", "v0.3.1", "v0.3.2", "v0.3.3"} {
 		for _, suffix := range []string{".md", "-checklist.md"} {
