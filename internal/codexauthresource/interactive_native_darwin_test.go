@@ -546,9 +546,11 @@ func writeSSE(writer io.Writer, events ...map[string]any) {
 func buildFixedCodexTrampoline(t *testing.T, target, baseURL, destination string) {
 	t.Helper()
 	source := filepath.Join(filepath.Dir(destination), "codex-trampoline.c")
-	program := fmt.Sprintf(`#include <stdlib.h>
-#include <string.h>
-#include <unistd.h>
+	program := fmt.Sprintf(`#include <sqlite3.h>
+#include <stdio.h>
+#include <stdlib.h>
+	#include <string.h>
+	#include <unistd.h>
 int main(int argc, char **argv) {
   char **next = calloc((size_t)argc + 3, sizeof(char *));
   if (!next) return 120;
@@ -557,9 +559,27 @@ int main(int argc, char **argv) {
   for (int i = 1; i < argc; i++) {
     next[i] = argv[i];
     if (strcmp(argv[i], "--version") == 0) version = 1;
-  }
-  if (!version) {
-    next[argc] = "-c";
+	}
+	if (!version) {
+		const char *home = getenv("HOME");
+		char path[4096];
+		sqlite3 *db = NULL;
+		if (!home || snprintf(path, sizeof(path), "%%s/.codex/acs-sqlite-preflight.sqlite", home) <= 0) return 122;
+		int rc = sqlite3_open_v2(path, &db, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE, NULL);
+		if (rc == SQLITE_OK) rc = sqlite3_exec(db, "PRAGMA journal_mode=WAL; CREATE TABLE proof(value INTEGER); INSERT INTO proof VALUES(1);", NULL, NULL, NULL);
+		if (rc != SQLITE_OK) {
+			fprintf(stderr, "acs-sqlite-preflight:failed:%%d:%%d\n", rc, db ? sqlite3_extended_errcode(db) : -1);
+			if (db) sqlite3_close(db);
+			return 123;
+		}
+		sqlite3_close(db);
+		unlink(path);
+		char sidecar[4100];
+		snprintf(sidecar, sizeof(sidecar), "%%s-wal", path); unlink(sidecar);
+		snprintf(sidecar, sizeof(sidecar), "%%s-shm", path); unlink(sidecar);
+		fputs("acs-sqlite-preflight:passed\n", stderr);
+		fflush(stderr);
+		next[argc] = "-c";
     next[argc + 1] = %s;
   }
   execv(next[0], next);
@@ -578,7 +598,7 @@ int main(int argc, char **argv) {
 		t.Fatal("prepare fixed Codex trampoline replacement")
 	}
 	defer os.Remove(replacementPath)
-	if output, err := exec.Command("/usr/bin/clang", "-Os", source, "-o", replacementPath).CombinedOutput(); err != nil {
+	if output, err := exec.Command("/usr/bin/clang", "-Os", source, "-lsqlite3", "-o", replacementPath).CombinedOutput(); err != nil {
 		t.Fatalf("compile fixed Codex trampoline: %v: %s", err, output)
 	}
 	if err := os.Chmod(replacementPath, 0o500); err != nil {
