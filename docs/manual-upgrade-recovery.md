@@ -12,6 +12,11 @@ identifies its four downloadable assets. The examples deliberately pin that
 release; they do not track a moving `latest` download URL. Selecting v0.4.0 when
 you already use newer development source is a binary downgrade.
 
+This two-architecture scope is historical and specific to published v0.4.0.
+Current development source and future releases support only macOS 26 on Apple
+Silicon (`darwin/arm64`); the Intel asset and checksum below remain unchanged so
+v0.4.0 recovery stays reproducible.
+
 ## Check which capabilities belong to your binary
 
 | Capability | Published v0.4.0 | Current development source |
@@ -452,7 +457,7 @@ and executables, including directories with spaces, verification failures,
 command shadowing, old/new selection and rollback. Such checks establish shell
 behavior and file preservation, not a real-user upgrade or recovery. Existing
 installer tests cover no-overwrite, unsafe destinations, checksum/version failures
-and archive validation. Native PR CI on macOS 26 arm64 and Intel remains necessary
+and archive validation. Native PR CI on macOS 26 Apple Silicon remains necessary
 for the installed candidate, filesystem transactions, Session settlement, Seatbelt
 and disposable-Keychain recovery contracts. Its source candidate is not evidence
 that the older published binary contains newer commands. No real credentials or

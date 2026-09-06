@@ -70,11 +70,6 @@ jobs:
             os: darwin
             arch: arm64
             sandbox_backend: available
-          - target: darwin/amd64
-            runner: macos-26-intel
-            os: darwin
-            arch: amd64
-            sandbox_backend: available
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 20
 
@@ -181,7 +176,7 @@ jobs:
           ACS_NATIVE_AUTH_RECOVERY_ROOT: ${{ runner.temp }}/acs-native-auth-recovery
         run: go test ./internal/codexauthresource -run '^TestNativeKeychainRecoveryEntrypoint$' -count=1
 
-      # Includes passive diagnostics, no-execution sentinels and no-write snapshots on both architectures.
+      # Includes passive diagnostics, no-execution sentinels and no-write snapshots on Apple Silicon.
       - name: Exercise installed candidate as a black box
         env:
           ACS_PROMOTED_BINARY: ${{ runner.temp }}/acs-promoted-${{ matrix.os }}-${{ matrix.arch }}/bin/acs

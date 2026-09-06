@@ -982,8 +982,8 @@ func writeNativeCodexProfile(t *testing.T, home, profileName, authRef, access st
 
 func assertLockedCodexIdentity(t *testing.T, archivePath, installedPath string) {
 	t.Helper()
-	want := map[string]string{"arm64": "ed60f475c6dda6044c2c00fd7f33273cc3f3f98900ccd1204bfdf2fe935f3405", "amd64": "85fe7a837eb739dd5e1cc59a9c95b7b682048e5aacdc261505bae768fb1288ef"}[runtime.GOARCH]
-	if want == "" || fileSHA256(t, archivePath) != want {
+	const want = "ed60f475c6dda6044c2c00fd7f33273cc3f3f98900ccd1204bfdf2fe935f3405"
+	if runtime.GOARCH != "arm64" || fileSHA256(t, archivePath) != want {
 		t.Fatal("Codex release archive does not match the reviewed architecture lock")
 	}
 	archive, err := os.Open(archivePath)
@@ -998,7 +998,7 @@ func assertLockedCodexIdentity(t *testing.T, archivePath, installedPath string) 
 	defer compressed.Close()
 	reader := tar.NewReader(compressed)
 	header, err := reader.Next()
-	if err != nil || header.Typeflag != tar.TypeReg || filepath.Base(header.Name) != map[string]string{"arm64": "codex-aarch64-apple-darwin", "amd64": "codex-x86_64-apple-darwin"}[runtime.GOARCH] {
+	if err != nil || header.Typeflag != tar.TypeReg || filepath.Base(header.Name) != "codex-aarch64-apple-darwin" {
 		t.Fatal("locked archive member is not the expected regular target")
 	}
 	member, err := io.ReadAll(reader)

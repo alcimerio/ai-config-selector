@@ -1,7 +1,7 @@
 # Edit, clone, rename and delete stored Profiles
 
-These commands describe the development source on macOS 26, Apple Silicon and
-Intel. They are not part of the published v0.4.0 binary. Build the current source
+These commands describe the development source on macOS 26 Apple Silicon.
+They are not part of the published v0.4.0 binary. Build the current source
 as described in the [README](../README.md).
 
 ```sh

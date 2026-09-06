@@ -26,9 +26,12 @@ esac
 asset="goreleaser_${tool_os}_${tool_arch}.tar.gz"
 case "${tool_os}/${tool_arch}" in
   Darwin/arm64) expected_checksum="b65624885c25da9a677b7ad11cf86a02123cc5a56af66f6b4ebb574658eada2e" ;;
-  Darwin/x86_64) expected_checksum="a92a68c61a6833ff67748f532cbebc7b8e49ba30de062ab463b221211ee6368f" ;;
   Linux/arm64) expected_checksum="702f03769ac8bcb0e47839c82243cc614ae995633599a98c63062e13ea85f829" ;;
   Linux/x86_64) expected_checksum="a99bbc7ae0d8d897b07c4c497a9b62f222558804715ef219d1af05a7e417bc80" ;;
+  *)
+    printf '%s\n' "goreleaser: unsupported validation host" >&2
+    exit 1
+    ;;
 esac
 
 for prerequisite in awk curl tar; do

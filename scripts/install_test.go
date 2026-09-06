@@ -60,7 +60,6 @@ func TestInstallerSelectsOnlySupportedReleaseTargets(t *testing.T) {
 		archiveName string
 	}{
 		{name: "Darwin arm64", hostOS: "Darwin", hostArch: "arm64", archiveName: "acs_0.2.0_darwin_arm64.tar.gz"},
-		{name: "Darwin amd64", hostOS: "Darwin", hostArch: "x86_64", archiveName: "acs_0.2.0_darwin_amd64.tar.gz"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -108,7 +107,7 @@ func TestInstallerRunsWithDash(t *testing.T) {
 	if err != nil {
 		t.Skip("dash is unavailable")
 	}
-	fixture := newInstallerFixture(t, "Darwin", "amd64")
+	fixture := newInstallerFixture(t, "Darwin", "arm64")
 	fixture.shell = dash
 	destination := filepath.Join(realTemporaryDirectory(t), "bin")
 	if err := os.Mkdir(destination, 0o700); err != nil {
@@ -132,6 +131,7 @@ func TestInstallerRejectsUnsupportedInputsBeforeDownloading(t *testing.T) {
 		{name: "unsupported operating system", hostOS: "FreeBSD", hostArch: "amd64", want: "unsupported operating system"},
 		{name: "unsupported Linux", hostOS: "Linux", hostArch: "amd64", want: "ACS v0.4 supports macOS only"},
 		{name: "unsupported architecture", hostOS: "Darwin", hostArch: "riscv64", want: "unsupported architecture"},
+		{name: "unsupported Intel Mac", hostOS: "Darwin", hostArch: "x86_64", want: "Apple Silicon (arm64) only"},
 		{name: "unknown argument", hostOS: "Darwin", hostArch: "arm64", args: func(_ *testing.T, _ *installerFixture) []string { return []string{"--version", "v9.9.9"} }, want: "unknown argument"},
 		{name: "missing option value", hostOS: "Darwin", hostArch: "arm64", args: func(_ *testing.T, _ *installerFixture) []string { return []string{"--bin-dir"} }, want: "--bin-dir requires a value"},
 		{name: "relative destination", hostOS: "Darwin", hostArch: "arm64", args: func(_ *testing.T, _ *installerFixture) []string { return []string{"--bin-dir", "relative/bin"} }, want: "must be an absolute path"},
@@ -216,6 +216,19 @@ func TestInstallerFailureStagesLeaveNoVisibleOrTemporaryExecutable(t *testing.T)
 				t.Fatal(err)
 			}
 			if _, err := fmt.Fprintf(file, "%s  unrelated.tar.gz\n", strings.Repeat("0", 64)); err != nil {
+				t.Fatal(err)
+			}
+			if err := file.Close(); err != nil {
+				t.Fatal(err)
+			}
+		}, want: "checksum manifest is malformed"},
+		{name: "extra Intel checksum entry", mutate: func(t *testing.T, fixture *installerFixture) {
+			path := filepath.Join(fixture.releaseDirectory, "SHA256SUMS")
+			file, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := fmt.Fprintf(file, "%s  acs_0.2.0_darwin_amd64.tar.gz\n", strings.Repeat("0", 64)); err != nil {
 				t.Fatal(err)
 			}
 			if err := file.Close(); err != nil {
@@ -624,7 +637,7 @@ func (fixture *installerFixture) writeReleaseAssets(hostOS, hostArch string) {
 	}
 	selectedChecksum := fmt.Sprintf("%x", sha256.Sum256(archive))
 	var manifest strings.Builder
-	for _, target := range []string{"darwin_arm64", "darwin_amd64"} {
+	for _, target := range []string{"darwin_arm64"} {
 		name := "acs_0.2.0_" + target + ".tar.gz"
 		checksum := strings.Repeat("0", 64)
 		if name == archiveName {
@@ -645,7 +658,7 @@ func (fixture *installerFixture) updateManifestChecksum() {
 	}
 	selectedChecksum := fmt.Sprintf("%x", sha256.Sum256(archive))
 	var manifest strings.Builder
-	for _, target := range []string{"darwin_arm64", "darwin_amd64"} {
+	for _, target := range []string{"darwin_arm64"} {
 		name := "acs_0.2.0_" + target + ".tar.gz"
 		checksum := strings.Repeat("0", 64)
 		if name == fixture.archiveName {

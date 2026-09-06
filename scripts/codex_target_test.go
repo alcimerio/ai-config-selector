@@ -54,14 +54,13 @@ func TestCodexTargetInstallerRejectsUnsafeArchiveContents(t *testing.T) {
 	}
 }
 
-func TestCodexTargetLockPinsBothOfficialAppleArchives(t *testing.T) {
+func TestCodexTargetLockPinsTheOfficialAppleSiliconArchive(t *testing.T) {
 	contents, err := os.ReadFile("codex-test-targets.lock")
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, want := range []string{
 		"0.149.1|darwin|arm64|ed60f475c6dda6044c2c00fd7f33273cc3f3f98900ccd1204bfdf2fe935f3405|https://github.com/openai/codex/releases/download/rust-v0.149.1/codex-aarch64-apple-darwin.tar.gz",
-		"0.149.1|darwin|amd64|85fe7a837eb739dd5e1cc59a9c95b7b682048e5aacdc261505bae768fb1288ef|https://github.com/openai/codex/releases/download/rust-v0.149.1/codex-x86_64-apple-darwin.tar.gz",
 	} {
 		if !strings.Contains(string(contents), want) {
 			t.Errorf("target lock omits %q", want)
@@ -73,7 +72,6 @@ func TestCodexTargetFetcherAcceptsCommittedLockWithoutNetwork(t *testing.T) {
 	output, calls := runCodexTargetFetcher(t, readCodexTargetLock(t))
 	for _, archive := range []string{
 		"codex_0.149.1_darwin_arm64.tar.gz",
-		"codex_0.149.1_darwin_amd64.tar.gz",
 	} {
 		contents, err := os.ReadFile(filepath.Join(output, archive))
 		if err != nil {
@@ -83,8 +81,8 @@ func TestCodexTargetFetcherAcceptsCommittedLockWithoutNetwork(t *testing.T) {
 			t.Fatalf("fetched %s contents = %q", archive, contents)
 		}
 	}
-	if got := strings.Count(string(calls), "https://github.com/openai/codex/releases/download/rust-v0.149.1/"); got != 2 {
-		t.Fatalf("approved download calls = %d, want 2; calls=%q", got, calls)
+	if got := strings.Count(string(calls), "https://github.com/openai/codex/releases/download/rust-v0.149.1/"); got != 1 {
+		t.Fatalf("approved download calls = %d, want 1; calls=%q", got, calls)
 	}
 }
 
@@ -116,38 +114,14 @@ func TestCodexTargetFetcherRejectsMalformedDigests(t *testing.T) {
 	}
 }
 
-func TestCodexTargetFetcherValidatesEveryLockRowBeforeDownloading(t *testing.T) {
-	valid := readCodexTargetLock(t)
-	for name, digest := range map[string]string{
-		"short":  strings.Repeat("b", 63),
-		"nonhex": strings.Repeat("b", 63) + "g",
-	} {
-		t.Run(name, func(t *testing.T) {
-			lock := strings.Replace(
-				valid,
-				"85fe7a837eb739dd5e1cc59a9c95b7b682048e5aacdc261505bae768fb1288ef",
-				digest,
-				1,
-			)
-			output, calls, result, err := runCodexTargetFetcherFailure(t, lock)
-			if err == nil || !strings.Contains(string(result), "invalid SHA-256 digest") {
-				t.Fatalf("fetch later malformed digest result = (%q, %v)", result, err)
-			}
-			if len(calls) != 0 {
-				t.Fatalf("later malformed digest invoked download: %q", calls)
-			}
-			entries, readErr := os.ReadDir(output)
-			if readErr != nil && !os.IsNotExist(readErr) {
-				t.Fatal(readErr)
-			}
-			if len(entries) != 0 {
-				t.Fatalf("later malformed digest left partial outputs: %#v", entries)
-			}
-			staging, globErr := filepath.Glob(output + ".fetch.*")
-			if globErr != nil || len(staging) != 0 {
-				t.Fatalf("later malformed digest left staging outputs = (%q, %v)", staging, globErr)
-			}
-		})
+func TestCodexTargetFetcherRejectsAnExtraIntelLockEntryBeforeDownloading(t *testing.T) {
+	lock := readCodexTargetLock(t) + "0.149.1|darwin|amd64|" + strings.Repeat("a", 64) + "|https://github.com/openai/codex/releases/download/rust-v0.149.1/codex-x86_64-apple-darwin.tar.gz\n"
+	_, calls, result, err := runCodexTargetFetcherFailure(t, lock)
+	if err == nil || !strings.Contains(string(result), "approved release asset") {
+		t.Fatalf("extra Intel target result = (%q, %v)", result, err)
+	}
+	if len(calls) != 0 {
+		t.Fatalf("extra Intel target invoked download: %q", calls)
 	}
 }
 
@@ -221,9 +195,6 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 archive="codex_0.149.1_darwin_arm64.tar.gz"
-case "$url" in
-  *codex-x86_64-apple-darwin.tar.gz) archive="codex_0.149.1_darwin_amd64.tar.gz" ;;
-esac
 printf '%s\n' "$url" >>"$ACS_FETCH_CALLS"
 printf '%s\n' "$archive" >"$output"
 `)
@@ -233,7 +204,6 @@ file=
 for argument do file="$argument"; done
 case "$file" in
   *arm64.tar.gz) digest=ed60f475c6dda6044c2c00fd7f33273cc3f3f98900ccd1204bfdf2fe935f3405 ;;
-  *amd64.tar.gz) digest=85fe7a837eb739dd5e1cc59a9c95b7b682048e5aacdc261505bae768fb1288ef ;;
   *) exit 1 ;;
 esac
 printf '%s  %s\n' "$digest" "$file"
@@ -261,8 +231,6 @@ func nativeCodexTestTarget(t *testing.T) (string, string) {
 	switch runtime.GOARCH {
 	case "arm64":
 		return "arm64", "codex-aarch64-apple-darwin"
-	case "amd64":
-		return "amd64", "codex-x86_64-apple-darwin"
 	default:
 		t.Fatalf("unsupported test architecture %q", runtime.GOARCH)
 		return "", ""
@@ -277,9 +245,6 @@ func writeCodexTargetLock(t *testing.T, arch, archive string) string {
 	}
 	digest := fmt.Sprintf("%x", sha256.Sum256(contents))
 	url := "https://github.com/openai/codex/releases/download/rust-v0.149.1/codex-aarch64-apple-darwin.tar.gz"
-	if arch == "amd64" {
-		url = "https://github.com/openai/codex/releases/download/rust-v0.149.1/codex-x86_64-apple-darwin.tar.gz"
-	}
 	path := filepath.Join(t.TempDir(), "targets.lock")
 	if err := os.WriteFile(path, []byte("0.149.1|darwin|"+arch+"|"+digest+"|"+url+"\n"), 0o600); err != nil {
 		t.Fatal(err)

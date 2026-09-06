@@ -12,9 +12,9 @@ acs profile validate --json backend-review
 ```
 
 `doctor` checks core host/platform and native backend-file prerequisites without
-requiring HOME, an account, a terminal, or optional clients. Supported hosts are
-macOS 26 on arm64 or Intel. Linux and other platforms fail the platform check;
-no Linux support is implied. macOS product version comes from the native
+requiring HOME, an account, a terminal, or optional clients. The supported host
+is macOS 26 on Apple Silicon (`arm64`). Intel, Linux, and other platforms fail
+the platform check; no Linux support is implied. macOS product version comes from the native
 `kern.osproductversion` API, without executing `sw_vers`.
 
 An optional `--target` requests just that workflow's executable availability:

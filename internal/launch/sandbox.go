@@ -130,11 +130,10 @@ type Platform struct {
 // ValidatePlatform accepts only the release and architecture combinations
 // certified by ACS.
 func ValidatePlatform(platform Platform) error {
-	architectureSupported := platform.Architecture == "amd64" || platform.Architecture == "arm64"
 	supported := false
 	switch platform.OS {
 	case "darwin":
-		supported = architectureSupported && releaseLine(platform.Release, "26")
+		supported = platform.Architecture == "arm64" && releaseLine(platform.Release, "26")
 	}
 	if !supported {
 		return sandboxError(SandboxUnsupportedPlatform, nil)

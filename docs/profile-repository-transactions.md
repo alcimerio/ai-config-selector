@@ -188,8 +188,8 @@ ones. Reads can observe the intermediate two-name rename state.
 
 ## Evidence and supported systems
 
-The supported runtime remains macOS 26 arm64 and Intel. The current-head promoted
-artifact workflow runs the full normal and race suites on both native architectures,
+The supported runtime is macOS 26 on Apple Silicon (`arm64`). The current-head
+promoted artifact workflow runs the full normal and race suites on the native Apple Silicon runner,
 logs the actual filesystem's ASCII case-alias behavior and kernel ownership probe,
 and retains installed-candidate, passive diagnostic, containment, Session and
 credential-free authentication gates. Linux checks are development observations,

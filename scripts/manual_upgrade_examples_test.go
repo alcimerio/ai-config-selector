@@ -264,6 +264,16 @@ func newManualUpgradeFixture(t *testing.T, arch string) *manualUpgradeFixture {
 		t.Fatal(err)
 	}
 	rendered := strings.ReplaceAll(readRepositoryFile(t, ".", "install.sh.tmpl"), "__ACS_RELEASE_VERSION__", "v0.4.0")
+	// The guide deliberately exercises the already-published v0.4.0 installer,
+	// whose historical artifact set included Intel. Reconstruct that fixed
+	// fixture from the current forward-only template without changing the guide.
+	rendered = strings.Replace(rendered,
+		"case \"$(uname -m)\" in\n  arm64 | aarch64) target_arch=\"arm64\" ;;",
+		"case \"$(uname -m)\" in\n  x86_64 | amd64) target_arch=\"amd64\" ;;\n  arm64 | aarch64) target_arch=\"arm64\" ;;", 1)
+	rendered = strings.Replace(rendered,
+		"return name == \"acs_\" version \"_darwin_arm64.tar.gz\"",
+		"return name == \"acs_\" version \"_darwin_arm64.tar.gz\" ||\n    name == \"acs_\" version \"_darwin_amd64.tar.gz\"", 1)
+	rendered = strings.Replace(rendered, "invalid || count != 1", "invalid || count != 2", 1)
 	if err := os.WriteFile(filepath.Join(installer.releaseDirectory, "install.sh"), []byte(rendered), 0o600); err != nil {
 		t.Fatal(err)
 	}

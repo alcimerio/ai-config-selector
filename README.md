@@ -4,9 +4,9 @@ AI Config Selector (`acs`) creates named capability Profiles and launches a
 process with only the selected configuration inside an ephemeral, native
 sandbox.
 
-The v0.4.0 contract is deliberately macOS-first:
+The current development and future release contract is Apple Silicon-only:
 
-- macOS 26 on `darwin/arm64` and `darwin/amd64`;
+- macOS 26 on `darwin/arm64`;
 - Skills discovered from `~/.config/devin/skills` and `~/.agents/skills`;
 - Devin launches with selected Skills and its allowlisted credential;
 - a credential-free sandbox shell for inspecting the same isolation directly.
@@ -95,8 +95,9 @@ go build -o ./bin/acs ./cmd/acs
 
 A source build reports `acs devel`.
 
-The installer accepts only macOS arm64 and amd64. It verifies the selected
-archive against the release's `SHA256SUMS`, validates the embedded version and
+The published v0.4.0 installer historically accepts macOS arm64 and amd64.
+Future installers built from current source accept only Apple Silicon (`arm64`).
+Each verifies the selected archive against the release's `SHA256SUMS`, validates the embedded version and
 archive structure, and refuses to replace an existing `acs` file. It defaults
 to `~/.local/bin`, does not use `sudo`, and never edits shell startup files.
 
@@ -115,7 +116,7 @@ compatible development source; the published v0.4.0 binary does not provide them
 
 Contextual help and the guidance below describe the current source build; the
 published v0.4.0 installer does not include these new help and diagnostic commands. Use macOS
-26 on Apple Silicon or Intel, Go 1.25 or later for the source build, and a real
+26 on Apple Silicon, Go 1.25 or later for the source build, and a real
 terminal for Profile creation and interactive launch. The system
 `/usr/bin/sandbox-exec` must be available; ACS checks it and fails closed.
 
@@ -407,16 +408,16 @@ authentication failures. Ordinary target exits preserve the target exit code.
 ## Release evidence
 
 A release candidate is built once, installed, and exercised as the exact same
-bytes on macOS 26 `darwin/arm64` and `darwin/amd64`. Both native jobs run normal,
+bytes on macOS 26 `darwin/arm64`. The native Apple Silicon job runs normal,
 race, installed-artifact, containment, terminal, descendant, and cleanup tests.
-Attestation and immutable publication depend on both jobs. Linux compilation is
+Attestation and immutable publication depend on that job. Linux compilation is
 recorded separately as a non-blocking portability observation and is not release
 evidence.
 
 The credential-free candidate gate is authoritative. The optional authenticated
-Devin smoke is supplemental and never replaces the two native gates.
+Devin smoke is supplemental and never replaces the native Apple Silicon gate.
 Development named-authentication changes additionally gate the locked official
-`codex-cli 0.149.1` target on both native runners with disposable Keychain,
+`codex-cli 0.149.1` Apple Silicon target with disposable Keychain,
 synthetic-home, and mandatory Seatbelt evidence. Real login and target-origin
 refresh observation remains supplemental and is never a CI credential gate.
 
@@ -428,7 +429,9 @@ refresh observation remains supplemental and is never a CI credential gate.
   source provides those commands. Neither provides CLI import or export.
 - Repository-local Skills remain under Devin's control and are not copied into
   the credential-free sandbox shell.
-- macOS 26 arm64 and amd64 are the only v0.4.0 supported platforms.
+- Current development source and future releases support only macOS 26 on
+  Apple Silicon (`darwin/arm64`). Published v0.4.0 historical assets also
+  include Intel.
 - Linux source is retained without binaries, native CI, or support guarantees.
 - Source builds and authenticated smoke runs are development evidence, not
   immutable-release evidence.

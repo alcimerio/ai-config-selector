@@ -74,6 +74,17 @@ func TestPlanRejectsReplacementOrConflictingReleaseState(t *testing.T) {
 	}
 }
 
+func TestPlanRejectsCandidateWithUnexpectedIntelArchive(t *testing.T) {
+	candidate, _ := writePublicationCandidate(t)
+	name := "acs_0.2.0_darwin_amd64.tar.gz"
+	if err := os.WriteFile(filepath.Join(candidate, name), []byte("unsupported Intel artifact\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := publication.Plan(candidate, "v0.2.0", "0123456789abcdef0123456789abcdef01234567", "notes\n", nil); err == nil || !strings.Contains(err.Error(), "asset names are incomplete or unexpected") {
+		t.Fatalf("unexpected Intel artifact rejection = %v", err)
+	}
+}
+
 type fixtureAsset struct {
 	name   string
 	size   int
@@ -85,7 +96,6 @@ func writePublicationCandidate(t *testing.T) (string, []fixtureAsset) {
 	directory := t.TempDir()
 	names := []string{
 		"acs_0.2.0_darwin_arm64.tar.gz",
-		"acs_0.2.0_darwin_amd64.tar.gz",
 		"SHA256SUMS",
 		"install.sh",
 	}

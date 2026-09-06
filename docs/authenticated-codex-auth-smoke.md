@@ -3,8 +3,8 @@
 This is a supplemental trusted-host observation for behavior that the
 credential-free `codex-cli 0.149.1` PR gate cannot honestly prove. It may
 observe interactive login completion and target-origin token refresh with a
-real account, but it must not run in CI and never replaces the arm64 and Intel
-native merge gates.
+real account, but it must not run in CI and never replaces the native Apple
+Silicon merge gate.
 
 ## Preconditions
 

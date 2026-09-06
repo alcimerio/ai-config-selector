@@ -11,19 +11,13 @@ import (
 	"testing"
 )
 
-func TestPromotedArtifactValidationRejectsANonNativeTargetBeforeCandidateInspection(t *testing.T) {
-	targetOS := runtime.GOOS
-	targetArch := "arm64"
-	if runtime.GOARCH == "arm64" {
-		targetArch = "amd64"
-	}
-
-	command := exec.Command("sh", "validate-promoted-artifact.sh", "v0.2.0", targetOS, targetArch, t.TempDir(), filepath.Join(t.TempDir(), "bin"))
+func TestPromotedArtifactValidationRejectsIntelBeforeCandidateInspection(t *testing.T) {
+	command := exec.Command("sh", "validate-promoted-artifact.sh", "v0.2.0", "darwin", "amd64", t.TempDir(), filepath.Join(t.TempDir(), "bin"))
 	output, err := command.CombinedOutput()
 	if err == nil {
-		t.Fatal("promoted artifact validation accepted a non-native target")
+		t.Fatal("promoted artifact validation accepted an Intel target")
 	}
-	want := "target=" + targetOS + "/" + targetArch + " candidate=v0.2.0 stage=host-identity"
+	want := "target=unvalidated candidate=unvalidated stage=arguments: unsupported validation target"
 	if !strings.Contains(string(output), want) {
 		t.Fatalf("diagnostic = %q, want %q", output, want)
 	}
@@ -52,6 +46,9 @@ func TestPromotedArtifactValidationEscapesUntrustedArguments(t *testing.T) {
 }
 
 func TestPromotedArtifactValidationInstallsTheExactCandidateOnTheNativeHost(t *testing.T) {
+	if runtime.GOOS != "darwin" || runtime.GOARCH != "arm64" {
+		t.Skip("promoted artifact validation requires a native Apple Silicon host")
+	}
 	candidateDirectory := realTemporaryDirectory(t)
 	writePromotedCandidate(t, candidateDirectory)
 	installDirectory := filepath.Join(realTemporaryDirectory(t), "custom-bin")
@@ -90,7 +87,7 @@ func writePromotedCandidate(t *testing.T, candidateDirectory string) {
 		t.Fatal(err)
 	}
 	var manifest strings.Builder
-	for _, target := range []string{"darwin_arm64", "darwin_amd64"} {
+	for _, target := range []string{"darwin_arm64"} {
 		name := "acs_0.2.0_" + target + ".tar.gz"
 		path := filepath.Join(candidateDirectory, name)
 		writeInstallerArchive(t, path, "#!/bin/sh\nif [ \"${1:-}\" = version ]; then printf 'acs v0.2.0\\n'; exit 0; fi\nexit 2\n")
