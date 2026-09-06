@@ -62,14 +62,40 @@ func TestNativeInstalledACSExecutesLockedCodexToolThroughNamedIdentity(t *testin
 		t.Fatal(err)
 	}
 	seedNativeIdentity(t, home, workspace, "interactive")
-	writeNativeCodexProfile(t, home, "interactive", "read-write")
+	writeNativeCodexProfile(t, home, "coding", "interactive", "read-write")
+	writeNativeCodexProfile(t, home, "readonly", "interactive", "read-only")
+	for _, test := range []struct {
+		name, profile, command, marker string
+		wantWrite                      bool
+	}{
+		{name: "coding write", profile: "coding", command: "printf codex-native-tool-ok > ./codex-native-write; printf codex-native-tool-output", marker: "codex-native-write", wantWrite: true},
+		{name: "read-only denial", profile: "readonly", command: "printf forbidden > ./codex-native-readonly-write; printf codex-native-tool-output", marker: "codex-native-readonly-write", wantWrite: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newNativeResponsesFixture(t, test.command)
+			defer fixture.server.Close()
+			trampoline := filepath.Join(tools, "codex")
+			buildFixedCodexTrampoline(t, target, fixture.server.URL+"/backend-api", trampoline)
+			t.Logf("harness executable sha256=%s; locked target sha256=%s", fileSHA256(t, trampoline), fileSHA256(t, target))
+			runInstalledCodexPTY(t, candidate, home, tools, workspace, test.profile, fixture.completed)
+			fixture.assert(t)
+			contents, err := os.ReadFile(filepath.Join(workspace, test.marker))
+			if test.wantWrite && (err != nil || string(contents) != "codex-native-tool-ok") {
+				t.Fatalf("real Codex shell tool result=%q err=%v", contents, err)
+			}
+			if !test.wantWrite && !os.IsNotExist(err) {
+				t.Fatalf("read-only Codex wrote workspace marker: bytes=%q err=%v", contents, err)
+			}
+			assertNoNativeSessions(t, filepath.Join(home, ".acs", "sessions"))
+		})
+	}
+	if contents, err := os.ReadFile(globalAuth); err != nil || string(contents) != "unrelated-global-auth" {
+		t.Fatal("interactive launch read or changed global Codex authentication state")
+	}
+}
 
-	fixture := newNativeResponsesFixture(t)
-	defer fixture.server.Close()
-	trampoline := filepath.Join(tools, "codex")
-	buildFixedCodexTrampoline(t, target, fixture.server.URL+"/backend-api", trampoline)
-	t.Logf("harness executable sha256=%s; locked target sha256=%s", fileSHA256(t, trampoline), fileSHA256(t, target))
-
+func runInstalledCodexPTY(t *testing.T, candidate, home, tools, workspace, profile string, completed <-chan struct{}) string {
+	t.Helper()
 	master, terminal, err := pty.Open()
 	if err != nil {
 		t.Fatal(err)
@@ -79,7 +105,7 @@ func TestNativeInstalledACSExecutesLockedCodexToolThroughNamedIdentity(t *testin
 	if err := pty.Setsize(master, &pty.Winsize{Rows: 40, Cols: 120}); err != nil {
 		t.Fatal(err)
 	}
-	command := exec.Command(candidate, "codex", "--profile", "interactive")
+	command := exec.Command(candidate, "codex", "--profile", profile)
 	command.Dir = workspace
 	command.Env = []string{"HOME=" + home, "PATH=" + tools + ":/usr/bin:/bin", "LANG=C", "LC_ALL=C", "TERM=xterm", "COLORTERM=truecolor"}
 	command.Stdin, command.Stdout, command.Stderr = terminal, terminal, terminal
@@ -96,7 +122,7 @@ func TestNativeInstalledACSExecutesLockedCodexToolThroughNamedIdentity(t *testin
 		t.Fatal(err)
 	}
 	select {
-	case <-fixture.completed:
+	case <-completed:
 	case <-time.After(30 * time.Second):
 		_ = command.Process.Kill()
 		t.Fatalf("real Codex did not complete two fixture requests; terminal=%q", output.String())
@@ -120,14 +146,7 @@ func TestNativeInstalledACSExecutesLockedCodexToolThroughNamedIdentity(t *testin
 	case <-time.After(time.Second):
 	}
 
-	fixture.assert(t)
-	if contents, err := os.ReadFile(filepath.Join(workspace, "codex-native-write")); err != nil || string(contents) != "codex-native-tool-ok" {
-		t.Fatalf("real Codex shell tool result=%q err=%v", contents, err)
-	}
-	if contents, err := os.ReadFile(globalAuth); err != nil || string(contents) != "unrelated-global-auth" {
-		t.Fatal("interactive launch read or changed global Codex authentication state")
-	}
-	assertNoNativeSessions(t, filepath.Join(home, ".acs", "sessions"))
+	return output.String()
 }
 
 type nativeResponsesFixture struct {
@@ -139,7 +158,7 @@ type nativeResponsesFixture struct {
 	headers   []http.Header
 }
 
-func newNativeResponsesFixture(t *testing.T) *nativeResponsesFixture {
+func newNativeResponsesFixture(t *testing.T, shellCommand string) *nativeResponsesFixture {
 	t.Helper()
 	fixture := &nativeResponsesFixture{completed: make(chan struct{})}
 	fixture.server = httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
@@ -157,7 +176,7 @@ func newNativeResponsesFixture(t *testing.T) *nativeResponsesFixture {
 		fixture.mu.Unlock()
 		response.Header().Set("Content-Type", "text/event-stream")
 		if index == 1 {
-			arguments, _ := json.Marshal(map[string]any{"command": "printf codex-native-tool-ok > ./codex-native-write; printf codex-native-tool-output", "timeout_ms": 5000})
+			arguments, _ := json.Marshal(map[string]any{"command": shellCommand, "timeout_ms": 5000})
 			writeSSE(response,
 				map[string]any{"type": "response.created", "response": map[string]any{"id": "resp-1"}},
 				map[string]any{"type": "response.output_item.done", "item": map[string]any{"type": "function_call", "call_id": "acs-call-1", "name": "shell_command", "arguments": string(arguments)}},
@@ -305,14 +324,14 @@ func writeNativeSkill(t *testing.T, directory, name, sentinel string) {
 	}
 }
 
-func writeNativeCodexProfile(t *testing.T, home, authRef, access string) {
+func writeNativeCodexProfile(t *testing.T, home, profileName, authRef, access string) {
 	t.Helper()
 	profiles := filepath.Join(home, ".acs", "profiles")
 	if err := os.MkdirAll(profiles, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	document := `{"version":3,"name":"interactive","common":{"skills":{"version":1,"selection":[{"source":"shared-agents","relativePath":"managed-proof"}]},"workspace":{"version":1,"selection":{"access":` + strconv.Quote(access) + `}}},"overlays":{"codex":{"version":1,"authRef":` + strconv.Quote(authRef) + `}}}`
-	if err := os.WriteFile(filepath.Join(profiles, "interactive.json"), []byte(document), 0o600); err != nil {
+	document := `{"version":3,"name":` + strconv.Quote(profileName) + `,"common":{"skills":{"version":1,"selection":[{"source":"shared-agents","relativePath":"managed-proof"}]},"workspace":{"version":1,"selection":{"access":` + strconv.Quote(access) + `}}},"overlays":{"codex":{"version":1,"authRef":` + strconv.Quote(authRef) + `}}}`
+	if err := os.WriteFile(filepath.Join(profiles, profileName+".json"), []byte(document), 0o600); err != nil {
 		t.Fatal(err)
 	}
 }

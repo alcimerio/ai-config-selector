@@ -191,13 +191,15 @@ func TestInteractiveCodexRunsRegisteredVerificationBeforeAnyTargetProcess(t *tes
 	if code, err := registry.ExecuteCodex(context.Background(), CodexRequest{ResolvedPlan: &plan}); code != 1 || !errors.Is(err, ErrCodexFailed) {
 		t.Fatalf("execution = (%d, %v)", code, err)
 	}
-	if len(sandbox.counts) != 0 {
-		t.Fatalf("verification failure prepared %d target processes", len(sandbox.counts))
+	if sandbox.checks != 0 || len(sandbox.counts) != 0 {
+		t.Fatalf("verification failure performed %d checks and prepared %d target processes", sandbox.checks, len(sandbox.counts))
 	}
 	if provider.replaceCalls != 0 || !reflect.DeepEqual(provider.records["work"].Auth, auth) {
 		t.Fatal("verification failure replaced identity")
 	}
-	assertNoSessionDirectories(t, sessionsDirectory)
+	if _, err := os.Stat(sessionsDirectory); !os.IsNotExist(err) {
+		t.Fatalf("verification failure touched Sessions: %v", err)
+	}
 }
 
 func TestInteractiveCodexCommitsOnlySuccessfulSameIdentityRefresh(t *testing.T) {
