@@ -434,8 +434,12 @@ int main(int argc, char **argv) {
   char **next = calloc((size_t)argc + 3, sizeof(char *));
   if (!next) return 120;
   next[0] = %s;
-  for (int i = 1; i < argc; i++) next[i] = argv[i];
-  if (!(argc == 2 && strcmp(argv[1], "--version") == 0)) {
+  int version = 0;
+  for (int i = 1; i < argc; i++) {
+    next[i] = argv[i];
+    if (strcmp(argv[i], "--version") == 0) version = 1;
+  }
+  if (!version) {
     next[argc] = "-c";
     next[argc + 1] = %s;
   }
@@ -466,7 +470,9 @@ func buildSyntheticLoginTarget(t *testing.T, destination string) {
 #include <unistd.h>
 static const unsigned char auth[] = {` + strings.Join(encoded, ",") + `};
 int main(int argc, char **argv) {
-  if (argc == 2 && strcmp(argv[1], "--version") == 0) { puts("codex-cli 0.149.1"); return 0; }
+  for (int i = 1; i < argc; i++) {
+    if (strcmp(argv[i], "--version") == 0) { puts("codex-cli 0.149.1"); return 0; }
+  }
   const char *home = getenv("HOME");
   if (!home) return 10;
   char path[4096];
