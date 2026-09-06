@@ -74,9 +74,12 @@ func TestNativeInstalledACSExecutesLockedCodexToolThroughNamedIdentity(t *testin
 	if err := os.WriteFile(globalAuth, []byte("unrelated-global-auth"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	copyLockedTarget(t, target, filepath.Join(tools, "codex"))
-	seedInstalledCandidateIdentity(t, candidate, home, tools, "interactive")
-	assertInstalledIdentityVisible(t, candidate, home, tools, workspace, "interactive")
+	configureInstalledCandidateKeychainContext(t, home, tools)
+	buildSyntheticLoginTarget(t, filepath.Join(tools, "codex"))
+	t.Run("installed ACS synthetic login transaction", func(t *testing.T) {
+		runInstalledSyntheticLogin(t, candidate, home, tools, workspace, "interactive")
+		assertInstalledIdentityVisible(t, candidate, home, tools, workspace, "interactive")
+	})
 	writeNativeCodexProfile(t, home, "coding", "interactive", "read-write")
 	writeNativeCodexProfile(t, home, "readonly", "interactive", "read-only")
 	grantedTarget := filepath.Join(workspace, "locked-codex-target")
@@ -134,32 +137,59 @@ func TestNativeInstalledACSExecutesLockedCodexToolThroughNamedIdentity(t *testin
 	}
 }
 
-func seedInstalledCandidateIdentity(t *testing.T, candidate, home, tools, name string) {
+func runInstalledSyntheticLogin(t *testing.T, candidate, home, tools, workspace, name string) {
 	t.Helper()
-	keychain := configureInstalledCandidateKeychainContext(t, home, tools)
-	comment, payload, err := codexauthresource.PrepareIsolatedKeychainRecordForComposition(
-		codexauthresource.CredentialRef(name), compositionAuth(t),
-	)
+	master, terminal, err := pty.Open()
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer codexauthresource.ClearBytes(payload)
-	command := exec.Command(
-		"/usr/bin/security", "add-generic-password",
-		"-a", name,
-		"-s", codexauthresource.KeychainServiceForComposition(),
-		"-j", comment,
-		"-l", "ACS Codex authentication: "+name,
-		"-w", string(payload),
-		"-T", candidate,
-		keychain,
-	)
-	if output, err := command.CombinedOutput(); err != nil {
-		t.Fatalf("seed candidate-scoped synthetic Keychain identity: %v; output=%q", err, output)
+	defer master.Close()
+	defer terminal.Close()
+	command := exec.Command(candidate, "codex", "auth", "login", "--name", name)
+	command.Dir = workspace
+	command.Env = nativeCandidateEnvironment(home, tools)
+	command.Stdin, command.Stdout, command.Stderr = terminal, terminal, terminal
+	command.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true, Ctty: 0}
+	var output nativeSafeCapture
+	copyDone := make(chan struct{})
+	go func() { _, _ = io.Copy(&output, master); close(copyDone) }()
+	if err := command.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if err := terminal.Close(); err != nil {
+		t.Fatal(err)
+	}
+	wait := make(chan error, 1)
+	go func() { wait <- command.Wait() }()
+	var runErr error
+	timedOut := false
+	select {
+	case runErr = <-wait:
+	case <-time.After(20 * time.Second):
+		timedOut = true
+		_ = syscall.Kill(-command.Process.Pid, syscall.SIGKILL)
+		runErr = <-wait
+	}
+	_ = master.Close()
+	select {
+	case <-copyDone:
+	case <-time.After(time.Second):
+		t.Fatal("installed ACS synthetic login capture did not drain")
+	}
+	if timedOut {
+		t.Fatalf("installed ACS synthetic login timed out after corrected Keychain selection; terminal=%q; settlement=%v", output.String(), runErr)
+	}
+	if runErr != nil {
+		t.Fatalf("installed ACS synthetic login failed: %v; terminal=%q", runErr, output.String())
+	}
+	for _, witness := range []string{"synthetic-login-target:started", "synthetic-login-target:auth-written", `Stored Codex authentication identity "` + name + `".`} {
+		if !strings.Contains(output.String(), witness) {
+			t.Fatalf("installed ACS synthetic login omitted %q; terminal=%q", witness, output.String())
+		}
 	}
 }
 
-func configureInstalledCandidateKeychainContext(t *testing.T, home, tools string) string {
+func configureInstalledCandidateKeychainContext(t *testing.T, home, tools string) {
 	t.Helper()
 	parentDefault, parentDefaultOK := queryNativeKeychainSelection(nil, "default-keychain")
 	parentSearch, parentSearchOK := queryNativeKeychainSelection(nil, "list-keychains")
@@ -199,7 +229,6 @@ func configureInstalledCandidateKeychainContext(t *testing.T, home, tools string
 	if !defaultMatches || !searchMatches {
 		t.Fatal("synthetic HOME did not select the disposable Keychain")
 	}
-	return keychain
 }
 
 func queryNativeKeychainSelection(environment []string, operation string) (string, bool) {
@@ -506,8 +535,51 @@ int main(int argc, char **argv) {
 	if err := os.WriteFile(source, []byte(program), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.Remove(destination); err != nil && !os.IsNotExist(err) {
+		t.Fatal("replace temporary target with fixed Codex trampoline")
+	}
 	if output, err := exec.Command("/usr/bin/clang", "-Os", source, "-o", destination).CombinedOutput(); err != nil {
 		t.Fatalf("compile fixed Codex trampoline: %v: %s", err, output)
+	}
+}
+
+func buildSyntheticLoginTarget(t *testing.T, destination string) {
+	t.Helper()
+	auth := compositionAuth(t)
+	encoded := make([]string, len(auth))
+	for index, value := range auth {
+		encoded[index] = strconv.Itoa(int(value))
+	}
+	source := filepath.Join(t.TempDir(), "synthetic-login.c")
+	program := `#include <fcntl.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+static const unsigned char auth[] = {` + strings.Join(encoded, ",") + `};
+int main(int argc, char **argv) {
+  for (int i = 1; i < argc; i++) {
+    if (strcmp(argv[i], "--version") == 0) { puts("codex-cli 0.149.1"); return 0; }
+  }
+  fputs("synthetic-login-target:started\n", stderr);
+  fflush(stderr);
+  const char *home = getenv("HOME");
+  if (!home) return 10;
+  char path[4096];
+  if (snprintf(path, sizeof(path), "%s/.codex/auth.json", home) <= 0) return 11;
+  int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+  if (fd < 0) return 12;
+  if (write(fd, auth, sizeof(auth)) != sizeof(auth) || fsync(fd) != 0 || close(fd) != 0) return 13;
+  fputs("synthetic-login-target:auth-written\n", stderr);
+  fflush(stderr);
+  return 0;
+}
+`
+	if err := os.WriteFile(source, []byte(program), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if output, err := exec.Command("/usr/bin/clang", "-Os", source, "-o", destination).CombinedOutput(); err != nil {
+		t.Fatalf("compile synthetic login target: %v: %s", err, output)
 	}
 }
 
