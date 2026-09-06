@@ -137,7 +137,7 @@ func runInstalledCodexPTY(t *testing.T, candidate, home, tools, workspace, profi
 	command.Dir = workspace
 	command.Env = []string{"HOME=" + home, "PATH=" + tools + ":/usr/bin:/bin", "LANG=C", "LC_ALL=C", "TERM=xterm", "COLORTERM=truecolor"}
 	command.Stdin, command.Stdout, command.Stderr = terminal, terminal, terminal
-	command.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true, Ctty: int(terminal.Fd())}
+	command.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true, Ctty: 0}
 	var output nativeSafeCapture
 	copyDone := make(chan struct{})
 	go func() { _, _ = io.Copy(&output, master); close(copyDone) }()
