@@ -42,3 +42,6 @@ next probe or target and retains the Session. The Devin adapter translates the
 lower redacted preflight error to its existing public compatibility wrapper and
 does not regain process lifecycle authority. Codex authentication remains on
 its existing lifecycle in this stage.
+
+During the reserved startup handoff, resize notifications may coalesce but
+cannot replace an already queued termination signal.

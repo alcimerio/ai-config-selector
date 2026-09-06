@@ -363,27 +363,35 @@ func (s *devinSignalSupervisor) run() {
 	for {
 		select {
 		case received := <-s.forwarded:
-			s.mutex.Lock()
-			child := s.child
-			if child == nil {
-				if s.starting {
-					s.pending = received
-					s.mutex.Unlock()
-					continue
-				}
-				if received != syscall.SIGWINCH {
-					s.pending = received
-					s.cancelPreflight()
-				}
-				s.mutex.Unlock()
-				continue
-			}
-			s.mutex.Unlock()
-			_ = child.Signal(received)
+			s.handleSignal(received)
 		case <-s.done:
 			return
 		}
 	}
+}
+
+func (s *devinSignalSupervisor) handleSignal(received os.Signal) {
+	s.mutex.Lock()
+	child := s.child
+	if child == nil {
+		if s.starting {
+			// Resize notifications may coalesce, but must never erase a
+			// termination already accepted during interactive preparation.
+			if s.pending == nil || received != syscall.SIGWINCH {
+				s.pending = received
+			}
+			s.mutex.Unlock()
+			return
+		}
+		if received != syscall.SIGWINCH {
+			s.pending = received
+			s.cancelPreflight()
+		}
+		s.mutex.Unlock()
+		return
+	}
+	s.mutex.Unlock()
+	_ = child.Signal(received)
 }
 func (s *devinSignalSupervisor) start(child launch.Process) (bool, error) {
 	if err := s.reserveInteractive(); err != nil {
