@@ -89,6 +89,63 @@ func TestRunCommandFailsClosedWhenExecutableChangesAfterCheck(t *testing.T) {
 	}
 }
 
+func replaceWorkspace(t *testing.T, workspace string) {
+	t.Helper()
+	oldWorkspace := workspace + "-old"
+	if err := os.Rename(workspace, oldWorkspace); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(workspace, 0o700); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRunCommandRejectsWorkspaceReplacementBeforeCheck(t *testing.T) {
+	parent := t.TempDir()
+	workspace := filepath.Join(parent, "workspace")
+	if err := os.Mkdir(workspace, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	command, err := runcommand.Resolve(workspace, []string{"/usr/bin/true"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	replaceWorkspace(t, workspace)
+	sandbox := &fakeSandbox{process: &fakeProcess{}}
+	plan := resolvedCommandPlan(t)
+	code, err := newExecutor(sandbox).RunCommand(context.Background(), CommandRequest{
+		SessionsDirectory: filepath.Join(t.TempDir(), "sessions"), WorkingDirectory: workspace,
+		ResolvedPlan: &plan, Command: command,
+	})
+	if code != 1 || err == nil || sandbox.checks != 0 || sandbox.prepares != 0 {
+		t.Fatalf("replacement result=(%d,%v) checks=%d prepares=%d", code, err, sandbox.checks, sandbox.prepares)
+	}
+}
+
+func TestRunCommandRejectsWorkspaceReplacementAfterCheckBeforePrepare(t *testing.T) {
+	parent := t.TempDir()
+	workspace := filepath.Join(parent, "workspace")
+	if err := os.Mkdir(workspace, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	command, err := runcommand.Resolve(workspace, []string{"/usr/bin/true"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sandbox := &fakeSandbox{process: &fakeProcess{}, checkFn: func() error {
+		replaceWorkspace(t, workspace)
+		return nil
+	}}
+	plan := resolvedCommandPlan(t)
+	code, err := newExecutor(sandbox).RunCommand(context.Background(), CommandRequest{
+		SessionsDirectory: filepath.Join(t.TempDir(), "sessions"), WorkingDirectory: workspace,
+		ResolvedPlan: &plan, Command: command,
+	})
+	if code != 1 || err == nil || sandbox.checks != 1 || sandbox.prepares != 0 {
+		t.Fatalf("replacement result=(%d,%v) checks=%d prepares=%d", code, err, sandbox.checks, sandbox.prepares)
+	}
+}
+
 func TestRunCommandRejectsInvalidPreparedProcess(t *testing.T) {
 	workspace := t.TempDir()
 	executableFixture(t, workspace)
