@@ -27,6 +27,92 @@ type fakeSandbox struct {
 	inspect              func(launch.ProcessRequest) error
 }
 
+type invalidPreparedProcessSandbox struct {
+	typedNil bool
+	prepares int
+}
+
+func (*invalidPreparedProcessSandbox) Readiness(context.Context) (launch.SandboxReadiness, error) {
+	return launch.SandboxReadiness{Supported: true, Ready: true}, nil
+}
+func (*invalidPreparedProcessSandbox) Check(context.Context, launch.SandboxCheck) error { return nil }
+func (sandbox *invalidPreparedProcessSandbox) Prepare(context.Context, launch.ProcessRequest) (launch.Process, error) {
+	sandbox.prepares++
+	if sandbox.typedNil {
+		var process *invalidPreparedProcess
+		return process, nil
+	}
+	return nil, nil
+}
+
+type invalidPreparedProcess struct{}
+
+func (*invalidPreparedProcess) Start() error { panic("invalid prepared process was started") }
+func (*invalidPreparedProcess) Wait() error  { panic("invalid prepared process was waited") }
+func (*invalidPreparedProcess) Signal(os.Signal) error {
+	panic("invalid prepared process was signaled")
+}
+
+func invalidPreparedProcessCases() []struct {
+	name     string
+	typedNil bool
+} {
+	return []struct {
+		name     string
+		typedNil bool
+	}{{name: "nil"}, {name: "typed-nil", typedNil: true}}
+}
+
+func requireSandboxSetupFailure(t *testing.T, err error) {
+	t.Helper()
+	var failure *launch.SandboxError
+	if !errors.As(err, &failure) || failure.Category != launch.SandboxSetupFailed {
+		t.Fatalf("error = %T %v, want sanitized sandbox setup failure", err, err)
+	}
+}
+
+func TestRunShellRejectsInvalidPreparedProcess(t *testing.T) {
+	for _, test := range invalidPreparedProcessCases() {
+		t.Run(test.name, func(t *testing.T) {
+			sessions := filepath.Join(t.TempDir(), "sessions")
+			sandbox := &invalidPreparedProcessSandbox{typedNil: test.typedNil}
+			err := newExecutor(sandbox).RunShell(context.Background(), ShellRequest{
+				SessionsDirectory: sessions, WorkingDirectory: t.TempDir(),
+			})
+			requireSandboxSetupFailure(t, err)
+			if sandbox.prepares != 1 {
+				t.Fatalf("prepare calls = %d, want 1", sandbox.prepares)
+			}
+			if entries, err := os.ReadDir(sessions); err != nil || len(entries) != 0 {
+				t.Fatalf("invalid prepared process retained shell Session: %v %v", entries, err)
+			}
+		})
+	}
+}
+
+func TestRunDevinProbeRejectsInvalidPreparedProcess(t *testing.T) {
+	for _, test := range invalidPreparedProcessCases() {
+		t.Run(test.name, func(t *testing.T) {
+			sessions := filepath.Join(t.TempDir(), "sessions")
+			sandbox := &invalidPreparedProcessSandbox{typedNil: test.typedNil}
+			code, err := newExecutor(sandbox).RunDevin(context.Background(), DevinRequest{
+				SessionsDirectory: sessions, WorkingDirectory: t.TempDir(), Executable: "devin",
+				ExpectedCatalog: []skills.SkillReference{},
+			})
+			if code != 1 {
+				t.Fatalf("exit code = %d, want 1", code)
+			}
+			requireSandboxSetupFailure(t, err)
+			if sandbox.prepares != 1 {
+				t.Fatalf("prepare calls = %d, want only the Skills probe", sandbox.prepares)
+			}
+			if entries, err := os.ReadDir(sessions); err != nil || len(entries) != 0 {
+				t.Fatalf("invalid prepared process retained Devin Session: %v %v", entries, err)
+			}
+		})
+	}
+}
+
 // TestRunDevinOwnsBothPreflightsAndTheSessionLease exercises the real
 // executor lifecycle, not an adapter callback.  The first two processes are
 // the fixed catalog/auth probes and the third is the fixed interactive target.

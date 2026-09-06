@@ -48,6 +48,41 @@ func TestRegistryLoginCreatesWithoutReplacingNamedIdentity(t *testing.T) {
 	}
 }
 
+func TestRegistryLoginPreservesRecoveryForInvalidPreparedProcess(t *testing.T) {
+	for _, test := range invalidPreparedProcessCases() {
+		t.Run(test.name, func(t *testing.T) {
+			provider := newFakeProvider()
+			registry, err := newRegistry(provider, &fakeLoginRunner{}, newFileIdentityLocker(t.TempDir()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			sessions := configureRegistryTestLifecycle(t, registry)
+			sandbox := &invalidPreparedProcessSandbox{typedNil: test.typedNil}
+			registry.login = newCodexLoginRunner(codexLoginConfig{
+				BinaryPath: "/usr/bin/true", SupportedVersion: SupportedCodexVersion,
+				SessionsDirectory: sessions, WorkingDirectory: registry.workingDirectory,
+			}, sandbox)
+
+			if _, err := registry.Login(context.Background(), CodexLoginRequest{Name: "work"}); !errors.Is(err, ErrLoginCleanupUncertain) {
+				t.Fatalf("Login error = %v, want cleanup uncertainty", err)
+			}
+			if sandbox.prepares != 1 {
+				t.Fatalf("prepare calls = %d, want 1", sandbox.prepares)
+			}
+			marker, exists, err := registryTestResources(registry).quarantine.Inspect(context.Background(), "work")
+			if err != nil || !exists || marker.Phase != quarantineCleanupPending {
+				t.Fatalf("pending marker = (%#v, %v, %v)", marker, exists, err)
+			}
+			if _, err := os.Stat(filepath.Join(sessions, marker.SessionID)); err != nil {
+				t.Fatalf("invalid prepared process lost protected projection: %v", err)
+			}
+			if _, exists, err := provider.Metadata(context.Background(), "work"); err != nil || exists {
+				t.Fatalf("invalid prepared process committed Login = (%v, %v)", exists, err)
+			}
+		})
+	}
+}
+
 func TestRegistryDefersPrivateWorkspaceRejectionToContainedOperations(t *testing.T) {
 	root := t.TempDir()
 	acsHome := filepath.Join(root, "acs")

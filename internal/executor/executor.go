@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"reflect"
 	"sync"
 	"syscall"
 
@@ -60,11 +61,28 @@ const (
 )
 
 var errRetainPreparedProcess = errors.New("retain prepared process")
+var errInvalidPreparedProcess = &launch.SandboxError{Category: launch.SandboxSetupFailed}
+
+func isNilProcess(process launch.Process) bool {
+	if process == nil {
+		return true
+	}
+	value := reflect.ValueOf(process)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return value.IsNil()
+	default:
+		return false
+	}
+}
 
 func (e *Executor) prepareRetainedProcess(ctx context.Context, created *session.Session, request launch.ProcessRequest) (launch.Process, error) {
 	process, err := e.sandbox.Prepare(ctx, request)
 	if err != nil {
 		return nil, err
+	}
+	if isNilProcess(process) {
+		return nil, errInvalidPreparedProcess
 	}
 	retained, err := created.RetainUntilProcessDone(process)
 	if err != nil {

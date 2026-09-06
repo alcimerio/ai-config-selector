@@ -106,10 +106,10 @@ func runContainedCodex(
 		Arguments:              codexAuthRuntimeArguments(workspace, arguments...), Terminal: terminal,
 	})
 	if err != nil {
-		if errors.Is(err, errRetainPreparedProcess) {
+		if errors.Is(err, errRetainPreparedProcess) || errors.Is(err, errInvalidPreparedProcess) {
 			// Process preparation already succeeded after the durable marker was
-			// armed. Without a retained handle, process-tree cleanup cannot be
-			// proven, so preserve the protected Session for recovery.
+			// armed. Without a valid retained handle, process-tree cleanup cannot
+			// be proven, so preserve the protected Session for recovery.
 			return containedRunResult{err: cleanupFailure, cleanupProven: false}
 		}
 		return containedRunResult{err: err, cleanupProven: true}
