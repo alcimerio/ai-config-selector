@@ -547,10 +547,12 @@ func buildFixedCodexTrampoline(t *testing.T, target, baseURL, destination string
 	t.Helper()
 	source := filepath.Join(filepath.Dir(destination), "codex-trampoline.c")
 	program := fmt.Sprintf(`#include <sqlite3.h>
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
-	#include <string.h>
-	#include <unistd.h>
+#include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
 int main(int argc, char **argv) {
   char **next = calloc((size_t)argc + 3, sizeof(char *));
   if (!next) return 120;
@@ -565,6 +567,24 @@ int main(int argc, char **argv) {
 		char path[4096];
 		sqlite3 *db = NULL;
 		if (!home || snprintf(path, sizeof(path), "%%s/.codex/acs-sqlite-preflight.sqlite", home) <= 0) return 122;
+		char prefix[4096];
+		strncpy(prefix, path, sizeof(prefix));
+		prefix[sizeof(prefix) - 1] = 0;
+		int prefix_index = 0;
+		for (char *cursor = prefix + 1; ; cursor++) {
+			if (*cursor != '/' && *cursor != 0) continue;
+			char saved = *cursor;
+			*cursor = 0;
+			struct stat status;
+			if (lstat(prefix, &status) != 0 && errno != ENOENT) {
+				fprintf(stderr, "acs-session-prefix-lstat:failed:%%d:%%d\n", prefix_index, errno);
+				return 124;
+			}
+			prefix_index++;
+			*cursor = saved;
+			if (saved == 0) break;
+		}
+		fprintf(stderr, "acs-session-prefix-lstat:passed:%%d\n", prefix_index);
 		int rc = sqlite3_open_v2(path, &db, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE, NULL);
 		if (rc == SQLITE_OK) rc = sqlite3_exec(db, "PRAGMA journal_mode=WAL; CREATE TABLE proof(value INTEGER); INSERT INTO proof VALUES(1);", NULL, NULL, NULL);
 		if (rc != SQLITE_OK) {
