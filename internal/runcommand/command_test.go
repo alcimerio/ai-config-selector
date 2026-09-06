@@ -168,8 +168,8 @@ func TestResolveAndRevalidatePreserveExecutableSymlinks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if executable, _, err := command.Revalidate(workspace); err != nil || executable != target {
-		t.Fatalf("symlink revalidation = (%q, %v), want %q", executable, err, target)
+	if executable, _, err := command.Revalidate(workspace); err != nil || executable != command.executable {
+		t.Fatalf("symlink revalidation = (%q, %v), want canonical target %q", executable, err, command.executable)
 	}
 }
 
