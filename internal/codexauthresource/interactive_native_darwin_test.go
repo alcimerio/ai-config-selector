@@ -31,24 +31,16 @@ import (
 )
 
 // TestNativeInstalledACSExecutesLockedCodexToolThroughNamedIdentity is the
-// credential-free half of the interactive acceptance gate. ACS starts a
-// test-only fixed trampoline, which immediately execs the checksum-locked real
-// target and adds only a literal loopback ChatGPT endpoint after ACS's fixed
-// arguments. It is intentionally reported separately from direct raw-target
-// executor coverage.
+// credential-free interactive acceptance gate. ACS starts a test-only fixed
+// trampoline, which immediately execs the checksum-locked real target and adds
+// only literal loopback ChatGPT endpoints after ACS's fixed production
+// arguments. The production adapter selects the target's externally sandboxed
+// no-prompt mode while ACS remains the sole policy and lifecycle authority.
 func TestNativeInstalledACSExecutesLockedCodexToolThroughNamedIdentity(t *testing.T) {
-	runNativeInstalledACSLockedCodexFixture(t, false)
+	runNativeInstalledACSLockedCodexFixture(t)
 }
 
-// TestNativeInstalledACSOuterSeatbeltExperiment is deliberately not release
-// acceptance. It measures the behavior of the locked interactive target when
-// a test-only trampoline disables its unsupported second Seatbelt layer while
-// the installed ACS candidate remains the sole, unchanged kernel enforcer.
-func TestNativeInstalledACSOuterSeatbeltExperiment(t *testing.T) {
-	runNativeInstalledACSLockedCodexFixture(t, true)
-}
-
-func runNativeInstalledACSLockedCodexFixture(t *testing.T, outerSeatbeltExperiment bool) {
+func runNativeInstalledACSLockedCodexFixture(t *testing.T) {
 	t.Helper()
 	if os.Getenv("ACS_RUN_NATIVE_AUTH_GATE") != "1" {
 		t.Skip("set ACS_RUN_NATIVE_AUTH_GATE=1 to use an isolated temporary Keychain")
@@ -87,22 +79,14 @@ func runNativeInstalledACSLockedCodexFixture(t *testing.T, outerSeatbeltExperime
 	if err := os.WriteFile(globalAuth, []byte("unrelated-global-auth"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	profilePrefix := ""
-	identities := map[string]string{"coding": "login-proof", "readonly": "login-proof", "recovery": "login-proof"}
-	if outerSeatbeltExperiment {
-		profilePrefix = "outer-"
-		identities = map[string]string{
-			"coding":   "outer-seatbelt-coding",
-			"readonly": "outer-seatbelt-readonly",
-			"recovery": "outer-seatbelt-recovery",
-		}
+	identities := map[string]string{
+		"coding":   "interactive-coding",
+		"readonly": "interactive-readonly",
+		"recovery": "interactive-recovery",
 	}
 	configureInstalledCandidateKeychainContext(t, home, tools)
 	buildSyntheticLoginTarget(t, filepath.Join(tools, "codex"))
-	loginNames := []string{identities["coding"]}
-	if outerSeatbeltExperiment {
-		loginNames = []string{identities["coding"], identities["readonly"], identities["recovery"]}
-	}
+	loginNames := []string{identities["coding"], identities["readonly"], identities["recovery"]}
 	for _, identityName := range loginNames {
 		if !t.Run("installed ACS synthetic login transaction "+identityName, func(t *testing.T) {
 			runInstalledSyntheticLogin(t, candidate, home, tools, workspace, identityName)
@@ -111,11 +95,9 @@ func runNativeInstalledACSLockedCodexFixture(t *testing.T, outerSeatbeltExperime
 			t.FailNow()
 		}
 	}
-	writeNativeCodexProfile(t, home, profilePrefix+"coding", identities["coding"], "read-write")
-	writeNativeCodexProfile(t, home, profilePrefix+"readonly", identities["readonly"], "read-only")
-	if outerSeatbeltExperiment {
-		writeNativeCodexProfile(t, home, profilePrefix+"recovery", identities["recovery"], "read-write")
-	}
+	writeNativeCodexProfile(t, home, "coding", identities["coding"], "read-write")
+	writeNativeCodexProfile(t, home, "readonly", identities["readonly"], "read-only")
+	writeNativeCodexProfile(t, home, "recovery", identities["recovery"], "read-write")
 	grantedTarget := filepath.Join(workspace, "locked-codex-target")
 	copyLockedTarget(t, target, grantedTarget)
 	outside, err := os.MkdirTemp("/tmp", "acs-codex-unrelated-")
@@ -131,26 +113,20 @@ func runNativeInstalledACSLockedCodexFixture(t *testing.T, outerSeatbeltExperime
 	normalDescendantReady := filepath.Join(workspace, ".acs-normal-descendant-ready")
 	recoveryDescendantReady := filepath.Join(workspace, ".acs-recovery-descendant-ready")
 	codingCommand := "printf codex-native-tool-ok > ./codex-native-write; printf codex-native-tool-output" + isolationProbe
-	codingDescendantReady := ""
-	codingWantDescendant := false
-	if outerSeatbeltExperiment {
-		codingCommand += nativeControlledDescendantCommand(normalDescendantReady)
-		codingDescendantReady = normalDescendantReady
-		codingWantDescendant = true
-	}
+	codingCommand += nativeControlledDescendantCommand(normalDescendantReady)
 	for _, test := range []struct {
 		name, profile, command, marker, descendantReady string
 		wantWrite, wantDescendant                       bool
 	}{
-		{name: "coding write", profile: profilePrefix + "coding", command: codingCommand, marker: "codex-native-write", descendantReady: codingDescendantReady, wantWrite: true, wantDescendant: codingWantDescendant},
-		{name: "read-only denial", profile: profilePrefix + "readonly", command: "printf forbidden > ./codex-native-readonly-write; printf codex-native-tool-output" + isolationProbe, marker: "codex-native-readonly-write", wantWrite: false},
+		{name: "coding write", profile: "coding", command: codingCommand, marker: "codex-native-write", descendantReady: normalDescendantReady, wantWrite: true, wantDescendant: true},
+		{name: "read-only denial", profile: "readonly", command: "printf forbidden > ./codex-native-readonly-write; printf codex-native-tool-output" + isolationProbe, marker: "codex-native-readonly-write", wantWrite: false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			fixture := newNativeResponsesFixture(t, test.command, home)
 			fixture.descendantReady = test.descendantReady
 			defer fixture.server.Close()
 			trampoline := filepath.Join(tools, "codex")
-			buildFixedCodexTrampoline(t, grantedTarget, fixture.server.URL+"/backend-api", trampoline, outerSeatbeltExperiment)
+			buildFixedCodexTrampoline(t, grantedTarget, fixture.server.URL+"/backend-api", trampoline)
 			t.Logf("harness executable sha256=%s; locked target member sha256=%s", fileSHA256(t, trampoline), fileSHA256(t, grantedTarget))
 			runInstalledCodexPTY(t, candidate, home, tools, workspace, test.profile, fixture, false)
 			descendantPID := fixture.assert(t, test.wantDescendant)
@@ -167,29 +143,27 @@ func runNativeInstalledACSLockedCodexFixture(t *testing.T, outerSeatbeltExperime
 			assertNoNativeSessions(t, filepath.Join(home, ".acs", "sessions"))
 		})
 	}
-	if outerSeatbeltExperiment {
-		t.Run("abrupt ACS termination and public recovery", func(t *testing.T) {
-			fixture := newNativeResponsesFixture(t, "printf codex-native-tool-output"+isolationProbe+nativeControlledDescendantCommand(recoveryDescendantReady), home)
-			fixture.descendantReady = recoveryDescendantReady
-			defer fixture.server.Close()
-			buildFixedCodexTrampoline(t, grantedTarget, fixture.server.URL+"/backend-api", filepath.Join(tools, "codex"), true)
-			runInstalledCodexPTY(t, candidate, home, tools, workspace, profilePrefix+"recovery", fixture, true)
-			descendantPID := fixture.assert(t, true)
-			assertNativeProcessRemoved(t, descendantPID, "Codex tool descendant survived abrupt ACS settlement")
-			sessions, err := filepath.Glob(filepath.Join(home, ".acs", "sessions", "session-*"))
-			if err != nil || len(sessions) != 1 {
-				t.Fatalf("abrupt ACS termination retained %d recoverable Sessions", len(sessions))
-			}
-			runInstalledCodexRecovery(t, candidate, home, tools, workspace, identities["recovery"])
-			assertNoNativeSessions(t, filepath.Join(home, ".acs", "sessions"))
-			reuseFixture := newNativeResponsesFixture(t, "printf codex-native-tool-output"+isolationProbe, home)
-			defer reuseFixture.server.Close()
-			buildFixedCodexTrampoline(t, grantedTarget, reuseFixture.server.URL+"/backend-api", filepath.Join(tools, "codex"), true)
-			runInstalledCodexPTY(t, candidate, home, tools, workspace, profilePrefix+"recovery", reuseFixture, false)
-			reuseFixture.assert(t, false)
-			assertNoNativeSessions(t, filepath.Join(home, ".acs", "sessions"))
-		})
-	}
+	t.Run("abrupt ACS termination and public recovery", func(t *testing.T) {
+		fixture := newNativeResponsesFixture(t, "printf codex-native-tool-output"+isolationProbe+nativeControlledDescendantCommand(recoveryDescendantReady), home)
+		fixture.descendantReady = recoveryDescendantReady
+		defer fixture.server.Close()
+		buildFixedCodexTrampoline(t, grantedTarget, fixture.server.URL+"/backend-api", filepath.Join(tools, "codex"))
+		runInstalledCodexPTY(t, candidate, home, tools, workspace, "recovery", fixture, true)
+		descendantPID := fixture.assert(t, true)
+		assertNativeProcessRemoved(t, descendantPID, "Codex tool descendant survived abrupt ACS settlement")
+		sessions, err := filepath.Glob(filepath.Join(home, ".acs", "sessions", "session-*"))
+		if err != nil || len(sessions) != 1 {
+			t.Fatalf("abrupt ACS termination retained %d recoverable Sessions", len(sessions))
+		}
+		runInstalledCodexRecovery(t, candidate, home, tools, workspace, identities["recovery"])
+		assertNoNativeSessions(t, filepath.Join(home, ".acs", "sessions"))
+		reuseFixture := newNativeResponsesFixture(t, "printf codex-native-tool-output"+isolationProbe, home)
+		defer reuseFixture.server.Close()
+		buildFixedCodexTrampoline(t, grantedTarget, reuseFixture.server.URL+"/backend-api", filepath.Join(tools, "codex"))
+		runInstalledCodexPTY(t, candidate, home, tools, workspace, "recovery", reuseFixture, false)
+		reuseFixture.assert(t, false)
+		assertNoNativeSessions(t, filepath.Join(home, ".acs", "sessions"))
+	})
 	if contents, err := os.ReadFile(globalAuth); err != nil || string(contents) != "unrelated-global-auth" {
 		t.Fatal("interactive launch changed global Codex authentication state")
 	}
@@ -889,25 +863,16 @@ func writeSSE(writer io.Writer, events ...map[string]any) {
 	}
 }
 
-func buildFixedCodexTrampoline(t *testing.T, target, baseURL, destination string, outerSeatbeltExperiment bool) {
+func buildFixedCodexTrampoline(t *testing.T, target, baseURL, destination string) {
 	t.Helper()
 	source := filepath.Join(filepath.Dir(destination), "codex-trampoline.c")
 	openAIOverride := fmt.Sprintf("openai_base_url=%q", baseURL+"/codex")
 	chatGPTOverride := fmt.Sprintf("chatgpt_base_url=%q", baseURL)
-	allocation, experimentOverrides := 5, ""
-	if outerSeatbeltExperiment {
-		allocation = 9
-		experimentOverrides = fmt.Sprintf(`
-		next[argc + 4] = "-c";
-		next[argc + 5] = %s;
-		next[argc + 6] = "-c";
-		next[argc + 7] = %s;`, strconv.Quote(`sandbox_mode="danger-full-access"`), strconv.Quote(`approval_policy="on-request"`))
-	}
 	program := fmt.Sprintf(`#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 int main(int argc, char **argv) {
-  char **next = calloc((size_t)argc + %d, sizeof(char *));
+  char **next = calloc((size_t)argc + 5, sizeof(char *));
   if (!next) return 120;
   next[0] = %s;
   int version = 0;
@@ -920,12 +885,11 @@ int main(int argc, char **argv) {
     next[argc + 1] = %s;
 		next[argc + 2] = "-c";
 		next[argc + 3] = %s;
-		%s
 	}
   execv(next[0], next);
   return 121;
 }
-`, allocation, strconv.Quote(target), strconv.Quote(openAIOverride), strconv.Quote(chatGPTOverride), experimentOverrides)
+`, strconv.Quote(target), strconv.Quote(openAIOverride), strconv.Quote(chatGPTOverride))
 	if err := os.WriteFile(source, []byte(program), 0o600); err != nil {
 		t.Fatal(err)
 	}

@@ -439,6 +439,10 @@ refresh observation remains supplemental and is never a CI credential gate.
   common Skills and workspace access. It exposes no arbitrary target arguments,
   backend selection, plugin configuration, API-key import, or generic Codex
   configuration passthrough.
+- ACS is the sole sandbox and approval authority for interactive Codex. The
+  locked target runs in its supported externally sandboxed no-prompt mode;
+  Profile read-only or coding-write access is enforced by ACS, and failure to
+  establish that outer containment never falls back to an unrestricted launch.
 - ACS has no automatic updater, package-manager distribution, or uninstaller.
 
 Read [the architecture](docs/architecture.md), [contribution guide](CONTRIBUTING.md),

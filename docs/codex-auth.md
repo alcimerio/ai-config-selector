@@ -259,12 +259,17 @@ projects only those copies into `.codex/skills/<source>/<relativePath>`, project
 the selected identity, checks the exact version, and starts interactive Codex.
 The fixed recipe forces file credential storage, ChatGPT login, the bound
 workspace restriction, the official ChatGPT endpoint, the OpenAI provider,
-workspace sandbox authority, and untrusted project configuration at runtime
-precedence. This prevents hostile project configuration from selecting another
-credential store, endpoint, provider, plugin, or project-local MCP
-configuration. ACS does not configure MCP servers in this delivery, and its
-empty ordinary MCP table is not represented as clearing every account-service
-or enterprise policy source. Repository
+untrusted project configuration, `sandbox_mode="danger-full-access"`, and
+`approval_policy="never"` at runtime precedence. The last two settings are the
+locked target's supported externally sandboxed no-prompt mode: ACS alone
+enforces the Profile's read-only or coding-write workspace access and owns all
+tool approval decisions. This prevents hostile project configuration from
+selecting another credential store, endpoint, provider, plugin, project-local
+MCP configuration, sandbox mode, or approval policy. A missing or uncertain ACS
+outer sandbox fails closed; Codex is never launched directly as a fallback.
+ACS does not configure MCP servers in this delivery, and its empty ordinary MCP
+table is not represented as clearing every account-service or enterprise
+policy source. Repository
 `.agents/skills` inheritance and bundled system behavior remain Codex-owned;
 ACS's selected-only statement applies to ACS-managed global projections, not
 every readable workspace file.

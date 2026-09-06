@@ -29,9 +29,14 @@ process executor owns both the exact-version probe and interactive process,
 including terminal streams, signals, resize, cancellation, descendant
 settlement, cleanup, and recovery. The target receives a private synthetic
 home, file-only credentials, ChatGPT-only authentication, fixed official
-provider and endpoint, the selected read-only or coding-write sandbox, and
-untrusted project configuration. ACS never reads global Codex authentication,
-imports API keys, or falls back to another named identity.
+provider and endpoint, and untrusted project configuration. ACS is the sole
+sandbox and approval authority: it applies the Profile's read-only or
+coding-write workspace policy, while locked Codex runs in its supported
+externally sandboxed mode (`danger-full-access` with approval policy `never`).
+Codex therefore creates no nested Seatbelt profile and shows no target-owned
+tool approval prompts; its full target permission remains inside the stricter
+ACS outer sandbox. ACS never reads global Codex authentication, imports API
+keys, or falls back to another named identity.
 
 Selected global Skills are first copied to the common Session materialization
 and then projected to `.codex/skills/<source>/<relativePath>` without rereading
@@ -48,6 +53,10 @@ untrusted-project decision prevent ordinary host-local and project-local MCP
 configuration from becoming launch input; ACS does not claim to override every
 account-service enterprise policy selected by the authenticated ChatGPT
 account.
+The fixed target mode is not a fallback outside containment: failure to create
+or retain the ACS sandbox fails closed. Codex's own readable/writable-root
+model and managed-sandbox denial messages are intentionally not the security
+boundary; ACS Profile grants and lifecycle proofs are.
 An output other than exact `codex-cli 0.149.1` is an actionable compatibility
 error. Real account login and target-origin refresh remain supplemental
 trusted-host observations rather than credential-bearing CI requirements.

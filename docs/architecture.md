@@ -99,7 +99,9 @@ allocation. Identity existence and status are explicitly unchecked.
 3. Pin the registered Codex executable, create a private Session, materialize
    common capabilities, and project only those copies into Codex locations.
 4. Project file credentials and force ChatGPT identity/workspace, provider,
-   endpoint, project-trust, plugin, and workspace-access restrictions.
+   endpoint, project-trust and plugin restrictions. The fixed target adapter
+   selects Codex's externally sandboxed no-prompt mode; the resolved Profile's
+   workspace access remains enforced exclusively by the ACS outer sandbox.
 5. Verify exact `codex-cli 0.149.1`, then attach interactive Codex through the
    shared process executor.
 6. Validate only successful same-identity refreshes; discard ineligible changes.

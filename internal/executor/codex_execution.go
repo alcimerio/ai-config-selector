@@ -46,17 +46,16 @@ func (runner *codexExecutionRunner) prepare(ctx context.Context, access launch.W
 
 const supportedChatGPTBaseURL = "https://chatgpt.com/backend-api/"
 
-func codexExecutionArguments(chatGPTWorkspace, workingDirectory string, access launch.WorkspaceAccess, arguments ...string) []string {
-	mode := "read-only"
-	if access == launch.WorkspaceAccessReadWrite || access == launch.WorkspaceAccessLegacy {
-		mode = "workspace-write"
-	}
+func codexExecutionArguments(chatGPTWorkspace, workingDirectory string, arguments ...string) []string {
+	// ACS is the sole sandbox and approval authority. Codex's fixed externally
+	// sandboxed mode prevents an unsupported second Seatbelt layer and target
+	// prompts without changing the resolved outer workspace access.
 	overrides := codexAuthRuntimeArguments(chatGPTWorkspace)
 	overrides = append(overrides,
 		"-c", `model_provider="openai"`,
 		"-c", `chatgpt_base_url=`+strconv.Quote(supportedChatGPTBaseURL),
-		"-c", `sandbox_mode=`+strconv.Quote(mode),
-		"-c", `approval_policy="on-request"`,
+		"-c", `sandbox_mode="danger-full-access"`,
+		"-c", `approval_policy="never"`,
 		"-c", `projects.`+strconv.Quote(filepath.Clean(workingDirectory))+`.trust_level="untrusted"`,
 		"-c", `features.plugins=false`,
 		"-c", `features.apps=false`,
@@ -65,16 +64,12 @@ func codexExecutionArguments(chatGPTWorkspace, workingDirectory string, access l
 	return append(overrides, arguments...)
 }
 
-func writeCodexExecutionConfig(home, chatGPTWorkspace, workingDirectory string, access launch.WorkspaceAccess) error {
+func writeCodexExecutionConfig(home, chatGPTWorkspace, workingDirectory string) error {
 	codexHome := filepath.Join(home, ".codex")
 	if err := os.MkdirAll(codexHome, 0o700); err != nil {
 		return err
 	}
-	mode := "read-only"
-	if access == launch.WorkspaceAccessReadWrite || access == launch.WorkspaceAccessLegacy {
-		mode = "workspace-write"
-	}
-	configuration := "cli_auth_credentials_store = \"file\"\nforced_login_method = \"chatgpt\"\nmodel_provider = \"openai\"\nchatgpt_base_url = " + strconv.Quote(supportedChatGPTBaseURL) + "\nsandbox_mode = " + strconv.Quote(mode) + "\napproval_policy = \"on-request\"\nmcp_servers = {}\n[features]\nplugins = false\napps = false\n[projects." + strconv.Quote(filepath.Clean(workingDirectory)) + "]\ntrust_level = \"untrusted\"\n"
+	configuration := "cli_auth_credentials_store = \"file\"\nforced_login_method = \"chatgpt\"\nmodel_provider = \"openai\"\nchatgpt_base_url = " + strconv.Quote(supportedChatGPTBaseURL) + "\nsandbox_mode = \"danger-full-access\"\napproval_policy = \"never\"\nmcp_servers = {}\n[features]\nplugins = false\napps = false\n[projects." + strconv.Quote(filepath.Clean(workingDirectory)) + "]\ntrust_level = \"untrusted\"\n"
 	if chatGPTWorkspace != "" {
 		configuration = "forced_chatgpt_workspace_id = " + strconv.Quote(chatGPTWorkspace) + "\n" + configuration
 	}
@@ -113,7 +108,7 @@ func (runner *codexExecutionRunner) run(ctx context.Context, config codexLoginCo
 		Workspace: created.WorkingDirectory(), WorkspaceAccess: access, SessionsDirectory: created.SessionsDirectory(),
 		SessionDirectory: created.RootDirectory(), SessionHome: created.HomeDirectory(), TemporaryDirectory: created.TemporaryDirectory(),
 		Executable: config.BinaryPath, RuntimeInputs: config.RuntimeInputs, RuntimeProbePaths: config.RuntimeProbePaths,
-		RecoveryProofChallenge: proof, Arguments: codexExecutionArguments(metadata.Workspace, created.WorkingDirectory(), access, arguments...), Terminal: terminal,
+		RecoveryProofChallenge: proof, Arguments: codexExecutionArguments(metadata.Workspace, created.WorkingDirectory(), arguments...), Terminal: terminal,
 	})
 	if err != nil {
 		cancelReservation()
@@ -217,7 +212,7 @@ func (service *CodexAuthService) ExecuteCodex(ctx context.Context, request Codex
 		}
 		return 1, ErrCodexFailed
 	}
-	if err := writeCodexExecutionConfig(created.HomeDirectory(), metadata.Workspace, created.WorkingDirectory(), access); err != nil {
+	if err := writeCodexExecutionConfig(created.HomeDirectory(), metadata.Workspace, created.WorkingDirectory()); err != nil {
 		_ = binding.MarkRecoverable(ctx)
 		if cleanupErr := remove(); cleanupErr != nil {
 			return 1, cleanupErr
