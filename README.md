@@ -29,6 +29,12 @@ also accepted. See the [inspection and JSON contract](docs/profile-inspection.md
 for status codes, exit behavior, limits, and examples. Run `acs profile --help`
 for contextual help.
 
+Use `acs profile create --file FILE [--dry-run]` to validate and publish a
+strict version-3 Profile document without a terminal, target installation,
+credential lookup or Skill discovery. See the [declarative Profile creation
+contract](docs/profile-creation.md) for input safety, previews, collisions and
+recovery.
+
 New development-source Profiles use independently versioned common Skills,
 workspace intent, and explicit target overlays. See the [common Profile format,
 migration, grants and projection contract](docs/common-profile-format.md) and

@@ -3,6 +3,10 @@
 Development source writes new Profiles as envelope version 3. Version 1 and 2
 remain readable and are never changed by inspection or launch.
 
+Noninteractive authoring accepts only this supported v3 representation; see
+[Declarative Profile creation](profile-creation.md). Legacy documents continue
+to use the established read, edit and explicit migration paths.
+
 ```json
 {
   "version": 3,
