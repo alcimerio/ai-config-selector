@@ -13,10 +13,34 @@ import (
 	"testing"
 	"time"
 
+	"github.com/alcimerio/ai-config-selector/internal/authority"
 	"github.com/alcimerio/ai-config-selector/internal/launch"
 	"github.com/alcimerio/ai-config-selector/internal/session"
 	"github.com/alcimerio/ai-config-selector/internal/skills"
 )
+
+type authorityTestContribution struct{}
+
+func (authorityTestContribution) Plan(context.Context, string, *launch.Plan) error { return nil }
+func (authorityTestContribution) Materialize(string) error                         { return nil }
+func (authorityTestContribution) Verify(context.Context, launch.VerificationContext) error {
+	return nil
+}
+
+func TestRunShellUsesOneResolvedPlanForCheckAndProcess(t *testing.T) {
+	sandbox := &fakeSandbox{process: &fakeProcess{}}
+	plan := authority.New([]authority.Contribution{{ID: "test", Value: authorityTestContribution{}}}, launch.WorkspaceAccessReadOnly, 3, "")
+	err := newExecutor(sandbox).RunShell(context.Background(), ShellRequest{
+		SessionsDirectory: filepath.Join(t.TempDir(), "sessions"), WorkingDirectory: t.TempDir(),
+		WorkspaceAccess: launch.WorkspaceAccessReadWrite, ResolvedPlan: &plan,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sandbox.check.WorkspaceAccess != launch.WorkspaceAccessReadOnly || sandbox.request.WorkspaceAccess != launch.WorkspaceAccessReadOnly {
+		t.Fatalf("resolved authority drifted: check=%q process=%q", sandbox.check.WorkspaceAccess, sandbox.request.WorkspaceAccess)
+	}
+}
 
 type fakeSandbox struct {
 	process              *fakeProcess
@@ -127,9 +151,12 @@ func TestRunDevinOwnsBothPreflightsAndTheSessionLease(t *testing.T) {
 	var requests []launch.ProcessRequest
 	sandbox := &sequenceSandbox{processes: processes, requests: &requests}
 	request := DevinRequest{
-		SessionsDirectory: sessions, WorkingDirectory: t.TempDir(), Executable: "devin",
+		SessionsDirectory: sessions, WorkingDirectory: t.TempDir(), Executable: "caller-must-not-select",
+		RuntimeInputs: []string{"caller-runtime-must-not-be-granted"}, ExistingHomeDirectory: filepath.Join(t.TempDir(), "caller-home"),
 		ExpectedCatalog: []skills.SkillReference{}, Terminal: launch.Terminal{Output: io.Discard, ErrorOutput: io.Discard},
 	}
+	plan := authority.New([]authority.Contribution{{ID: "test", Value: authorityTestContribution{}}}, launch.WorkspaceAccessReadOnly, 3, "devin", authority.TargetRequirements{Recipe: authority.RecipeDevin, Executable: "devin", RuntimeInputs: []string{"registered-runtime"}, ExistingHomeDirectory: filepath.Join(t.TempDir(), "registered-home")})
+	request.ResolvedPlan = &plan
 	// The catalog interpreter accepts an empty JSON catalog; write the probe
 	// outputs through the request terminals as the real contained processes do.
 	processes[0].write = []byte("[]\n")
@@ -139,6 +166,14 @@ func TestRunDevinOwnsBothPreflightsAndTheSessionLease(t *testing.T) {
 	}
 	if got := [][]string{requests[0].Arguments, requests[1].Arguments, requests[2].Arguments}; !reflect.DeepEqual(got, [][]string{{"skills", "list", "--json"}, {"auth", "status"}, {"--respect-workspace-trust", "false"}}) {
 		t.Fatalf("fixed Devin lifecycle arguments = %#v", got)
+	}
+	for index, prepared := range requests {
+		if prepared.WorkspaceAccess != launch.WorkspaceAccessReadOnly {
+			t.Fatalf("process %d workspace access = %q", index, prepared.WorkspaceAccess)
+		}
+		if prepared.Executable != "devin" || !reflect.DeepEqual(prepared.RuntimeInputs, []string{"registered-runtime"}) {
+			t.Fatalf("process %d did not use registered target requirements: %#v", index, prepared)
+		}
 	}
 	if entries, err := os.ReadDir(sessions); err != nil || len(entries) != 0 {
 		t.Fatalf("executor did not remove settled Devin Session: %v %v", entries, err)

@@ -13,6 +13,7 @@ import (
 	"github.com/alcimerio/ai-config-selector/internal/adapter/devin"
 	"github.com/alcimerio/ai-config-selector/internal/builder"
 	"github.com/alcimerio/ai-config-selector/internal/category"
+	"github.com/alcimerio/ai-config-selector/internal/profile"
 	"github.com/alcimerio/ai-config-selector/internal/profileinspect"
 	"github.com/alcimerio/ai-config-selector/internal/profilerepo"
 	"github.com/alcimerio/ai-config-selector/internal/skills"
@@ -90,6 +91,18 @@ func (app App) readMutation(ctx context.Context, inv invocation) (mutationSnapsh
 		if err != nil {
 			return snapshot, err
 		}
+		if inv.command.path == "profile migrate" {
+			if snapshot.entry.StoredVersion == nil || *snapshot.entry.StoredVersion == profile.CurrentVersion {
+				return snapshot, errors.New("Profile is already version 3; no migration was prepared")
+			}
+		}
+		if snapshot.entry.StoredVersion != nil && *snapshot.entry.StoredVersion == profile.CurrentVersion {
+			for _, overlay := range snapshot.entry.Overlays {
+				if overlay.Support != "supported" {
+					return snapshot, fmt.Errorf("Profile rewrite refused: inactive overlay %q cannot be preserved losslessly", overlay.ID)
+				}
+			}
+		}
 	}
 	if inv.command.valueFlag == "--name" {
 		destination, err := app.Repository.Read(ctx, inv.value)
@@ -111,7 +124,7 @@ func (app App) mutateProfile(ctx context.Context, inv invocation) int {
 	if err != nil {
 		return app.fail("%s: %v", inv.command.path, err)
 	}
-	label := map[string]string{"profile edit": "Edit", "profile clone": "Clone", "profile rename": "Rename", "profile delete": "Delete"}[inv.command.path]
+	label := map[string]string{"profile edit": "Edit", "profile clone": "Clone", "profile rename": "Rename", "profile delete": "Delete", "profile migrate": "Migrate"}[inv.command.path]
 	destination := inv.operand
 	if inv.command.valueFlag == "--name" {
 		destination = inv.value
@@ -142,7 +155,13 @@ func (app App) mutateProfile(ctx context.Context, inv invocation) int {
 			}
 			text.WriteString("Only this stored Profile is removed. Active Session copies, identities and other Profiles are preserved.\n")
 		} else {
-			candidate, err := app.Categories.NewProfile(destination, draft)
+			var candidate profile.Profile
+			var err error
+			if inv.command.path != "profile migrate" && snapshot.entry.StoredVersion != nil && *snapshot.entry.StoredVersion < profile.CurrentVersion {
+				candidate, err = app.Categories.NewLegacyProfile(destination, draft)
+			} else {
+				candidate, err = app.Categories.NewProfile(destination, draft)
+			}
 			if err != nil {
 				return builder.PreparedMutation{}, err
 			}
@@ -157,9 +176,19 @@ func (app App) mutateProfile(ctx context.Context, inv invocation) int {
 			if entry.Status != "valid" {
 				return builder.PreparedMutation{}, errors.New("desired Profile has unsupported structure")
 			}
-			fmt.Fprintf(&text, "Stored v%d -> v2 canonical representation.\n", *snapshot.entry.StoredVersion)
-			if *snapshot.entry.StoredVersion == 1 {
+			resultVersion := candidate.Version
+			fmt.Fprintf(&text, "Stored v%d -> v%d canonical representation.\n", *snapshot.entry.StoredVersion, resultVersion)
+			if *snapshot.entry.StoredVersion == 1 && resultVersion == 2 {
 				text.WriteString("Explicit legacy conversion: v1 skillReferences becomes v2 categories.skills (schemaVersion 1).\n")
+			}
+			if inv.command.path == "profile migrate" {
+				if entry.Workspace != nil && *entry.Workspace == "read-write" {
+					text.WriteString("Explicit migration: legacy workspace write is retained as common.workspace v1 read-write.\n")
+				} else {
+					text.WriteString("Explicit migration: workspace authority is reduced from legacy write to common.workspace v1 read-only.\n")
+				}
+				text.WriteString("Common material path: $SESSION_HOME/.acs/common/v1/skills/<source>/<relativePath>.\n")
+				text.WriteString("Devin projection paths: $SESSION_HOME/.config/devin/skills and $SESSION_HOME/.agents/skills.\n")
 			}
 			text.WriteString("Category envelopes/defaults, selection sorting, JSON field order, indentation and trailing newline are canonicalized.\n")
 			if bytes.Equal(snapshot.source.Bytes, desired) {
@@ -172,6 +201,8 @@ func (app App) mutateProfile(ctx context.Context, inv invocation) int {
 		var request profilerepo.Request
 		switch inv.command.path {
 		case "profile edit":
+			request = profilerepo.ReplaceRequest{Name: inv.operand, Expected: snapshot.source.Revision, Bytes: desired}
+		case "profile migrate":
 			request = profilerepo.ReplaceRequest{Name: inv.operand, Expected: snapshot.source.Revision, Bytes: desired}
 		case "profile clone":
 			request = profilerepo.CloneRequest{Source: inv.operand, Destination: destination, ExpectedSource: snapshot.source.Revision, ExpectedDestination: snapshot.destination, Bytes: desired}

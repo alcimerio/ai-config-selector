@@ -43,7 +43,14 @@ type Entry struct {
 	StoredVersion *int        `json:"storedVersion"`
 	Target        *string     `json:"target"`
 	Categories    []Category  `json:"categories"`
+	Overlays      []Overlay   `json:"overlays"`
+	Workspace     *string     `json:"workspaceAccess"`
 	Diagnostic    *Diagnostic `json:"diagnostic"`
+}
+type Overlay struct {
+	ID      string `json:"id"`
+	Version *int   `json:"version"`
+	Support string `json:"support"`
 }
 type Category struct {
 	ID            string                  `json:"id"`
@@ -55,7 +62,7 @@ func newResult(operation string) Result {
 	return Result{FormatVersion: 1, Operation: operation, Storage: "unavailable", Entries: []Entry{}, Checks: Checks{"unchecked", "unchecked", "unchecked"}}
 }
 func newEntry(name string) Entry {
-	entry := Entry{Categories: []Category{}}
+	entry := Entry{Categories: []Category{}, Overlays: []Overlay{}}
 	if profile.ValidateName(name) == nil {
 		entry.Name = &name
 	}
@@ -82,6 +89,8 @@ func (entry Entry) failed(code string) Entry {
 	entry.Diagnostic = diagnostic(code)
 	entry.Target = nil
 	entry.Categories = []Category{}
+	entry.Overlays = []Overlay{}
+	entry.Workspace = nil
 	return entry
 }
 
@@ -104,7 +113,7 @@ func (result Result) ExitCode() int {
 // InspectBytes strictly inspects one bounded exact stored representation, bound
 // to its requested filename identity. It performs no filesystem or codec work.
 func InspectBytes(name string, data []byte) Entry {
-	entry := Entry{Name: &name, Categories: []Category{}}
+	entry := Entry{Name: &name, Categories: []Category{}, Overlays: []Overlay{}}
 	if profile.ValidateName(name) != nil || len(data) > maxProfileBytes {
 		return entry.failed("invalid_structure")
 	}
@@ -125,8 +134,11 @@ func decode(entry Entry, data []byte) Entry {
 		return entry.failed("invalid_structure")
 	}
 	entry.StoredVersion = &version
-	if version != 1 && version != 2 {
+	if version != 1 && version != 2 && version != 3 {
 		return entry.failed("unsupported_content")
+	}
+	if version == 3 {
+		return decodeVersionThree(entry, envelope)
 	}
 	keys := []string{"version", "name", "target", "categories"}
 	if version == 1 {
@@ -188,6 +200,112 @@ func decode(entry Entry, data []byte) Entry {
 	entry.Target = &target
 	entry.Categories = categories
 	return entry
+}
+
+func decodeVersionThree(entry Entry, envelope map[string]json.RawMessage) Entry {
+	if unknown(envelope, "version", "name", "common", "overlays") {
+		return entry.failed("unsupported_content")
+	}
+	var name string
+	if !required(envelope, "name", &name) || profile.ValidateName(name) != nil {
+		return entry.failed("invalid_structure")
+	}
+	if entry.Name == nil || name != *entry.Name {
+		return entry.failed("identity_mismatch")
+	}
+	var common map[string]json.RawMessage
+	if !required(envelope, "common", &common) || common == nil || unknown(common, "skills", "workspace") {
+		return entry.failed("unsupported_content")
+	}
+	if len(common) != 2 {
+		return entry.failed("invalid_structure")
+	}
+	skillsPayload, ok := common["skills"]
+	if !ok {
+		return entry.failed("invalid_structure")
+	}
+	version, selection, code := decodeCommonPayload(skillsPayload)
+	if code != "" || version != 1 {
+		if code == "" {
+			code = "unsupported_content"
+		}
+		return entry.failed(code)
+	}
+	references, code := decodeReferences(selection)
+	if code != "" {
+		return entry.failed(code)
+	}
+	entry.Categories = append(entry.Categories, Category{ID: "skills", SchemaVersion: &version, Selection: references})
+	workspacePayload, ok := common["workspace"]
+	if !ok {
+		return entry.failed("invalid_structure")
+	}
+	workspaceVersion, workspaceSelection, code := decodeCommonPayload(workspacePayload)
+	if code != "" || workspaceVersion != 1 {
+		if code == "" {
+			code = "unsupported_content"
+		}
+		return entry.failed(code)
+	}
+	var workspace map[string]json.RawMessage
+	if json.Unmarshal(workspaceSelection, &workspace) != nil || workspace == nil || unknown(workspace, "access") {
+		return entry.failed("unsupported_content")
+	}
+	var access string
+	if !required(workspace, "access", &access) || (access != "read-only" && access != "read-write") {
+		return entry.failed("invalid_structure")
+	}
+	entry.Workspace = &access
+	entry.Categories = append(entry.Categories, Category{ID: "workspace", SchemaVersion: &workspaceVersion, Selection: []skills.SkillReference{}})
+	var overlays map[string]json.RawMessage
+	if !required(envelope, "overlays", &overlays) || overlays == nil {
+		return entry.failed("invalid_structure")
+	}
+	ids := make([]string, 0, len(overlays))
+	for id := range overlays {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	for _, id := range ids {
+		var payload map[string]json.RawMessage
+		if json.Unmarshal(overlays[id], &payload) != nil || payload == nil {
+			return entry.failed("invalid_structure")
+		}
+		var overlayVersion int
+		if !required(payload, "version", &overlayVersion) || overlayVersion < 1 {
+			return entry.failed("invalid_structure")
+		}
+		support := "inactive-unknown"
+		if id == "devin" {
+			support = "unsupported"
+			if overlayVersion == 1 && !unknown(payload, "version") {
+				support = "supported"
+			}
+		}
+		entry.Overlays = append(entry.Overlays, Overlay{ID: id, Version: &overlayVersion, Support: support})
+	}
+	target := "common"
+	entry.Target, entry.Status = &target, "valid"
+	return entry
+}
+
+func decodeCommonPayload(raw json.RawMessage) (int, json.RawMessage, string) {
+	var payload map[string]json.RawMessage
+	if json.Unmarshal(raw, &payload) != nil || payload == nil {
+		return 0, nil, "invalid_structure"
+	}
+	if unknown(payload, "version", "selection") {
+		return 0, nil, "unsupported_content"
+	}
+	var version int
+	if !required(payload, "version", &version) || version < 1 {
+		return 0, nil, "invalid_structure"
+	}
+	selection, ok := payload["selection"]
+	if !ok || bytes.Equal(bytes.TrimSpace(selection), []byte("null")) {
+		return 0, nil, "invalid_structure"
+	}
+	return version, selection, ""
 }
 func required(fields map[string]json.RawMessage, key string, destination any) bool {
 	raw, ok := fields[key]

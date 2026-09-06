@@ -111,14 +111,14 @@ func (app App) Run(ctx context.Context, args []string) int {
 		return app.createProfile(ctx, inv.value)
 	case "devin":
 		if inv.enabled {
-			return app.dryRun(ctx, inv.value, app.Planner, "No Session was created and Devin was not started.")
+			return app.dryRun(ctx, inv.value, "devin", app.Planner, "No Session was created and Devin was not started.")
 		}
-		return app.launchProfile(ctx, inv.value, app.Launcher, "launch")
+		return app.launchProfile(ctx, inv.value, "devin", app.Launcher, "launch")
 	case "sandbox":
 		if inv.enabled {
-			return app.dryRun(ctx, inv.value, app.SandboxPlanner, "No Session was created and no sandbox shell was started.")
+			return app.dryRun(ctx, inv.value, "", app.SandboxPlanner, "No Session was created and no sandbox shell was started.")
 		}
-		return app.launchProfile(ctx, inv.value, app.SandboxLauncher, "launch sandbox")
+		return app.launchProfile(ctx, inv.value, "", app.SandboxLauncher, "launch sandbox")
 	case "codex auth login":
 		return app.loginCodexAuth(ctx, inv.value, inv.enabled)
 	case "codex auth list":
@@ -293,8 +293,8 @@ func (app App) createProfile(ctx context.Context, name string) int {
 	return 0
 }
 
-func (app App) dryRun(ctx context.Context, name string, planner LaunchPlanner, closingMessage string) int {
-	resolved, err := app.resolveProfile(ctx, name)
+func (app App) dryRun(ctx context.Context, name, overlay string, planner LaunchPlanner, closingMessage string) int {
+	resolved, err := app.resolveProfile(ctx, name, overlay)
 	if err != nil {
 		return app.fail("%v", err)
 	}
@@ -320,8 +320,8 @@ func (app App) dryRun(ctx context.Context, name string, planner LaunchPlanner, c
 	return 0
 }
 
-func (app App) launchProfile(ctx context.Context, name string, launcher ProfileLauncher, action string) int {
-	resolved, err := app.resolveProfile(ctx, name)
+func (app App) launchProfile(ctx context.Context, name, overlay string, launcher ProfileLauncher, action string) int {
+	resolved, err := app.resolveProfile(ctx, name, overlay)
 	if err != nil {
 		return app.fail("%v", err)
 	}
@@ -342,7 +342,7 @@ func (app App) launchProfile(ctx context.Context, name string, launcher ProfileL
 	return exitCode
 }
 
-func (app App) resolveProfile(ctx context.Context, name string) (category.ResolvedProfile, error) {
+func (app App) resolveProfile(ctx context.Context, name, overlay string) (category.ResolvedProfile, error) {
 	if err := profile.ValidateName(name); err != nil {
 		return category.ResolvedProfile{}, err
 	}
@@ -350,7 +350,7 @@ func (app App) resolveProfile(ctx context.Context, name string) (category.Resolv
 	if err != nil {
 		return category.ResolvedProfile{}, fmt.Errorf("load Profile %q: %w", name, err)
 	}
-	resolved, err := app.Categories.Resolve(ctx, loaded)
+	resolved, err := app.Categories.ResolveFor(ctx, loaded, overlay)
 	if err != nil {
 		return category.ResolvedProfile{}, fmt.Errorf("resolve Profile %q: %w", name, err)
 	}

@@ -78,7 +78,14 @@ func (store *Store) Load(name string) (Profile, error) {
 	if err != nil {
 		return Profile{}, err
 	}
-	loaded, err := store.codec.Decode(contents)
+	var loaded Profile
+	if strict, ok := store.codec.(interface {
+		DecodeNamed(string, []byte) (Profile, error)
+	}); ok {
+		loaded, err = strict.DecodeNamed(name, contents)
+	} else {
+		loaded, err = store.codec.Decode(contents)
+	}
 	if err != nil {
 		return Profile{}, fmt.Errorf("decode Profile %q: %w", name, err)
 	}

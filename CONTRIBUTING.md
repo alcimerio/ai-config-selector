@@ -30,8 +30,12 @@ target output, private paths, environment values, or generated Seatbelt policy.
 - Add a failing test before changing behavior.
 - Keep public CLI parsing in `internal/cli` and target behavior behind planner
   and launcher boundaries.
-- Keep Profile materialization target-independent. Credentials and executable
-  verification belong to the target adapter.
+- Keep common Profile codecs, defaults, authority and materialization in
+  `internal/commonprofile`, and the immutable execution inputs in
+  `internal/authority`. Target adapters may provide only fixed projection and
+  declarative target requirements. The shared executor owns backend selection,
+  executable/runtime verification, Sessions, processes and cleanup. Typed
+  authentication resources remain separate.
 - Do not add a backend selector, sandbox bypass, unsandboxed fallback, arbitrary
   shell command option, or `$SHELL` lookup.
 - Preserve stable error categories and sanitize private backend detail.

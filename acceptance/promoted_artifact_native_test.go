@@ -121,9 +121,52 @@ func TestPromotedArtifactNativeContainmentContract(t *testing.T) {
 
 	t.Run("readiness is native and sanitized", assertPromotedArtifactNativeReadiness)
 	t.Run("sandbox shell is credential-free contained and cleaned", assertPromotedArtifactSandboxShell)
+	t.Run("v3 common material and workspace modes are enforced", assertPromotedArtifactV3WorkspaceModes)
 	t.Run("filesystem environment descriptors sockets IP preflight and descendants", assertPromotedArtifactNativeContainment)
 	t.Run("preflight failure is categorized without target details", assertPromotedArtifactNativePreflightFailureIsSafe)
 	t.Run("missing backend OR invalid policy cannot start a marker", assertPromotedArtifactMissingBackendFailsClosed)
+}
+
+func assertPromotedArtifactV3WorkspaceModes(t *testing.T) {
+	binary := promotedBinary(t)
+	home, path := prepareRuntimeHome(t)
+	writeVersionThreeProfile(t, home, "readonly", "read-only")
+	writeVersionThreeProfile(t, home, "coding", "read-write")
+	outsideDirectory := realTemporaryDirectory(t)
+	outside := filepath.Join(outsideDirectory, "unrelated-write")
+	outsideSecret := filepath.Join(outsideDirectory, "unrelated-secret")
+	if err := os.WriteFile(outsideSecret, []byte("must remain outside grants\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		profile  string
+		writable bool
+	}{{"readonly", false}, {"coding", true}} {
+		workspace := realTemporaryDirectory(t)
+		commands := "set -u\n" +
+			"test \"$(cat \"$HOME/.acs/common/v1/skills/devin-config/review/SKILL.md\")\" != \"\" || exit 61\n" +
+			"test ! -e \"$HOME/.config/devin/skills/review/SKILL.md\" || exit 62\n" +
+			"printf session > \"$HOME/session-write\" || exit 63\n" +
+			"if printf workspace > ./workspace-write 2>/dev/null; then print -r -- workspace-written; else print -r -- workspace-denied; fi\n" +
+			"if printf outside > " + strconv.Quote(outside) + " 2>/dev/null; then exit 64; fi\n" +
+			"if cat " + strconv.Quote(outsideSecret) + " >/dev/null 2>&1; then exit 65; fi\n" +
+			"print -r -- v3-common-ok\nexit 0\n"
+		command := exec.Command(binary, "sandbox", "--profile", test.profile)
+		command.Env, command.Dir, command.Stdin = nativeCandidateEnvironment(home, path, nil), workspace, strings.NewReader(commands)
+		output, err := command.CombinedOutput()
+		if err != nil {
+			t.Fatalf("installed v3 %s shell: %v; output=%s", test.profile, err, output)
+		}
+		if !strings.Contains(string(output), "v3-common-ok") {
+			t.Fatalf("v3 common material was not consumed: %s", output)
+		}
+		_, workspaceErr := os.Stat(filepath.Join(workspace, "workspace-write"))
+		if (workspaceErr == nil) != test.writable {
+			t.Fatalf("profile %s workspace state=%v, writable=%v; output=%s", test.profile, workspaceErr, test.writable, output)
+		}
+		assertMarkerAbsent(t, outside, "v3 shell wrote unrelated host path")
+		assertNoSessions(t, home)
+	}
 }
 
 func assertPromotedArtifactSandboxShell(t *testing.T) {
@@ -226,6 +269,9 @@ func assertPromotedArtifactNativeReadiness(t *testing.T) {
 func assertPromotedArtifactNativeContainment(t *testing.T) {
 	binary := promotedBinary(t)
 	home, path := prepareRuntimeHome(t)
+	// Exercise the installed candidate's v3 common copy followed by its real
+	// Devin projection; the fake target observes the projected managed path.
+	writeVersionThreeProfile(t, home, "reviews", "read-write")
 	fixtureRoot := realTemporaryDirectory(t)
 	workspace := filepath.Join(fixtureRoot, "workspace")
 	tools := filepath.Join(fixtureRoot, "tools")

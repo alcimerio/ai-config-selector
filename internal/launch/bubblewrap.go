@@ -67,8 +67,12 @@ func bubblewrapArguments(request validatedProcessRequest) []string {
 	for _, directory := range bubblewrapParentDirectories(mountPaths) {
 		arguments = append(arguments, "--dir", directory)
 	}
+	workspaceBinding := "--ro-bind"
+	if workspaceWritable(request.workspaceAccess) {
+		workspaceBinding = "--bind"
+	}
 	arguments = append(arguments,
-		"--bind", request.workspace, request.workspace,
+		workspaceBinding, request.workspace, request.workspace,
 		"--bind", request.sessionDirectory, request.sessionDirectory,
 		"--ro-bind", request.executable, request.executable,
 	)

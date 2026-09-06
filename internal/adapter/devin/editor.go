@@ -21,16 +21,20 @@ func NewProfileEditor(home string) (*Adapter, error) {
 		return nil, errors.New("Profile editor home is required")
 	}
 	a := &Adapter{existingHomeDir: home}
-	registry, binding, err := newCategoryRegistry(a)
+	registry, binding, workspaceBinding, err := newCategoryRegistry(a)
 	if err != nil {
 		return nil, err
 	}
-	a.categories, a.skillsCategory = registry, binding
-	registration, err := builder.RegisterSkillsRepairEditor(a.skillsCategory, a.discoverProfileSkills)
+	a.categories, a.skillsCategory, a.workspaceCategory = registry, binding, workspaceBinding
+	skillsRegistration, err := builder.RegisterSkillsRepairEditor(a.skillsCategory, a.discoverProfileSkills)
 	if err != nil {
 		return nil, err
 	}
-	a.editors, err = builder.NewEditorRegistry(a.categories, registration)
+	workspaceRegistration, err := builder.RegisterWorkspaceEditor(a.workspaceCategory)
+	if err != nil {
+		return nil, err
+	}
+	a.editors, err = builder.NewEditorRegistry(a.categories, skillsRegistration, workspaceRegistration)
 	return a, err
 }
 
@@ -45,11 +49,15 @@ func (a *Adapter) BuildProfile(ctx context.Context, name string, draft category.
 }
 
 func newEditorRegistry(adapter *Adapter) (*builder.EditorRegistry, error) {
-	registration, err := builder.RegisterSkillsEditor(adapter.skillsCategory, adapter.DiscoverGlobalSkillCatalog)
+	skillsRegistration, err := builder.RegisterSkillsEditor(adapter.skillsCategory, adapter.DiscoverGlobalSkillCatalog)
 	if err != nil {
 		return nil, err
 	}
-	return builder.NewEditorRegistry(adapter.categories, registration)
+	workspaceRegistration, err := builder.RegisterWorkspaceEditor(adapter.workspaceCategory)
+	if err != nil {
+		return nil, err
+	}
+	return builder.NewEditorRegistry(adapter.categories, skillsRegistration, workspaceRegistration)
 }
 
 // EditProfileDraft presents the current line-oriented Skills editor. The

@@ -35,7 +35,7 @@ func (launcher *Launcher) Launch(
 	resolved category.ResolvedProfile,
 	terminal launch.Terminal,
 ) (exitCode int, resultErr error) {
-	err := launcher.executor.RunShell(ctx, executor.ShellRequest{SessionsDirectory: sessionsDirectory, WorkingDirectory: workingDirectory, Materializer: resolved, Terminal: terminal})
+	err := launcher.executor.RunShell(ctx, executor.ShellRequest{SessionsDirectory: sessionsDirectory, WorkingDirectory: workingDirectory, ResolvedPlan: &resolved, Terminal: terminal})
 	return shellResult(err)
 }
 

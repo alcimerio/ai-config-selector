@@ -25,6 +25,7 @@ var commands = []commandSpec{
 	{path: "profile clone", syntax: "acs profile clone NAME --name NEW", description: "Open a seeded Profile Builder under a new name. Preview and confirm before publication.\nThe source must remain unchanged and the destination must remain absent.", example: "acs profile clone backend-review --name frontend-review", nameOperand: true, valueFlag: "--name"},
 	{path: "profile rename", syntax: "acs profile rename NAME --name NEW", description: "Preview and confirm coordinated filename and embedded-name changes interactively.\nAn occupied destination is never overwritten. Legacy conversion requires a canonical representation preview.", example: "acs profile rename backend-review --name service-review", nameOperand: true, valueFlag: "--name"},
 	{path: "profile delete", syntax: "acs profile delete NAME [--confirm NAME]", description: "Delete only the named stored Profile at its captured revision.\nInteractive deletion requires typing the exact name; noninteractive use requires an exact --confirm NAME.\nSafely readable unsupported documents may be deleted. Identities, Sessions and other Profiles are unaffected.", example: "acs profile delete backend-review\n  acs profile delete backend-review --confirm backend-review", nameOperand: true, valueFlag: "--confirm", optionalValue: true},
+	{path: "profile migrate", syntax: "acs profile migrate NAME", description: "Preview and explicitly migrate one legacy v1/v2 Profile to v3 through the revisioned repository.\nLegacy workspace write is preserved explicitly; common and target projection paths change only after confirmation.", example: "acs profile migrate backend-review", nameOperand: true},
 
 	{path: "doctor", syntax: "acs doctor [--target devin|sandbox|codex-auth] [--json]", description: "Inspect passive host and backend-file prerequisites. Optional targets check executable availability only.\nVersions, authentication and actual sandbox enforcement remain unchecked. No processes run or files change.\ncodex-auth describes named authentication workflows; interactive Codex launch is not implemented.", example: "acs doctor\n  acs doctor --target devin --json", valueFlag: "--target", boolFlag: "--json", optionalValue: true},
 	{path: "profile validate", syntax: "acs profile validate NAME [--json]", description: "Validate stored Profile structure and selected Skill-source resolution without a launch plan.\nPlatform, backend, executables, authentication and runtime remain unchecked. No files change.", example: "acs profile validate backend-review\n  acs profile validate --json backend-review", boolFlag: "--json", nameOperand: true},
@@ -225,7 +226,7 @@ func (app App) RunInformational(args []string) (handled bool, code int) {
 
 func isMutation(command string) bool {
 	switch command {
-	case "profile edit", "profile clone", "profile rename", "profile delete":
+	case "profile edit", "profile clone", "profile rename", "profile delete", "profile migrate":
 		return true
 	}
 	return false

@@ -35,7 +35,7 @@ an unsupported macOS version does not make the command succeed. On non-macOS
 hosts, or when host metadata cannot be read, backend availability is unchecked.
 
 `profile validate NAME` first uses the existing read-only inspection codec and
-safe store traversal to validate supported persisted structure. The v1/v2
+safe store traversal to validate supported persisted structure. The v1/v2/v3
 persistence and [inspection output contract](profile-inspection.md) are unchanged.
 It then resolves only the selected Skill references through the existing Devin
 discovery rules: immediate child directories with regular `SKILL.md` files under

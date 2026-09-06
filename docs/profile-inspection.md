@@ -57,7 +57,8 @@ requested name; backslashes and non-ASCII/control bytes use Go string escapes,
 without surrounding quotes), `name` (validated filename stem, or null for an invalid
 name), `status` (`valid`, `invalid`, `unsupported`, `missing`, or `unreadable`),
 `storedVersion` (integer or null when not safely decoded), `target` (`devin` for
-valid entries, otherwise null), `categories` (array), and `diagnostic` (null for
+legacy entries and `common` for v3), `categories` (array), `workspaceAccess`,
+`overlays`, and `diagnostic` (null for
 valid entries, otherwise the diagnostic object). No corrupt or unknown payload
 is echoed. Invalid/unsupported entries have empty categories. A valid entry
 means supported persisted structure only; it does **not** mean executable.
@@ -72,8 +73,10 @@ references are invalid. JSON escapes controls; human output escapes non-ASCII
 and terminal controls. Private absolute paths and arbitrary decoder errors are
 never printed.
 
-Supported structures are Devin Profile envelopes 1 and 2 and Skills category
-schema 1. Version 2 may have an empty categories object. Unknown fields, category
+Supported structures are Devin Profile envelopes 1 and 2 plus common Profile
+envelope 3. Version 3 has independently versioned Skills/workspace capabilities
+and explicit overlays; unknown inactive overlays are reported without being
+selected or executed. Version 2 may have an empty categories object. Unknown fields, category
 IDs, targets, source aliases, and unsupported versions are explicitly unsupported;
 missing fields, wrong types, duplicate JSON keys, filename/body mismatch, and
 malformed references are invalid. Unpaired JSON UTF-16 surrogate escapes are

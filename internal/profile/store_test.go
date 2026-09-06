@@ -46,11 +46,11 @@ func TestStoreCreatesAtomicHumanReadableUserOnlyProfileWithoutOverwrite(t *testi
 	}
 	text := string(contents)
 	for _, fragment := range []string{
-		"\n  \"version\": 2",
+		"\n  \"version\": 3",
 		"\n  \"name\": \"backend-review\"",
-		"\n  \"categories\": {",
+		"\n  \"common\": {",
 		"\n    \"skills\": {",
-		"\n      \"schemaVersion\": 1",
+		"\n      \"version\": 1",
 		"\n      \"selection\": [",
 		"\"source\": \"devin-config\"",
 		"\"relativePath\": \"review\"",
@@ -63,7 +63,7 @@ func TestStoreCreatesAtomicHumanReadableUserOnlyProfileWithoutOverwrite(t *testi
 		t.Fatalf("Profile Skill References are not sorted by stable identity:\n%s", text)
 	}
 	if strings.Contains(text, "skillReferences") {
-		t.Fatalf("version-2 Profile contains the version-1 field:\n%s", text)
+		t.Fatalf("version-3 Profile contains the version-1 field:\n%s", text)
 	}
 	profileInfo, err := os.Stat(path)
 	if err != nil {
@@ -137,8 +137,8 @@ func TestStoreLoadsVersionOneProfileAsVersionTwoWithoutRewritingIt(t *testing.T)
 	if err != nil {
 		t.Fatalf("load version-1 Profile: %v", err)
 	}
-	if loaded.Version != profile.CurrentVersion {
-		t.Fatalf("normalized Profile version = %d, want %d", loaded.Version, profile.CurrentVersion)
+	if loaded.Version != profile.LegacyCurrentVersion || loaded.SourceVersion != 1 {
+		t.Fatalf("normalized legacy Profile = %#v", loaded)
 	}
 	references, err := devin.SkillReferences(loaded)
 	if err != nil {
@@ -196,22 +196,22 @@ func TestStoreRejectsInvalidVersionTwoSavedIntent(t *testing.T) {
 		{
 			name:          "unknown-category",
 			contents:      `{"version":2,"name":"unknown-category","target":"devin","categories":{"agents":{"schemaVersion":1,"selection":[]}}}`,
-			wantErrorText: `unknown Profile category "agents"`,
+			wantErrorText: "Stored Profile",
 		},
 		{
 			name:          "unsupported-category-schema",
 			contents:      `{"version":2,"name":"unsupported-category-schema","target":"devin","categories":{"skills":{"schemaVersion":2,"selection":[]}}}`,
-			wantErrorText: "skills category uses unsupported schema version 2",
+			wantErrorText: "Stored Profile",
 		},
 		{
 			name:          "malformed-selection-shape",
 			contents:      `{"version":2,"name":"malformed-selection-shape","target":"devin","categories":{"skills":{"schemaVersion":1,"selection":{}}}}`,
-			wantErrorText: "decode skills category selection",
+			wantErrorText: "Stored Profile",
 		},
 		{
 			name:          "malformed-reference",
 			contents:      `{"version":2,"name":"malformed-reference","target":"devin","categories":{"skills":{"schemaVersion":1,"selection":[{"source":"devin-config"}]}}}`,
-			wantErrorText: "invalid Skill Reference",
+			wantErrorText: "Stored Profile",
 		},
 	}
 
@@ -231,17 +231,17 @@ func TestStoreRejectsInvalidVersionOneSavedIntent(t *testing.T) {
 		{
 			name:          "missing-selection",
 			contents:      `{"version":1,"name":"missing-selection","target":"devin"}`,
-			wantErrorText: "decode version-1 skillReferences",
+			wantErrorText: "Stored Profile",
 		},
 		{
 			name:          "null-selection",
 			contents:      `{"version":1,"name":"null-selection","target":"devin","skillReferences":null}`,
-			wantErrorText: "expected an array, got null",
+			wantErrorText: "Stored Profile",
 		},
 		{
 			name:          "malformed-reference",
 			contents:      `{"version":1,"name":"malformed-reference","target":"devin","skillReferences":[{"source":"devin-config"}]}`,
-			wantErrorText: "invalid Skill Reference",
+			wantErrorText: "Stored Profile",
 		},
 	}
 

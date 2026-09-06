@@ -34,7 +34,7 @@ func TestPromotedArtifactReportsItsVersionAndCreatesAnEmptyProfileThroughAPTY(t 
 
 	result := runPromotedPTY(t, binary, home, "promoted-empty", func(t *testing.T, terminal io.Writer, capture *safeCapture) {
 		waitForOutput(t, capture, `Create Profile "promoted-empty"`)
-		writePTY(t, terminal, "\x1b[B", "\r")
+		writePTY(t, terminal, "\x1b[B", "\x1b[B", "\r")
 		waitForOutput(t, capture, "Create an empty Profile?")
 		writePTY(t, terminal, "y")
 	})
@@ -50,7 +50,7 @@ func TestPromotedArtifactReportsItsVersionAndCreatesAnEmptyProfileThroughAPTY(t 
 	if err != nil {
 		t.Fatalf("created Profile is unavailable: %v", err)
 	}
-	for _, fragment := range []string{`"version": 2`, `"name": "promoted-empty"`, `"target": "devin"`, `"skills"`, `"selection": []`} {
+	for _, fragment := range []string{`"version": 3`, `"name": "promoted-empty"`, `"common"`, `"skills"`, `"selection": []`, `"workspace"`, `"access": "read-only"`, `"overlays"`, `"devin"`} {
 		if !bytes.Contains(contents, []byte(fragment)) {
 			t.Errorf("created Profile omits %s", fragment)
 		}
@@ -583,6 +583,18 @@ func writeVersionOneProfile(t *testing.T, home, name string) {
 		t.Fatal(err)
 	}
 	contents := fmt.Sprintf(`{"version":1,"name":%q,"target":"devin","skillReferences":[{"source":"devin-config","relativePath":"review"}]}`, name)
+	if err := os.WriteFile(filepath.Join(directory, name+".json"), []byte(contents), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func writeVersionThreeProfile(t *testing.T, home, name, workspaceAccess string) {
+	t.Helper()
+	directory := filepath.Join(home, ".acs", "profiles")
+	if err := os.MkdirAll(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	contents := fmt.Sprintf(`{"version":3,"name":%q,"common":{"skills":{"version":1,"selection":[{"source":"devin-config","relativePath":"review"}]},"workspace":{"version":1,"selection":{"access":%q}}},"overlays":{"devin":{"version":1}}}`, name, workspaceAccess)
 	if err := os.WriteFile(filepath.Join(directory, name+".json"), []byte(contents), 0o600); err != nil {
 		t.Fatal(err)
 	}

@@ -58,7 +58,7 @@ func TestPromotedPassiveDiagnostics(t *testing.T) {
 			t.Fatalf("streams: %s %s", &out, &stderr)
 		}
 		var r diagnostics.Result
-		if json.Unmarshal(out.Bytes(), &r) != nil || r.FormatVersion != 1 || len(r.Checks) != 8 || code != r.ExitCode() {
+		if json.Unmarshal(out.Bytes(), &r) != nil || r.FormatVersion != 1 || len(r.Checks) != 10 || code != r.ExitCode() {
 			t.Fatalf("result: %d %s", code, &out)
 		}
 		for _, c := range r.Checks {

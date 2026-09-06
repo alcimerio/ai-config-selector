@@ -28,6 +28,10 @@ also accepted. See the [inspection and JSON contract](docs/profile-inspection.md
 for status codes, exit behavior, limits, and examples. Run `acs profile --help`
 for contextual help.
 
+New development-source Profiles use independently versioned common Skills,
+workspace intent, and explicit target overlays. See the [common Profile format,
+migration, grants and projection contract](docs/common-profile-format.md).
+
 ## Edit and repair Profiles (development source)
 
 Use the seeded Profile Builder to change stored selections or create a copy:
@@ -37,10 +41,12 @@ acs profile edit backend-review
 acs profile clone backend-review --name frontend-review
 acs profile rename backend-review --name service-review
 acs profile delete service-review
+acs profile migrate legacy-review
 ```
 
 Edit and clone retain missing selections until explicitly removed. Every rewrite
-previews exact canonical bytes, including explicit legacy v1 → v2 conversion;
+previews exact canonical bytes. Ordinary legacy mutations preserve canonical v2
+authority and placement; `profile migrate` explicitly adopts v3 common paths;
 unresolved selections require a separate warning acknowledgement. Rename confirms
 both filename and embedded identity. Deletion requires typing the exact name, or
 an exact `--confirm NAME` for deliberate noninteractive use. Destination collisions
@@ -167,7 +173,8 @@ Validate the saved Profile without runtime checks:
 acs profile validate backend-review
 ```
 
-From the workspace you want the sandboxed process to read and write, inspect
+From the workspace you want the sandboxed process to read (and, only when the
+Profile explicitly grants coding write, modify), inspect
 and launch the credential-free shell:
 
 ```sh

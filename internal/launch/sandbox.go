@@ -19,6 +19,31 @@ import (
 const safeProcessPath = "/usr/local/bin:/usr/bin:/bin"
 const requiredSandboxNotice = "ACS will not start the requested process without the required sandbox"
 
+// WorkspaceAccess is the bounded common authority granted to the selected
+// workspace. The zero value preserves the writable authority of legacy
+// Profiles and internal callers; new Profiles resolve an explicit value.
+type WorkspaceAccess string
+
+const (
+	WorkspaceAccessLegacy    WorkspaceAccess = ""
+	WorkspaceAccessReadOnly  WorkspaceAccess = "read-only"
+	WorkspaceAccessReadWrite WorkspaceAccess = "read-write"
+)
+
+func normalizeWorkspaceAccess(access WorkspaceAccess) (WorkspaceAccess, error) {
+	if access == WorkspaceAccessLegacy {
+		return WorkspaceAccessReadWrite, nil
+	}
+	if access != WorkspaceAccessReadOnly && access != WorkspaceAccessReadWrite {
+		return "", errors.New("unsupported workspace access")
+	}
+	return access, nil
+}
+
+func workspaceWritable(access WorkspaceAccess) bool {
+	return access == WorkspaceAccessLegacy || access == WorkspaceAccessReadWrite
+}
+
 // SandboxErrorCategory is a stable, non-sensitive class of sandbox failure.
 type SandboxErrorCategory string
 
@@ -176,6 +201,7 @@ func CurrentPlatform() (Platform, error) {
 // RuntimeInputs, they need not exist.
 type SandboxCheck struct {
 	Workspace         string
+	WorkspaceAccess   WorkspaceAccess
 	SessionsDirectory string
 	Executable        string
 	RuntimeInputs     []string
@@ -186,6 +212,7 @@ type SandboxCheck struct {
 // native sandbox. Callers supply intent, not backend policy or mount details.
 type ProcessRequest struct {
 	Workspace              string
+	WorkspaceAccess        WorkspaceAccess
 	SessionsDirectory      string
 	SessionDirectory       string
 	SessionHome            string
@@ -451,6 +478,7 @@ func (process sanitizedProcess) CleanupDone() <-chan struct{} {
 
 type validatedSandboxCheck struct {
 	workspace                  string
+	workspaceAccess            WorkspaceAccess
 	sessionsDirectory          string
 	executable                 string
 	runtimeInputs              []string
@@ -459,6 +487,10 @@ type validatedSandboxCheck struct {
 }
 
 func validateSandboxCheck(request SandboxCheck) (validatedSandboxCheck, error) {
+	workspaceAccess, err := normalizeWorkspaceAccess(request.WorkspaceAccess)
+	if err != nil {
+		return validatedSandboxCheck{}, sandboxError(SandboxUnsafePath, err)
+	}
 	workspace, err := resolveExistingPath(request.Workspace, true, false)
 	if err != nil {
 		return validatedSandboxCheck{}, sandboxError(SandboxUnsafePath, err)
@@ -493,7 +525,7 @@ func validateSandboxCheck(request SandboxCheck) (validatedSandboxCheck, error) {
 		}
 	}
 	return validatedSandboxCheck{
-		workspace: workspace, sessionsDirectory: sessionsDirectory, executable: executable,
+		workspace: workspace, workspaceAccess: workspaceAccess, sessionsDirectory: sessionsDirectory, executable: executable,
 		runtimeInputs: runtimeInputs, runtimeProbePaths: runtimeProbePaths,
 		runtimeProbeTraversalPaths: runtimeProbeTraversalPaths,
 	}, nil
@@ -508,6 +540,7 @@ func broadRuntimeInput(input, workspace, sessionsDirectory string) bool {
 
 type validatedProcessRequest struct {
 	workspace                  string
+	workspaceAccess            WorkspaceAccess
 	sessionsDirectory          string
 	sessionDirectory           string
 	sessionHome                string
@@ -524,7 +557,7 @@ type validatedProcessRequest struct {
 
 func validateProcessRequest(request ProcessRequest) (validatedProcessRequest, error) {
 	checked, err := validateSandboxCheck(SandboxCheck{
-		Workspace: request.Workspace, SessionsDirectory: request.SessionsDirectory,
+		Workspace: request.Workspace, WorkspaceAccess: request.WorkspaceAccess, SessionsDirectory: request.SessionsDirectory,
 		Executable: request.Executable, RuntimeInputs: request.RuntimeInputs,
 		RuntimeProbePaths: request.RuntimeProbePaths,
 	})
@@ -547,7 +580,7 @@ func validateProcessRequest(request ProcessRequest) (validatedProcessRequest, er
 		return validatedProcessRequest{}, sandboxError(SandboxInvalidEnvironment, nil)
 	}
 	return validatedProcessRequest{
-		workspace: checked.workspace, sessionsDirectory: checked.sessionsDirectory,
+		workspace: checked.workspace, workspaceAccess: checked.workspaceAccess, sessionsDirectory: checked.sessionsDirectory,
 		sessionDirectory: sessionDirectory, sessionHome: sessionHome,
 		temporaryDirectory: temporaryDirectory, executable: checked.executable,
 		runtimeInputs: checked.runtimeInputs, runtimeProbePaths: checked.runtimeProbePaths,

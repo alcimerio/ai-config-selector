@@ -14,14 +14,10 @@ import (
 // adapter supplies only validated configuration and selected profile data.
 func (a *Adapter) Launch(ctx context.Context, sessionsDirectory, workingDirectory string, resolved category.ResolvedProfile, terminal launch.Terminal) (int, error) {
 	exitCode, err := a.executor.RunDevin(ctx, executor.DevinRequest{
-		SessionsDirectory:     sessionsDirectory,
-		WorkingDirectory:      workingDirectory,
-		Materializer:          resolved,
-		Terminal:              terminal,
-		Executable:            a.binaryPath,
-		RuntimeInputs:         append([]string(nil), a.runtimeInputs...),
-		ExistingHomeDirectory: a.existingHomeDir,
-		ExpectedCatalog:       resolved.DevinExpectedCatalog(),
+		SessionsDirectory: sessionsDirectory,
+		WorkingDirectory:  workingDirectory,
+		Terminal:          terminal,
+		ResolvedPlan:      &resolved,
 	})
 	if err != nil {
 		return exitCode, sanitizeLaunchError(err)

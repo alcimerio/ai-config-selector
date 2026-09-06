@@ -9,6 +9,7 @@ import (
 	"github.com/alcimerio/ai-config-selector/internal/builder"
 	"github.com/alcimerio/ai-config-selector/internal/category"
 	"github.com/alcimerio/ai-config-selector/internal/profile"
+	"github.com/alcimerio/ai-config-selector/internal/profileinspect"
 	"github.com/alcimerio/ai-config-selector/internal/profilerepo"
 	"golang.org/x/sys/unix"
 	"io"
@@ -30,10 +31,59 @@ func TestMutationGrammarAccepted(t *testing.T) {
 		{"profile", "delete", "old"},
 		{"profile", "delete", "--confirm", "old", "old"},
 		{"profile", "delete", "old", "--confirm", "old"},
+		{"profile", "migrate", "old"},
 	} {
 		if _, problem := parseCommand(args); problem != "" {
 			t.Errorf("%q: %s", args, problem)
 		}
+	}
+}
+
+func TestExplicitMigrationPreservesLegacyWriteAndUsesRevisionedReplace(t *testing.T) {
+	app, repository, _, output := mutationFixture(t, legacyMutationDocument)
+	app.MutationBuilder = mutationEditorFunc(func(ctx context.Context, name string, draft category.Draft, options builder.MutationOptions, _ io.Reader, _ io.Writer) (builder.Outcome, error) {
+		prepared, err := options.Prepare(draft)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, text := range []string{"Stored v1 -> v3", "workspace write is retained", ".acs/common/v1/skills", "Devin projection paths"} {
+			if !strings.Contains(prepared.Text, text) {
+				t.Fatalf("migration preview lacks %q:\n%s", text, prepared.Text)
+			}
+		}
+		path, err := prepared.Save(ctx, draft)
+		if err != nil {
+			return builder.Outcome{}, err
+		}
+		return builder.Outcome{Create: true, Draft: draft, Path: path}, nil
+	})
+	if code := app.Run(context.Background(), []string{"profile", "migrate", "old"}); code != 0 {
+		t.Fatalf("migration exit %d: %s", code, output)
+	}
+	stored, err := repository.Read(context.Background(), "old")
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry := profileinspect.InspectBytes("old", stored.Bytes)
+	if entry.Status != "valid" || entry.StoredVersion == nil || *entry.StoredVersion != 3 || entry.Workspace == nil || *entry.Workspace != "read-write" {
+		t.Fatalf("migrated entry = %#v", entry)
+	}
+}
+
+func TestCancelledMigrationPreservesExactLegacyBytes(t *testing.T) {
+	app, repository, _, output := mutationFixture(t, legacyMutationDocument)
+	app.MutationBuilder = mutationEditorFunc(func(_ context.Context, _ string, draft category.Draft, options builder.MutationOptions, _ io.Reader, _ io.Writer) (builder.Outcome, error) {
+		if _, err := options.Prepare(draft); err != nil {
+			t.Fatal(err)
+		}
+		return builder.Outcome{Draft: draft, Cancelled: true}, nil
+	})
+	if code := app.Run(context.Background(), []string{"profile", "migrate", "old"}); code != 130 {
+		t.Fatalf("cancel exit %d: %s", code, output)
+	}
+	stored, err := repository.Read(context.Background(), "old")
+	if err != nil || !bytes.Equal(stored.Bytes, legacyMutationDocument) {
+		t.Fatalf("cancel changed bytes: %s %v", stored.Bytes, err)
 	}
 }
 
@@ -194,6 +244,57 @@ func TestMutationRefusesUnsupportedBytesWithoutTreeChanges(t *testing.T) {
 	}
 }
 
+func TestVersionThreeMutationRefusesUnknownInactiveOverlayWithoutWrites(t *testing.T) {
+	raw := []byte(`{"version":3,"name":"old","common":{"skills":{"version":1,"selection":[]},"workspace":{"version":1,"selection":{"access":"read-only"}}},"overlays":{"devin":{"version":1},"codex":{"version":9,"future":{"opaque":true}}}}`)
+	for _, operation := range []string{"edit", "clone", "rename"} {
+		t.Run(operation, func(t *testing.T) {
+			app, _, home, output := mutationFixture(t, raw)
+			before := mutationTree(t, home)
+			app.MutationBuilder = mutationEditorFunc(func(context.Context, string, category.Draft, builder.MutationOptions, io.Reader, io.Writer) (builder.Outcome, error) {
+				t.Fatal("unknown inactive overlay opened writer")
+				return builder.Outcome{}, nil
+			})
+			args := []string{"profile", operation, "old"}
+			if operation != "edit" {
+				args = append(args, "--name", "new")
+			}
+			if code := app.Run(context.Background(), args); code == 0 || !strings.Contains(output.String(), "cannot be preserved losslessly") {
+				t.Fatalf("rewrite result = %d %s", code, output)
+			}
+			if after := mutationTree(t, home); !reflect.DeepEqual(after, before) {
+				t.Fatalf("refusal changed tree: before=%v after=%v", before, after)
+			}
+		})
+	}
+}
+
+func TestSupportedVersionThreeEditDoesNotDowngradeOrRewriteOverlayVersion(t *testing.T) {
+	raw := []byte(`{"version":3,"name":"old","common":{"skills":{"version":1,"selection":[]},"workspace":{"version":1,"selection":{"access":"read-only"}}},"overlays":{"devin":{"version":1}}}`)
+	app, repository, _, output := mutationFixture(t, raw)
+	app.MutationBuilder = mutationEditorFunc(func(ctx context.Context, _ string, draft category.Draft, options builder.MutationOptions, _ io.Reader, _ io.Writer) (builder.Outcome, error) {
+		prepared, err := options.Prepare(draft)
+		if err != nil {
+			return builder.Outcome{}, err
+		}
+		if !strings.Contains(prepared.Text, "Stored v3 -> v3") {
+			t.Fatalf("v3 rewrite preview = %s", prepared.Text)
+		}
+		path, err := prepared.Save(ctx, draft)
+		return builder.Outcome{Create: err == nil, Draft: draft, Path: path}, err
+	})
+	if code := app.Run(context.Background(), []string{"profile", "edit", "old"}); code != 0 {
+		t.Fatalf("edit exit %d: %s", code, output)
+	}
+	stored, err := repository.Read(context.Background(), "old")
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry := profileinspect.InspectBytes("old", stored.Bytes)
+	if entry.Status != "valid" || entry.StoredVersion == nil || *entry.StoredVersion != 3 || len(entry.Overlays) != 1 || entry.Overlays[0].ID != "devin" || entry.Overlays[0].Version == nil || *entry.Overlays[0].Version != 1 {
+		t.Fatalf("v3 edit downgraded or changed overlay: %#v", entry)
+	}
+}
+
 func mutationTree(t *testing.T, home string) map[string]string {
 	t.Helper()
 	tree := map[string]string{}
@@ -224,7 +325,7 @@ func mutationTree(t *testing.T, home string) map[string]string {
 }
 
 func TestMutationCancellationNeverPublishes(t *testing.T) {
-	for _, operation := range []string{"edit", "clone", "rename", "delete"} {
+	for _, operation := range []string{"edit", "clone", "rename", "delete", "migrate"} {
 		t.Run(operation, func(t *testing.T) {
 			app, _, home, output := mutationFixture(t, legacyMutationDocument)
 			before := mutationTree(t, home)
@@ -325,7 +426,7 @@ func independentMutationWriter(t *testing.T, home, name string) {
 }
 
 func TestMutationExpectedRevisionAgainstIndependentWriter(t *testing.T) {
-	for _, operation := range []string{"edit", "clone", "rename", "delete"} {
+	for _, operation := range []string{"edit", "clone", "rename", "delete", "migrate"} {
 		for _, raceDestination := range []bool{false, true} {
 			if raceDestination && operation != "clone" && operation != "rename" {
 				continue

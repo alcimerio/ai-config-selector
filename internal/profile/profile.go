@@ -8,7 +8,10 @@ import (
 	"regexp"
 )
 
-const CurrentVersion = 2
+const (
+	CurrentVersion       = 3
+	LegacyCurrentVersion = 2
+)
 
 var (
 	ErrInvalidProfileName = errors.New("invalid Profile name")
@@ -18,13 +21,32 @@ var (
 type Profile struct {
 	Version    int                        `json:"version"`
 	Name       string                     `json:"name"`
-	Target     string                     `json:"target"`
-	Categories map[string]CategoryPayload `json:"categories"`
+	Target     string                     `json:"target,omitempty"`
+	Categories map[string]CategoryPayload `json:"categories,omitempty"`
+	Common     map[string]CommonPayload   `json:"common,omitempty"`
+	Overlays   map[string]OverlayPayload  `json:"overlays,omitempty"`
+	// SourceVersion records the admitted on-disk envelope without changing its
+	// bytes. It preserves legacy grant and placement semantics after decoding.
+	SourceVersion int `json:"-"`
 }
 
 type CategoryPayload struct {
 	SchemaVersion int             `json:"schemaVersion"`
 	Selection     json.RawMessage `json:"selection"`
+}
+
+// CommonPayload is one independently versioned common capability. Selection
+// remains capability-owned and cannot grant target-specific authority.
+type CommonPayload struct {
+	Version   int             `json:"version"`
+	Selection json.RawMessage `json:"selection"`
+}
+
+// OverlayPayload is one independently versioned, explicitly selected target
+// overlay. Version one is intentionally empty and bounded.
+type OverlayPayload struct {
+	Version int    `json:"version"`
+	Support string `json:"-"`
 }
 
 func ValidateName(name string) error {
