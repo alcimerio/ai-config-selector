@@ -219,6 +219,13 @@ func assertPromotedArtifactGenericRun(t *testing.T) {
 		t.Fatal(err)
 	}
 	home, path := prepareRuntimeHome(t)
+	sharedSkill := filepath.Join(home, ".agents", "skills", "delivery")
+	if err := os.MkdirAll(sharedSkill, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sharedSkill, "SKILL.md"), []byte("# delivery\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	writeSharedTargetProfile(t, home, "generic-readwrite", "read-write")
 	writeSharedTargetProfile(t, home, "generic-readonly", "read-only")
 	workspace := realTemporaryDirectory(t)
