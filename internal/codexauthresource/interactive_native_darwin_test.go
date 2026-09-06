@@ -130,11 +130,19 @@ func runNativeInstalledACSLockedCodexFixture(t *testing.T, outerSeatbeltExperime
 	isolationProbe := fmt.Sprintf(`; if cat %s >/dev/null 2>&1; then printf global-auth-read-bad; else printf global-auth-read-denied; fi; if cat %s >/dev/null 2>&1; then printf outside-read-bad; else printf outside-read-denied; fi; if printf bad > %s 2>/dev/null; then printf outside-write-bad; else printf outside-write-denied; fi`, strconv.Quote(globalAuth), strconv.Quote(outsideSecret), strconv.Quote(outsideWrite))
 	normalDescendantReady := filepath.Join(workspace, ".acs-normal-descendant-ready")
 	recoveryDescendantReady := filepath.Join(workspace, ".acs-recovery-descendant-ready")
+	codingCommand := "printf codex-native-tool-ok > ./codex-native-write; printf codex-native-tool-output" + isolationProbe
+	codingDescendantReady := ""
+	codingWantDescendant := false
+	if outerSeatbeltExperiment {
+		codingCommand += nativeControlledDescendantCommand(normalDescendantReady)
+		codingDescendantReady = normalDescendantReady
+		codingWantDescendant = true
+	}
 	for _, test := range []struct {
 		name, profile, command, marker, descendantReady string
 		wantWrite, wantDescendant                       bool
 	}{
-		{name: "coding write", profile: profilePrefix + "coding", command: "printf codex-native-tool-ok > ./codex-native-write; printf codex-native-tool-output" + isolationProbe + nativeControlledDescendantCommand(normalDescendantReady), marker: "codex-native-write", descendantReady: normalDescendantReady, wantWrite: true, wantDescendant: true},
+		{name: "coding write", profile: profilePrefix + "coding", command: codingCommand, marker: "codex-native-write", descendantReady: codingDescendantReady, wantWrite: true, wantDescendant: codingWantDescendant},
 		{name: "read-only denial", profile: profilePrefix + "readonly", command: "printf forbidden > ./codex-native-readonly-write; printf codex-native-tool-output" + isolationProbe, marker: "codex-native-readonly-write", wantWrite: false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -443,8 +451,6 @@ func runInstalledCodexPTY(t *testing.T, candidate, home, tools, workspace, profi
 	}
 	time.Sleep(500 * time.Millisecond)
 	_, _ = master.Write([]byte{3})
-	time.Sleep(150 * time.Millisecond)
-	_, _ = master.Write([]byte{3})
 	select {
 	case err := <-wait:
 		finished = true
@@ -460,15 +466,22 @@ func runInstalledCodexPTY(t *testing.T, candidate, home, tools, workspace, profi
 
 func runInstalledCodexRecovery(t *testing.T, candidate, home, tools, workspace, name string) {
 	t.Helper()
-	command := exec.Command(candidate, "codex", "auth", "recover", "--name", name)
-	command.Dir = workspace
-	command.Env = nativeCandidateEnvironment(home, tools)
-	output, err := command.CombinedOutput()
-	if err != nil {
-		t.Fatalf("public Codex identity recovery failed: %v; output=%q", err, output)
-	}
-	if !strings.Contains(string(output), `Recovered Codex authentication identity "`+name+`".`) || !strings.Contains(string(output), "disposition:") {
-		t.Fatalf("public Codex identity recovery omitted its disposition: output=%q", output)
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		command := exec.Command(candidate, "codex", "auth", "recover", "--name", name)
+		command.Dir = workspace
+		command.Env = nativeCandidateEnvironment(home, tools)
+		output, err := command.CombinedOutput()
+		if err == nil {
+			if !strings.Contains(string(output), `Recovered Codex authentication identity "`+name+`".`) || !strings.Contains(string(output), "disposition:") {
+				t.Fatalf("public Codex identity recovery omitted its disposition: output=%q", output)
+			}
+			return
+		}
+		if !strings.Contains(string(output), "identity is in use") || time.Now().After(deadline) {
+			t.Fatalf("public Codex identity recovery failed: %v; output=%q", err, output)
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
 }
 
