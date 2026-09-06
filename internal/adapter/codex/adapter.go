@@ -42,8 +42,8 @@ type Adapter struct {
 }
 
 func New(config Config) (*Adapter, error) {
-	if config.BinaryPath == "" || config.ExistingHomeDir == "" || config.Executor == nil {
-		return nil, errors.New("create Codex Adapter: binary path, existing home and executor are required")
+	if config.BinaryPath == "" || config.ExistingHomeDir == "" {
+		return nil, errors.New("create Codex Adapter: binary path and existing home are required")
 	}
 	a := &Adapter{home: filepath.Clean(config.ExistingHomeDir), auth: config.Executor}
 	skillsBinding, err := commonprofile.NewSkillsBinding(
@@ -107,14 +107,25 @@ func (a *Adapter) ResolveAuth(resolved category.ResolvedProfile, override string
 }
 
 func (a *Adapter) PlanLaunch(ctx context.Context, workingDirectory string, resolved category.ResolvedProfile, override string) (launch.Plan, error) {
-	selected, err := a.ResolveAuth(resolved, override)
-	if err != nil {
-		return launch.Plan{}, err
+	if resolved.Requirements().Recipe != authority.RecipeCodex || resolved.Overlay() != "codex" {
+		return launch.Plan{}, errors.New("resolved authority does not select Codex")
 	}
-	return selected.Plan(ctx, workingDirectory)
+	effective := resolved.AuthRef()
+	if override != "" {
+		effective = override
+	}
+	if effective != "" {
+		if _, err := codexauth.ParseCredentialRef(effective); err != nil {
+			return launch.Plan{}, err
+		}
+	}
+	return resolved.WithAuthRef(effective).Plan(ctx, workingDirectory)
 }
 
 func (a *Adapter) Launch(ctx context.Context, _ string, _ string, resolved category.ResolvedProfile, override string, terminal launch.Terminal) (int, error) {
+	if a.auth == nil {
+		return 1, errors.New("interactive Codex executor is unavailable")
+	}
 	selected, err := a.ResolveAuth(resolved, override)
 	if err != nil {
 		return 1, err
@@ -123,8 +134,10 @@ func (a *Adapter) Launch(ctx context.Context, _ string, _ string, resolved categ
 }
 
 func NewProfile(name, authRef string, common profile.Profile) (profile.Profile, error) {
-	if _, err := codexauth.ParseCredentialRef(authRef); err != nil {
-		return profile.Profile{}, err
+	if authRef != "" {
+		if _, err := codexauth.ParseCredentialRef(authRef); err != nil {
+			return profile.Profile{}, err
+		}
 	}
 	common.Name = name
 	if common.Overlays == nil {

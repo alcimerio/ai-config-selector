@@ -285,10 +285,15 @@ func decodeVersionThree(entry Entry, envelope map[string]json.RawMessage) Entry 
 		} else if id == "codex" {
 			if overlayVersion == 1 {
 				support = "unsupported"
-				var authRef string
-				if !unknown(payload, "version", "authRef") && required(payload, "authRef", &authRef) {
-					if _, err := codexauthresource.ParseCredentialRef(authRef); err == nil {
-						support = "supported"
+				if !unknown(payload, "version", "authRef") {
+					support = "supported"
+					if encoded, exists := payload["authRef"]; exists {
+						var authRef string
+						if json.Unmarshal(encoded, &authRef) != nil || authRef == "" {
+							support = "unsupported"
+						} else if _, err := codexauthresource.ParseCredentialRef(authRef); err != nil {
+							support = "unsupported"
+						}
 					}
 				}
 			}

@@ -30,7 +30,7 @@ obvious portability breakage without turning it into a support promise.
   directories and materialized Profile content.
 - **Process Sandbox**: validates platform and paths, creates a clean environment,
   prepares a native contained process, and reports bounded cleanup proof.
-- **Target**: Devin or the fixed credential-free sandbox shell.
+- **Target**: Devin, interactive Codex, or the fixed credential-free sandbox shell.
 
 ## Module boundaries
 
@@ -49,9 +49,11 @@ the lease while a prepared process may still have descendants, and removes the
 root only after cleanup settles.
 
 `internal/adapter/devin` owns Devin discovery, Profile editing, and declarative
-launch configuration. `internal/executor` owns the allowlisted credential,
-Skill catalog verification, authentication preflight, and protected Devin,
-shell, and Codex authentication lifecycles. Interactive Devin launches pass `--respect-workspace-trust false`:
+launch configuration. `internal/adapter/codex` owns the thin fixed Codex recipe,
+common Profile editing, effective authRef selection, and projection locations.
+`internal/executor` owns the allowlisted credentials, Skill catalog verification,
+authentication preflight, and protected Devin, shell, and Codex lifecycles.
+Interactive Devin launches pass `--respect-workspace-trust false`:
 the ephemeral Session cannot retain a workspace-trust decision, while the ACS
 Process Sandbox remains the mandatory boundary. Credential copying happens
 after generic Session creation; it is not part of Profile materialization.
@@ -83,6 +85,26 @@ repository-local Skills inherited specifically by Devin, and sandbox readiness.
 `acs sandbox --profile NAME --dry-run` reports only content materialized into
 the generic Session plus sandbox-shell readiness. It does not report Devin-only
 repository inheritance.
+
+`acs codex --profile NAME [--auth REF] --dry-run` is a narrower syntax-only
+path. It loads the Profile and explains registered authority without source
+discovery, authentication access, executable probes, sandbox checks, or Session
+allocation. Identity existence and status are explicitly unchecked.
+
+### Interactive Codex
+
+1. Resolve the supported Codex overlay and one effective authRef; a command-line
+   reference overrides the stored default.
+2. Acquire that named resource before executable or Session work.
+3. Pin the registered Codex executable, create a private Session, materialize
+   common capabilities, and project only those copies into Codex locations.
+4. Project file credentials and force ChatGPT identity/workspace, provider,
+   endpoint, project-trust, plugin, and workspace-access restrictions.
+5. Verify exact `codex-cli 0.149.1`, then attach interactive Codex through the
+   shared process executor.
+6. Validate only successful same-identity refreshes; discard ineligible changes.
+7. Prove descendant settlement and projection removal before releasing the
+   identity; retain Session and identity on cleanup uncertainty.
 
 ### Devin
 

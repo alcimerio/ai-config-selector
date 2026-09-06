@@ -59,6 +59,7 @@ func NewWorkspaceBinding() (WorkspaceBinding, error) {
 		Resolve: func(_ context.Context, access launch.WorkspaceAccess) (launch.WorkspaceAccess, error) {
 			return access, nil
 		},
+		ResolveSyntax: func(access launch.WorkspaceAccess) (launch.WorkspaceAccess, error) { return access, nil },
 		Contribute: func(access launch.WorkspaceAccess) (WorkspaceContribution, error) {
 			return WorkspaceContribution{access: access}, nil
 		},

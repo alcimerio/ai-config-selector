@@ -19,8 +19,8 @@ no Linux support is implied. macOS product version comes from the native
 
 An optional `--target` requests just that workflow's executable availability:
 `devin` searches for `devin`, `sandbox` checks `/bin/zsh`, and `codex-auth` searches
-for `codex`. The last describes the implemented named Codex authentication
-workflows; interactive Codex launch is not implemented. This option is not a
+for `codex`. The last is an executable-presence check shared by named Codex
+authentication and interactive launch; it does not inspect a Profile. This option is not a
 sandbox-backend selector. Only absolute PATH entries are searched; empty or
 relative entries are ignored. Executables must resolve to readable, executable
 regular files; symlinks to such files follow existing runtime lookup semantics.

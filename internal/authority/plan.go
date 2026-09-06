@@ -111,8 +111,12 @@ func (plan Plan) Plan(ctx context.Context, workingDirectory string) (launch.Plan
 		},
 	}}}
 	if plan.requirements.Recipe == RecipeCodex {
+		reference := plan.authRef
+		if reference == "" {
+			reference = "(required at launch)"
+		}
 		explanation.Sections[0].Items = append(explanation.Sections[0].Items,
-			launch.PlanItem{Label: "authentication", Details: []launch.PlanDetail{{Label: "reference", Value: plan.authRef}, {Label: "existence/status", Value: "unchecked"}}})
+			launch.PlanItem{Label: "authentication", Details: []launch.PlanDetail{{Label: "reference", Value: reference}, {Label: "existence/status", Value: "unchecked"}}})
 	}
 	for _, entry := range plan.contributions {
 		var err error

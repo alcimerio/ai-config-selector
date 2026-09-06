@@ -2,6 +2,7 @@ package commonprofile
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -169,5 +170,43 @@ func TestTargetOverlaySelectionIsExplicitAndFailsClosed(t *testing.T) {
 	candidate.Overlays = map[string]profile.OverlayPayload{"devin": {Version: 1}, "codex": {Version: 99}}
 	if _, err := registry.ResolveFor(context.Background(), candidate, "devin"); err != nil {
 		t.Fatalf("unknown inactive overlay widened or blocked Devin: %v", err)
+	}
+}
+
+func TestSyntaxResolutionDoesNotDiscoverSelectedSources(t *testing.T) {
+	projection := &testProjection{}
+	discoveryCalls := 0
+	skillsBinding, err := NewSkillsBinding(func(context.Context) ([]skills.SkillBundle, error) {
+		discoveryCalls++
+		return nil, errors.New("source must remain unchecked")
+	}, projection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspaceBinding, err := NewWorkspaceBinding()
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry, err := category.NewRegistry("devin", skillsBinding.Registration(), workspaceBinding.Registration())
+	if err != nil {
+		t.Fatal(err)
+	}
+	draft := registry.NewDraft()
+	if err := category.SetSelection(&draft, skillsBinding, []skills.SkillReference{{Source: "shared-agents", RelativePath: "missing"}}); err != nil {
+		t.Fatal(err)
+	}
+	candidate, err := registry.NewProfile("example", draft)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := registry.ResolveSyntaxFor(context.Background(), candidate, "devin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := resolved.Plan(context.Background(), t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	if discoveryCalls != 0 {
+		t.Fatalf("syntax-only resolution discovered sources %d times", discoveryCalls)
 	}
 }

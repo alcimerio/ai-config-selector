@@ -43,7 +43,7 @@ func TestVersionThreeInspectsSupportedCodexOverlayWithoutDisclosingAuthRef(t *te
 
 func TestVersionThreeRejectsInvalidCodexOverlayContract(t *testing.T) {
 	for _, data := range []string{
-		`{"version":3,"name":"example","common":{"skills":{"version":1,"selection":[]},"workspace":{"version":1,"selection":{"access":"read-only"}}},"overlays":{"codex":{"version":1}}}`,
+		`{"version":3,"name":"example","common":{"skills":{"version":1,"selection":[]},"workspace":{"version":1,"selection":{"access":"read-only"}}},"overlays":{"codex":{"version":1,"authRef":""}}}`,
 		`{"version":3,"name":"example","common":{"skills":{"version":1,"selection":[]},"workspace":{"version":1,"selection":{"access":"read-only"}}},"overlays":{"codex":{"version":1,"authRef":"UPPER"}}}`,
 		`{"version":3,"name":"example","common":{"skills":{"version":1,"selection":[]},"workspace":{"version":1,"selection":{"access":"read-only"}}},"overlays":{"codex":{"version":1,"authRef":"work","arguments":["--unsafe"]}}}`,
 	} {
@@ -51,5 +51,13 @@ func TestVersionThreeRejectsInvalidCodexOverlayContract(t *testing.T) {
 		if entry.Status == "valid" && len(entry.Overlays) == 1 && entry.Overlays[0].Support == "supported" {
 			t.Fatalf("accepted invalid Codex overlay: %#v", entry)
 		}
+	}
+}
+
+func TestVersionThreeSupportsCodexOverlayWithoutPersistedDefaultIdentity(t *testing.T) {
+	data := []byte(`{"version":3,"name":"example","common":{"skills":{"version":1,"selection":[]},"workspace":{"version":1,"selection":{"access":"read-only"}}},"overlays":{"codex":{"version":1}}}`)
+	entry := InspectBytes("example", data)
+	if entry.Status != "valid" || len(entry.Overlays) != 1 || entry.Overlays[0].Support != "supported" {
+		t.Fatalf("entry = %#v", entry)
 	}
 }

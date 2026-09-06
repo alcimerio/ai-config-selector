@@ -20,7 +20,8 @@ remain readable and are never changed by inspection or launch.
     }
   },
   "overlays": {
-    "devin": {"version": 1}
+    "devin": {"version": 1},
+    "codex": {"version": 1, "authRef": "work"}
   }
 }
 ```
@@ -60,11 +61,12 @@ before sandbox execution. Bundle file modes and internal relative symlinks are
 preserved.
 
 `acs sandbox` selects no target overlay and exposes only the common copy. `acs
-devin` requires exactly the supported `devin` overlay and projects from the
-already materialized common copy into Devin's established per-source managed
-roots. The projection does not reread the original host bundle. The envelope
-may contain an inactive future `codex` overlay, but this source does not provide
-interactive Codex execution.
+devin` and `acs codex` require their exact supported overlay and project from
+the already materialized common copy into the target's per-source managed
+roots. Codex uses `$SESSION_HOME/.codex/skills/<source>/<relativePath>`. The
+projection does not reread the original host bundle. A supported inactive
+overlay is preserved by mutation; an unknown inactive overlay remains inert,
+but rewrite commands refuse it when lossless preservation cannot be proven.
 
 Whole-workspace read includes project-local files. “Selected only” describes
 ACS-managed global materials: it does not claim to hide project-local Skills or

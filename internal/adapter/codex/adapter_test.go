@@ -106,3 +106,36 @@ func TestCodexAuthOverrideIsResolvedOnceForPlanAndExecution(t *testing.T) {
 		t.Fatalf("execution request = %#v after %d calls", runtime.request, runtime.calls)
 	}
 }
+
+func TestCodexProfileWithoutDefaultCanBeExplainedAndRequiresRuntimeOverride(t *testing.T) {
+	home := t.TempDir()
+	runtime := &recordingExecutor{}
+	adapter, err := New(Config{BinaryPath: "/usr/bin/codex", ExistingHomeDir: home, Executor: runtime})
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate := profile.Profile{Version: 3, SourceVersion: 3, Name: "example",
+		Common: map[string]profile.CommonPayload{
+			"skills":    {Version: 1, Selection: json.RawMessage(`[]`)},
+			"workspace": {Version: 1, Selection: json.RawMessage(`{"access":"read-only"}`)},
+		},
+		Overlays: map[string]profile.OverlayPayload{"codex": {Version: 1}},
+	}
+	resolved, err := adapter.Categories().ResolveSyntaxFor(context.Background(), candidate, "codex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := adapter.PlanLaunch(context.Background(), home, resolved, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(plan.Sections[0].Items[4].Details[0].Value, "required at launch") {
+		t.Fatalf("missing-identity explanation = %#v", plan)
+	}
+	if _, err := adapter.Launch(context.Background(), "", home, resolved, "", launch.Terminal{}); err == nil {
+		t.Fatal("real launch accepted no effective identity")
+	}
+	if _, err := adapter.Launch(context.Background(), "", home, resolved, "override", launch.Terminal{}); err != nil {
+		t.Fatal(err)
+	}
+}

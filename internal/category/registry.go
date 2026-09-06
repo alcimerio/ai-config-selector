@@ -28,6 +28,7 @@ type Definition[S, R any, C launch.Contribution] struct {
 	Encode        func(S) (json.RawMessage, error)
 	Decode        func(json.RawMessage) (S, error)
 	Resolve       func(context.Context, S) (R, error)
+	ResolveSyntax func(S) (R, error)
 	Contribute    func(R) (C, error)
 	Count         func(S) int
 }
@@ -61,6 +62,7 @@ type Registration struct {
 	encode        func(any) (json.RawMessage, error)
 	decode        func(json.RawMessage) (any, error)
 	resolve       func(context.Context, any) (any, error)
+	resolveSyntax func(any) (any, error)
 	contribute    func(any) (launch.Contribution, error)
 	count         func(any) int
 	token         *struct{ marker byte }
@@ -140,6 +142,15 @@ func Bind[S, R any, C launch.Contribution](definition Definition[S, R, C]) (Bind
 			return definition.Count(selection)
 		},
 		token: &struct{ marker byte }{marker: 1},
+	}
+	if definition.ResolveSyntax != nil {
+		registration.resolveSyntax = func(value any) (any, error) {
+			selection, ok := value.(S)
+			if !ok {
+				return nil, fmt.Errorf("category %q selection type mismatch", definition.ID)
+			}
+			return definition.ResolveSyntax(selection)
+		}
 	}
 	if definition.LegacyEmpty != nil {
 		registration.legacyEmpty = func() any { return definition.LegacyEmpty() }
@@ -607,6 +618,16 @@ func (registry *Registry) Resolve(ctx context.Context, candidate profile.Profile
 // ResolveFor selects exactly one supported overlay, or none for common shell
 // execution. Unknown inactive overlays remain inert.
 func (registry *Registry) ResolveFor(ctx context.Context, candidate profile.Profile, overlay string) (ResolvedProfile, error) {
+	return registry.resolveFor(ctx, candidate, overlay, false)
+}
+
+// ResolveSyntaxFor builds a non-executable explanation plan from stored
+// selections without source discovery or runtime access.
+func (registry *Registry) ResolveSyntaxFor(ctx context.Context, candidate profile.Profile, overlay string) (ResolvedProfile, error) {
+	return registry.resolveFor(ctx, candidate, overlay, true)
+}
+
+func (registry *Registry) resolveFor(ctx context.Context, candidate profile.Profile, overlay string, syntaxOnly bool) (ResolvedProfile, error) {
 	normalized, err := registry.Normalize(candidate)
 	if err != nil {
 		return ResolvedProfile{}, err
@@ -619,9 +640,6 @@ func (registry *Registry) ResolveFor(ctx context.Context, candidate profile.Prof
 		}
 		if overlay != registry.target || payload.Version != supportedOverlayVersion || (payload.Support != "" && payload.Support != "supported") {
 			return ResolvedProfile{}, fmt.Errorf("selected target overlay %q uses unsupported version %d", overlay, payload.Version)
-		}
-		if overlay == "codex" && payload.AuthRef == "" {
-			return ResolvedProfile{}, errors.New("selected target overlay \"codex\" requires authRef")
 		}
 	}
 	workspaceAccess := launch.WorkspaceAccessReadWrite
@@ -650,7 +668,12 @@ func (registry *Registry) ResolveFor(ctx context.Context, candidate profile.Prof
 		if err != nil {
 			return ResolvedProfile{}, fmt.Errorf("decode %s category selection: %w", registration.id, err)
 		}
-		value, err := registration.resolve(ctx, selection)
+		var value any
+		if syntaxOnly && registration.resolveSyntax != nil {
+			value, err = registration.resolveSyntax(selection)
+		} else {
+			value, err = registration.resolve(ctx, selection)
+		}
 		if err != nil {
 			return ResolvedProfile{}, fmt.Errorf("resolve %s category selection: %w", registration.id, err)
 		}

@@ -59,8 +59,9 @@ for selection repair, preview controls, cancellation and uncertain outcomes.
 Run `acs doctor` for core host and trusted backend-file checks without an account
 or optional clients. Add `--target devin`, `--target sandbox`, or
 `--target codex-auth` to check only that workflow's executable availability.
-`codex-auth` describes named authentication workflows, not interactive Codex
-launch. Versions, authentication, and actual containment remain unchecked.
+`codex-auth` describes named authentication workflows. Interactive Codex has a
+separate syntax-only `--dry-run`; neither command checks versions,
+authentication readiness, or actual containment.
 
 Run `acs profile validate NAME` to validate supported stored structure and resolve
 selected Skill sources without constructing a launch plan. Unselected sources
@@ -303,13 +304,29 @@ outside ACS may change that global login, but it does not change ACS-owned
 records. A locked, unavailable, ambiguous, or corrupt Keychain fails closed;
 there is no plaintext fallback.
 
-This development slice manages durable identities and binds one identity to a
-contained status probe. It does not yet bind an identity to a Codex launch,
-expose `--auth`, persist a Codex Profile overlay, or provide the Codex target
-adapter. Deleting a Profile never deletes an identity.
+Create and launch a common Profile with a supported Codex overlay:
 
-See [named Codex authentication and contained status](docs/codex-auth.md) for the
-storage, isolation, failure, and cleanup contracts.
+```sh
+acs codex create-profile --name backend-review --auth work
+acs codex --profile backend-review --dry-run
+acs codex --profile backend-review
+acs codex --profile backend-review --auth personal
+```
+
+The Profile stores only the opaque identity reference when one is supplied;
+omit it during creation to require `--auth` on every launch. A per-run `--auth`
+overrides it without rewriting the Profile. Dry-run loads the selected Profile,
+validates Profile and reference syntax, and explains the immutable plan; it does
+not access Keychain, acquire an identity lock, discover source bundles, probe
+Codex, create a Session, or claim authentication readiness. Real execution
+acquires exactly one named identity before Session creation and keeps that exact
+binding through the version check, interactive process, refresh decision,
+projection removal, and lock release. Deleting a Profile never deletes an
+identity.
+
+See [interactive Codex](docs/interactive-codex.md) and
+[named Codex authentication](docs/codex-auth.md) for the launch, storage,
+isolation, failure, and cleanup contracts.
 
 ## Inspect the sandbox directly
 
@@ -405,7 +422,7 @@ refresh observation remains supplemental and is never a CI credential gate.
 
 ## Compatibility and limitations
 
-- Devin is the only production CLI adapter.
+- Devin and the fixed interactive Codex recipe are the production CLI adapters.
 - Skills is the only production Profile category.
 - The published v0.4.0 CLI cannot list, edit or delete Profiles; current development
   source provides those commands. Neither provides CLI import or export.
@@ -417,9 +434,10 @@ refresh observation remains supplemental and is never a CI credential gate.
   immutable-release evidence.
 - ACS does not manage MCP servers, hooks, instructions, agents, or arbitrary
   target settings.
-- The development Codex authentication commands can project a named identity
-  for contained status verification, but do not yet launch an interactive Codex
-  process or expose run-time auth selection.
+- Interactive Codex supports only `codex-cli 0.149.1`, ChatGPT named identities,
+  common Skills and workspace access. It exposes no arbitrary target arguments,
+  backend selection, plugin configuration, API-key import, or generic Codex
+  configuration passthrough.
 - ACS has no automatic updater, package-manager distribution, or uninstaller.
 
 Read [the architecture](docs/architecture.md), [contribution guide](CONTRIBUTING.md),

@@ -56,6 +56,13 @@ func NewSkillsBinding(discover func(context.Context) ([]skills.SkillBundle, erro
 			}
 			return skills.ResolveReferences(references, catalog)
 		},
+		ResolveSyntax: func(references []skills.SkillReference) ([]skills.SkillBundle, error) {
+			selected := make([]skills.SkillBundle, 0, len(references))
+			for _, reference := range references {
+				selected = append(selected, skills.SkillBundle{Reference: reference, DisplayName: filepath.Base(reference.RelativePath)})
+			}
+			return selected, nil
+		},
 		Contribute: func(selected []skills.SkillBundle) (SkillsContribution, error) {
 			if err := ValidateCommonDestinations(selected); err != nil {
 				return SkillsContribution{}, err

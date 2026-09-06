@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"syscall"
@@ -38,21 +39,27 @@ func (runner *codexExecutionRunner) prepare(ctx context.Context, access launch.W
 	return prepareContainedOperationWithAccess(ctx, runner.config, runner.sandbox, access, ErrCodexFailed)
 }
 
-func codexExecutionArguments(workspace string, access launch.WorkspaceAccess, arguments ...string) []string {
+const supportedChatGPTBaseURL = "https://chatgpt.com/backend-api/"
+
+func codexExecutionArguments(chatGPTWorkspace, workingDirectory string, access launch.WorkspaceAccess, arguments ...string) []string {
 	mode := "read-only"
 	if access == launch.WorkspaceAccessReadWrite || access == launch.WorkspaceAccessLegacy {
 		mode = "workspace-write"
 	}
-	overrides := codexAuthRuntimeArguments(workspace)
+	overrides := codexAuthRuntimeArguments(chatGPTWorkspace)
 	overrides = append(overrides,
 		"-c", `model_provider="openai"`,
+		"-c", `chatgpt_base_url=`+strconv.Quote(supportedChatGPTBaseURL),
 		"-c", `sandbox_mode=`+strconv.Quote(mode),
 		"-c", `approval_policy="on-request"`,
+		"-c", `projects.`+strconv.Quote(filepath.Clean(workingDirectory))+`.trust_level="untrusted"`,
+		"-c", `features.plugins=false`,
+		"-c", `features.apps=false`,
 	)
 	return append(overrides, arguments...)
 }
 
-func writeCodexExecutionConfig(home, workspace string, access launch.WorkspaceAccess) error {
+func writeCodexExecutionConfig(home, chatGPTWorkspace, workingDirectory string, access launch.WorkspaceAccess) error {
 	codexHome := filepath.Join(home, ".codex")
 	if err := os.MkdirAll(codexHome, 0o700); err != nil {
 		return err
@@ -61,9 +68,9 @@ func writeCodexExecutionConfig(home, workspace string, access launch.WorkspaceAc
 	if access == launch.WorkspaceAccessReadWrite || access == launch.WorkspaceAccessLegacy {
 		mode = "workspace-write"
 	}
-	configuration := "cli_auth_credentials_store = \"file\"\nforced_login_method = \"chatgpt\"\nmodel_provider = \"openai\"\nsandbox_mode = " + strconv.Quote(mode) + "\napproval_policy = \"on-request\"\n"
-	if workspace != "" {
-		configuration += "forced_chatgpt_workspace_id = " + strconv.Quote(workspace) + "\n"
+	configuration := "cli_auth_credentials_store = \"file\"\nforced_login_method = \"chatgpt\"\nmodel_provider = \"openai\"\nchatgpt_base_url = " + strconv.Quote(supportedChatGPTBaseURL) + "\nsandbox_mode = " + strconv.Quote(mode) + "\napproval_policy = \"on-request\"\n[features]\nplugins = false\napps = false\n[projects." + strconv.Quote(filepath.Clean(workingDirectory)) + "]\ntrust_level = \"untrusted\"\n"
+	if chatGPTWorkspace != "" {
+		configuration = "forced_chatgpt_workspace_id = " + strconv.Quote(chatGPTWorkspace) + "\n" + configuration
 	}
 	return os.WriteFile(filepath.Join(codexHome, "config.toml"), []byte(configuration), 0o600)
 }
@@ -84,7 +91,7 @@ func (runner *codexExecutionRunner) run(ctx context.Context, config codexLoginCo
 		Workspace: created.WorkingDirectory(), WorkspaceAccess: access, SessionsDirectory: created.SessionsDirectory(),
 		SessionDirectory: created.RootDirectory(), SessionHome: created.HomeDirectory(), TemporaryDirectory: created.TemporaryDirectory(),
 		Executable: config.BinaryPath, RuntimeInputs: config.RuntimeInputs, RuntimeProbePaths: config.RuntimeProbePaths,
-		RecoveryProofChallenge: proof, Arguments: codexExecutionArguments(metadata.Workspace, access, arguments...), Terminal: terminal,
+		RecoveryProofChallenge: proof, Arguments: codexExecutionArguments(metadata.Workspace, created.WorkingDirectory(), access, arguments...), Terminal: terminal,
 	})
 	if err != nil {
 		if errors.Is(err, errRetainPreparedProcess) || errors.Is(err, errInvalidPreparedProcess) {
@@ -111,6 +118,10 @@ func decodeRecoveryChallenge(value string) ([]byte, error) {
 // Session work, and retains that binding until projection removal is proven.
 func (service *CodexAuthService) ExecuteCodex(ctx context.Context, request CodexRequest) (exitCode int, resultErr error) {
 	if service == nil || service.execution == nil || request.ResolvedPlan == nil || request.ResolvedPlan.Requirements().Recipe != authority.RecipeCodex {
+		return 1, ErrCodexFailed
+	}
+	requirements := request.ResolvedPlan.Requirements()
+	if requirements.Executable != service.execution.config.BinaryPath || !reflect.DeepEqual(requirements.RuntimeInputs, service.execution.config.RuntimeInputs) || requirements.ExistingHomeDirectory != "" {
 		return 1, ErrCodexFailed
 	}
 	authRef, err := ParseCredentialRef(request.ResolvedPlan.AuthRef())
@@ -153,7 +164,7 @@ func (service *CodexAuthService) ExecuteCodex(ctx context.Context, request Codex
 		}
 		return 1, ErrProjectedAuthInvalid
 	}
-	if err := writeCodexExecutionConfig(created.HomeDirectory(), metadata.Workspace, access); err != nil {
+	if err := writeCodexExecutionConfig(created.HomeDirectory(), metadata.Workspace, created.WorkingDirectory(), access); err != nil {
 		_ = binding.MarkRecoverable(ctx)
 		if cleanupErr := remove(); cleanupErr != nil {
 			return 1, cleanupErr
@@ -162,7 +173,7 @@ func (service *CodexAuthService) ExecuteCodex(ctx context.Context, request Codex
 	}
 	versionOutput := boundedBuffer{limit: maximumVersionOutputSize}
 	version := service.execution.run(ctx, preparation.config, created, metadata, access, challenge, binding, []string{"--version"}, launch.Terminal{Output: &versionOutput, ErrorOutput: io.Discard})
-	if version.err == nil && !versionOutput.overflow && strings.TrimSpace(versionOutput.String()) != "codex-cli "+service.execution.config.SupportedVersion {
+	if version.err == nil && (versionOutput.overflow || strings.TrimSpace(versionOutput.String()) != "codex-cli "+service.execution.config.SupportedVersion) {
 		version.err = ErrUnsupportedVersion
 	}
 	run := version

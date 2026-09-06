@@ -157,7 +157,12 @@ func (app App) runCodex(ctx context.Context, name, authOverride string, dryRun b
 	if err != nil {
 		return app.fail("load Profile %q: %v", name, err)
 	}
-	resolved, err := app.CodexCategories.ResolveFor(ctx, loaded, "codex")
+	var resolved category.ResolvedProfile
+	if dryRun {
+		resolved, err = app.CodexCategories.ResolveSyntaxFor(ctx, loaded, "codex")
+	} else {
+		resolved, err = app.CodexCategories.ResolveFor(ctx, loaded, "codex")
+	}
 	if err != nil {
 		return app.fail("resolve Profile %q: %v", name, err)
 	}
@@ -200,8 +205,10 @@ func (app App) createCodexProfile(ctx context.Context, name, authRef string) int
 	if err := profile.ValidateName(name); err != nil {
 		return app.fail("%v", err)
 	}
-	if _, err := codexauth.ParseCredentialRef(authRef); err != nil {
-		return app.fail("invalid Codex authentication reference")
+	if authRef != "" {
+		if _, err := codexauth.ParseCredentialRef(authRef); err != nil {
+			return app.fail("invalid Codex authentication reference")
+		}
 	}
 	if app.Interactive == nil || !app.Interactive(app.Input, app.Output) {
 		return app.fail("create Profile requires interactive stdin and stdout")
