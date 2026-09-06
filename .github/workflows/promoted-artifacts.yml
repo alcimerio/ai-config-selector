@@ -171,7 +171,8 @@ jobs:
           # Each disposable Keychain gets a fresh process for native framework state.
           go test ./internal/codexauthresource -run '^TestNativeKeychainCredentialFreeContract$' -count=1
           go test ./internal/codexauthresource -run '^TestNativeRealStoreInstalledTargetComposition$' -count=1 -v
-          go test ./internal/executor -run '^(TestNativeInstalledTargetContainedStatusWithoutCredentials|TestNativeDirectInstalledTargetInteractiveLifecycle)$' -count=1 -v
+          go test ./internal/executor -run '^TestNativeInstalledTargetContainedStatusWithoutCredentials$' -count=1
+          go test ./internal/executor -run '^TestNativeDirectInstalledTargetInteractiveLifecycle$' -count=1 -v
 
       - name: Recover native authentication gate state
         if: always()
