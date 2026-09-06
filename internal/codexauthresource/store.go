@@ -5,9 +5,13 @@ package codexauthresource
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"syscall"
+
+	"golang.org/x/sys/unix"
 )
 
 type credentialRecord struct {
@@ -285,13 +289,66 @@ func writeExclusivePrivateFile(path string, contents []byte) error {
 }
 
 func readSessionAuthFile(root string) ([]byte, error) {
-	path := filepath.Join(root, "home", ".codex", "auth.json")
-	file, err := os.Open(path)
+	directory, err := openPrivateDirectory(root)
 	if err != nil {
+		return nil, ErrUnsupportedAuth
+	}
+	defer directory.Close()
+	home, err := openPrivateChildDirectory(directory, "home")
+	if err != nil {
+		return nil, ErrUnsupportedAuth
+	}
+	defer home.Close()
+	codexHome, err := openPrivateChildDirectory(home, ".codex")
+	if err != nil {
+		return nil, ErrUnsupportedAuth
+	}
+	defer codexHome.Close()
+	descriptor, err := unix.Openat(int(codexHome.Fd()), "auth.json", unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+	if err != nil {
+		return nil, ErrUnsupportedAuth
+	}
+	file := os.NewFile(uintptr(descriptor), "auth.json")
+	if file == nil {
+		_ = unix.Close(descriptor)
 		return nil, ErrUnsupportedAuth
 	}
 	defer file.Close()
 	return readPrivateRegularDescriptor(file, MaximumAuthJSONSize)
+}
+
+func openPrivateDirectory(path string) (*os.File, error) {
+	descriptor, err := unix.Open(path, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_DIRECTORY, 0)
+	if err != nil {
+		return nil, err
+	}
+	return privateDirectoryFile(descriptor, path)
+}
+
+func openPrivateChildDirectory(parent *os.File, name string) (*os.File, error) {
+	descriptor, err := unix.Openat(int(parent.Fd()), name, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_DIRECTORY, 0)
+	if err != nil {
+		return nil, err
+	}
+	return privateDirectoryFile(descriptor, name)
+}
+
+func privateDirectoryFile(descriptor int, name string) (*os.File, error) {
+	directory := os.NewFile(uintptr(descriptor), name)
+	if directory == nil {
+		_ = unix.Close(descriptor)
+		return nil, errors.New("open private directory")
+	}
+	info, err := directory.Stat()
+	if err != nil || !info.IsDir() || info.Mode().Perm()&0o077 != 0 {
+		_ = directory.Close()
+		return nil, errors.New("invalid private directory")
+	}
+	if native, ok := info.Sys().(*syscall.Stat_t); !ok || native.Uid != uint32(os.Geteuid()) {
+		_ = directory.Close()
+		return nil, errors.New("invalid private directory")
+	}
+	return directory, nil
 }
 
 func readPrivateRegularDescriptor(file *os.File, maximumSize int64) ([]byte, error) {
