@@ -24,6 +24,8 @@ import (
 const (
 	fakeDevinConfigurationName  = ".acs-native-candidate-fixture.json"
 	fakeDevinResultName         = ".acs-native-candidate-result.json"
+	fakeDevinSkillsProbeMarker  = ".acs-native-skills-probe"
+	fakeDevinAuthProbeMarker    = ".acs-native-auth-probe"
 	privateEnvironmentValue     = "candidate-secret-value"
 	privateDescriptorValue      = "candidate-descriptor-value"
 	fakeDevinDescendantExitWait = 3 * time.Second
@@ -288,6 +290,18 @@ func TestPromotedArtifactSharedTargetConformance(t *testing.T) {
 		t.Fatalf("dry-run accessed or changed global Codex auth: %q, %v", contents, err)
 	}
 	assertNoSessions(t, home)
+}
+
+func TestSharedTargetFixtureDoesNotInventPreflightEvidence(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+
+	result := observeFakeDevinSharedTargetConformance(fakeDevinConfiguration{}, workspace)
+	if result.PreflightSkills || result.PreflightAuthentication {
+		t.Fatalf("attached fixture invented missing preflight evidence: %#v", result)
+	}
 }
 
 func assertPromotedArtifactV3WorkspaceModes(t *testing.T) {
@@ -729,7 +743,9 @@ func runPromotedArtifactFakeDevin(arguments []string) bool {
 func runFakeDevinSkills() {
 	workspace := mustGetwd()
 	configuration, _ := readFakeDevinConfiguration()
-	if configuration.Mode != "shared-target-conformance" {
+	if configuration.Mode == "shared-target-conformance" {
+		writeFakeDevinMarker(filepath.Join(os.Getenv("HOME"), fakeDevinSkillsProbeMarker))
+	} else {
 		writeFakeDevinMarker(filepath.Join(workspace, "preflight-skills"))
 	}
 	base := filepath.Join(os.Getenv("XDG_CONFIG_HOME"), "devin", "skills", "review")
@@ -754,7 +770,9 @@ func runFakeDevinAuthentication() {
 	if _, err := os.Stat(credential); err != nil {
 		os.Exit(65)
 	}
-	if configuration.Mode != "shared-target-conformance" {
+	if configuration.Mode == "shared-target-conformance" {
+		writeFakeDevinMarker(filepath.Join(os.Getenv("HOME"), fakeDevinAuthProbeMarker))
+	} else {
 		writeFakeDevinMarker(filepath.Join(mustGetwd(), "preflight-authentication"))
 	}
 	_, _ = io.WriteString(os.Stdout, "Logged in (fixture).\n")
@@ -801,10 +819,17 @@ func runFakeDevinInteractive() {
 }
 
 func runFakeDevinSharedTargetConformance(configuration fakeDevinConfiguration, workspace string) {
+	result := observeFakeDevinSharedTargetConformance(configuration, workspace)
+	if err := json.NewEncoder(os.Stdout).Encode(result); err != nil {
+		os.Exit(77)
+	}
+}
+
+func observeFakeDevinSharedTargetConformance(configuration fakeDevinConfiguration, workspace string) fakeDevinResult {
 	home := os.Getenv("HOME")
-	result := fakeDevinResult{
-		PreflightSkills:         true,
-		PreflightAuthentication: true,
+	return fakeDevinResult{
+		PreflightSkills:         fakeDevinMarkerExists(filepath.Join(home, fakeDevinSkillsProbeMarker)),
+		PreflightAuthentication: fakeDevinMarkerExists(filepath.Join(home, fakeDevinAuthProbeMarker)),
 		SelectedCommonSkills: fakeDevinContentsEqual(filepath.Join(home, ".acs", "common", "v1", "skills", "devin-config", "review", "SKILL.md"), "# review\n") &&
 			fakeDevinContentsEqual(filepath.Join(home, ".acs", "common", "v1", "skills", "shared-agents", "delivery", "SKILL.md"), "# delivery\n"),
 		SelectedProjectedSkills: fakeDevinContentsEqual(filepath.Join(os.Getenv("XDG_CONFIG_HOME"), "devin", "skills", "review", "SKILL.md"), "# review\n") &&
@@ -819,9 +844,6 @@ func runFakeDevinSharedTargetConformance(configuration fakeDevinConfiguration, w
 		SessionWritable:        writeFakeDevinMarker(filepath.Join(home, "shared-session-write")),
 		HostFileReadable:       fakeDevinCanRead(configuration.HostSecret),
 		ExternalWriteSucceeded: writeFakeDevinMarker(configuration.ExternalWritePath),
-	}
-	if err := json.NewEncoder(os.Stdout).Encode(result); err != nil {
-		os.Exit(77)
 	}
 }
 
