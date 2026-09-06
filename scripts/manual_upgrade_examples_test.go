@@ -181,6 +181,43 @@ esac
 	}
 }
 
+func TestManualRecoveryExamplesReturnToStrictParent(t *testing.T) {
+	blocks := manualExamples(t)
+	root := realTemporaryDirectory(t)
+	binary := filepath.Join(root, "source acs")
+	fake := `#!/bin/sh
+case "$*" in
+  'profile show backend-review') printf 'missing Profile\n'; exit 1 ;;
+esac
+`
+	if err := os.WriteFile(binary, []byte(fake), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	script := strings.ReplaceAll(blocks["recovery-inspection"], `source_bin="/absolute/path/to/compatible-source/acs"`, `source_bin="$TEST_SOURCE_BINARY"`)
+	// Keep the failed final inspection immediately before the documented exit:
+	// a successful status assertion here would hide bare exit's propagation.
+	script += blocks["recovery-follow-up"] + blocks["recovery-exit"]
+	scriptPath := filepath.Join(root, "recovery commands.sh")
+	if err := os.WriteFile(scriptPath, []byte(script), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	parent := "set -eu\nexport SHELLOPTS\n" + strings.TrimSpace(blocks["recovery-shell"]) + " \"$TEST_RECOVERY_SCRIPT\"\n"
+	parent += "case \"$-\" in *e*) printf 'strict maintenance parent retained\\n' ;; *) exit 94 ;; esac\n"
+	command := exec.Command("/bin/bash", "--noprofile", "--norc", "-c", parent)
+	command.Dir = root
+	command.Env = []string{
+		"HOME=" + root, "PATH=/usr/bin:/bin", "LC_ALL=C",
+		"TEST_SOURCE_BINARY=" + binary, "TEST_RECOVERY_SCRIPT=" + scriptPath,
+	}
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("documented recovery exit also exited the strict parent: %v\n%s", err, output)
+	}
+	if want := "missing Profile\nmissing Profile\nstrict maintenance parent retained\n"; string(output) != want {
+		t.Fatalf("recovery did not return to the strict parent: got %q, want %q", output, want)
+	}
+}
+
 type manualUpgradeFixture struct {
 	t         *testing.T
 	installer *installerFixture

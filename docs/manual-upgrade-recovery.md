@@ -293,8 +293,10 @@ or cancelled builder must leave you able to inspect the result. The earlier
 maintenance shell retains its fail-fast settings; installer, hash, version and
 selection failures must still stop that workflow.
 Read each recovery command's output and status before choosing the next step;
-a nonzero status is not automatically success. Type `exit` when finished with
-the recovery shell to return to its parent.
+a nonzero status is not automatically success. When finished inspecting and
+interpreting the results, use the [explicit return step below](#leave-the-recovery-shell)
+to return to the parent without propagating a failed final inspection into its
+fail-fast setting.
 
 Initialize `source_bin` **in this recovery shell** to the inspected, compatible
 source executable, not the staged v0.4.0 binary. Keep this shell for the Profile
@@ -426,6 +428,18 @@ into a Session as a repair. Do not dump Keychain secrets, projected `auth.json`,
 Session contents or proof files into a terminal, issue, PR or support artifact.
 Deleting/restoring a Profile does not delete/restore an identity. See the
 [authentication contract](codex-auth.md) for the complete isolation boundary.
+
+## Leave the recovery shell
+
+After completing or pausing recovery and preserving any unresolved evidence,
+leave this recovery shell with an explicit successful shell status. This keeps
+the strict maintenance parent open even if your last inspection failed; it does
+not mark that inspection or recovery successful.
+
+<!-- example: recovery-exit -->
+```sh
+exit 0
+```
 
 ## Validation boundary
 
