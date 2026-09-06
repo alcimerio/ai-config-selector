@@ -149,11 +149,13 @@ jobs:
           ACS_RUN_NATIVE_AUTH_GATE: "1"
           ACS_NATIVE_AUTH_RECOVERY_ROOT: ${{ runner.temp }}/acs-native-auth-recovery
           ACS_TEST_CODEX_BINARY: ${{ runner.temp }}/codex-target-${{ matrix.os }}-${{ matrix.arch }}/bin/codex
+          ACS_PROMOTED_BINARY: ${{ runner.temp }}/acs-promoted-${{ matrix.os }}-${{ matrix.arch }}/bin/acs
         run: |
           # Each disposable Keychain gets a fresh process for native framework state.
           go test ./internal/codexauthresource -run '^TestNativeKeychainCredentialFreeContract$' -count=1
           go test ./internal/codexauthresource -run '^TestNativeRealStoreInstalledTargetComposition$' -count=1 -v
           go test ./internal/executor -run '^TestNativeInstalledTargetContainedStatusWithoutCredentials$' -count=1
+          go test ./internal/codexauthresource -run '^TestNativeInstalledACSExecutesLockedCodexToolThroughNamedIdentity$' -count=1 -v
 
       - name: Recover native authentication gate state
         if: always()
@@ -178,7 +180,8 @@ jobs:
             printf '%s\n' "- Target: \`${{ matrix.target }}\` on its required native runner."
             printf '%s\n' "- Backend observation: required native backend is \`${{ matrix.sandbox_backend }}\`."
             printf '%s\n' '- Candidate observation: the installed black-box containment and lifecycle suite passed.'
-            printf '%s\n' '- Authentication observation: the checksum-locked native target, isolated Keychain contract, fresh-process recovery gate, and credential-free contained status lifecycle passed.'
+            printf '%s\n' '- Authentication observation: the checksum-locked native target, isolated Keychain contract, fresh-process recovery gate, credential-free contained status, and harness-assisted real-target interactive tool lifecycle passed.'
+            printf '%s\n' '- Interactive evidence boundary: direct raw-target containment and the installed-ACS trampoline-assisted loopback model turn are distinct observations; no fake target or production fixture hook is used.'
             printf '%s\n' '- Authentication boundary: production queries prohibit authentication UI, deterministic tests cover locked or unavailable mapping, and live locked-Keychain and ACL probes remain supplemental.'
             printf '%s\n' '- Compatibility rule: v0.4.0 release artifacts are macOS-only and use the verified system Seatbelt backend.'
             printf '%s\n' '- The candidate itself is never rebuilt in this job.'
