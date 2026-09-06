@@ -6,6 +6,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -166,7 +167,7 @@ func runInstalledSyntheticLogin(t *testing.T, candidate, home, tools, workspace,
 	case runErr = <-wait:
 	case <-time.After(20 * time.Second):
 		timedOut = true
-		diagnostic = syntheticLoginDiagnostic(home, command.Process.Pid)
+		diagnostic = syntheticLoginDiagnostic(home, command.Process.Pid) + "; stack=" + syntheticLoginStack(command.Process.Pid)
 		_ = syscall.Kill(-command.Process.Pid, syscall.SIGKILL)
 		select {
 		case runErr = <-wait:
@@ -238,6 +239,43 @@ func syntheticLoginDiagnostic(home string, processGroup int) string {
 		recoveryMarkers = len(entries)
 	}
 	return fmt.Sprintf("processes=%v sessions=%d auth-projections=%d cleanup-proofs=%d recovery-markers=%d", processes, sessions, authProjections, cleanupProofs, recoveryMarkers)
+}
+
+func syntheticLoginStack(pid int) string {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	output, err := exec.CommandContext(ctx, "/usr/bin/sample", strconv.Itoa(pid), "1", "1").CombinedOutput()
+	if err != nil {
+		return fmt.Sprintf("unavailable(%T)", err)
+	}
+	lines := make([]string, 0, 24)
+	for _, line := range strings.Split(string(output), "\n") {
+		if len(lines) == cap(lines) {
+			break
+		}
+		if !strings.Contains(line, "ai-config-selector") && !strings.Contains(line, "codexauth") &&
+			!strings.Contains(line, "seatbelt") && !strings.Contains(line, "SecItem") &&
+			!strings.Contains(line, "security") && !strings.Contains(line, "runtime.") &&
+			!strings.Contains(line, "syscall.") {
+			continue
+		}
+		line = strings.Map(func(value rune) rune {
+			if value == '\t' || (value >= 0x20 && value <= 0x7e) {
+				return value
+			}
+			return -1
+		}, strings.TrimSpace(line))
+		if len(line) > 240 {
+			line = line[:240]
+		}
+		if line != "" {
+			lines = append(lines, line)
+		}
+	}
+	if len(lines) == 0 {
+		return "no-matching-frames"
+	}
+	return strings.Join(lines, " | ")
 }
 
 func assertInstalledIdentityVisible(t *testing.T, candidate, home, tools, workspace, name string) {

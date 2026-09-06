@@ -42,6 +42,12 @@ that a workspace grant hides all unselected workspace files.
 
 The adapter deliberately has no generic argument or configuration passthrough,
 backend selector, dynamic plugin authority, credential import, or API-key mode.
+ACS does not configure or manage MCP servers in this delivery. Its isolated
+home, default-deny outer sandbox, disabled stock plugin/app features, and fixed
+untrusted-project decision prevent ordinary host-local and project-local MCP
+configuration from becoming launch input; ACS does not claim to override every
+account-service enterprise policy selected by the authenticated ChatGPT
+account.
 An output other than exact `codex-cli 0.149.1` is an actionable compatibility
 error. Real account login and target-origin refresh remain supplemental
 trusted-host observations rather than credential-bearing CI requirements.

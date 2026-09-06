@@ -261,7 +261,10 @@ The fixed recipe forces file credential storage, ChatGPT login, the bound
 workspace restriction, the official ChatGPT endpoint, the OpenAI provider,
 workspace sandbox authority, and untrusted project configuration at runtime
 precedence. This prevents hostile project configuration from selecting another
-credential store, endpoint, provider, plugin, or MCP configuration. Repository
+credential store, endpoint, provider, plugin, or project-local MCP
+configuration. ACS does not configure MCP servers in this delivery, and its
+empty ordinary MCP table is not represented as clearing every account-service
+or enterprise policy source. Repository
 `.agents/skills` inheritance and bundled system behavior remain Codex-owned;
 ACS's selected-only statement applies to ACS-managed global projections, not
 every readable workspace file.

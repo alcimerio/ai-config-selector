@@ -433,7 +433,8 @@ refresh observation remains supplemental and is never a CI credential gate.
 - Source builds and authenticated smoke runs are development evidence, not
   immutable-release evidence.
 - ACS does not manage MCP servers, hooks, instructions, agents, or arbitrary
-  target settings.
+  target settings. Interactive Codex isolates ordinary host/project MCP inputs;
+  it does not claim to override every account-service enterprise policy.
 - Interactive Codex supports only `codex-cli 0.149.1`, ChatGPT named identities,
   common Skills and workspace access. It exposes no arbitrary target arguments,
   backend selection, plugin configuration, API-key import, or generic Codex
