@@ -184,6 +184,7 @@ func TestNativeDirectInstalledTargetInteractiveLifecycle(t *testing.T) {
 			return
 		}
 		cancelRun()
+		_ = terminal.Close()
 		_ = master.Close()
 		select {
 		case <-finished:
@@ -224,6 +225,10 @@ func TestNativeDirectInstalledTargetInteractiveLifecycle(t *testing.T) {
 	case <-time.After(15 * time.Second):
 		t.Fatal("raw target did not terminate after terminal cancellation")
 	}
+	// The harness retains its slave descriptor while ExecuteCodex is running.
+	// Close that descriptor before the master so Darwin reliably delivers EOF
+	// to the capture goroutine, including when the x86_64 target used Rosetta.
+	_ = terminal.Close()
 	_ = master.Close()
 	select {
 	case <-copyDone:
