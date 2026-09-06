@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"reflect"
 	"strconv"
 	"strings"
 	"syscall"
@@ -32,11 +31,17 @@ func newCodexExecutionRunner(config codexLoginConfig, sandbox launch.ProcessSand
 	return &codexExecutionRunner{config: config, sandbox: sandbox}
 }
 
-func (runner *codexExecutionRunner) prepare(ctx context.Context, access launch.WorkspaceAccess) (*containedOperationPreparation, error) {
+func (runner *codexExecutionRunner) prepare(ctx context.Context, access launch.WorkspaceAccess, requirements authority.TargetRequirements) (*containedOperationPreparation, error) {
 	if runner == nil {
 		return nil, ErrCodexFailed
 	}
-	return prepareContainedOperationWithAccess(ctx, runner.config, runner.sandbox, access, ErrCodexFailed)
+	if requirements.Recipe != authority.RecipeCodex || requirements.Executable == "" || requirements.ExistingHomeDirectory != "" {
+		return nil, ErrCodexFailed
+	}
+	config := runner.config
+	config.BinaryPath = requirements.Executable
+	config.RuntimeInputs = append([]string(nil), requirements.RuntimeInputs...)
+	return prepareContainedOperationWithAccess(ctx, config, runner.sandbox, access, ErrCodexFailed)
 }
 
 const supportedChatGPTBaseURL = "https://chatgpt.com/backend-api/"
@@ -121,9 +126,6 @@ func (service *CodexAuthService) ExecuteCodex(ctx context.Context, request Codex
 		return 1, ErrCodexFailed
 	}
 	requirements := request.ResolvedPlan.Requirements()
-	if requirements.Executable != service.execution.config.BinaryPath || !reflect.DeepEqual(requirements.RuntimeInputs, service.execution.config.RuntimeInputs) || requirements.ExistingHomeDirectory != "" {
-		return 1, ErrCodexFailed
-	}
 	authRef, err := ParseCredentialRef(request.ResolvedPlan.AuthRef())
 	if err != nil {
 		return 1, err
@@ -138,7 +140,7 @@ func (service *CodexAuthService) ExecuteCodex(ctx context.Context, request Codex
 		}
 	}()
 	access := request.ResolvedPlan.WorkspaceAccess()
-	preparation, err := service.execution.prepare(ctx, access)
+	preparation, err := service.execution.prepare(ctx, access, requirements)
 	if err != nil {
 		return 1, sanitizeCodexExecutionError(err)
 	}
@@ -165,6 +167,17 @@ func (service *CodexAuthService) ExecuteCodex(ctx context.Context, request Codex
 		return 1, ErrProjectedAuthInvalid
 	}
 	if err := writeCodexExecutionConfig(created.HomeDirectory(), metadata.Workspace, created.WorkingDirectory(), access); err != nil {
+		_ = binding.MarkRecoverable(ctx)
+		if cleanupErr := remove(); cleanupErr != nil {
+			return 1, cleanupErr
+		}
+		return 1, ErrCodexFailed
+	}
+	if err := request.ResolvedPlan.Verify(ctx, launch.VerificationContext{
+		SessionsDirectory: created.SessionsDirectory(), SessionDirectory: created.RootDirectory(),
+		SessionHome: created.HomeDirectory(), TemporaryDirectory: created.TemporaryDirectory(), WorkingDirectory: created.WorkingDirectory(),
+		RetainProcess: created.RetainUntilProcessDone,
+	}); err != nil {
 		_ = binding.MarkRecoverable(ctx)
 		if cleanupErr := remove(); cleanupErr != nil {
 			return 1, cleanupErr

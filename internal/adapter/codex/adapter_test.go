@@ -125,12 +125,11 @@ func TestCodexProfileWithoutDefaultCanBeExplainedAndRequiresRuntimeOverride(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	plan, err := adapter.PlanLaunch(context.Background(), home, resolved, "")
-	if err != nil {
-		t.Fatal(err)
+	if _, err := adapter.PlanLaunch(context.Background(), home, resolved, ""); err == nil {
+		t.Fatal("dry-run plan accepted no effective identity")
 	}
-	if !strings.Contains(plan.Sections[0].Items[4].Details[0].Value, "required at launch") {
-		t.Fatalf("missing-identity explanation = %#v", plan)
+	if _, err := adapter.PlanLaunch(context.Background(), home, resolved, "override"); err != nil {
+		t.Fatal(err)
 	}
 	if _, err := adapter.Launch(context.Background(), "", home, resolved, "", launch.Terminal{}); err == nil {
 		t.Fatal("real launch accepted no effective identity")

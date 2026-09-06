@@ -107,19 +107,11 @@ func (a *Adapter) ResolveAuth(resolved category.ResolvedProfile, override string
 }
 
 func (a *Adapter) PlanLaunch(ctx context.Context, workingDirectory string, resolved category.ResolvedProfile, override string) (launch.Plan, error) {
-	if resolved.Requirements().Recipe != authority.RecipeCodex || resolved.Overlay() != "codex" {
-		return launch.Plan{}, errors.New("resolved authority does not select Codex")
+	selected, err := a.ResolveAuth(resolved, override)
+	if err != nil {
+		return launch.Plan{}, err
 	}
-	effective := resolved.AuthRef()
-	if override != "" {
-		effective = override
-	}
-	if effective != "" {
-		if _, err := codexauth.ParseCredentialRef(effective); err != nil {
-			return launch.Plan{}, err
-		}
-	}
-	return resolved.WithAuthRef(effective).Plan(ctx, workingDirectory)
+	return selected.Plan(ctx, workingDirectory)
 }
 
 func (a *Adapter) Launch(ctx context.Context, _ string, _ string, resolved category.ResolvedProfile, override string, terminal launch.Terminal) (int, error) {

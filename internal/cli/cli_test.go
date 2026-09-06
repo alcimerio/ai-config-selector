@@ -94,6 +94,44 @@ func TestCodexDryRunUsesOverrideAndDoesNotAcquireAuthenticationOrRunTarget(t *te
 	}
 }
 
+func TestCodexProfileCreationWithoutDefaultPersistsOverlayAndDryRunsWithOverride(t *testing.T) {
+	home := t.TempDir()
+	adapter, err := codexadapter.New(codexadapter.Config{BinaryPath: "/missing/codex", ExistingHomeDir: home})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := profile.NewStore(filepath.Join(home, ".acs"), adapter.Categories())
+	stub := &staticBuilder{outcome: builder.Outcome{Create: true, Draft: adapter.Categories().NewDraft()}}
+	var stdout, stderr bytes.Buffer
+	app := cli.App{
+		CodexTarget: adapter, CodexCategories: adapter.Categories(), CodexBuilder: stub, CodexProfiles: store,
+		WorkingDirectory: home, Input: strings.NewReader(""), Output: &stdout, ErrorOutput: &stderr,
+		Interactive: func(io.Reader, io.Writer) bool { return true },
+	}
+	if code := app.Run(context.Background(), []string{"codex", "create-profile", "--name", "example"}); code != 0 {
+		t.Fatalf("create code=%d stderr=%q", code, stderr.String())
+	}
+	saved, err := store.Load("example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if overlay, ok := saved.Overlays["codex"]; !ok || overlay.Version != 1 || overlay.AuthRef != "" {
+		t.Fatalf("saved overlay = %#v", saved.Overlays)
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := app.Run(context.Background(), []string{"codex", "--profile", "example", "--dry-run"}); code != 1 || !strings.Contains(stderr.String(), "invalid Codex authentication identity name") {
+		t.Fatalf("missing reference = code %d stderr %q", code, stderr.String())
+	}
+	stderr.Reset()
+	if code := app.Run(context.Background(), []string{"codex", "--profile", "example", "--auth", "override", "--dry-run"}); code != 0 {
+		t.Fatalf("override dry-run code=%d stderr=%q", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "override") || strings.Contains(stdout.String(), "auth.json") {
+		t.Fatalf("dry-run output = %q", stdout.String())
+	}
+}
+
 func TestCodexAuthLoginRequiresInteractiveStreamsAndForwardsTheTerminal(t *testing.T) {
 	input := strings.NewReader("")
 	var stdout bytes.Buffer
