@@ -90,7 +90,7 @@ func TestNativeInstalledACSExecutesLockedCodexToolThroughNamedIdentity(t *testin
 	if err := os.WriteFile(outsideSecret, []byte("unrelated"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	isolationProbe := fmt.Sprintf(`; printf private > "$HOME/codex-private-proof" && printf private-ok; printf ' session-home-begin:%%s:session-home-end' "$HOME"; printf ' terminal-size:'; stty size </dev/tty 2>/dev/null; if cat %s >/dev/null 2>&1; then printf global-auth-read-bad; else printf global-auth-read-denied; fi; if cat %s >/dev/null 2>&1; then printf outside-read-bad; else printf outside-read-denied; fi; if printf bad > %s 2>/dev/null; then printf outside-write-bad; else printf outside-write-denied; fi; sleep 30 </dev/null >/dev/null 2>&1 & printf descendant-pid:%%s "$!"`, strconv.Quote(globalAuth), strconv.Quote(outsideSecret), strconv.Quote(outsideWrite))
+	isolationProbe := fmt.Sprintf(`; printf ' session-home-begin:%%s:session-home-end' "$HOME"; printf ' terminal-size:'; stty size </dev/tty 2>/dev/null; if cat %s >/dev/null 2>&1; then printf global-auth-read-bad; else printf global-auth-read-denied; fi; if cat %s >/dev/null 2>&1; then printf outside-read-bad; else printf outside-read-denied; fi; if printf bad > %s 2>/dev/null; then printf outside-write-bad; else printf outside-write-denied; fi; sleep 30 </dev/null >/dev/null 2>&1 & printf descendant-pid:%%s "$!"`, strconv.Quote(globalAuth), strconv.Quote(outsideSecret), strconv.Quote(outsideWrite))
 	for _, test := range []struct {
 		name, profile, command, marker string
 		wantWrite                      bool
@@ -161,14 +161,18 @@ func seedInstalledCandidateIdentity(t *testing.T, candidate, home, name string) 
 
 func configureInstalledCandidateKeychainContext(t *testing.T, home string) string {
 	t.Helper()
-	parentDefault := queryNativeKeychainSelection(t, nil, "default-keychain")
-	parentSearch := queryNativeKeychainSelection(t, nil, "list-keychains")
+	parentDefault, parentDefaultOK := queryNativeKeychainSelection(nil, "default-keychain")
+	parentSearch, parentSearchOK := queryNativeKeychainSelection(nil, "list-keychains")
+	if !parentDefaultOK || !parentSearchOK {
+		t.Fatal("isolated parent Keychain selection is unavailable")
+	}
 	fixtureEnvironment := environmentWithHome(home)
-	fixtureDefaultBefore := queryNativeKeychainSelection(t, fixtureEnvironment, "default-keychain")
-	fixtureSearchBefore := queryNativeKeychainSelection(t, fixtureEnvironment, "list-keychains")
+	fixtureDefaultBefore, fixtureDefaultBeforeOK := queryNativeKeychainSelection(fixtureEnvironment, "default-keychain")
+	fixtureSearchBefore, fixtureSearchBeforeOK := queryNativeKeychainSelection(fixtureEnvironment, "list-keychains")
 	t.Logf(
 		"synthetic HOME Keychain selection before setup: default-match=%t search-list-match=%t",
-		fixtureDefaultBefore == parentDefault, fixtureSearchBefore == parentSearch,
+		fixtureDefaultBeforeOK && fixtureDefaultBefore == parentDefault,
+		fixtureSearchBeforeOK && fixtureSearchBefore == parentSearch,
 	)
 	keychain := strings.Trim(strings.TrimSpace(parentDefault), `"`)
 	if keychain == "" || !filepath.IsAbs(keychain) {
@@ -184,26 +188,25 @@ func configureInstalledCandidateKeychainContext(t *testing.T, home string) strin
 			t.Fatal("configure synthetic HOME to use the disposable Keychain")
 		}
 	}
-	fixtureDefaultAfter := queryNativeKeychainSelection(t, fixtureEnvironment, "default-keychain")
-	fixtureSearchAfter := queryNativeKeychainSelection(t, fixtureEnvironment, "list-keychains")
-	if fixtureDefaultAfter != parentDefault || fixtureSearchAfter != parentSearch {
+	fixtureDefaultAfter, fixtureDefaultAfterOK := queryNativeKeychainSelection(fixtureEnvironment, "default-keychain")
+	fixtureSearchAfter, fixtureSearchAfterOK := queryNativeKeychainSelection(fixtureEnvironment, "list-keychains")
+	if !fixtureDefaultAfterOK || !fixtureSearchAfterOK || fixtureDefaultAfter != parentDefault || fixtureSearchAfter != parentSearch {
 		t.Fatal("synthetic HOME did not select the disposable Keychain")
 	}
 	t.Log("synthetic HOME Keychain selection after setup: default-match=true search-list-match=true")
 	return keychain
 }
 
-func queryNativeKeychainSelection(t *testing.T, environment []string, operation string) string {
-	t.Helper()
+func queryNativeKeychainSelection(environment []string, operation string) (string, bool) {
 	command := exec.Command("/usr/bin/security", operation, "-d", "user")
 	if environment != nil {
 		command.Env = environment
 	}
 	output, err := command.Output()
 	if err != nil {
-		t.Fatalf("query %s for native fixture", operation)
+		return "", false
 	}
-	return strings.TrimSpace(string(output))
+	return strings.TrimSpace(string(output)), true
 }
 
 func environmentWithHome(home string) []string {
@@ -406,7 +409,7 @@ func (fixture *nativeResponsesFixture) assert(t *testing.T) int {
 	if err != nil {
 		t.Fatalf("second request tool output: %v", err)
 	}
-	for _, sentinel := range []string{"Process exited with code 0", "codex-native-tool-output", "private-ok", "terminal-size:43 117", "global-auth-read-denied", "outside-read-denied", "outside-write-denied"} {
+	for _, sentinel := range []string{"Process exited with code 0", "codex-native-tool-output", "terminal-size:43 117", "global-auth-read-denied", "outside-read-denied", "outside-write-denied"} {
 		if !strings.Contains(toolOutput, sentinel) {
 			t.Fatalf("second request omitted real shell result %q", sentinel)
 		}
@@ -440,12 +443,29 @@ func observeNativeSessionProjection(body, launcherHome string) string {
 	if err != nil || len(parts) != 2 || !strings.HasPrefix(parts[0], "session-") || parts[1] != "home" {
 		return "target private write was not located in the allocated Session HOME"
 	}
-	contents, err := os.ReadFile(filepath.Join(sessionHome, "codex-private-proof"))
-	if err != nil || string(contents) != "private" {
-		return "target private Session write was not observable while the Session was retained"
+	var rolloutPath string
+	err = filepath.WalkDir(filepath.Join(sessionHome, ".codex", "sessions"), func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if !entry.IsDir() && strings.HasPrefix(entry.Name(), "rollout-") && strings.HasSuffix(entry.Name(), ".jsonl") {
+			rolloutPath = path
+		}
+		return nil
+	})
+	if err != nil || rolloutPath == "" {
+		return "locked Codex private rollout was not observable while the Session was retained"
 	}
-	if _, err := os.Stat(filepath.Join(launcherHome, "codex-private-proof")); !os.IsNotExist(err) {
-		return "target private write reached the launcher HOME"
+	info, err := os.Stat(rolloutPath)
+	if err != nil || info.Size() == 0 {
+		return "locked Codex private rollout was empty or unavailable"
+	}
+	relativeRollout, err := filepath.Rel(sessionHome, rolloutPath)
+	if err != nil {
+		return "locked Codex private rollout path was invalid"
+	}
+	if _, err := os.Stat(filepath.Join(launcherHome, relativeRollout)); !os.IsNotExist(err) {
+		return "locked Codex private rollout reached the launcher HOME"
 	}
 	return ""
 }
