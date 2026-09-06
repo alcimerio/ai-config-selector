@@ -385,11 +385,11 @@ func runInstalledCodexPTY(t *testing.T, candidate, home, tools, workspace, profi
 		t.Fatalf("installed ACS or locked target exited before interactive input: %v; terminal=%q", err, output.String())
 	case <-time.After(1500 * time.Millisecond):
 	}
-	if !waitNativeCaptureStable(&output, 2*time.Second) {
-		t.Fatalf("real Codex TUI did not reach a stable pre-resize frame; terminal=%q", output.String())
+	if !waitNativeCaptureContainsAfter(&output, 0, "\x1b[1;40r", 10*time.Second) {
+		t.Fatalf("real Codex TUI did not render the initial 40-row terminal geometry; terminal=%q", output.String())
 	}
-	if !strings.Contains(output.String(), "\x1b[1;42H") {
-		t.Fatalf("real Codex TUI did not render the initial 120-column frame; terminal=%q", output.String())
+	if !waitNativeCaptureStable(&output, 2*time.Second) {
+		t.Fatalf("real Codex TUI did not settle its initial 40-row frame; terminal=%q", output.String())
 	}
 	resizeOffset := output.Len()
 	if err := pty.Setsize(master, &pty.Winsize{Rows: 43, Cols: 117}); err != nil {
@@ -399,8 +399,8 @@ func runInstalledCodexPTY(t *testing.T, candidate, home, tools, workspace, profi
 	if err != nil || size.Rows != 43 || size.Cols != 117 {
 		t.Fatalf("resized outer PTY geometry=%v err=%v", size, err)
 	}
-	if !waitNativeCaptureContainsAfter(&output, resizeOffset, "\x1b[1;41H", 2*time.Second) {
-		t.Fatalf("real Codex TUI did not redraw for the resized 117-column terminal geometry; terminal=%q", output.String())
+	if !waitNativeCaptureContainsAfter(&output, resizeOffset, "\x1b[1;43r", 10*time.Second) {
+		t.Fatalf("real Codex TUI did not render the resized 43-row terminal geometry; terminal=%q", output.String())
 	}
 	// Emulate a real terminal paste and let Codex's 120ms paste-burst window
 	// settle before sending the separately encoded enhanced Enter key.
