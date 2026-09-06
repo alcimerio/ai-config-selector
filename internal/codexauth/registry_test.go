@@ -36,6 +36,27 @@ func TestRegistryForwardsFixedOperationsToExecutor(t *testing.T) {
 	}
 }
 
+func TestProductionRegistryRecoveryWithoutMarkerIsIdempotent(t *testing.T) {
+	root := t.TempDir()
+	sessions := filepath.Join(root, "sessions")
+	registry, err := New(Config{
+		BinaryPath: "/usr/bin/true", ACSHome: filepath.Join(root, "acs"),
+		SessionsDirectory: sessions, WorkingDirectory: root,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for attempt := 0; attempt < 2; attempt++ {
+		disposition, err := registry.Recover(context.Background(), "unbound")
+		if err != nil || disposition != DiscardedProjection {
+			t.Fatalf("recovery without marker = (%q, %v), want idempotent discard", disposition, err)
+		}
+	}
+	if _, err := os.Stat(sessions); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("empty recovery created Session state: %v", err)
+	}
+}
+
 func TestRegistryRejectsIncompleteExecutorConfiguration(t *testing.T) {
 	if registry, err := New(Config{}); registry != nil || err == nil || err.Error() != "create Codex authentication registry: binary path is required" {
 		t.Fatalf("construction = (%#v, %v)", registry, err)

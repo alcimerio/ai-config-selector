@@ -150,8 +150,9 @@ jobs:
           ACS_NATIVE_AUTH_RECOVERY_ROOT: ${{ runner.temp }}/acs-native-auth-recovery
           ACS_TEST_CODEX_BINARY: ${{ runner.temp }}/codex-target-${{ matrix.os }}-${{ matrix.arch }}/bin/codex
         run: |
+          # Each disposable Keychain gets a fresh process for native framework state.
           go test ./internal/codexauthresource -run '^TestNativeKeychainCredentialFreeContract$' -count=1
-          go test ./internal/codexauthresource -run '^TestNativeRealStoreInstalledTargetComposition$' -count=1
+          go test ./internal/codexauthresource -run '^TestNativeRealStoreInstalledTargetComposition$' -count=1 -v
           go test ./internal/executor -run '^TestNativeInstalledTargetContainedStatusWithoutCredentials$' -count=1
 
       - name: Recover native authentication gate state

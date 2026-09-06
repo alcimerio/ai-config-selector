@@ -69,7 +69,11 @@ func (resources productionAuthResources) AcquireRecovery(ctx context.Context, na
 	if resources.store == nil {
 		return nil, ErrProviderUnavailable
 	}
-	return resources.store.AcquireRecovery(ctx, name)
+	binding, err := resources.store.AcquireRecovery(ctx, name)
+	if binding == nil {
+		return nil, err
+	}
+	return binding, err
 }
 
 func (resources productionAuthResources) List(ctx context.Context) ([]IdentityMetadata, error) {
