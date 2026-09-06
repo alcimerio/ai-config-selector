@@ -98,6 +98,7 @@ func TestSeatbeltPolicyIsDefaultDenyAndUsesParametersForValidatedPaths(t *testin
 		request.runtimeProbeTraversalPaths[0],
 		"(allow sysctl-read)\n", "(allow iokit", "(allow network*)",
 		"(subpath (param \"EXECUTABLE_ANCESTOR_",
+		"(subpath (param \"SESSION_ANCESTOR_",
 		`(subpath "/usr/share")`,
 		"com.apple.system.opendirectoryd.libinfo", "com.apple.SystemConfiguration.configd",
 		"com.apple.notificationcenter", "com.apple.logd",
@@ -1861,9 +1862,14 @@ func TestSeatbeltPermitsSessionPrefixMetadataWithoutDirectoryContents(t *testing
 	skipSeatbeltNativeTestBinaryUnderRace(t)
 	request := seatbeltTestRequest(t)
 	database := filepath.Join(request.sessionHome, ".codex", "state_5.sqlite")
+	sibling := filepath.Join(request.sessionsDirectory, "sibling-secret")
+	siblingWrite := filepath.Join(request.sessionsDirectory, "sibling-write")
+	if err := os.WriteFile(sibling, []byte("private"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	request.arguments = []string{
 		"-test.run=TestSeatbeltHelperProcess", "--", "session-prefix-metadata",
-		database, request.sessionsDirectory,
+		database, request.sessionsDirectory, sibling, siblingWrite,
 	}
 	var output bytes.Buffer
 	request.terminal = Terminal{Output: &output, ErrorOutput: &output}
@@ -2308,6 +2314,14 @@ func TestSeatbeltHelperProcess(t *testing.T) {
 		if _, err := os.ReadDir(arguments[2]); !isSeatbeltPermission(err) {
 			fmt.Fprintln(os.Stderr, "Session parent contents exposed")
 			os.Exit(122)
+		}
+		if _, err := os.ReadFile(arguments[3]); !isSeatbeltPermission(err) {
+			fmt.Fprintln(os.Stderr, "Session sibling contents exposed")
+			os.Exit(123)
+		}
+		if err := os.WriteFile(arguments[4], []byte("bad"), 0o600); !isSeatbeltPermission(err) {
+			fmt.Fprintln(os.Stderr, "Session sibling write exposed")
+			os.Exit(124)
 		}
 		fmt.Fprintln(os.Stdout, "session-prefix-metadata")
 		os.Exit(0)
