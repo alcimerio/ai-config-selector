@@ -239,6 +239,7 @@ func assertPromotedArtifactGenericRun(t *testing.T) {
 	dryRun := exec.Command(binary, "run", "--dry-run", "--profile", "generic-readwrite", "--", helper, privateArgument)
 	dryRun.Dir = workspace
 	dryRun.Env = nativeCandidateEnvironment(home, path, map[string]string{"ACS_GENERIC_HOST_SECRET": "hidden"})
+	requireEnvironmentEntry(t, dryRun.Env, "ACS_GENERIC_HOST_SECRET=hidden")
 	dryOutput, err := dryRun.CombinedOutput()
 	if err != nil {
 		t.Fatalf("generic dry-run: %v; output=%s", err, dryOutput)
@@ -257,6 +258,7 @@ func assertPromotedArtifactGenericRun(t *testing.T) {
 		"--acs-generic-command-helper", externalSecret, externalWrite, "space value", "", "--", "*.go", "$HOME")
 	command.Dir = workspace
 	command.Env = nativeCandidateEnvironment(home, path, map[string]string{"ACS_GENERIC_HOST_SECRET": "hidden"})
+	requireEnvironmentEntry(t, command.Env, "ACS_GENERIC_HOST_SECRET=hidden")
 	command.Stdin = strings.NewReader("pipe-input")
 	var stdout, stderr bytes.Buffer
 	command.Stdout, command.Stderr = &stdout, &stderr
@@ -1300,12 +1302,22 @@ func nativeCandidateEnvironment(home, path string, overrides map[string]string) 
 		}
 		environment = append(environment, entry)
 	}
-	for _, key := range []string{"HOME", "PATH", "TERM", "NO_COLOR", "ACS_NATIVE_CANDIDATE_SECRET"} {
+	for _, key := range []string{"HOME", "PATH", "TERM", "NO_COLOR", "ACS_NATIVE_CANDIDATE_SECRET", "ACS_GENERIC_HOST_SECRET"} {
 		if value, ok := values[key]; ok {
 			environment = append(environment, key+"="+value)
 		}
 	}
 	return environment
+}
+
+func requireEnvironmentEntry(t *testing.T, environment []string, want string) {
+	t.Helper()
+	for _, entry := range environment {
+		if entry == want {
+			return
+		}
+	}
+	t.Fatalf("parent environment does not contain %q", want)
 }
 
 func assertSafeCandidateFailure(t *testing.T, output []byte, category string, forbidden ...string) {

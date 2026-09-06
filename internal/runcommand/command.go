@@ -9,6 +9,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"golang.org/x/sys/unix"
 )
 
 const FixedSearchPath = "/usr/local/bin:/usr/bin:/bin"
@@ -28,6 +30,7 @@ type Command struct {
 	arguments                     []string
 	form                          Form
 	identity                      os.FileInfo
+	workspaceIdentity             os.FileInfo
 	digest                        [sha256.Size]byte
 }
 
@@ -55,7 +58,7 @@ func Resolve(workingDirectory string, argv []string) (Command, error) {
 	if err := ValidateSyntax(argv); err != nil {
 		return Command{}, err
 	}
-	workspace, err := canonicalDirectory(workingDirectory)
+	workspace, workspaceIdentity, err := canonicalDirectory(workingDirectory)
 	if err != nil {
 		return Command{}, errors.New("working directory is unavailable")
 	}
@@ -64,17 +67,18 @@ func Resolve(workingDirectory string, argv []string) (Command, error) {
 		return Command{}, err
 	}
 	info, digest, err := executableSnapshot(executable)
-	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0o111 == 0 {
+	if err != nil {
 		return Command{}, errors.New("executable is unavailable")
 	}
 	return Command{intent: argv[0], executable: executable, workspace: workspace,
-		arguments: append([]string(nil), argv[1:]...), form: form, identity: info, digest: digest}, nil
+		arguments: append([]string(nil), argv[1:]...), form: form, identity: info,
+		workspaceIdentity: workspaceIdentity, digest: digest}, nil
 }
 
 // Revalidate repeats resolution immediately before native preparation.
 func (command Command) Revalidate(workingDirectory string) (string, []string, error) {
-	workspace, err := canonicalDirectory(workingDirectory)
-	if err != nil || workspace != command.workspace {
+	workspace, workspaceIdentity, err := canonicalDirectory(workingDirectory)
+	if err != nil || workspace != command.workspace || !sameWorkspaceIdentity(command.workspaceIdentity, workspaceIdentity) {
 		return "", nil, errors.New("working directory changed after command resolution")
 	}
 	executable, form, err := resolveExecutable(workspace, command.intent)
@@ -91,19 +95,24 @@ func (command Command) Revalidate(workingDirectory string) (string, []string, er
 func (command Command) Form() Form         { return command.form }
 func (command Command) ArgumentCount() int { return len(command.arguments) }
 
-func canonicalDirectory(path string) (string, error) {
+func canonicalDirectory(path string) (string, os.FileInfo, error) {
 	if path == "" || !filepath.IsAbs(path) {
-		return "", errors.New("path must be absolute")
+		return "", nil, errors.New("path must be absolute")
 	}
 	resolved, err := filepath.EvalSymlinks(filepath.Clean(path))
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
-	info, err := os.Stat(resolved)
+	file, err := openPath(resolved, unix.O_DIRECTORY)
+	if err != nil {
+		return "", nil, errors.New("path is not a directory")
+	}
+	defer file.Close()
+	info, err := file.Stat()
 	if err != nil || !info.IsDir() {
-		return "", errors.New("path is not a directory")
+		return "", nil, errors.New("path is not a directory")
 	}
-	return resolved, nil
+	return resolved, info, nil
 }
 
 func resolveExecutable(workspace, intent string) (string, Form, error) {
@@ -146,8 +155,12 @@ func sameIdentity(before, after os.FileInfo) bool {
 		before.Size() == after.Size() && before.ModTime().Equal(after.ModTime())
 }
 
+func sameWorkspaceIdentity(before, after os.FileInfo) bool {
+	return before != nil && after != nil && before.IsDir() && after.IsDir() && os.SameFile(before, after)
+}
+
 func executableSnapshot(path string) (os.FileInfo, [sha256.Size]byte, error) {
-	file, err := os.Open(path)
+	file, err := openPath(path, 0)
 	if err != nil {
 		return nil, [sha256.Size]byte{}, err
 	}
@@ -156,6 +169,9 @@ func executableSnapshot(path string) (os.FileInfo, [sha256.Size]byte, error) {
 	if err != nil {
 		return nil, [sha256.Size]byte{}, err
 	}
+	if !info.Mode().IsRegular() || info.Mode().Perm()&0o111 == 0 {
+		return nil, [sha256.Size]byte{}, errors.New("path is not an executable regular file")
+	}
 	hash := sha256.New()
 	if _, err := io.Copy(hash, file); err != nil {
 		return nil, [sha256.Size]byte{}, err
@@ -163,4 +179,12 @@ func executableSnapshot(path string) (os.FileInfo, [sha256.Size]byte, error) {
 	var digest [sha256.Size]byte
 	copy(digest[:], hash.Sum(nil))
 	return info, digest, nil
+}
+
+func openPath(path string, flags int) (*os.File, error) {
+	descriptor, err := unix.Open(path, unix.O_RDONLY|unix.O_NONBLOCK|unix.O_CLOEXEC|unix.O_NOFOLLOW|flags, 0)
+	if err != nil {
+		return nil, err
+	}
+	return os.NewFile(uintptr(descriptor), path), nil
 }
