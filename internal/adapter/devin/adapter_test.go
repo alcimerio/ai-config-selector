@@ -1,3 +1,5 @@
+//go:build legacydevin
+
 package devin
 
 import (

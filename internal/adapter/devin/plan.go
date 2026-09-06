@@ -22,7 +22,7 @@ func (a *Adapter) PlanLaunch(ctx context.Context, workingDirectory string, resol
 	if err := a.planProjectSkills(ctx, workingDirectory, &plan); err != nil {
 		return launch.Plan{}, err
 	}
-	readiness, err := a.sandbox.Readiness(ctx)
+	readiness, err := a.executor.Readiness(ctx)
 	if err != nil {
 		return launch.Plan{}, fmt.Errorf("inspect required process sandbox readiness: %w", err)
 	}

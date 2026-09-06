@@ -8,10 +8,13 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"strings"
+	"syscall"
 	"testing"
 	"time"
 
 	"github.com/alcimerio/ai-config-selector/internal/launch"
+	"github.com/alcimerio/ai-config-selector/internal/skills"
 )
 
 type fakeSandbox struct {
@@ -20,6 +23,39 @@ type fakeSandbox struct {
 	request              launch.ProcessRequest
 	check                launch.SandboxCheck
 	inspect              func(launch.ProcessRequest) error
+}
+
+// TestRunDevinOwnsBothPreflightsAndTheSessionLease exercises the real
+// executor lifecycle, not an adapter callback.  The first two processes are
+// the fixed catalog/auth probes and the third is the fixed interactive target.
+func TestRunDevinOwnsBothPreflightsAndTheSessionLease(t *testing.T) {
+	sessions := filepath.Join(t.TempDir(), "sessions")
+	home := filepath.Join(sessions, "unused")
+	processes := []*fakeProcess{
+		{waitFn: func() error { return nil }},
+		{waitFn: func() error { return nil }},
+		{},
+	}
+	var requests []launch.ProcessRequest
+	sandbox := &sequenceSandbox{processes: processes, requests: &requests}
+	request := DevinRequest{
+		SessionsDirectory: sessions, WorkingDirectory: t.TempDir(), Executable: "devin",
+		ExpectedCatalog: []skills.SkillReference{}, Terminal: launch.Terminal{Output: io.Discard, ErrorOutput: io.Discard},
+	}
+	// The catalog interpreter accepts an empty JSON catalog; write the probe
+	// outputs through the request terminals as the real contained processes do.
+	processes[0].write = []byte("[]\n")
+	processes[1].write = []byte("Logged in\n")
+	if code, err := newExecutor(sandbox).RunDevin(context.Background(), request); err != nil || code != 0 {
+		t.Fatalf("RunDevin = (%d, %v)", code, err)
+	}
+	if got := [][]string{requests[0].Arguments, requests[1].Arguments, requests[2].Arguments}; !reflect.DeepEqual(got, [][]string{{"skills", "list", "--json"}, {"auth", "status"}, {"--respect-workspace-trust", "false"}}) {
+		t.Fatalf("fixed Devin lifecycle arguments = %#v", got)
+	}
+	if entries, err := os.ReadDir(sessions); err != nil || len(entries) != 0 {
+		t.Fatalf("executor did not remove settled Devin Session: %v %v", entries, err)
+	}
+	_ = home
 }
 
 func (*fakeSandbox) Readiness(context.Context) (launch.SandboxReadiness, error) {
@@ -47,18 +83,62 @@ type fakeProcess struct {
 	startErr, waitErr error
 	cleanup           <-chan struct{}
 	waited            chan<- struct{}
+	write             []byte
+	output            io.Writer
+	waitFn            func() error
+	startEntered      chan<- struct{}
+	startReturned     chan<- struct{}
+	allowStart        <-chan struct{}
+	signalErr         error
 }
 
-func (p *fakeProcess) Start() error { p.starts++; return p.startErr }
+func (p *fakeProcess) Start() error {
+	p.starts++
+	if p.startEntered != nil {
+		p.startEntered <- struct{}{}
+	}
+	if p.allowStart != nil {
+		<-p.allowStart
+	}
+	if p.startReturned != nil {
+		p.startReturned <- struct{}{}
+	}
+	return p.startErr
+}
 func (p *fakeProcess) Wait() error {
 	p.waits++
+	if len(p.write) != 0 && p.output != nil {
+		_, _ = p.output.Write(p.write)
+	}
 	if p.waited != nil {
 		p.waited <- struct{}{}
 	}
+	if p.waitFn != nil {
+		return p.waitFn()
+	}
 	return p.waitErr
 }
-func (*fakeProcess) Signal(os.Signal) error         { return nil }
+func (p *fakeProcess) Signal(os.Signal) error       { return p.signalErr }
 func (p *fakeProcess) CleanupDone() <-chan struct{} { return p.cleanup }
+
+type sequenceSandbox struct {
+	processes []*fakeProcess
+	requests  *[]launch.ProcessRequest
+}
+
+func (*sequenceSandbox) Readiness(context.Context) (launch.SandboxReadiness, error) {
+	return launch.SandboxReadiness{}, nil
+}
+func (*sequenceSandbox) Check(context.Context, launch.SandboxCheck) error { return nil }
+func (s *sequenceSandbox) Prepare(_ context.Context, request launch.ProcessRequest) (launch.Process, error) {
+	*s.requests = append(*s.requests, request)
+	index := len(*s.requests) - 1
+	if index >= len(s.processes) {
+		return nil, errors.New("unexpected Devin process")
+	}
+	s.processes[index].output = request.Terminal.Output
+	return s.processes[index], nil
+}
 
 func shellRequest(t *testing.T, sessions string) ShellRequest {
 	t.Helper()
@@ -148,18 +228,75 @@ func TestRunShellCleanupUncertaintyOutranksOrdinaryExitAndRetainsSession(t *test
 
 func TestRunShellFailedStartDoesNotWaitRetainsThenRemovesSession(t *testing.T) {
 	done := make(chan struct{})
-	p := &fakeProcess{startErr: errors.New("start failed"), cleanup: done}
+	startReturned := make(chan struct{})
+	p := &fakeProcess{startErr: errors.New("start failed"), cleanup: done, startReturned: startReturned}
 	sessions := filepath.Join(t.TempDir(), "sessions")
 	result := make(chan error, 1)
 	go func() {
 		result <- newExecutor(&fakeSandbox{process: p}).RunShell(context.Background(), shellRequest(t, sessions))
 	}()
+	select {
+	case <-startReturned:
+	case <-time.After(time.Second):
+		t.Fatal("Start did not fail")
+	}
 	eventuallyNonEmptyDirectory(t, sessions)
+	select {
+	case err := <-result:
+		t.Fatalf("failed Start returned before cleanup proof: %v", err)
+	default:
+	}
 	close(done)
 	if err := <-result; err == nil || p.waits != 0 {
 		t.Fatalf("result=%v waits=%d", err, p.waits)
 	}
 	eventuallyEmptyDirectory(t, sessions)
+}
+
+func TestDevinSignalSupervisorCancelsEarlySignalBeforeStart(t *testing.T) {
+	canceled := make(chan struct{})
+	s := newDevinSignalSupervisor(func() { close(canceled) })
+	defer s.stop()
+	s.forwarded <- syscall.SIGTERM
+	select {
+	case <-canceled:
+	case <-time.After(time.Second):
+		t.Fatal("early signal did not cancel preflight")
+	}
+	p := &fakeProcess{}
+	if err := runDevinAttached(p, s); err == nil || p.starts != 0 || p.waits != 0 {
+		t.Fatalf("early signal result=%v Start/Wait=%d/%d", err, p.starts, p.waits)
+	}
+}
+
+func TestRunDevinAttachedWaitsOnceAfterReplayFailure(t *testing.T) {
+	s := newDevinSignalSupervisor(func() {})
+	defer s.stop()
+	entered, release := make(chan struct{}), make(chan struct{})
+	p := &fakeProcess{startEntered: entered, allowStart: release, signalErr: errors.New("private replay failure")}
+	result := make(chan error, 1)
+	go func() { result <- runDevinAttached(p, s) }()
+	<-entered
+	s.forwarded <- syscall.SIGTERM
+	deadline := time.Now().Add(time.Second)
+	for {
+		s.mutex.Lock()
+		pending := s.pending
+		s.mutex.Unlock()
+		if pending == syscall.SIGTERM {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("signal was not captured during Start")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	close(release)
+	err := <-result
+	var sandboxErr *launch.SandboxError
+	if !errors.As(err, &sandboxErr) || sandboxErr.Category != launch.SandboxProcessStartFailed || p.waits != 1 || strings.Contains(err.Error(), "private") {
+		t.Fatalf("replay result=%v waits=%d", err, p.waits)
+	}
 }
 
 func TestRunShellFailedWaitRetainsThenRemovesSession(t *testing.T) {

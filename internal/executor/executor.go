@@ -54,11 +54,6 @@ type Executor struct{ sandbox launch.ProcessSandbox }
 // New returns the production executor using ACS's required native sandbox.
 func New() *Executor { return newExecutor(launch.NewProcessSandbox()) }
 
-// NewForDevinPackageTests is limited to internal-package tests which preserve
-// real Session/process assertions while exercising an injected sandbox.
-// Production adapters must use New.
-func NewForDevinPackageTests(sandbox launch.ProcessSandbox) *Executor { return newExecutor(sandbox) }
-
 // newExecutor exists only for executor package tests. Production callers must
 // use New so they cannot choose a sandbox backend.
 func newExecutor(sandbox launch.ProcessSandbox) *Executor { return &Executor{sandbox: sandbox} }
@@ -90,8 +85,8 @@ func (e *Executor) RunShell(ctx context.Context, request ShellRequest) (resultEr
 		return err
 	}
 	defer func() {
-		if err := created.Remove(); err != nil {
-			resultErr = cleanupPrecedence(resultErr, err)
+		if removeErr := created.Remove(); removeErr != nil {
+			resultErr = cleanupPrecedence(resultErr, removeErr)
 		}
 	}()
 	process, err := e.sandbox.Prepare(ctx, launch.ProcessRequest{
@@ -177,6 +172,34 @@ func (e *Executor) RunDevin(ctx context.Context, request DevinRequest) (exitCode
 		}
 	}
 	return 1, fmt.Errorf("start Devin: %w", runErr)
+}
+
+// VerifyDevin performs the registered Devin checks in a protected temporary
+// Session without attaching the interactive target. It is the opt-in smoke
+// entrypoint: callers provide declarative data, never a Session or process.
+func (e *Executor) VerifyDevin(ctx context.Context, request DevinRequest) (resultErr error) {
+	if e == nil || e.sandbox == nil {
+		return errors.New("contained Devin executor is unavailable")
+	}
+	if err := e.sandbox.Check(ctx, launch.SandboxCheck{Workspace: request.WorkingDirectory, SessionsDirectory: request.SessionsDirectory, Executable: request.Executable, RuntimeInputs: request.RuntimeInputs}); err != nil {
+		return err
+	}
+	created, err := session.Create(request.SessionsDirectory, request.WorkingDirectory, request.Materializer)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if removeErr := created.Remove(); removeErr != nil {
+			resultErr = cleanupPrecedence(resultErr, removeErr)
+		}
+	}()
+	if err := copyDevinCredentialIfPresent(filepath.Join(request.ExistingHomeDirectory, ".local", "share", "devin", "credentials.toml"), filepath.Join(created.HomeDirectory(), ".local", "share", "devin", "credentials.toml")); err != nil {
+		return err
+	}
+	if err := e.verifyDevinSkills(ctx, created, request); err != nil {
+		return err
+	}
+	return e.verifyDevinAuthentication(ctx, created, request)
 }
 
 // DevinExit is intentionally small: the adapter translates it to its stable

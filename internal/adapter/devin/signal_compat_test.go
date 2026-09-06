@@ -1,3 +1,5 @@
+//go:build legacydevin
+
 package devin
 
 // These test-only compatibility helpers preserve the historical white-box

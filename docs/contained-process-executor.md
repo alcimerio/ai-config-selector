@@ -27,6 +27,11 @@ observations are interpreted. Catalog parsing remains in `devinruntime`; it
 keeps project and built-in treatment, canonical managed identities, and safe
 redacted capability failures without exposing process output or credentials.
 
+`VerifyDevin` is the fixed protected preflight entrypoint for the opt-in
+authenticated smoke. It performs Check, Session creation and materialization,
+credential copy, ordered probes, settlement, and removal internally; it never
+returns a Session path, process, retention lease, or execution callback.
+
 Each probe and target is retained before Start. A failed Start is not waited;
 a successful Start is waited exactly once, and cleanup uncertainty blocks the
 next probe or target and retains the Session. The Devin adapter translates the

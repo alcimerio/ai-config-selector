@@ -22,7 +22,7 @@ func TestStoredProfileEditorSeedsWithoutSourceResolution(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if editor.sandbox != nil || editor.binaryPath != "" {
+		if editor.binaryPath != "" {
 			t.Fatal("stored selection assembly constructed runtime")
 		}
 		if entry := profileinspect.InspectBytes("old", []byte(raw)); entry.Status != "valid" {

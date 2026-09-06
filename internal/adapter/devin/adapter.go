@@ -2,20 +2,15 @@
 package devin
 
 import (
-	"bytes"
-	"context"
 	"errors"
 	"fmt"
-	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 
 	"github.com/alcimerio/ai-config-selector/internal/builder"
 	"github.com/alcimerio/ai-config-selector/internal/category"
 	"github.com/alcimerio/ai-config-selector/internal/devinruntime"
 	"github.com/alcimerio/ai-config-selector/internal/executor"
-	"github.com/alcimerio/ai-config-selector/internal/launch"
 	"github.com/alcimerio/ai-config-selector/internal/skills"
 )
 
@@ -56,7 +51,6 @@ type Adapter struct {
 	categories      *category.Registry
 	editors         *builder.EditorRegistry
 	skillsCategory  category.Binding[[]skills.SkillReference, []skills.SkillBundle, skillsContribution]
-	sandbox         launch.ProcessSandbox
 	executor        *executor.Executor
 	runtimeInputs   []string
 }
@@ -75,22 +69,19 @@ type Session struct {
 	WorkingDirectory string
 
 	expectedCatalog []SkillReference
-	retainProcess   func(launch.Process) (launch.Process, error)
 }
 
 func New(config Config) (*Adapter, error) {
-	adapter, err := newAdapter(config, launch.NewProcessSandbox())
+	adapter, err := newAdapter(config)
 	if err != nil {
 		return nil, err
 	}
-	// Production always selects the native backend inside executor.New.
-	adapter.executor = executor.New()
 	return adapter, nil
 }
 
-// newAdapter is the package-private assembly seam. Production callers always
-// receive the fail-closed native sandbox from New.
-func newAdapter(config Config, sandbox launch.ProcessSandbox) (*Adapter, error) {
+// newAdapter assembles declarative adapter configuration. Process backend
+// selection belongs exclusively to executor.New.
+func newAdapter(config Config) (*Adapter, error) {
 	if config.BinaryPath == "" {
 		return nil, errors.New("create Devin Adapter: binary path is required")
 	}
@@ -100,13 +91,9 @@ func newAdapter(config Config, sandbox launch.ProcessSandbox) (*Adapter, error) 
 	adapter := &Adapter{
 		binaryPath:      config.BinaryPath,
 		existingHomeDir: filepath.Clean(config.ExistingHomeDir),
-		sandbox:         sandbox,
 		runtimeInputs:   append([]string(nil), config.RuntimeInputs...),
 	}
-	if adapter.sandbox == nil {
-		return nil, errors.New("create Devin Adapter: process sandbox is required")
-	}
-	adapter.executor = executor.NewForDevinPackageTests(adapter.sandbox)
+	adapter.executor = executor.New()
 	registry, binding, err := newCategoryRegistry(adapter)
 	if err != nil {
 		return nil, fmt.Errorf("create Devin Adapter categories: %w", err)
@@ -176,66 +163,7 @@ func (a *Adapter) PrepareSession(rootDir, workingDirectory string, selected []Sk
 		SessionsDir:      filepath.Dir(filepath.Clean(rootDir)),
 		WorkingDirectory: filepath.Clean(workingDirectory),
 		expectedCatalog:  expected,
-		// This helper prepares caller-owned storage. Production Launch instead
-		// supplies the live Session's retention capability to every preflight.
-		retainProcess: func(process launch.Process) (launch.Process, error) { return process, nil },
 	}, nil
-}
-
-// Preflight asks the installed Devin CLI to report its observed skills and
-// authentication state. It returns only sanitized capability diagnostics.
-func (a *Adapter) Preflight(ctx context.Context, session *Session) error {
-	if err := a.verifySkillIsolation(ctx, session); err != nil {
-		return err
-	}
-	return a.verifyAuthentication(ctx, session)
-}
-
-func (a *Adapter) verifyAuthentication(ctx context.Context, session *Session) error {
-	var output bytes.Buffer
-	err := a.runSandboxed(ctx, session, []string{"auth", "status"}, launch.Terminal{Output: &output, ErrorOutput: io.Discard})
-	if err != nil {
-		var sandboxFailure *launch.SandboxError
-		if errors.As(err, &sandboxFailure) {
-			return err
-		}
-		return &PreflightError{Capability: CapabilityAuthentication, reason: commandFailureReason(ctx, err, reasonAuthenticationCommandFailed)}
-	}
-	if !devinruntime.AuthenticationLoggedIn(output.Bytes()) {
-		return &PreflightError{Capability: CapabilityAuthentication, reason: reasonAuthenticationUnavailable}
-	}
-	return nil
-}
-
-func (a *Adapter) verifySkillIsolation(ctx context.Context, session *Session) error {
-	observed, failure, err := a.observeGlobalCatalog(ctx, session)
-	if err != nil {
-		return err
-	}
-	if failure != 0 {
-		return &PreflightError{Capability: CapabilitySkillIsolation, reason: failure}
-	}
-	if observed.HasUnmanagedSource() || !devinruntime.EqualSkillReferences(session.expectedCatalog, observed.ManagedReferences()) {
-		return &PreflightError{
-			Capability: CapabilitySkillIsolation,
-			reason:     reasonCatalogMismatch,
-		}
-	}
-
-	return nil
-}
-
-func (a *Adapter) observeGlobalCatalog(ctx context.Context, session *Session) (devinruntime.CatalogObservation, preflightFailureReason, error) {
-	var stdout bytes.Buffer
-	if err := a.runSandboxed(ctx, session, []string{"skills", "list", "--json"}, launch.Terminal{Output: &stdout, ErrorOutput: io.Discard}); err != nil {
-		var sandboxFailure *launch.SandboxError
-		if errors.As(err, &sandboxFailure) {
-			return devinruntime.CatalogObservation{}, 0, err
-		}
-		return devinruntime.CatalogObservation{}, commandFailureReason(ctx, err, reasonSkillInspectionCommandFailed), nil
-	}
-	observed, failure := devinruntime.InterpretCatalog(session.HomeDir, session.WorkingDirectory, stdout.Bytes())
-	return observed, failure, nil
 }
 
 func sourceRule(source GlobalSource) (SourceRule, bool) {
@@ -248,44 +176,4 @@ func cleanBundleRelativePath(path string) (string, error) {
 
 func diagnosticIdentity(reference SkillReference) string {
 	return devinruntime.DiagnosticIdentity(reference)
-}
-
-func commandFailureReason(ctx context.Context, err error, commandFailed preflightFailureReason) preflightFailureReason {
-	if ctx.Err() != nil {
-		return reasonVerificationInterrupted
-	}
-	var executableError *exec.Error
-	if errors.As(err, &executableError) || errors.Is(err, os.ErrNotExist) {
-		return reasonExecutableUnavailable
-	}
-	return commandFailed
-}
-
-func (a *Adapter) runSandboxed(ctx context.Context, session *Session, arguments []string, terminal launch.Terminal) error {
-	if session == nil || session.retainProcess == nil {
-		return &launch.SandboxError{Category: launch.SandboxSetupFailed}
-	}
-	process, err := a.sandbox.Prepare(ctx, launch.ProcessRequest{
-		Workspace: session.WorkingDirectory, SessionsDirectory: session.SessionsDir,
-		SessionDirectory: session.RootDir, SessionHome: session.HomeDir,
-		TemporaryDirectory: session.TemporaryDir, Executable: a.binaryPath,
-		RuntimeInputs: a.runtimeInputs, Arguments: arguments, Terminal: terminal,
-	})
-	if err != nil {
-		return err
-	}
-	process, err = session.retainProcess(process)
-	if err != nil {
-		return err
-	}
-	runErr := process.Start()
-	if runErr == nil {
-		runErr = process.Wait()
-	}
-	// Cleanup failure takes precedence over probe failures and successful output.
-	// A bounded timeout leaves the Session retained until cleanup is proven.
-	if cleanupErr := launch.AwaitRetainedSessionCleanup(process); cleanupErr != nil {
-		return cleanupErr
-	}
-	return runErr
 }
