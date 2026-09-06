@@ -135,6 +135,22 @@ jobs:
             "${{ matrix.arch }}" \
             "$target_root/bin/codex"
 
+      - name: Run credential-free interactive Codex fixture early
+        env:
+          ACS_RUN_NATIVE_AUTH_GATE: "1"
+          ACS_NATIVE_AUTH_RECOVERY_ROOT: ${{ runner.temp }}/acs-native-auth-recovery
+          ACS_TEST_CODEX_BINARY: ${{ runner.temp }}/codex-target-${{ matrix.os }}-${{ matrix.arch }}/bin/codex
+          ACS_TEST_CODEX_ARCHIVE: ${{ github.workspace }}/dist/codex-test-targets/codex_0.149.1_${{ matrix.os }}_${{ matrix.arch }}.tar.gz
+          ACS_PROMOTED_BINARY: ${{ runner.temp }}/acs-promoted-${{ matrix.os }}-${{ matrix.arch }}/bin/acs
+        run: go test ./internal/codexauthresource -run '^TestNativeInstalledACSExecutesLockedCodexToolThroughNamedIdentity$' -count=1 -v
+
+      - name: Recover early interactive Codex fixture state
+        if: always()
+        env:
+          ACS_RUN_NATIVE_AUTH_RECOVERY: "1"
+          ACS_NATIVE_AUTH_RECOVERY_ROOT: ${{ runner.temp }}/acs-native-auth-recovery
+        run: go test ./internal/codexauthresource -run '^TestNativeKeychainRecoveryEntrypoint$' -count=1
+
       - name: Run native application, Adapter, installer, and PTY regressions
         run: go test ./...
 
@@ -156,7 +172,6 @@ jobs:
           go test ./internal/codexauthresource -run '^TestNativeKeychainCredentialFreeContract$' -count=1
           go test ./internal/codexauthresource -run '^TestNativeRealStoreInstalledTargetComposition$' -count=1 -v
           go test ./internal/executor -run '^(TestNativeInstalledTargetContainedStatusWithoutCredentials|TestNativeDirectInstalledTargetInteractiveLifecycle)$' -count=1 -v
-          go test ./internal/codexauthresource -run '^TestNativeInstalledACSExecutesLockedCodexToolThroughNamedIdentity$' -count=1 -v
 
       - name: Recover native authentication gate state
         if: always()

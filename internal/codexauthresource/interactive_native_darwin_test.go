@@ -276,15 +276,19 @@ func (fixture *nativeResponsesFixture) assert(t *testing.T) int {
 			t.Fatalf("first request omitted Skill discovery sentinel %q", sentinel)
 		}
 	}
-	for _, sentinel := range []string{"acs-call-1", "codex-native-tool-output", "private-ok", "outside-read-denied", "outside-write-denied"} {
-		if !strings.Contains(fixture.bodies[1], sentinel) {
+	toolOutput, err := nativeFunctionCallOutput(fixture.bodies[1], "acs-call-1")
+	if err != nil {
+		t.Fatalf("second request tool output: %v", err)
+	}
+	for _, sentinel := range []string{"Process exited with code 0", "codex-native-tool-output", "private-ok", "outside-read-denied", "outside-write-denied"} {
+		if !strings.Contains(toolOutput, sentinel) {
 			t.Fatalf("second request omitted real shell result %q", sentinel)
 		}
 	}
-	if strings.Contains(fixture.bodies[1], "outside-read-bad") || strings.Contains(fixture.bodies[1], "outside-write-bad") {
-		t.Fatal("second request omitted real shell function output")
+	if strings.Contains(toolOutput, "outside-read-bad") || strings.Contains(toolOutput, "outside-write-bad") {
+		t.Fatal("matching function output reports an isolation escape")
 	}
-	match := regexp.MustCompile(`descendant-pid:(\d+)`).FindStringSubmatch(fixture.bodies[1])
+	match := regexp.MustCompile(`descendant-pid:(\d+)`).FindStringSubmatch(toolOutput)
 	if len(match) != 2 {
 		t.Fatal("second request omitted descendant process identity")
 	}
