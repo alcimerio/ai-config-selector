@@ -18,9 +18,10 @@ type Contribution struct {
 type Recipe string
 
 const (
-	RecipeShell Recipe = "shell"
-	RecipeDevin Recipe = "devin"
-	RecipeCodex Recipe = "codex"
+	RecipeShell   Recipe = "shell"
+	RecipeDevin   Recipe = "devin"
+	RecipeCodex   Recipe = "codex"
+	RecipeCommand Recipe = "command"
 )
 
 // TargetRequirements are registered once during application assembly. They
@@ -66,6 +67,17 @@ func (plan Plan) AuthRef() string    { return plan.authRef }
 // WithAuthRef returns an independent resolved plan with one canonical opaque
 // authentication reference. Validation belongs to the target adapter.
 func (plan Plan) WithAuthRef(value string) Plan { plan.authRef = value; return plan }
+
+// ForCommand returns an independent authority plan for one explicit command.
+// The command itself remains a separate declarative executor input; it cannot
+// add filesystem, environment, credential, or sandbox authority.
+func (plan Plan) ForCommand() (Plan, error) {
+	if plan.requirements.Recipe != RecipeShell || plan.overlay != "" {
+		return Plan{}, fmt.Errorf("generic command requires common Profile authority")
+	}
+	plan.requirements = TargetRequirements{Recipe: RecipeCommand}
+	return plan, nil
+}
 func (plan Plan) Requirements() TargetRequirements {
 	result := plan.requirements
 	result.RuntimeInputs = append([]string(nil), result.RuntimeInputs...)

@@ -20,6 +20,7 @@ import (
 	"github.com/alcimerio/ai-config-selector/internal/authority"
 	"github.com/alcimerio/ai-config-selector/internal/devinruntime"
 	"github.com/alcimerio/ai-config-selector/internal/launch"
+	"github.com/alcimerio/ai-config-selector/internal/runcommand"
 	"github.com/alcimerio/ai-config-selector/internal/session"
 	"github.com/alcimerio/ai-config-selector/internal/skills"
 )
@@ -51,6 +52,16 @@ type DevinRequest struct {
 	ExistingHomeDirectory string
 	ExpectedCatalog       []skills.SkillReference
 	ResolvedPlan          *authority.Plan
+}
+
+// CommandRequest contains one already-resolved literal command and the common
+// Profile authority under which the shared executor must run it.
+type CommandRequest struct {
+	SessionsDirectory string
+	WorkingDirectory  string
+	ResolvedPlan      *authority.Plan
+	Command           runcommand.Command
+	Terminal          launch.Terminal
 }
 
 func (request ShellRequest) resolvedInputs() (launch.WorkspaceAccess, session.Materializer) {
@@ -161,35 +172,108 @@ func (e *Executor) RunShell(ctx context.Context, request ShellRequest) (resultEr
 	if request.ResolvedPlan != nil && request.ResolvedPlan.Requirements().Recipe != authority.RecipeShell {
 		return errors.New("resolved authority does not select the shell execution recipe")
 	}
-	if err := e.sandbox.Check(ctx, launch.SandboxCheck{
-		Workspace: request.WorkingDirectory, WorkspaceAccess: workspaceAccess, SessionsDirectory: request.SessionsDirectory,
-		Executable: systemShell,
-	}); err != nil {
-		return err
+	resultErr, _ = e.runAttached(ctx, attachedRecipe{
+		sessionsDirectory: request.SessionsDirectory, workingDirectory: request.WorkingDirectory,
+		workspaceAccess: workspaceAccess, materializer: materializer,
+		executable: systemShell, arguments: []string{"-f"}, terminal: request.Terminal,
+	})
+	return resultErr
+}
+
+type attachedRecipe struct {
+	sessionsDirectory string
+	workingDirectory  string
+	workspaceAccess   launch.WorkspaceAccess
+	materializer      session.Materializer
+	executable        string
+	arguments         []string
+	command           *runcommand.Command
+	terminal          launch.Terminal
+}
+
+// runAttached is the one Session/process lifecycle for the fixed shell and an
+// explicit generic command. Command identity validation is declarative and
+// remains inside this shared lifecycle; there are no adapter callbacks.
+func (e *Executor) runAttached(ctx context.Context, recipe attachedRecipe) (resultErr error, cleanupFailed bool) {
+	executable, arguments := recipe.executable, append([]string(nil), recipe.arguments...)
+	if recipe.command != nil {
+		var err error
+		executable, arguments, err = recipe.command.Revalidate(recipe.workingDirectory)
+		if err != nil {
+			return err, false
+		}
 	}
-	created, err := session.Create(request.SessionsDirectory, request.WorkingDirectory, materializer)
+	if err := e.sandbox.Check(ctx, launch.SandboxCheck{Workspace: recipe.workingDirectory,
+		WorkspaceAccess: recipe.workspaceAccess, SessionsDirectory: recipe.sessionsDirectory,
+		Executable: executable}); err != nil {
+		return err, false
+	}
+	created, err := session.Create(recipe.sessionsDirectory, recipe.workingDirectory, recipe.materializer)
 	if err != nil {
-		return err
+		return err, false
 	}
 	defer func() {
 		if removeErr := created.Remove(); removeErr != nil {
 			resultErr = cleanupPrecedence(resultErr, removeErr)
+			cleanupFailed = true
 		}
 	}()
+	if recipe.command != nil {
+		executable, arguments, err = recipe.command.Revalidate(created.WorkingDirectory())
+		if err != nil {
+			return err, false
+		}
+	}
 	process, err := e.prepareRetainedProcess(ctx, created, launch.ProcessRequest{
-		Workspace: created.WorkingDirectory(), WorkspaceAccess: workspaceAccess, SessionsDirectory: created.SessionsDirectory(),
-		SessionDirectory: created.RootDirectory(), SessionHome: created.HomeDirectory(),
-		TemporaryDirectory: created.TemporaryDirectory(), Executable: systemShell,
-		Arguments: []string{"-f"}, Terminal: request.Terminal,
+		Workspace: created.WorkingDirectory(), WorkspaceAccess: recipe.workspaceAccess,
+		SessionsDirectory: created.SessionsDirectory(), SessionDirectory: created.RootDirectory(),
+		SessionHome: created.HomeDirectory(), TemporaryDirectory: created.TemporaryDirectory(),
+		Executable: executable, Arguments: arguments, Terminal: recipe.terminal,
 	})
 	if err != nil {
-		return err
+		return err, false
 	}
 	runErr, cleanupErr := settleRetainedProcess(process, retainedAttached, nil)
 	if cleanupErr != nil {
-		return cleanupPrecedence(runErr, cleanupErr)
+		return cleanupPrecedence(runErr, cleanupErr), true
 	}
-	return runErr
+	return runErr, false
+}
+
+// RunCommand executes one literal argv through the same mandatory Session,
+// sandbox, attachment, settlement, and cleanup lifecycle as fixed targets.
+func (e *Executor) RunCommand(ctx context.Context, request CommandRequest) (exitCode int, resultErr error) {
+	if e == nil || e.sandbox == nil {
+		return 1, errors.New("contained command executor is unavailable")
+	}
+	if request.ResolvedPlan == nil || request.ResolvedPlan.Requirements().Recipe != authority.RecipeCommand {
+		return 1, errors.New("resolved authority does not select the command execution recipe")
+	}
+	runErr, cleanupFailed := e.runAttached(ctx, attachedRecipe{
+		sessionsDirectory: request.SessionsDirectory, workingDirectory: request.WorkingDirectory,
+		workspaceAccess: request.ResolvedPlan.WorkspaceAccess(), materializer: *request.ResolvedPlan,
+		command: &request.Command, terminal: request.Terminal,
+	})
+	if cleanupFailed {
+		return 1, runErr
+	}
+	if ctx.Err() != nil {
+		return 130, context.Canceled
+	}
+	if runErr == nil {
+		return 0, nil
+	}
+	var exitError *exec.ExitError
+	if errors.As(runErr, &exitError) {
+		if status, ok := exitError.Sys().(syscall.WaitStatus); ok && status.Signaled() {
+			code := 128 + int(status.Signal())
+			return code, exitCodeError(code)
+		}
+		if code := exitError.ExitCode(); code >= 0 {
+			return code, exitCodeError(code)
+		}
+	}
+	return 1, runErr
 }
 
 // RunDevin performs the complete fixed Devin lifecycle. It captures signals

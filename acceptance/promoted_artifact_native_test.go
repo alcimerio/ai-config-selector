@@ -4,14 +4,17 @@ package acceptance_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"os"
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"syscall"
@@ -19,6 +22,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/x/term"
+	"github.com/creack/pty"
 )
 
 const (
@@ -35,6 +39,9 @@ const (
 // installed ACS candidate resolves it like a normal target executable; no test
 // hook, build tag, or environment variable is available to the candidate.
 func TestMain(m *testing.M) {
+	if runPromotedArtifactGenericHelper(os.Args[1:]) {
+		return
+	}
 	if runPromotedArtifactFakeDevin(os.Args[1:]) {
 		return
 	}
@@ -124,9 +131,278 @@ func TestPromotedArtifactNativeContainmentContract(t *testing.T) {
 	t.Run("readiness is native and sanitized", assertPromotedArtifactNativeReadiness)
 	t.Run("sandbox shell is credential-free contained and cleaned", assertPromotedArtifactSandboxShell)
 	t.Run("v3 common material and workspace modes are enforced", assertPromotedArtifactV3WorkspaceModes)
+	t.Run("generic literal command uses candidate containment", assertPromotedArtifactGenericRun)
 	t.Run("filesystem environment descriptors sockets IP preflight and descendants", assertPromotedArtifactNativeContainment)
 	t.Run("preflight failure is categorized without target details", assertPromotedArtifactNativePreflightFailureIsSafe)
 	t.Run("missing backend OR invalid policy cannot start a marker", assertPromotedArtifactMissingBackendFailsClosed)
+}
+
+type genericHelperObservation struct {
+	Arguments       []string `json:"arguments"`
+	Input           string   `json:"input"`
+	SafePath        bool     `json:"safePath"`
+	HostSecretGone  bool     `json:"hostSecretGone"`
+	HomeIsSynthetic bool     `json:"homeIsSynthetic"`
+	WorkspaceWrite  bool     `json:"workspaceWrite"`
+	ExternalRead    bool     `json:"externalRead"`
+	ExternalWrite   bool     `json:"externalWrite"`
+}
+
+func runPromotedArtifactGenericHelper(arguments []string) bool {
+	if len(arguments) == 0 || arguments[0] != "--acs-generic-command-helper" {
+		return false
+	}
+	if len(arguments) >= 2 {
+		switch arguments[1] {
+		case "--exit-23":
+			os.Exit(23)
+		case "--wait-signal":
+			signals := make(chan os.Signal, 1)
+			signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
+			_ = os.WriteFile("generic-signal-ready", []byte("ready\n"), 0o600)
+			<-signals
+			os.Exit(42)
+		case "--descendant-parent":
+			if len(arguments) < 3 {
+				os.Exit(96)
+			}
+			child := exec.Command(os.Args[0], "--acs-generic-command-helper", "--descendant-child", arguments[2])
+			child.Dir, child.Env = mustGetwd(), os.Environ()
+			if err := child.Start(); err != nil || !waitForFakeDevinMarker(arguments[2], 2*time.Second) {
+				os.Exit(95)
+			}
+			return true
+		case "--descendant-child":
+			if len(arguments) < 3 || os.WriteFile(arguments[2], []byte(strconv.Itoa(os.Getpid())), 0o600) != nil {
+				os.Exit(94)
+			}
+			select {}
+		case "--pty-resize":
+			if !term.IsTerminal(os.Stdin.Fd()) || !term.IsTerminal(os.Stdout.Fd()) || !term.IsTerminal(os.Stderr.Fd()) {
+				os.Exit(93)
+			}
+			signals := make(chan os.Signal, 1)
+			signal.Notify(signals, syscall.SIGWINCH)
+			_, _ = fmt.Fprintln(os.Stdout, "generic-pty-ready")
+			<-signals
+			width, height, err := term.GetSize(os.Stdin.Fd())
+			if err != nil {
+				os.Exit(92)
+			}
+			_, _ = fmt.Fprintf(os.Stdout, "generic-pty-size:%d:%d\n", width, height)
+			return true
+		}
+	}
+	if len(arguments) < 3 {
+		os.Exit(97)
+	}
+	input, _ := io.ReadAll(os.Stdin)
+	observation := genericHelperObservation{
+		Arguments: append([]string(nil), arguments[3:]...), Input: string(input),
+		SafePath:        os.Getenv("PATH") == "/usr/local/bin:/usr/bin:/bin",
+		HostSecretGone:  os.Getenv("ACS_GENERIC_HOST_SECRET") == "",
+		HomeIsSynthetic: strings.Contains(os.Getenv("HOME"), string(filepath.Separator)+"sessions"+string(filepath.Separator)),
+	}
+	observation.WorkspaceWrite = os.WriteFile("generic-workspace-write", []byte("ok\n"), 0o600) == nil
+	_, readErr := os.ReadFile(arguments[1])
+	observation.ExternalRead = readErr == nil
+	observation.ExternalWrite = os.WriteFile(arguments[2], []byte("bad\n"), 0o600) == nil
+	_ = json.NewEncoder(os.Stdout).Encode(observation)
+	_, _ = fmt.Fprintln(os.Stderr, "generic-stderr-ok")
+	return true
+}
+
+func assertPromotedArtifactGenericRun(t *testing.T) {
+	binary := promotedBinary(t)
+	helper, err := filepath.Abs(os.Args[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	home, path := prepareRuntimeHome(t)
+	sharedSkill := filepath.Join(home, ".agents", "skills", "delivery")
+	if err := os.MkdirAll(sharedSkill, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sharedSkill, "SKILL.md"), []byte("# delivery\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	writeSharedTargetProfile(t, home, "generic-readwrite", "read-write")
+	writeSharedTargetProfile(t, home, "generic-readonly", "read-only")
+	workspace := realTemporaryDirectory(t)
+	external := realTemporaryDirectory(t)
+	externalSecret := filepath.Join(external, "secret")
+	externalWrite := filepath.Join(external, "write")
+	if err := os.WriteFile(externalSecret, []byte("private\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	privateArgument := "private-argument-must-not-appear"
+	dryRun := exec.Command(binary, "run", "--dry-run", "--profile", "generic-readwrite", "--", helper, privateArgument)
+	dryRun.Dir = workspace
+	dryRun.Env = nativeCandidateEnvironment(home, path, map[string]string{"ACS_GENERIC_HOST_SECRET": "hidden"})
+	requireEnvironmentEntry(t, dryRun.Env, "ACS_GENERIC_HOST_SECRET=hidden")
+	dryOutput, err := dryRun.CombinedOutput()
+	if err != nil {
+		t.Fatalf("generic dry-run: %v; output=%s", err, dryOutput)
+	}
+	if bytes.Contains(dryOutput, []byte(helper)) || bytes.Contains(dryOutput, []byte(privateArgument)) {
+		t.Fatalf("generic dry-run leaked executable or argument: %s", dryOutput)
+	}
+	for _, marker := range []string{"literal child arguments: 1 (values hidden)", "implicit evaluation: none", "No Session or process was created."} {
+		if !bytes.Contains(dryOutput, []byte(marker)) {
+			t.Fatalf("generic dry-run omitted %q: %s", marker, dryOutput)
+		}
+	}
+	assertNoSessions(t, home)
+
+	command := exec.Command(binary, "run", "--profile", "generic-readwrite", "--", helper,
+		"--acs-generic-command-helper", externalSecret, externalWrite, "space value", "", "--", "*.go", "$HOME")
+	command.Dir = workspace
+	command.Env = nativeCandidateEnvironment(home, path, map[string]string{"ACS_GENERIC_HOST_SECRET": "hidden"})
+	requireEnvironmentEntry(t, command.Env, "ACS_GENERIC_HOST_SECRET=hidden")
+	command.Stdin = strings.NewReader("pipe-input")
+	var stdout, stderr bytes.Buffer
+	command.Stdout, command.Stderr = &stdout, &stderr
+	if err := command.Run(); err != nil {
+		t.Fatalf("generic run: %v; stderr=%s", err, stderr.String())
+	}
+	var observation genericHelperObservation
+	if err := json.Unmarshal(bytes.TrimSpace(stdout.Bytes()), &observation); err != nil {
+		t.Fatalf("decode observation: %v; output=%s", err, stdout.String())
+	}
+	wantArguments := []string{"space value", "", "--", "*.go", "$HOME"}
+	if !reflect.DeepEqual(observation.Arguments, wantArguments) || observation.Input != "pipe-input" ||
+		!observation.SafePath || !observation.HostSecretGone || !observation.HomeIsSynthetic ||
+		!observation.WorkspaceWrite || observation.ExternalRead || observation.ExternalWrite {
+		t.Fatalf("generic observation = %#v", observation)
+	}
+	if stderr.String() != "generic-stderr-ok\n" {
+		t.Fatalf("stderr = %q", stderr.String())
+	}
+	assertMarkerExists(t, filepath.Join(workspace, "generic-workspace-write"))
+	assertNoSessions(t, home)
+
+	readOnlyWorkspace := realTemporaryDirectory(t)
+	readOnly := exec.Command(binary, "run", "--profile", "generic-readonly", "--", helper,
+		"--acs-generic-command-helper", externalSecret, externalWrite)
+	readOnly.Dir, readOnly.Env = readOnlyWorkspace, nativeCandidateEnvironment(home, path, nil)
+	readOnlyOutput, err := readOnly.Output()
+	if err != nil {
+		t.Fatalf("read-only generic run: %v", err)
+	}
+	if err := json.Unmarshal(bytes.TrimSpace(readOnlyOutput), &observation); err != nil {
+		t.Fatal(err)
+	}
+	if observation.WorkspaceWrite {
+		t.Fatal("read-only generic command wrote to workspace")
+	}
+	assertNoSessions(t, home)
+
+	nonzero := exec.Command(binary, "run", "--profile", "generic-readwrite", "--", helper, "--acs-generic-command-helper", "--exit-23")
+	nonzero.Dir, nonzero.Env = workspace, nativeCandidateEnvironment(home, path, nil)
+	if err := nonzero.Run(); !exitStatusIs(err, 23) {
+		t.Fatalf("generic nonzero exit = %v, want 23", err)
+	}
+
+	signalCommand := exec.Command(binary, "run", "--profile", "generic-readwrite", "--", helper, "--acs-generic-command-helper", "--wait-signal")
+	signalCommand.Dir, signalCommand.Env = workspace, nativeCandidateEnvironment(home, path, nil)
+	if err := signalCommand.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if !waitForFakeDevinMarker(filepath.Join(workspace, "generic-signal-ready"), 2*time.Second) {
+		t.Fatal("generic signal helper did not become ready")
+	}
+	if err := signalCommand.Process.Signal(os.Interrupt); err != nil {
+		t.Fatal(err)
+	}
+	if err := waitForGenericCommand(signalCommand, 5*time.Second); !exitStatusIs(err, 42) {
+		t.Fatalf("generic forwarded signal exit = %v, want 42", err)
+	}
+
+	descendantPID := filepath.Join(workspace, "generic-descendant.pid")
+	descendantContext, cancelDescendant := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancelDescendant()
+	descendant := exec.CommandContext(descendantContext, binary, "run", "--profile", "generic-readwrite", "--", helper,
+		"--acs-generic-command-helper", "--descendant-parent", descendantPID)
+	descendant.Dir, descendant.Env = workspace, nativeCandidateEnvironment(home, path, nil)
+	if output, err := descendant.CombinedOutput(); err != nil {
+		t.Fatalf("generic descendant run: %v; output=%s", err, output)
+	}
+	pIDBytes, err := os.ReadFile(descendantPID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pID, err := strconv.Atoi(string(pIDBytes))
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) && !errors.Is(syscall.Kill(pID, 0), syscall.ESRCH) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err := syscall.Kill(pID, 0); !errors.Is(err, syscall.ESRCH) {
+		t.Fatalf("generic descendant %d survived settlement: %v", pID, err)
+	}
+
+	ptyCommand := exec.Command(binary, "run", "--profile", "generic-readwrite", "--", helper, "--acs-generic-command-helper", "--pty-resize")
+	ptyCommand.Dir, ptyCommand.Env = workspace, nativeCandidateEnvironment(home, path, nil)
+	terminal, err := pty.Start(ptyCommand)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer terminal.Close()
+	capture := &safeCapture{}
+	copyDone := make(chan struct{})
+	go func() {
+		defer close(copyDone)
+		buffer := make([]byte, 4096)
+		for {
+			count, readErr := terminal.Read(buffer)
+			if count > 0 {
+				capture.Write(buffer[:count])
+			}
+			if readErr != nil {
+				return
+			}
+		}
+	}()
+	waitForOutput(t, capture, "generic-pty-ready")
+	if err := pty.Setsize(terminal, &pty.Winsize{Rows: 31, Cols: 97}); err != nil {
+		t.Fatal(err)
+	}
+	if err := ptyCommand.Process.Signal(syscall.SIGWINCH); err != nil {
+		t.Fatal(err)
+	}
+	if err := waitForGenericCommand(ptyCommand, 5*time.Second); err != nil {
+		t.Fatalf("generic PTY run: %v; output=%s", err, capture.String())
+	}
+	_ = terminal.Close()
+	select {
+	case <-copyDone:
+	case <-time.After(time.Second):
+		t.Fatal("generic PTY output did not settle")
+	}
+	if !strings.Contains(capture.String(), "generic-pty-size:97:31") {
+		t.Fatalf("generic resize was not forwarded: %s", capture.String())
+	}
+	assertNoSessions(t, home)
+}
+
+func exitStatusIs(err error, status int) bool {
+	exitError, ok := err.(*exec.ExitError)
+	return ok && exitError.ExitCode() == status
+}
+
+func waitForGenericCommand(command *exec.Cmd, timeout time.Duration) error {
+	done := make(chan error, 1)
+	go func() { done <- command.Wait() }()
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(timeout):
+		_ = command.Process.Kill()
+		<-done
+		return errors.New("generic command did not exit before the acceptance timeout")
+	}
 }
 
 // TestPromotedArtifactSharedTargetConformance exercises the common Profile
@@ -1026,12 +1302,22 @@ func nativeCandidateEnvironment(home, path string, overrides map[string]string) 
 		}
 		environment = append(environment, entry)
 	}
-	for _, key := range []string{"HOME", "PATH", "TERM", "NO_COLOR", "ACS_NATIVE_CANDIDATE_SECRET"} {
+	for _, key := range []string{"HOME", "PATH", "TERM", "NO_COLOR", "ACS_NATIVE_CANDIDATE_SECRET", "ACS_GENERIC_HOST_SECRET"} {
 		if value, ok := values[key]; ok {
 			environment = append(environment, key+"="+value)
 		}
 	}
 	return environment
+}
+
+func requireEnvironmentEntry(t *testing.T, environment []string, want string) {
+	t.Helper()
+	for _, entry := range environment {
+		if entry == want {
+			return
+		}
+	}
+	t.Fatalf("parent environment does not contain %q", want)
 }
 
 func assertSafeCandidateFailure(t *testing.T, output []byte, category string, forbidden ...string) {

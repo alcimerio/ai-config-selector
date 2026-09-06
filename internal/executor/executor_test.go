@@ -45,10 +45,11 @@ func TestRunShellUsesOneResolvedPlanForCheckAndProcess(t *testing.T) {
 type fakeSandbox struct {
 	process              *fakeProcess
 	checkErr, prepareErr error
-	prepares             int
+	checks, prepares     int
 	request              launch.ProcessRequest
 	check                launch.SandboxCheck
 	inspect              func(launch.ProcessRequest) error
+	checkFn              func() error
 }
 
 type invalidPreparedProcessSandbox struct {
@@ -185,7 +186,11 @@ func (*fakeSandbox) Readiness(context.Context) (launch.SandboxReadiness, error) 
 	return launch.SandboxReadiness{}, nil
 }
 func (s *fakeSandbox) Check(_ context.Context, check launch.SandboxCheck) error {
+	s.checks++
 	s.check = check
+	if s.checkFn != nil {
+		return s.checkFn()
+	}
 	return s.checkErr
 }
 func (s *fakeSandbox) Prepare(_ context.Context, request launch.ProcessRequest) (launch.Process, error) {

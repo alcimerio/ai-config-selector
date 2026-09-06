@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"github.com/alcimerio/ai-config-selector/internal/codexauth"
 	"github.com/alcimerio/ai-config-selector/internal/profile"
+	"github.com/alcimerio/ai-config-selector/internal/runcommand"
 	"strings"
 )
 
@@ -32,6 +33,7 @@ var commands = []commandSpec{
 
 	{path: "doctor", syntax: "acs doctor [--target devin|sandbox|codex-auth] [--json]", description: "Inspect passive host and backend-file prerequisites. Optional targets check executable availability only.\nVersions, authentication and actual sandbox enforcement remain unchecked. No processes run or files change.\ncodex-auth describes named authentication workflows; use Codex dry-run to inspect a Profile launch plan.", example: "acs doctor\n  acs doctor --target devin --json", valueFlag: "--target", boolFlag: "--json", optionalValue: true},
 	{path: "profile validate", syntax: "acs profile validate NAME [--json]", description: "Validate stored Profile structure and selected Skill-source resolution without a launch plan.\nPlatform, backend, executables, authentication and runtime remain unchecked. No files change.", example: "acs profile validate backend-review\n  acs profile validate --json backend-review", boolFlag: "--json", nameOperand: true},
+	{path: "run", syntax: "acs run --profile <name> [--dry-run] -- COMMAND [ARG...]", description: "Run one literal argv with common Profile authority and the required native sandbox.\nNo shell, target overlay, credentials, or host PATH is inherited.", example: "acs run --profile backend-review -- /usr/bin/git status\n  acs run --dry-run --profile backend-review -- ./tool --flag", valueFlag: "--profile", boolFlag: "--dry-run"},
 	{path: "devin", syntax: "acs devin --profile <name> [--dry-run]", description: "Launch Devin with a saved Profile. --dry-run inspects the plan without creating a Session.\nUse create-profile to open the interactive Profile Builder.", example: "acs devin --profile backend-review --dry-run\n  acs devin --profile backend-review", valueFlag: "--profile", boolFlag: "--dry-run"},
 	{path: "devin create-profile", syntax: "acs devin create-profile --name <name>", description: "Create a new Profile using interactive stdin and stdout. Existing names are never overwritten.\nSelect Skills with Space/Enter; return with Left/Esc; choose Create Profile to save.\nCtrl+C cancels without saving (exit 130).", example: "acs devin create-profile --name backend-review", valueFlag: "--name"},
 	{path: "sandbox", syntax: "acs sandbox --profile <name> [--dry-run]", description: "Open /bin/zsh -f in the Profile sandbox without Devin credentials.\n--dry-run inspects the plan without creating a Session or starting a shell.", example: "acs sandbox --dry-run --profile backend-review\n  acs sandbox --profile backend-review", valueFlag: "--profile", boolFlag: "--dry-run"},
@@ -52,6 +54,7 @@ type invocation struct {
 	auxValue      string
 	operand       string
 	enabled, help bool
+	arguments     []string
 }
 
 func parseCommand(args []string) (inv invocation, problem string) {
@@ -71,6 +74,29 @@ func parseCommand(args []string) (inv invocation, problem string) {
 		}
 	}
 	args = args[consumed:]
+	if inv.command.path == "run" && !helpCommand {
+		boundary := -1
+		for index, argument := range args {
+			if argument == "--" {
+				boundary = index
+				break
+			}
+		}
+		hasHelp := false
+		for _, argument := range args {
+			hasHelp = hasHelp || argument == "--help"
+		}
+		if boundary < 0 && !hasHelp {
+			return inv, "missing required -- command boundary"
+		}
+		if boundary >= 0 {
+			inv.arguments = append([]string(nil), args[boundary+1:]...)
+			args = args[:boundary]
+			if err := runcommand.ValidateSyntax(inv.arguments); err != nil {
+				return inv, "invalid command after --"
+			}
+		}
+	}
 	seen := map[string]bool{}
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
@@ -137,6 +163,9 @@ func parseCommand(args []string) (inv invocation, problem string) {
 			return inv, "invalid Codex authentication reference"
 		}
 	}
+	if inv.command.path == "run" && profile.ValidateName(inv.value) != nil {
+		return inv, "invalid Profile name"
+	}
 	if isMutation(inv.command.path) {
 		if profile.ValidateName(inv.operand) != nil {
 			return inv, "invalid Profile name"
@@ -153,6 +182,13 @@ func parseCommand(args []string) (inv invocation, problem string) {
 	}
 
 	return inv, ""
+}
+
+// GenericRunRequested identifies the validated command path so main can avoid
+// assembling credential-backed targets for a generic run or dry-run.
+func GenericRunRequested(args []string) bool {
+	inv, problem := parseCommand(args)
+	return problem == "" && !inv.help && inv.command.path == "run"
 }
 
 // CodexDryRunRequested identifies the already syntax-validated early path used
@@ -214,7 +250,9 @@ func (app App) printHelp(command commandSpec) {
 		fmt.Fprintf(app.Output, "  %s  %s\n", command.boolFlag, map[string]string{"--dry-run": "Inspect without launching", "--device-auth": "Use device login", "--json": "Emit versioned JSON format 1"}[command.boolFlag])
 	}
 	fmt.Fprintln(app.Output, "  --help  Show this help without runtime access")
-	if command.nameOperand {
+	if command.path == "run" {
+		fmt.Fprintln(app.Output, "\nGrammar: --profile and --dry-run may be reordered before exactly one required -- boundary.\nEverything after that boundary is one literal child argv; a later -- belongs to the child.\nNo target pass-through, backend selection, sandbox bypass, or implicit shell is supported.")
+	} else if command.nameOperand {
 		fmt.Fprintln(app.Output, "\nGrammar: command words first, then exactly one NAME and flags in any order. Values use a separate token.\nEach flag may occur once. No extra operands, '=' syntax, '--' separator,\ntarget pass-through, backend selection, or sandbox bypass is supported.")
 	} else {
 		fmt.Fprintln(app.Output, "\nGrammar: command words first, then flags in any order. Values use a separate token.\nEach flag may occur once. No positional arguments, '=' syntax, '--' separator,\ntarget pass-through, backend selection, or sandbox bypass is supported.")
