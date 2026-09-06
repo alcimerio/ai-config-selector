@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/alcimerio/ai-config-selector/internal/category"
+	"github.com/alcimerio/ai-config-selector/internal/executor"
 	"github.com/alcimerio/ai-config-selector/internal/launch"
 )
 
@@ -18,10 +19,11 @@ func TestPlanLaunchReportsReadOnlySandboxReadinessWithoutPreparingADevinProcess(
 		Supported:    true,
 		Ready:        true,
 	}}
-	adapter, err := newAdapter(Config{BinaryPath: "devin", ExistingHomeDir: t.TempDir()}, sandbox)
+	adapter, err := newAdapter(Config{BinaryPath: "devin", ExistingHomeDir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("create adapter: %v", err)
 	}
+	adapter.executor = sandbox
 	plan, err := adapter.PlanLaunch(context.Background(), t.TempDir(), resolvedEmptyProfile(t, adapter))
 	if err != nil {
 		t.Fatalf("plan launch: %v", err)
@@ -61,10 +63,11 @@ func TestPlanLaunchReportsSafeUnavailableSandboxReadiness(t *testing.T) {
 		Supported:    true,
 		Failure:      &launch.SandboxError{Category: launch.SandboxBackendUnavailable},
 	}}
-	adapter, err := newAdapter(Config{BinaryPath: "devin", ExistingHomeDir: t.TempDir()}, sandbox)
+	adapter, err := newAdapter(Config{BinaryPath: "devin", ExistingHomeDir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("create adapter: %v", err)
 	}
+	adapter.executor = sandbox
 	plan, err := adapter.PlanLaunch(context.Background(), t.TempDir(), resolvedEmptyProfile(t, adapter))
 	if err != nil {
 		t.Fatalf("plan launch: %v", err)
@@ -171,4 +174,9 @@ func planSectionText(section launch.PlanSection) string {
 		items = append(items, item.Label)
 	}
 	return strings.Join(items, "\n")
+}
+
+func (sandbox *readinessSandbox) RunDevin(context.Context, executor.DevinRequest) (int, error) {
+	sandbox.prepareCalls++
+	return 1, errors.New("unexpected process execution")
 }

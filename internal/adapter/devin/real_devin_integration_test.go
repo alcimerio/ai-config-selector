@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/alcimerio/ai-config-selector/internal/adapter/devin"
+	"github.com/alcimerio/ai-config-selector/internal/executor"
 )
 
 func TestRealDevinPreflightPreservesExactGlobalCatalogAndExistingLogin(t *testing.T) {
@@ -26,68 +27,46 @@ func TestRealDevinPreflightPreservesExactGlobalCatalogAndExistingLogin(t *testin
 		t.Fatal("real-Devin contract could not resolve the existing home")
 	}
 
+	// Resolve only repository fixtures; never require fixture-named Skills in
+	// the maintainer's real home. The executor separately projects the existing
+	// allowlisted credential for the explicitly authorized native probe.
+	fixtureHome := t.TempDir()
+	for _, relative := range []string{
+		filepath.Join(".config", "devin", "skills", "acs-selected-devin"),
+		filepath.Join(".agents", "skills", "acs-selected-agents"),
+	} {
+		if err := os.CopyFS(filepath.Join(fixtureHome, relative), os.DirFS(filepath.Join("testdata", "selected-skill"))); err != nil {
+			t.Fatal("real-Devin contract could not prepare fixture Skills")
+		}
+	}
 	adapter, err := devin.New(devin.Config{
 		BinaryPath:      binary,
-		ExistingHomeDir: existingHome,
+		ExistingHomeDir: fixtureHome,
 	})
 	if err != nil {
 		t.Fatal("real-Devin contract could not create the Adapter")
 	}
 
-	session, err := adapter.PrepareSession(t.TempDir(), t.TempDir(), []devin.SkillBundle{
+	resolved, err := adapter.Categories().Resolve(context.Background(), devin.NewSkillsProfile("authenticated-smoke", []devin.SkillReference{
 		{
-			Reference: devin.SkillReference{
-				Source:       devin.GlobalSourceDevinConfig,
-				RelativePath: "acs-selected-devin",
-			},
-			BundlePath: filepath.Join("testdata", "selected-skill"),
+			Source:       devin.GlobalSourceDevinConfig,
+			RelativePath: "acs-selected-devin",
 		},
 		{
-			Reference: devin.SkillReference{
-				Source:       devin.GlobalSourceSharedAgents,
-				RelativePath: "acs-selected-agents",
-			},
-			BundlePath: filepath.Join("testdata", "selected-skill"),
+			Source:       devin.GlobalSourceSharedAgents,
+			RelativePath: "acs-selected-agents",
 		},
-	})
+	}))
 	if err != nil {
-		t.Fatal("real-Devin contract could not prepare the synthetic Session")
+		t.Fatal("real-Devin contract could not resolve the selected Skills")
 	}
-
-	assertPreparationCopiedOnlyAllowlistedState(t, session.HomeDir)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	if err := adapter.Preflight(ctx, session); err != nil {
-		t.Fatalf("real-Devin Adapter Preflight: %v", err)
-	}
-}
-
-func assertPreparationCopiedOnlyAllowlistedState(t *testing.T, sessionHome string) {
-	t.Helper()
-
-	required := []string{
-		filepath.Join(sessionHome, ".config", "devin", "skills", "acs-selected-devin", "SKILL.md"),
-		filepath.Join(sessionHome, ".config", "devin", "skills", "acs-selected-devin", "references", "proof.txt"),
-		filepath.Join(sessionHome, ".agents", "skills", "acs-selected-agents", "SKILL.md"),
-		filepath.Join(sessionHome, ".agents", "skills", "acs-selected-agents", "references", "proof.txt"),
-		filepath.Join(sessionHome, ".local", "share", "devin", "credentials.toml"),
-	}
-	for _, path := range required {
-		if _, err := os.Stat(path); err != nil {
-			t.Errorf("required Session file %q: %v", path, err)
-		}
-	}
-
-	forbidden := []string{
-		filepath.Join(sessionHome, ".config", "devin", "config.json"),
-		filepath.Join(sessionHome, ".config", "devin", "mcp_config.json"),
-		filepath.Join(sessionHome, ".config", "devin", "hooks"),
-		filepath.Join(sessionHome, ".config", "devin", "AGENTS.md"),
-	}
-	for _, path := range forbidden {
-		if _, err := os.Lstat(path); !os.IsNotExist(err) {
-			t.Errorf("unrestricted Devin state was copied to %q", path)
-		}
+	if err := executor.New().VerifyDevin(ctx, executor.DevinRequest{
+		SessionsDirectory: t.TempDir(), WorkingDirectory: t.TempDir(), Materializer: resolved,
+		Executable: binary, ExistingHomeDirectory: existingHome, ExpectedCatalog: resolved.DevinExpectedCatalog(),
+	}); err != nil {
+		t.Fatalf("real-Devin protected preflight: %v", err)
 	}
 }

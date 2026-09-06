@@ -2,17 +2,14 @@ package devin
 
 import (
 	"context"
-	"encoding/json"
-	"errors"
+	"github.com/alcimerio/ai-config-selector/internal/launch"
+	"github.com/alcimerio/ai-config-selector/internal/skills"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strconv"
 	"strings"
 	"testing"
-
-	"github.com/alcimerio/ai-config-selector/internal/launch"
-	"github.com/alcimerio/ai-config-selector/internal/skills"
 )
 
 func TestDiscoverGlobalSkillCatalogKeepsSourceIdentityForDuplicateNames(t *testing.T) {
@@ -96,286 +93,8 @@ func TestSandboxAssemblyHasNoCrossPackageBypass(t *testing.T) {
 	}
 }
 
-func TestPreflightAcceptsCanonicalManagedSkillPathsFromAliasedSession(t *testing.T) {
-	fixture := newFakeDevinFixture(t, nil, "Logged in (via Devin).", 0)
-	realSessionsDirectory := filepath.Join(fixture.testRoot, "real-sessions")
-	aliasSessionsDirectory := filepath.Join(fixture.testRoot, "sessions-alias")
-	if err := os.MkdirAll(filepath.Join(realSessionsDirectory, "session", "home"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Symlink(realSessionsDirectory, aliasSessionsDirectory); err != nil {
-		t.Fatal(err)
-	}
-	fixture.sessionRoot = filepath.Join(aliasSessionsDirectory, "session")
-
-	canonicalHome, err := filepath.EvalSymlinks(filepath.Join(fixture.sessionRoot, "home"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	fixture.skills = []fakeObservedSkill{{
-		Name:     "acs-selected-fixture",
-		Provider: "Devin",
-		BaseDir:  filepath.Join(canonicalHome, ".config", "devin", "skills", "acs-selected-fixture"),
-	}}
-
-	adapter, session := fixture.prepare(t)
-	if session.HomeDir == canonicalHome {
-		t.Fatal("PrepareSession unexpectedly canonicalized the aliased session home")
-	}
-	if err := adapter.Preflight(context.Background(), session); err != nil {
-		t.Fatalf("Preflight rejected canonical managed skill path from aliased Session: %v", err)
-	}
-}
-
-func TestPreflightRejectsManagedSourceRootSymlinkEscape(t *testing.T) {
-	fixture := newFakeDevinFixture(t, nil, "Logged in (via Devin).", 0)
-	externalRoot := filepath.Join(t.TempDir(), "external-skills")
-	externalBundle := filepath.Join(externalRoot, "acs-selected-fixture")
-	if err := os.MkdirAll(externalBundle, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	canonicalExternalBundle, err := filepath.EvalSymlinks(externalBundle)
-	if err != nil {
-		t.Fatal(err)
-	}
-	fixture.skills = []fakeObservedSkill{{
-		Name:     "acs-selected-fixture",
-		Provider: "Devin",
-		BaseDir:  canonicalExternalBundle,
-	}}
-
-	adapter, session := fixture.prepare(t)
-	managedRoot := filepath.Join(session.HomeDir, ".config", "devin", "skills")
-	movedRoot := filepath.Join(fixture.testRoot, "moved-managed-root")
-	if err := os.Rename(managedRoot, movedRoot); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Symlink(externalRoot, managedRoot); err != nil {
-		t.Fatal(err)
-	}
-
-	err = adapter.Preflight(context.Background(), session)
-	if err == nil {
-		t.Fatal("Preflight accepted a managed source root symlink escape")
-	}
-	if strings.Contains(err.Error(), externalRoot) {
-		t.Fatalf("Preflight exposed the escaped source root: %q", err)
-	}
-}
-
-func TestPreflightRejectsSelectedBundleSymlinkEscape(t *testing.T) {
-	fixture := newFakeDevinFixture(t, nil, "Logged in (via Devin).", 0)
-	selectedBundle := filepath.Join(plannedSessionHome(t), ".config", "devin", "skills", "acs-selected-fixture")
-	fixture.skills = []fakeObservedSkill{{
-		Name:     "acs-selected-fixture",
-		Provider: "Devin",
-		BaseDir:  selectedBundle,
-	}}
-	externalBundle := filepath.Join(t.TempDir(), "external-selected-bundle")
-	if err := os.MkdirAll(externalBundle, 0o700); err != nil {
-		t.Fatal(err)
-	}
-
-	adapter, session := fixture.prepare(t)
-	managedRoot := filepath.Join(session.HomeDir, ".config", "devin", "skills")
-	rootInfo, err := os.Lstat(managedRoot)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !rootInfo.IsDir() || rootInfo.Mode()&os.ModeSymlink != 0 {
-		t.Fatal("managed source root is not a regular directory")
-	}
-	movedBundle := filepath.Join(fixture.testRoot, "moved-selected-bundle")
-	if err := os.Rename(selectedBundle, movedBundle); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Symlink(externalBundle, selectedBundle); err != nil {
-		t.Fatal(err)
-	}
-
-	err = adapter.Preflight(context.Background(), session)
-	if err == nil {
-		t.Fatal("Preflight accepted a selected bundle symlink escape")
-	}
-	for _, sensitivePath := range []string{externalBundle, selectedBundle} {
-		if strings.Contains(err.Error(), sensitivePath) {
-			t.Fatalf("Preflight exposed a managed bundle path: %q", err)
-		}
-	}
-}
-
-func TestPreflightReportsSanitizedCatalogMismatch(t *testing.T) {
-	fixture := newFakeDevinFixture(t, []fakeObservedSkill{{
-		Name:     "token=SUPER_SECRET_STDOUT",
-		Provider: "Devin",
-		BaseDir:  filepath.Join(plannedSessionHome(t), ".config", "devin", "skills", "SUPER_SECRET_PATH"),
-	}}, "Logged in (via Devin).", 0)
-	fixture.skillsStderr = "credential=SUPER_SECRET_CATALOG_OUTPUT"
-
-	adapter, session := fixture.prepare(t)
-	err := adapter.Preflight(context.Background(), session)
-	if err == nil {
-		t.Fatal("Preflight succeeded with the wrong global Skill Catalog")
-	}
-
-	var preflightError *PreflightError
-	if !errors.As(err, &preflightError) {
-		t.Fatalf("Preflight error type = %T, want *PreflightError", err)
-	}
-	if preflightError.Capability != CapabilitySkillIsolation {
-		t.Errorf("failed capability = %q, want %q", preflightError.Capability, CapabilitySkillIsolation)
-	}
-	diagnostic := err.Error()
-	for _, required := range []string{"skill isolation", "incompatible"} {
-		if !strings.Contains(diagnostic, required) {
-			t.Errorf("diagnostic %q does not contain actionable detail %q", diagnostic, required)
-		}
-	}
-	for _, sensitive := range []string{"SUPER_SECRET_CATALOG_OUTPUT", "SUPER_SECRET_STDOUT", "SUPER_SECRET_PATH", "acs-selected-fixture"} {
-		if strings.Contains(diagnostic, sensitive) {
-			t.Errorf("diagnostic leaked catalog data: %q", diagnostic)
-		}
-	}
-}
-
-func TestPreflightPreservesStableSandboxFailureCategory(t *testing.T) {
-	adapter, err := newAdapter(Config{
-		BinaryPath: "devin", ExistingHomeDir: t.TempDir(),
-	}, setupFailureSandbox{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	workingDirectory := t.TempDir()
-	session, err := adapter.PrepareSession(filepath.Join(t.TempDir(), "session"), workingDirectory, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	err = adapter.Preflight(context.Background(), session)
-	var sandboxFailure *launch.SandboxError
-	if !errors.As(err, &sandboxFailure) {
-		t.Fatalf("Preflight error type = %T, want *launch.SandboxError: %v", err, err)
-	}
-	if sandboxFailure.Category != launch.SandboxSetupFailed {
-		t.Fatalf("sandbox category = %q, want %q", sandboxFailure.Category, launch.SandboxSetupFailed)
-	}
-}
-
-func TestPreflightSanitizesManagedSkillIdentities(t *testing.T) {
-	fixture := newFakeDevinFixture(t, nil, "Logged in (via Devin).", 0)
-	fixture.selectedRelativePath = "acs-selected\n\x1b[31mforged"
-
-	adapter, session := fixture.prepare(t)
-	err := adapter.Preflight(context.Background(), session)
-	if err == nil {
-		t.Fatal("Preflight succeeded with a missing selected Skill Bundle")
-	}
-	if strings.ContainsAny(err.Error(), "\n\r\x1b") {
-		t.Fatalf("diagnostic contains terminal control characters: %q", err.Error())
-	}
-}
-
-func TestPreflightDoesNotExposeManagedCatalogIdentities(t *testing.T) {
-	fixture := newFakeDevinFixture(t, []fakeObservedSkill{{
-		Name:     "café",
-		Provider: "Devin",
-		BaseDir:  filepath.Join(plannedSessionHome(t), ".config", "devin", "skills", "café"),
-	}}, "Logged in (via Devin).", 0)
-	fixture.selectedRelativePath = "caf"
-
-	adapter, session := fixture.prepare(t)
-	err := adapter.Preflight(context.Background(), session)
-	if err == nil {
-		t.Fatal("Preflight succeeded with different managed Skill References")
-	}
-	diagnostic := err.Error()
-	for _, identity := range []string{"caf", "café", `caf\u00e9`} {
-		if strings.Contains(diagnostic, identity) {
-			t.Fatalf("diagnostic exposed a managed catalog identity: %q", diagnostic)
-		}
-	}
-}
-
-func TestPreflightReportsMissingExecutableInsteadOfSuggestingLoginOrCommandSupport(t *testing.T) {
-	fixture := newFakeDevinFixture(t, nil, "", 0)
-	adapter, session := fixture.prepare(t)
-	if err := os.Remove(filepath.Join(fixture.testRoot, "fake-devin")); err != nil {
-		t.Fatal(err)
-	}
-
-	err := adapter.Preflight(context.Background(), session)
-	if err == nil {
-		t.Fatal("Preflight succeeded without a Devin executable")
-	}
-	diagnostic := err.Error()
-	if !strings.Contains(diagnostic, "executable") || !strings.Contains(diagnostic, "installed") {
-		t.Fatalf("missing-executable diagnostic is not actionable: %q", diagnostic)
-	}
-	if strings.Contains(diagnostic, "auth login") || strings.Contains(diagnostic, "supports `devin skills") {
-		t.Fatalf("missing-executable diagnostic suggests the wrong remedy: %q", diagnostic)
-	}
-}
-
-func TestPreflightReportsSanitizedUnavailableAuthentication(t *testing.T) {
-	fixture := newFakeDevinFixture(t, []fakeObservedSkill{{
-		Name:     "acs-selected-fixture",
-		Provider: "Devin",
-		BaseDir:  filepath.Join(plannedSessionHome(t), ".config", "devin", "skills", "acs-selected-fixture"),
-	}}, "Not logged in. account=PRIVATE_ACCOUNT token=SUPER_SECRET", 0)
-
-	adapter, session := fixture.prepare(t)
-	err := adapter.Preflight(context.Background(), session)
-	if err == nil {
-		t.Fatal("Preflight succeeded without usable authentication")
-	}
-
-	var preflightError *PreflightError
-	if !errors.As(err, &preflightError) {
-		t.Fatalf("Preflight error type = %T, want *PreflightError", err)
-	}
-	if preflightError.Capability != CapabilityAuthentication {
-		t.Errorf("failed capability = %q, want %q", preflightError.Capability, CapabilityAuthentication)
-	}
-	diagnostic := err.Error()
-	if !strings.Contains(diagnostic, "devin auth login") {
-		t.Errorf("diagnostic is not actionable: %q", diagnostic)
-	}
-	for _, privateValue := range []string{"PRIVATE_ACCOUNT", "SUPER_SECRET"} {
-		if strings.Contains(diagnostic, privateValue) {
-			t.Errorf("diagnostic leaked authentication output: %q", diagnostic)
-		}
-	}
-}
-
-func TestPreflightExcludesProjectLocalSkillsFromManagedGlobalCatalog(t *testing.T) {
-	projectBundle := filepath.Join(plannedWorkingDirectory(t), ".agents", "skills", "project-local")
-	if err := os.MkdirAll(projectBundle, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(projectBundle, "SKILL.md"), []byte("# project local\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	fixture := newFakeDevinFixture(t, []fakeObservedSkill{
-		{
-			Name:     "acs-selected-fixture",
-			Provider: "Devin",
-			BaseDir:  filepath.Join(plannedSessionHome(t), ".config", "devin", "skills", "acs-selected-fixture"),
-		},
-		{
-			Name:     "project-local",
-			Provider: "Devin",
-			BaseDir:  projectBundle,
-		},
-	}, "Logged in (via Devin).", 0)
-
-	adapter, session := fixture.prepare(t)
-	if err := adapter.Preflight(context.Background(), session); err != nil {
-		t.Fatalf("project-local skill changed the managed global catalog: %v", err)
-	}
-}
-
 func TestPrepareSessionCopiesOnlySelectedBundlesAndCredentialAllowlist(t *testing.T) {
-	fixture := newFakeDevinFixture(t, nil, "", 0)
+	fixture := newPreparationFixture(t)
 	if err := os.MkdirAll(filepath.Join(fixture.existingHome, ".config", "devin", "hooks"), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -488,141 +207,32 @@ func TestSourceRulesSeparateGlobalAndProjectLocalSkills(t *testing.T) {
 	}
 }
 
-type fakeObservedSkill struct {
-	Name     string `json:"name"`
-	Provider string `json:"provider"`
-	BaseDir  string `json:"base_dir"`
-}
+type preparationFixture struct{ existingHome string }
 
-type setupFailureSandbox struct{}
-
-func (setupFailureSandbox) Readiness(context.Context) (launch.SandboxReadiness, error) {
-	return launch.SandboxReadiness{RequiredMode: "native", Backend: "test", Platform: "test platform", Supported: true, Ready: true}, nil
-}
-
-func (setupFailureSandbox) Check(context.Context, launch.SandboxCheck) error { return nil }
-func (setupFailureSandbox) Prepare(context.Context, launch.ProcessRequest) (launch.Process, error) {
-	return nil, &launch.SandboxError{Category: launch.SandboxSetupFailed}
-}
-
-type fakeDevinFixture struct {
-	testRoot             string
-	existingHome         string
-	skills               []fakeObservedSkill
-	skillsStderr         string
-	authOutput           string
-	authExitStatus       int
-	selectedRelativePath string
-	sessionRoot          string
-}
-
-func newFakeDevinFixture(t *testing.T, skills []fakeObservedSkill, authOutput string, authExitStatus int) *fakeDevinFixture {
+func newPreparationFixture(t *testing.T) preparationFixture {
 	t.Helper()
-	root := testRootPath(t)
-	existingHome := filepath.Join(root, "existing-home")
-	credentialPath := filepath.Join(existingHome, ".local", "share", "devin", "credentials.toml")
-	if err := os.MkdirAll(filepath.Dir(credentialPath), 0o700); err != nil {
+	home := t.TempDir()
+	path := filepath.Join(home, ".local", "share", "devin", "credentials.toml")
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(credentialPath, []byte("fixture-credential"), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte("fixture-credential"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	return &fakeDevinFixture{
-		testRoot:             root,
-		existingHome:         existingHome,
-		skills:               skills,
-		authOutput:           authOutput,
-		authExitStatus:       authExitStatus,
-		selectedRelativePath: "acs-selected-fixture",
-	}
+	return preparationFixture{existingHome: home}
 }
-
-func (fixture *fakeDevinFixture) prepare(t *testing.T) (*Adapter, *Session) {
+func (fixture preparationFixture) prepare(t *testing.T) (*Adapter, *Session) {
 	t.Helper()
-	binaryPath := filepath.Join(fixture.testRoot, "fake-devin")
-	skillsJSONPath := filepath.Join(fixture.testRoot, "skills.json")
-	authOutputPath := filepath.Join(fixture.testRoot, "auth.txt")
-	stderrPath := filepath.Join(fixture.testRoot, "skills-stderr.txt")
-
-	skillsJSON, err := json.Marshal(fixture.skills)
+	adapter, err := New(Config{BinaryPath: "devin", ExistingHomeDir: fixture.existingHome})
 	if err != nil {
 		t.Fatal(err)
 	}
-	for path, content := range map[string][]byte{
-		skillsJSONPath: skillsJSON,
-		authOutputPath: []byte(fixture.authOutput),
-		stderrPath:     []byte(fixture.skillsStderr),
-	} {
-		if err := os.WriteFile(path, content, 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	script := `#!/bin/sh
-if [ "$1" = "skills" ]; then
-  cat "$FAKE_DEVIN_SKILLS_JSON"
-  cat "$FAKE_DEVIN_SKILLS_STDERR" >&2
-  exit 0
-fi
-if [ "$1" = "auth" ]; then
-  cat "$FAKE_DEVIN_AUTH_OUTPUT"
-  exit "$FAKE_DEVIN_AUTH_EXIT"
-fi
-exit 64
-`
-	if err := os.WriteFile(binaryPath, []byte(script), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("FAKE_DEVIN_SKILLS_JSON", skillsJSONPath)
-	t.Setenv("FAKE_DEVIN_SKILLS_STDERR", stderrPath)
-	t.Setenv("FAKE_DEVIN_AUTH_OUTPUT", authOutputPath)
-	t.Setenv("FAKE_DEVIN_AUTH_EXIT", strconv.Itoa(fixture.authExitStatus))
-
-	adapter, err := newAdapter(Config{BinaryPath: binaryPath, ExistingHomeDir: fixture.existingHome}, directSandbox{})
+	prepared, err := adapter.PrepareSession(t.TempDir(), t.TempDir(), []SkillBundle{{
+		Reference:  SkillReference{Source: GlobalSourceDevinConfig, RelativePath: "acs-selected-fixture"},
+		BundlePath: filepath.Join("testdata", "selected-skill"),
+	}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	sessionRoot := fixture.sessionRoot
-	if sessionRoot == "" {
-		sessionRoot = filepath.Join(fixture.testRoot, "session")
-	}
-	session, err := adapter.PrepareSession(
-		sessionRoot,
-		plannedWorkingDirectory(t),
-		[]SkillBundle{{
-			Reference: SkillReference{
-				Source:       GlobalSourceDevinConfig,
-				RelativePath: fixture.selectedRelativePath,
-			},
-			BundlePath: filepath.Join("testdata", "selected-skill"),
-		}},
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return adapter, session
-}
-
-func plannedSessionHome(t *testing.T) string {
-	t.Helper()
-	return filepath.Join(testRootPath(t), "session", "home")
-}
-
-func plannedWorkingDirectory(t *testing.T) string {
-	t.Helper()
-	path := filepath.Join(testRootPath(t), "work")
-	if err := os.MkdirAll(path, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	return path
-}
-
-func testRootPath(t *testing.T) string {
-	t.Helper()
-	if value := os.Getenv("ACS_TEST_ROOT_" + strings.ReplaceAll(t.Name(), "/", "_")); value != "" {
-		return value
-	}
-	value := filepath.Join(t.TempDir(), "fixture")
-	t.Setenv("ACS_TEST_ROOT_"+strings.ReplaceAll(t.Name(), "/", "_"), value)
-	return value
+	return adapter, prepared
 }

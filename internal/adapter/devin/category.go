@@ -12,6 +12,7 @@ import (
 	"sort"
 
 	"github.com/alcimerio/ai-config-selector/internal/category"
+	"github.com/alcimerio/ai-config-selector/internal/devinruntime"
 	"github.com/alcimerio/ai-config-selector/internal/launch"
 	"github.com/alcimerio/ai-config-selector/internal/profile"
 	"github.com/alcimerio/ai-config-selector/internal/skills"
@@ -79,7 +80,7 @@ func newCategoryRegistry(adapter *Adapter) (*category.Registry, category.Binding
 				}
 				expected = append(expected, reference)
 			}
-			sortSkillReferences(expected)
+			devinruntime.SortSkillReferences(expected)
 			return skillsContribution{adapter: adapter, selected: selected, expected: expected}, nil
 		},
 		Count: func(references []skills.SkillReference) int { return len(references) },
@@ -170,7 +171,7 @@ func (contribution skillsContribution) Plan(ctx context.Context, _ string, plan 
 }
 
 func (contribution skillsContribution) Materialize(sessionHome string) error {
-	for _, rule := range globalSourceRules {
+	for _, rule := range devinruntime.GlobalSourceRules() {
 		if err := os.MkdirAll(filepath.Join(sessionHome, rule.RelativeDirectory), 0o700); err != nil {
 			return fmt.Errorf("prepare Devin Session global source %q: %w", rule.Source, err)
 		}
@@ -193,13 +194,12 @@ func (contribution skillsContribution) Materialize(sessionHome string) error {
 }
 
 func (contribution skillsContribution) Verify(ctx context.Context, verification launch.VerificationContext) error {
-	return contribution.adapter.verifySkillIsolation(ctx, &Session{
-		RootDir:          verification.SessionDirectory,
-		HomeDir:          verification.SessionHome,
-		TemporaryDir:     verification.TemporaryDirectory,
-		SessionsDir:      verification.SessionsDirectory,
-		WorkingDirectory: verification.WorkingDirectory,
-		expectedCatalog:  contribution.expected,
-		retainProcess:    verification.RetainProcess,
-	})
+	// Process execution belongs to executor.RunDevin. Keeping verification
+	// declarative here prevents a category from retaining a process or changing
+	// probe order after the Session is materialized.
+	return nil
+}
+
+func (contribution skillsContribution) DevinExpectedCatalog() []skills.SkillReference {
+	return append([]skills.SkillReference(nil), contribution.expected...)
 }

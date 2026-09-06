@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 
 	"github.com/alcimerio/ai-config-selector/internal/category"
+	"github.com/alcimerio/ai-config-selector/internal/devinruntime"
 	"github.com/alcimerio/ai-config-selector/internal/launch"
 	"github.com/alcimerio/ai-config-selector/internal/skills"
 )
@@ -21,7 +22,7 @@ func (a *Adapter) PlanLaunch(ctx context.Context, workingDirectory string, resol
 	if err := a.planProjectSkills(ctx, workingDirectory, &plan); err != nil {
 		return launch.Plan{}, err
 	}
-	readiness, err := a.sandbox.Readiness(ctx)
+	readiness, err := a.executor.Readiness(ctx)
 	if err != nil {
 		return launch.Plan{}, fmt.Errorf("inspect required process sandbox readiness: %w", err)
 	}
@@ -82,7 +83,7 @@ func (a *Adapter) planProjectSkills(ctx context.Context, workingDirectory string
 	projectSection := launch.PlanSection{
 		Title: "Project-local Skill Bundles inherited by Devin (not managed by ACS):",
 	}
-	for _, relativeRoot := range projectSourceDirectories {
+	for _, relativeRoot := range devinruntime.ProjectSourceDirectories() {
 		root := filepath.Join(workingDirectory, relativeRoot)
 		entries, err := os.ReadDir(root)
 		if os.IsNotExist(err) {

@@ -1,0 +1,1010 @@
+package executor
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"reflect"
+	"strconv"
+	"strings"
+	"sync"
+	"syscall"
+	"testing"
+	"time"
+
+	"github.com/alcimerio/ai-config-selector/internal/devinruntime"
+	"github.com/alcimerio/ai-config-selector/internal/launch"
+	"github.com/alcimerio/ai-config-selector/internal/session"
+	"github.com/alcimerio/ai-config-selector/internal/skills"
+)
+
+func TestLaunchRunsPreflightBeforeInteractiveDevinAndCleansUpSession(t *testing.T) {
+	fixture := newLaunchTestFixture(t)
+	recorder := &recordingSandbox{delegate: directSandbox{}}
+	fixture.sandbox = recorder
+	workingDirectory := t.TempDir()
+
+	eventsPath := filepath.Join(t.TempDir(), "events")
+	t.Setenv("FAKE_DEVIN_EVENTS", eventsPath)
+	script := `#!/bin/sh
+if [ "$1" = "skills" ]; then
+  printf 'preflight-skills\n' >> "$FAKE_DEVIN_EVENTS"
+  printf '[{"name":"review","provider":"Devin","base_dir":"%s"}]\n' "$HOME/.config/devin/skills/review"
+  exit 0
+fi
+if [ "$1" = "auth" ]; then
+  printf 'preflight-auth\n' >> "$FAKE_DEVIN_EVENTS"
+  printf 'Logged in (via fixture).\n'
+  exit 0
+fi
+printf 'launch-args=%s:%s\n' "$#" "$*" >> "$FAKE_DEVIN_EVENTS"
+IFS= read -r line
+printf 'stdout:%s\n' "$line"
+printf 'stderr:%s\n' "$line" >&2
+exit 23
+`
+	binaryPath := writeFakeDevin(t, script)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	application := fixture.application(t, binaryPath, workingDirectory, strings.NewReader("terminal input\n"), &stdout, &stderr)
+
+	exitCode := application.Run(context.Background(), []string{"devin", "--profile", "reviews"})
+	if exitCode != 23 {
+		t.Fatalf("exit code = %d, want child exit code 23; stderr: %s", exitCode, stderr.String())
+	}
+	if stdout.String() != "stdout:terminal input\n" {
+		t.Fatalf("Devin stdout = %q, want attached terminal output", stdout.String())
+	}
+	if stderr.String() != "stderr:terminal input\n" {
+		t.Fatalf("Devin stderr = %q, want attached terminal error output", stderr.String())
+	}
+	events, err := os.ReadFile(eventsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := string(events), "preflight-skills\npreflight-auth\nlaunch-args=2:--respect-workspace-trust false\n"; got != want {
+		t.Fatalf("Devin events = %q, want %q", got, want)
+	}
+	if got, want := recorder.arguments, [][]string{{"skills", "list", "--json"}, {"auth", "status"}, {"--respect-workspace-trust", "false"}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("sandbox process arguments = %#v, want %#v", got, want)
+	}
+	entries, err := os.ReadDir(fixture.sessionsDirectory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("launch left Session data behind: %v", entries)
+	}
+}
+
+func TestLaunchCleanupFailureSupersedesTargetExitAndRedactsSession(t *testing.T) {
+	fixture := newLaunchTestFixture(t)
+	sessionRootPath := filepath.Join(t.TempDir(), "session-root")
+	t.Setenv("FAKE_DEVIN_SESSION_ROOT", sessionRootPath)
+	var stderr bytes.Buffer
+	application := fixture.application(
+		t,
+		writeFakeDevin(t, successfulDevinScript(`mkdir "$HOME/cleanup-block"
+printf 'SUPER_SECRET_SESSION_CONTENT\n' > "$HOME/cleanup-block/credential"
+chmod 500 "$HOME/cleanup-block"
+printf '%s\n' "${HOME%/home}" > "$FAKE_DEVIN_SESSION_ROOT"
+exit 23
+`)),
+		t.TempDir(),
+		strings.NewReader(""),
+		&bytes.Buffer{},
+		&stderr,
+	)
+
+	exitCode := application.Run(context.Background(), []string{"devin", "--profile", "reviews"})
+	sessionRootBytes, err := os.ReadFile(sessionRootPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionRoot := strings.TrimSpace(string(sessionRootBytes))
+	t.Cleanup(func() {
+		_ = os.Chmod(filepath.Join(sessionRoot, "home", "cleanup-block"), 0o700)
+		_ = os.RemoveAll(sessionRoot)
+	})
+	if _, err := os.Stat(sessionRoot); err != nil {
+		t.Fatalf("cleanup failure did not leave the Session available for recovery: %v", err)
+	}
+	if exitCode != 1 {
+		t.Fatalf("exit code = %d, want cleanup failure 1; stderr: %s", exitCode, stderr.String())
+	}
+	// The facade maps this private cleanup failure to SandboxSetupFailed.
+	// Here the actual lifecycle must report failure and suppress target exit.
+	if stderr.Len() == 0 {
+		t.Fatal("cleanup failure was suppressed")
+	}
+	for _, private := range []string{"SUPER_SECRET_SESSION_CONTENT", sessionRoot, filepath.Join(sessionRoot, "home"), "status 23"} {
+		if strings.Contains(stderr.String(), private) {
+			t.Fatalf("cleanup diagnostic leaked %q: %s", private, stderr.String())
+		}
+	}
+}
+
+func TestLaunchWaitsForRetainedCleanupFailureBeforeReportingTargetExit(t *testing.T) {
+	fixture := newLaunchTestFixture(t)
+	deferred := &deferredCleanupSandbox{
+		delegate: directSandbox{}, cleanupDone: make(chan struct{}), waitReturned: make(chan struct{}),
+	}
+	fixture.sandbox = deferred
+	application := fixture.application(
+		t,
+		writeFakeDevin(t, successfulDevinScript(`printf 'ASYNC_CREDENTIAL\n' > "$HOME/credential"
+printf 'ASYNC_SESSION_CONTENT\n' > "$HOME/content"
+exit 23
+`)),
+		t.TempDir(),
+		strings.NewReader(""),
+		&bytes.Buffer{},
+		&bytes.Buffer{},
+	)
+
+	type launchResult struct {
+		exitCode int
+		err      error
+	}
+	finished := make(chan launchResult, 1)
+	go func() {
+		exitCode, err := application.run(context.Background())
+		finished <- launchResult{exitCode: exitCode, err: err}
+	}()
+
+	select {
+	case <-deferred.waitReturned:
+	case <-time.After(time.Second):
+		t.Fatal("fake Devin did not report its target exit")
+	}
+	select {
+	case result := <-finished:
+		t.Fatalf("launch returned before retained cleanup completed: (%d, %v)", result.exitCode, result.err)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	if err := os.Chmod(application.sessionsDirectory, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(application.sessionsDirectory, 0o700) })
+	close(deferred.cleanupDone)
+
+	var result launchResult
+	select {
+	case result = <-finished:
+	case <-time.After(time.Second):
+		t.Fatal("launch did not return after retained cleanup completed")
+	}
+	if result.exitCode != 1 {
+		t.Fatalf("launch exit code = %d, want safe non-target exit 1", result.exitCode)
+	}
+	var targetExit DevinExit
+	if errors.As(result.err, &targetExit) {
+		t.Fatalf("cleanup failure retained DevinExitError in returned graph: %v", result.err)
+	}
+	if result.err == nil {
+		t.Fatal("physical cleanup failure was suppressed")
+	}
+	if deferred.sessionRoot == "" {
+		t.Fatal("deferred cleanup did not observe the Session")
+	}
+	for _, private := range []string{
+		deferred.sessionRoot,
+		filepath.Join(deferred.sessionRoot, "home"),
+		"ASYNC_CREDENTIAL",
+		"ASYNC_SESSION_CONTENT",
+		"ASYNC_BACKEND_OUTPUT",
+		"ASYNC_ENVIRONMENT_VALUE",
+		"23",
+	} {
+		if strings.Contains(result.err.Error(), private) {
+			t.Fatalf("cleanup failure leaked %q: %v", private, result.err)
+		}
+	}
+}
+
+func TestLaunchPreservesTargetExitAfterRetainedCleanupSucceeds(t *testing.T) {
+	fixture := newLaunchTestFixture(t)
+	deferred := &deferredCleanupSandbox{
+		delegate: directSandbox{}, cleanupDone: make(chan struct{}), waitReturned: make(chan struct{}),
+	}
+	fixture.sandbox = deferred
+	application := fixture.application(
+		t,
+		writeFakeDevin(t, successfulDevinScript("exit 23\n")),
+		t.TempDir(),
+		strings.NewReader(""),
+		&bytes.Buffer{},
+		&bytes.Buffer{},
+	)
+
+	type launchResult struct {
+		exitCode int
+		err      error
+	}
+	finished := make(chan launchResult, 1)
+	go func() {
+		exitCode, err := application.run(context.Background())
+		finished <- launchResult{exitCode: exitCode, err: err}
+	}()
+
+	select {
+	case <-deferred.waitReturned:
+	case <-time.After(time.Second):
+		t.Fatal("fake Devin did not report its target exit")
+	}
+	select {
+	case result := <-finished:
+		t.Fatalf("launch returned before retained cleanup completed: (%d, %v)", result.exitCode, result.err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(deferred.cleanupDone)
+
+	select {
+	case result := <-finished:
+		if result.exitCode != 23 {
+			t.Fatalf("launch exit code = %d, want target exit 23", result.exitCode)
+		}
+		var targetExit DevinExit
+		if !errors.As(result.err, &targetExit) || targetExit.ExitCode() != 23 {
+			t.Fatalf("launch error = %v, want target exit 23", result.err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("launch did not return after retained cleanup completed")
+	}
+	if deferred.sessionRoot == "" {
+		t.Fatal("deferred cleanup did not observe the Session")
+	}
+	if _, err := os.Stat(deferred.sessionRoot); !os.IsNotExist(err) {
+		t.Fatalf("successful retained cleanup left Session behind: %v", err)
+	}
+}
+
+func TestLaunchRejectsUnavailableSandboxBeforeCreatingSession(t *testing.T) {
+	fixture := newLaunchTestFixture(t)
+	fixture.sandbox = failingSandbox{checkErr: &launch.SandboxError{Category: launch.SandboxBackendUnavailable}}
+	marker := filepath.Join(t.TempDir(), "target-started")
+	script := "#!/bin/sh\ntouch " + strconv.Quote(marker) + "\n"
+	var stderr bytes.Buffer
+	application := fixture.application(t, writeFakeDevin(t, script), t.TempDir(), strings.NewReader(""), &bytes.Buffer{}, &stderr)
+
+	if exitCode := application.Run(context.Background(), []string{"devin", "--profile", "reviews"}); exitCode == 0 {
+		t.Fatal("launch succeeded without a sandbox backend")
+	}
+	if !strings.Contains(stderr.String(), string(launch.SandboxBackendUnavailable)) && !strings.Contains(stderr.String(), "required system backend") {
+		t.Fatalf("sandbox diagnostic lacks its stable category: %s", stderr.String())
+	}
+	if _, err := os.Stat(fixture.sessionsDirectory); !os.IsNotExist(err) {
+		t.Fatalf("early sandbox failure created a Session: %v", err)
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("target started after early sandbox failure: %v", err)
+	}
+}
+
+func TestLaunchRemovesUnusedSessionWhenSandboxSetupFails(t *testing.T) {
+	fixture := newLaunchTestFixture(t)
+	fixture.sandbox = failingSandbox{prepareErr: &launch.SandboxError{Category: launch.SandboxSetupFailed}}
+	marker := filepath.Join(t.TempDir(), "target-started")
+	script := "#!/bin/sh\ntouch " + strconv.Quote(marker) + "\n"
+	application := fixture.application(t, writeFakeDevin(t, script), t.TempDir(), strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
+
+	if exitCode := application.Run(context.Background(), []string{"devin", "--profile", "reviews"}); exitCode == 0 {
+		t.Fatal("launch succeeded after sandbox setup failed")
+	}
+	entries, err := os.ReadDir(fixture.sessionsDirectory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("sandbox setup failure left Session data behind: %v", entries)
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("target started after sandbox setup failure: %v", err)
+	}
+}
+
+func TestLaunchRetainsSessionWhileStartupCleanupIsQuarantined(t *testing.T) {
+	fixture := newLaunchTestFixture(t)
+	cleanupDone := make(chan struct{})
+	quarantine := &startupQuarantineSandbox{delegate: directSandbox{}, cleanupDone: cleanupDone}
+	fixture.sandbox = quarantine
+	application := fixture.application(
+		t,
+		writeFakeDevin(t, successfulDevinScript("exit 0\n")),
+		t.TempDir(),
+		strings.NewReader(""),
+		&bytes.Buffer{},
+		&bytes.Buffer{},
+	)
+
+	exitCode, err := application.run(context.Background())
+	if exitCode != 1 || err == nil {
+		t.Fatalf("launch result = (%d, %v), want bounded startup failure", exitCode, err)
+	}
+	if quarantine.sessionRoot == "" {
+		t.Fatal("startup quarantine did not observe the Session")
+	}
+	if _, err := os.Stat(quarantine.sessionRoot); err != nil {
+		t.Fatalf("Adapter removed Session before startup quarantine completed: %v", err)
+	}
+
+	concurrent, err := session.Create(fixture.sessionsDirectory, t.TempDir(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(quarantine.sessionRoot); err != nil {
+		t.Fatalf("later Session cleanup removed startup quarantine's active Session: %v", err)
+	}
+	if err := concurrent.Remove(); err != nil {
+		t.Fatal(err)
+	}
+
+	close(cleanupDone)
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if _, err := os.Stat(quarantine.sessionRoot); os.IsNotExist(err) {
+			break
+		} else if err != nil {
+			t.Fatal(err)
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("Session remained after startup quarantine completed")
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+func TestLaunchRemovesAbandonedSessionFromAnEarlierRun(t *testing.T) {
+	fixture := newLaunchTestFixture(t)
+	abandonedSession := filepath.Join(fixture.sessionsDirectory, "session-abandoned")
+	if err := os.MkdirAll(filepath.Join(abandonedSession, "home"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(abandonedSession, "left-behind"), []byte("stale"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	script := successfulDevinScript("exit 0\n")
+	application := fixture.application(
+		t,
+		writeFakeDevin(t, script),
+		t.TempDir(),
+		strings.NewReader(""),
+		&bytes.Buffer{},
+		&bytes.Buffer{},
+	)
+
+	if exitCode := application.Run(context.Background(), []string{"devin", "--profile", "reviews"}); exitCode != 0 {
+		t.Fatalf("launch exit code = %d, want 0", exitCode)
+	}
+	if _, err := os.Stat(abandonedSession); !os.IsNotExist(err) {
+		t.Fatalf("later launch did not remove abandoned Session: %v", err)
+	}
+}
+
+func TestLaterLaunchPreservesAConcurrentActiveSession(t *testing.T) {
+	fixture := newLaunchTestFixture(t)
+	claimPath := filepath.Join(t.TempDir(), "first-claimed")
+	readyPath := filepath.Join(t.TempDir(), "first-ready")
+	releasePath := filepath.Join(t.TempDir(), "release-first")
+	t.Setenv("FAKE_DEVIN_FIRST_CLAIM", claimPath)
+	t.Setenv("FAKE_DEVIN_FIRST_READY", readyPath)
+	t.Setenv("FAKE_DEVIN_RELEASE_FIRST", releasePath)
+	script := successfulDevinScript(`if mkdir "$FAKE_DEVIN_FIRST_CLAIM" 2>/dev/null; then
+  printf '%s\n' "$HOME" > "$FAKE_DEVIN_FIRST_READY"
+  while [ ! -e "$FAKE_DEVIN_RELEASE_FIRST" ]; do sleep 0.05; done
+fi
+exit 0
+`)
+	binaryPath := writeFakeDevin(t, script)
+	firstApplication := fixture.application(t, binaryPath, t.TempDir(), strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
+	secondApplication := fixture.application(t, binaryPath, t.TempDir(), strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
+
+	firstExitCodes := make(chan int, 1)
+	go func() {
+		firstExitCodes <- firstApplication.Run(context.Background(), []string{"devin", "--profile", "reviews"})
+	}()
+	waitForFile(t, readyPath)
+	homeBytes, err := os.ReadFile(readyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstSession := filepath.Dir(strings.TrimSpace(string(homeBytes)))
+
+	secondExitCode := secondApplication.Run(context.Background(), []string{"devin", "--profile", "reviews"})
+	_, activeSessionErr := os.Stat(firstSession)
+	if err := os.WriteFile(releasePath, []byte("release"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case firstExitCode := <-firstExitCodes:
+		if firstExitCode != 0 {
+			t.Errorf("first launch exit code = %d, want 0", firstExitCode)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for first launch to exit")
+	}
+	if secondExitCode != 0 {
+		t.Errorf("second launch exit code = %d, want 0", secondExitCode)
+	}
+	if activeSessionErr != nil {
+		t.Fatalf("later launch removed a concurrent active Session: %v", activeSessionErr)
+	}
+}
+
+func TestLaunchForwardsSignalsToDevinAndCleansUpSession(t *testing.T) {
+	fixture := newLaunchTestFixture(t)
+
+	readyPath := filepath.Join(t.TempDir(), "ready")
+	signalPath := filepath.Join(t.TempDir(), "signal")
+	t.Setenv("FAKE_DEVIN_READY", readyPath)
+	t.Setenv("FAKE_DEVIN_SIGNAL", signalPath)
+	script := successfulDevinScript(`trap 'printf "SIGTERM\n" > "$FAKE_DEVIN_SIGNAL"; exit 42' TERM
+touch "$FAKE_DEVIN_READY"
+while :; do sleep 1; done
+`)
+	binaryPath := writeFakeDevin(t, script)
+	application := fixture.application(t, binaryPath, t.TempDir(), strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
+
+	exitCodes := make(chan int, 1)
+	go func() {
+		exitCodes <- application.Run(context.Background(), []string{"devin", "--profile", "reviews"})
+	}()
+	waitForFile(t, readyPath)
+	if err := syscall.Kill(os.Getpid(), syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case exitCode := <-exitCodes:
+		if exitCode != 42 {
+			t.Fatalf("exit code = %d, want signaled Devin exit code 42", exitCode)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for signaled Devin to exit")
+	}
+	signal, err := os.ReadFile(signalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(signal) != "SIGTERM\n" {
+		t.Fatalf("forwarded signal record = %q, want SIGTERM", signal)
+	}
+	entries, err := os.ReadDir(fixture.sessionsDirectory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("signaled launch left Session data behind: %v", entries)
+	}
+}
+
+func TestLaunchForwardsTerminalResizeEventToDevin(t *testing.T) {
+	fixture := newLaunchTestFixture(t)
+	readyPath := filepath.Join(t.TempDir(), "ready")
+	resizePath := filepath.Join(t.TempDir(), "resize")
+	t.Setenv("FAKE_DEVIN_READY", readyPath)
+	t.Setenv("FAKE_DEVIN_RESIZE", resizePath)
+	script := successfulDevinScript(`trap 'printf "SIGWINCH\n" > "$FAKE_DEVIN_RESIZE"' WINCH
+touch "$FAKE_DEVIN_READY"
+while [ ! -e "$FAKE_DEVIN_RESIZE" ]; do sleep 0.05; done
+exit 0
+`)
+	application := fixture.application(
+		t,
+		writeFakeDevin(t, script),
+		t.TempDir(),
+		strings.NewReader(""),
+		&bytes.Buffer{},
+		&bytes.Buffer{},
+	)
+
+	exitCodes := make(chan int, 1)
+	go func() {
+		exitCodes <- application.Run(context.Background(), []string{"devin", "--profile", "reviews"})
+	}()
+	waitForFile(t, readyPath)
+	if err := syscall.Kill(os.Getpid(), syscall.SIGWINCH); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case exitCode := <-exitCodes:
+		if exitCode != 0 {
+			t.Fatalf("exit code = %d, want 0 after resize", exitCode)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for resized Devin to exit")
+	}
+	resize, err := os.ReadFile(resizePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(resize) != "SIGWINCH\n" {
+		t.Fatalf("resize record = %q, want SIGWINCH", resize)
+	}
+}
+
+func TestRunAttachedDoesNotCancelAndReforwardOneSignalDuringStart(t *testing.T) {
+	preflightContext, cancelPreflight := context.WithCancel(context.Background())
+	defer cancelPreflight()
+	supervisor := newDevinSignalSupervisor(cancelPreflight)
+	defer supervisor.stop()
+	process := &startAttachRaceProcess{preflightContext: preflightContext}
+
+	if err := runDevinAttached(process, supervisor); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := process.receivedSignals(), []syscall.Signal{syscall.SIGTERM}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("signal handoff = %v, want one forwarded SIGTERM", got)
+	}
+}
+
+func TestRunAttachedWaitsAndReleasesSessionAfterReplaySignalFailure(t *testing.T) {
+	sessionsDirectory := filepath.Join(t.TempDir(), "sessions")
+	session, err := session.Create(sessionsDirectory, t.TempDir(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	process := &replaySignalFailureProcess{
+		startEntered: make(chan struct{}),
+		allowStart:   make(chan struct{}),
+		cleanupDone:  make(chan struct{}),
+	}
+	retained, err := session.RetainUntilProcessDone(process)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, cancelPreflight := context.WithCancel(context.Background())
+	defer cancelPreflight()
+	supervisor := newDevinSignalSupervisor(cancelPreflight)
+	defer supervisor.stop()
+
+	finished := make(chan error, 1)
+	go func() { finished <- runDevinAttached(retained, supervisor) }()
+	<-process.startEntered
+	supervisor.forwarded <- syscall.SIGTERM
+	waitForPendingSignal(t, supervisor, syscall.SIGTERM)
+	close(process.allowStart)
+	err = <-finished
+
+	var sandboxErr *launch.SandboxError
+	if !errors.As(err, &sandboxErr) || sandboxErr.Category != launch.SandboxProcessStartFailed {
+		t.Fatalf("replayed signal error = %v, want sanitized process_start_failed", err)
+	}
+	if strings.Contains(err.Error(), "SUPER_SECRET_REPLAY_FAILURE") {
+		t.Fatalf("replayed signal error leaked process detail: %v", err)
+	}
+	if got := process.waits; got != 1 {
+		t.Fatalf("Wait calls = %d, want exactly one after successful Start", got)
+	}
+	select {
+	case <-process.cleanupDone:
+	default:
+		t.Fatal("replayed signal failure did not settle native cleanup")
+	}
+	if err := session.Remove(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(session.RootDirectory()); !os.IsNotExist(err) {
+		t.Fatalf("Session remained leased after replay cleanup: %v", err)
+	}
+}
+
+func TestLaunchSignalDuringPreflightCancelsVerificationAndCleansUpSession(t *testing.T) {
+	fixture := newLaunchTestFixture(t)
+	readyPath := filepath.Join(t.TempDir(), "preflight-ready")
+	t.Setenv("FAKE_DEVIN_PREFLIGHT_READY", readyPath)
+	script := `#!/bin/sh
+if [ "$1" = "skills" ]; then
+  touch "$FAKE_DEVIN_PREFLIGHT_READY"
+  sleep 30
+  exit 0
+fi
+exit 64
+`
+	binaryPath := writeFakeDevin(t, script)
+	var stderr bytes.Buffer
+	application := fixture.application(t, binaryPath, t.TempDir(), strings.NewReader(""), &bytes.Buffer{}, &stderr)
+
+	exitCodes := make(chan int, 1)
+	go func() {
+		exitCodes <- application.Run(context.Background(), []string{"devin", "--profile", "reviews"})
+	}()
+	waitForFile(t, readyPath)
+	if err := syscall.Kill(os.Getpid(), syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case exitCode := <-exitCodes:
+		if exitCode == 0 {
+			t.Fatal("launch succeeded after preflight was interrupted")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for interrupted preflight to exit")
+	}
+	if !strings.Contains(stderr.String(), "verification was canceled or timed out") {
+		t.Fatalf("interrupted-preflight error is unclear: %s", stderr.String())
+	}
+	entries, err := os.ReadDir(fixture.sessionsDirectory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("interrupted preflight left Session data behind: %v", entries)
+	}
+}
+
+func TestLaunchPreflightFailureReportsSanitizedCatalogAndCleansUpSession(t *testing.T) {
+	fixture := newLaunchTestFixture(t)
+
+	launchMarker := filepath.Join(t.TempDir(), "launched")
+	t.Setenv("FAKE_DEVIN_LAUNCH_MARKER", launchMarker)
+	script := `#!/bin/sh
+if [ "$1" = "skills" ]; then
+  printf '[{"name":"token=SUPER_SECRET_STDOUT","provider":"Devin","base_dir":"%s"}]\n' "$HOME/.config/devin/skills/SUPER_SECRET_PATH"
+  printf 'token=SUPER_SECRET\n' >&2
+  exit 0
+fi
+if [ "$1" = "auth" ]; then
+  printf 'Logged in (via fixture).\n'
+  exit 0
+fi
+touch "$FAKE_DEVIN_LAUNCH_MARKER"
+exit 0
+`
+	binaryPath := writeFakeDevin(t, script)
+	var stderr bytes.Buffer
+	application := fixture.application(t, binaryPath, t.TempDir(), strings.NewReader(""), &bytes.Buffer{}, &stderr)
+
+	if exitCode := application.Run(context.Background(), []string{"devin", "--profile", "reviews"}); exitCode == 0 {
+		t.Fatal("launch succeeded after Adapter Preflight catalog mismatch")
+	}
+	for _, detail := range []string{"skill isolation", "global Skill Catalog did not match", "incompatible"} {
+		if !strings.Contains(stderr.String(), detail) {
+			t.Errorf("preflight diagnostic does not contain %q: %s", detail, stderr.String())
+		}
+	}
+	for _, sensitive := range []string{"SUPER_SECRET", "devin-config:review"} {
+		if strings.Contains(stderr.String(), sensitive) {
+			t.Fatalf("preflight diagnostic leaked catalog data: %s", stderr.String())
+		}
+	}
+	if _, err := os.Stat(launchMarker); !os.IsNotExist(err) {
+		t.Fatalf("Devin started after failed preflight: %v", err)
+	}
+	entries, err := os.ReadDir(fixture.sessionsDirectory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("failed preflight left Session data behind: %v", entries)
+	}
+}
+
+type launchTestFixture struct {
+	existingHome      string
+	sessionsDirectory string
+	sandbox           launch.ProcessSandbox
+}
+
+func newLaunchTestFixture(t *testing.T) launchTestFixture {
+	t.Helper()
+	existingHome := t.TempDir()
+	bundlePath := filepath.Join(existingHome, ".config", "devin", "skills", "review")
+	if err := os.MkdirAll(bundlePath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bundlePath, "SKILL.md"), []byte("# review\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return launchTestFixture{
+		existingHome:      existingHome,
+		sessionsDirectory: filepath.Join(t.TempDir(), "sessions"),
+		sandbox:           directSandbox{},
+	}
+}
+
+type executorLaunchApplication struct {
+	executor          *Executor
+	request           DevinRequest
+	sessionsDirectory string
+	workingDirectory  string
+	terminal          launch.Terminal
+}
+
+func (fixture launchTestFixture) application(
+	t *testing.T,
+	binaryPath string,
+	workingDirectory string,
+	input io.Reader,
+	output io.Writer,
+	errorOutput io.Writer,
+) executorLaunchApplication {
+	t.Helper()
+	terminal := launch.Terminal{Input: input, Output: output, ErrorOutput: errorOutput}
+	request := DevinRequest{
+		SessionsDirectory: fixture.sessionsDirectory, WorkingDirectory: workingDirectory, Executable: binaryPath,
+		ExistingHomeDirectory: fixture.existingHome, Terminal: terminal,
+		ExpectedCatalog: []skills.SkillReference{{Source: devinruntime.GlobalSourceDevinConfig, RelativePath: "review"}},
+		Materializer:    devinTestMaterializer(t),
+	}
+	return executorLaunchApplication{executor: newExecutor(fixture.sandbox), request: request, sessionsDirectory: fixture.sessionsDirectory, workingDirectory: workingDirectory, terminal: terminal}
+}
+
+func (application executorLaunchApplication) run(ctx context.Context) (int, error) {
+	return application.executor.RunDevin(ctx, application.request)
+}
+
+func (application executorLaunchApplication) Run(ctx context.Context, _ []string) int {
+	exitCode, err := application.run(ctx)
+	if err != nil {
+		if _, ok := err.(DevinExit); ok {
+			return exitCode
+		}
+		fmt.Fprintln(application.terminal.ErrorOutput, err)
+		return 1
+	}
+	return exitCode
+}
+
+type recordingSandbox struct {
+	delegate  launch.ProcessSandbox
+	arguments [][]string
+}
+
+func (sandbox *recordingSandbox) Readiness(ctx context.Context) (launch.SandboxReadiness, error) {
+	return sandbox.delegate.Readiness(ctx)
+}
+
+func (sandbox *recordingSandbox) Check(ctx context.Context, request launch.SandboxCheck) error {
+	return sandbox.delegate.Check(ctx, request)
+}
+
+func (sandbox *recordingSandbox) Prepare(ctx context.Context, request launch.ProcessRequest) (launch.Process, error) {
+	sandbox.arguments = append(sandbox.arguments, append([]string(nil), request.Arguments...))
+	return sandbox.delegate.Prepare(ctx, request)
+}
+
+type failingSandbox struct {
+	checkErr   error
+	prepareErr error
+}
+
+func (failingSandbox) Readiness(context.Context) (launch.SandboxReadiness, error) {
+	return launch.SandboxReadiness{RequiredMode: "native", Backend: "test", Platform: "test platform", Supported: true, Ready: true}, nil
+}
+
+func (sandbox failingSandbox) Check(context.Context, launch.SandboxCheck) error {
+	return sandbox.checkErr
+}
+
+func (sandbox failingSandbox) Prepare(context.Context, launch.ProcessRequest) (launch.Process, error) {
+	return nil, sandbox.prepareErr
+}
+
+type startupQuarantineSandbox struct {
+	delegate    launch.ProcessSandbox
+	cleanupDone chan struct{}
+	sessionRoot string
+}
+
+func (sandbox *startupQuarantineSandbox) Readiness(ctx context.Context) (launch.SandboxReadiness, error) {
+	return sandbox.delegate.Readiness(ctx)
+}
+
+func (sandbox *startupQuarantineSandbox) Check(ctx context.Context, request launch.SandboxCheck) error {
+	return sandbox.delegate.Check(ctx, request)
+}
+
+func (sandbox *startupQuarantineSandbox) Prepare(ctx context.Context, request launch.ProcessRequest) (launch.Process, error) {
+	if !isInteractiveDevinLaunch(request.Arguments) {
+		return sandbox.delegate.Prepare(ctx, request)
+	}
+	sandbox.sessionRoot = request.SessionDirectory
+	return startupQuarantineProcess{cleanupDone: sandbox.cleanupDone}, nil
+}
+
+type startupQuarantineProcess struct {
+	cleanupDone <-chan struct{}
+}
+
+func (process startupQuarantineProcess) Start() error {
+	return fmt.Errorf("startup cleanup quarantined")
+}
+func (startupQuarantineProcess) Wait() error { return nil }
+func (startupQuarantineProcess) Signal(os.Signal) error {
+	return nil
+}
+func (process startupQuarantineProcess) CleanupDone() <-chan struct{} { return process.cleanupDone }
+
+type deferredCleanupSandbox struct {
+	delegate     launch.ProcessSandbox
+	cleanupDone  chan struct{}
+	waitReturned chan struct{}
+	sessionRoot  string
+}
+
+func (sandbox *deferredCleanupSandbox) Readiness(ctx context.Context) (launch.SandboxReadiness, error) {
+	return sandbox.delegate.Readiness(ctx)
+}
+
+func (sandbox *deferredCleanupSandbox) Check(ctx context.Context, request launch.SandboxCheck) error {
+	return sandbox.delegate.Check(ctx, request)
+}
+
+func (sandbox *deferredCleanupSandbox) Prepare(ctx context.Context, request launch.ProcessRequest) (launch.Process, error) {
+	if !isInteractiveDevinLaunch(request.Arguments) {
+		return sandbox.delegate.Prepare(ctx, request)
+	}
+	process, err := sandbox.delegate.Prepare(ctx, request)
+	if err != nil {
+		return nil, err
+	}
+	sandbox.sessionRoot = request.SessionDirectory
+	return &deferredCleanupProcess{
+		process: process, cleanupDone: sandbox.cleanupDone, waitReturned: sandbox.waitReturned,
+	}, nil
+}
+
+func isInteractiveDevinLaunch(arguments []string) bool {
+	return reflect.DeepEqual(arguments, []string{"--respect-workspace-trust", "false"})
+}
+
+type deferredCleanupProcess struct {
+	process      launch.Process
+	cleanupDone  <-chan struct{}
+	waitReturned chan struct{}
+}
+
+func (process *deferredCleanupProcess) Start() error { return process.process.Start() }
+
+func (process *deferredCleanupProcess) Wait() error {
+	err := process.process.Wait()
+	close(process.waitReturned)
+	return errors.Join(err, errors.New("ASYNC_BACKEND_OUTPUT ASYNC_ENVIRONMENT_VALUE"))
+}
+
+func (process *deferredCleanupProcess) Signal(signal os.Signal) error {
+	return process.process.Signal(signal)
+}
+
+func (process *deferredCleanupProcess) CleanupDone() <-chan struct{} { return process.cleanupDone }
+
+type startAttachRaceProcess struct {
+	preflightContext context.Context
+	mutex            sync.Mutex
+	signals          []syscall.Signal
+}
+
+type replaySignalFailureProcess struct {
+	startEntered chan struct{}
+	allowStart   chan struct{}
+	cleanupDone  chan struct{}
+	waits        int
+}
+
+func (process *replaySignalFailureProcess) Start() error {
+	close(process.startEntered)
+	<-process.allowStart
+	return nil
+}
+
+func (process *replaySignalFailureProcess) Wait() error {
+	process.waits++
+	close(process.cleanupDone)
+	return nil
+}
+
+func (*replaySignalFailureProcess) Signal(os.Signal) error {
+	return errors.New("SUPER_SECRET_REPLAY_FAILURE")
+}
+
+func (process *replaySignalFailureProcess) CleanupDone() <-chan struct{} { return process.cleanupDone }
+
+func waitForPendingSignal(t *testing.T, supervisor *devinSignalSupervisor, want os.Signal) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		supervisor.mutex.Lock()
+		got := supervisor.pending
+		supervisor.mutex.Unlock()
+		if got == want {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("signal supervisor did not retain the startup signal for replay")
+}
+
+func (process *startAttachRaceProcess) Start() error {
+	if err := syscall.Kill(os.Getpid(), syscall.SIGTERM); err != nil {
+		return err
+	}
+	select {
+	case <-process.preflightContext.Done():
+		// CommandContext cancellation can stop a just-started process before
+		// the supervisor replays its pending terminating signal.
+		_ = process.Signal(syscall.SIGKILL)
+	case <-time.After(200 * time.Millisecond):
+	}
+	return nil
+}
+
+func (*startAttachRaceProcess) Wait() error { return nil }
+
+func (process *startAttachRaceProcess) Signal(signal os.Signal) error {
+	unixSignal, ok := signal.(syscall.Signal)
+	if !ok {
+		return nil
+	}
+	process.mutex.Lock()
+	defer process.mutex.Unlock()
+	process.signals = append(process.signals, unixSignal)
+	return nil
+}
+
+func (process *startAttachRaceProcess) receivedSignals() []syscall.Signal {
+	process.mutex.Lock()
+	defer process.mutex.Unlock()
+	return append([]syscall.Signal(nil), process.signals...)
+}
+
+func writeFakeDevin(t *testing.T, script string) string {
+	t.Helper()
+	binaryPath := filepath.Join(t.TempDir(), "devin")
+	if err := os.WriteFile(binaryPath, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return binaryPath
+}
+
+func successfulDevinScript(interactiveBody string) string {
+	return `#!/bin/sh
+if [ "$1" = "skills" ]; then
+  printf '[{"name":"review","provider":"Devin","base_dir":"%s"}]\n' "$HOME/.config/devin/skills/review"
+  exit 0
+fi
+if [ "$1" = "auth" ]; then
+  printf 'Logged in (via fixture).\n'
+  exit 0
+fi
+` + interactiveBody
+}
+
+func waitForFile(t *testing.T, path string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(path); err == nil {
+			return
+		} else if !os.IsNotExist(err) {
+			t.Fatal(err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %q", path)
+}
+
+type devinTestMaterializerFunc func(string) error
+
+func (f devinTestMaterializerFunc) Materialize(home string) error { return f(home) }
+
+func devinTestMaterializer(t *testing.T) session.Materializer {
+	t.Helper()
+	return devinTestMaterializerFunc(func(home string) error {
+		bundle := filepath.Join(home, ".config", "devin", "skills", "review")
+		if err := os.MkdirAll(bundle, 0o700); err != nil {
+			return err
+		}
+		return os.WriteFile(filepath.Join(bundle, "SKILL.md"), []byte("# review\n"), 0o600)
+	})
+}
