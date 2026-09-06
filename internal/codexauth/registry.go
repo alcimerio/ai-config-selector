@@ -27,7 +27,6 @@ type credentialProvider interface {
 }
 
 type loginRunResult struct {
-	auth []byte
 	containedRunResult
 }
 
@@ -87,7 +86,7 @@ type LoginRequest struct {
 // Registry is the deep named-auth module used by the CLI. Provider records,
 // login Sessions, credential bytes, and identity locks stay behind this seam.
 type Registry struct {
-	resources         *codexauthresource.Store
+	resources         loginResourceStore
 	provider          credentialProvider
 	login             loginRunner
 	locks             identityLocker
@@ -136,12 +135,18 @@ func New(config Config) (*Registry, error) {
 	if err != nil {
 		return nil, errors.New("create Codex authentication registry: authentication quarantine directory must be private")
 	}
+	locks := newFileIdentityLocker(locksDirectory)
+	if locks.initErr != nil {
+		return nil, errors.New("create Codex authentication registry: authentication locks directory must be private")
+	}
+	quarantine := newFileBindingQuarantine(quarantineDirectory)
+	if quarantine.initErr != nil {
+		return nil, errors.New("create Codex authentication registry: authentication quarantine directory must be private")
+	}
 	resources, err := codexauthresource.New(locksDirectory, quarantineDirectory)
 	if err != nil {
 		return nil, errors.New("create Codex authentication registry: authentication resource directories must be private")
 	}
-	locks := newFileIdentityLocker(locksDirectory)
-	quarantine := newFileBindingQuarantine(quarantineDirectory)
 	if filepath.Clean(config.SessionsDirectory) == filepath.Join(requestedACSHome, "sessions") {
 		config.SessionsDirectory = filepath.Join(acsHome, "sessions")
 	}
@@ -164,7 +169,7 @@ func New(config Config) (*Registry, error) {
 		WorkingDirectory: config.WorkingDirectory, PrivateRoot: acsHome,
 	}, sandbox)
 	registry.quarantine = quarantine
-	registry.resources = resources
+	registry.resources = productionLoginResources{store: resources}
 	registry.sessionsDirectory = config.SessionsDirectory
 	registry.workingDirectory = config.WorkingDirectory
 	return registry, nil
@@ -176,81 +181,14 @@ func newRegistry(provider credentialProvider, login loginRunner, locks identityL
 	}
 	return &Registry{
 		provider: provider, login: login, locks: locks, quarantine: noBindingQuarantine{},
+		resources:     unavailableLoginResources{},
 		verifyCleanup: launch.VerifySessionCleanupProof,
 	}, nil
 }
 
 // Login creates one new identity. An existing name is never replaced.
 func (registry *Registry) Login(ctx context.Context, request LoginRequest) (IdentityMetadata, error) {
-	if registry.resources != nil {
-		return registry.loginWithResource(ctx, request)
-	}
-	name, err := ParseCredentialRef(request.Name)
-	if err != nil {
-		return IdentityMetadata{}, err
-	}
-	locked, err := registry.tryLock(ctx, name, false)
-	if err != nil {
-		return IdentityMetadata{}, err
-	}
-	defer locked.Release()
-
-	if _, exists, err := registry.provider.Metadata(ctx, name); err != nil {
-		return IdentityMetadata{}, fmt.Errorf("inspect Codex authentication identity %q: %w", name, err)
-	} else if exists {
-		return IdentityMetadata{}, fmt.Errorf("%w: %q", ErrIdentityExists, name)
-	}
-
-	if registry.sessionsDirectory == "" || registry.workingDirectory == "" {
-		return IdentityMetadata{}, ErrProviderUnavailable
-	}
-	preparation, err := registry.login.Prepare(ctx)
-	if err != nil {
-		return IdentityMetadata{}, err
-	}
-	defer preparation.Close()
-	created, proofChallenge, stage, err := registry.prepareBinding(ctx, name)
-	if err != nil {
-		if errors.Is(err, ErrBindingQuarantined) {
-			return IdentityMetadata{}, ErrLoginCleanupUncertain
-		}
-		if stage == bindingMarkerCreation {
-			return IdentityMetadata{}, err
-		}
-		return IdentityMetadata{}, ErrLoginFailed
-	}
-
-	beginProcess := func() error { return registry.quarantine.MarkCleanupPending(ctx, name) }
-	run := preparation.Run(ctx, created, proofChallenge, beginProcess, request.DeviceAuth, request.Terminal)
-	if err := registry.settleBinding(ctx, created, name, proofChallenge, false, run.cleanupProven, run.cleanupProcess); err != nil {
-		clearBytes(run.auth)
-		return IdentityMetadata{}, ErrLoginCleanupUncertain
-	}
-	if run.err != nil {
-		clearBytes(run.auth)
-		if cleanupErr := registry.removeCreatedBinding(ctx, created, name); cleanupErr != nil {
-			return IdentityMetadata{}, ErrLoginCleanupUncertain
-		}
-		return IdentityMetadata{}, run.err
-	}
-	defer clearBytes(run.auth)
-	metadata, err := validateAuthJSON(name, run.auth)
-	if err != nil {
-		if cleanupErr := registry.removeCreatedBinding(ctx, created, name); cleanupErr != nil {
-			return IdentityMetadata{}, ErrLoginCleanupUncertain
-		}
-		return IdentityMetadata{}, ErrUnsupportedAuth
-	}
-	if err := registry.provider.Create(ctx, credentialRecord{Metadata: metadata, Auth: run.auth}); err != nil {
-		if cleanupErr := registry.removeCreatedBinding(ctx, created, name); cleanupErr != nil {
-			return IdentityMetadata{}, ErrLoginCleanupUncertain
-		}
-		return IdentityMetadata{}, fmt.Errorf("store Codex authentication identity %q: %w", name, err)
-	}
-	if err := registry.removeCreatedBinding(ctx, created, name); err != nil {
-		return IdentityMetadata{}, ErrLoginCleanupUncertain
-	}
-	return metadata, nil
+	return registry.loginWithResource(ctx, request)
 }
 
 // List returns only provider attributes; it does not retrieve credential

@@ -50,6 +50,8 @@ type Binding struct {
 	lock      identityLock
 	record    credentialRecord
 	hasRecord bool
+	sessionID string
+	challenge string
 }
 
 // RecoveryBinding is deliberately separate from an active Binding. Recovery
@@ -176,28 +178,92 @@ func (binding *Binding) PublishPrepared(ctx context.Context, sessionID, challeng
 	if binding == nil || binding.store == nil || binding.lock == nil {
 		return ErrProviderUnavailable
 	}
+	binding.sessionID, binding.challenge = sessionID, challenge
 	return binding.store.markers.Create(ctx, quarantineMarker{Version: recordVersion, Name: binding.name, SessionID: sessionID, Phase: quarantinePrepared, ProofChallenge: challenge})
+}
+
+func (binding *Binding) currentGeneration(ctx context.Context, phases ...quarantinePhase) (quarantineMarker, error) {
+	if binding == nil || binding.store == nil || binding.sessionID == "" || binding.challenge == "" {
+		return quarantineMarker{}, ErrBindingQuarantined
+	}
+	marker, exists, err := binding.store.markers.Inspect(ctx, binding.name)
+	if err != nil {
+		return quarantineMarker{}, err
+	}
+	if !exists || marker.SessionID != binding.sessionID || marker.ProofChallenge != binding.challenge {
+		return quarantineMarker{}, ErrBindingQuarantined
+	}
+	for _, phase := range phases {
+		if marker.Phase == phase {
+			return marker, nil
+		}
+	}
+	return quarantineMarker{}, ErrBindingQuarantined
+}
+
+// Published verifies that the exact marker is the durable current generation.
+// It is used only to distinguish an uncertain Create error from a confirmed
+// no-publication or a known marker that can follow the base repair path.
+func (binding *Binding) Published(ctx context.Context, sessionID, challenge string) (bool, error) {
+	if binding == nil || binding.store == nil || binding.lock == nil {
+		return false, ErrProviderUnavailable
+	}
+	if sessionID != binding.sessionID || challenge != binding.challenge {
+		return false, ErrBindingQuarantined
+	}
+	marker, exists, err := binding.store.markers.Inspect(ctx, binding.name)
+	if err != nil {
+		return false, err
+	}
+	return exists && marker.SessionID == sessionID && marker.ProofChallenge == challenge && marker.Phase == quarantinePrepared, nil
 }
 
 // MarkCleanupPending is intentionally idempotent for the current generation:
 // both the version probe and the login/status operation arm a distinct proof.
 func (binding *Binding) MarkCleanupPending(ctx context.Context) error {
-	if binding == nil || binding.store == nil {
+	if binding == nil || binding.store == nil || binding.lock == nil {
 		return ErrProviderUnavailable
+	}
+	if _, err := binding.currentGeneration(ctx, quarantinePrepared, quarantineCleanupPending); err != nil {
+		return err
 	}
 	return binding.store.markers.MarkCleanupPending(ctx, binding.name)
 }
 
 func (binding *Binding) MarkRefreshAllowed(ctx context.Context) error {
-	if binding == nil || binding.store == nil {
+	if binding == nil || binding.store == nil || binding.lock == nil {
 		return ErrProviderUnavailable
 	}
 	return binding.store.markers.MarkRefreshAllowed(ctx, binding.name)
 }
 
 func (binding *Binding) MarkRecoverable(ctx context.Context) error {
+	if binding == nil || binding.store == nil || binding.lock == nil {
+		return ErrProviderUnavailable
+	}
+	if _, err := binding.currentGeneration(ctx, quarantinePrepared, quarantineCleanupPending, quarantineRecoverable); err != nil {
+		return err
+	}
+	return binding.store.markers.MarkRecoverable(ctx, binding.name)
+}
+
+// SettlePending marks this exact prepared projection recoverable only when it
+// is still the current marker generation.  A late process waiter therefore
+// cannot mutate a newer Login marker for the same identity.
+func (binding *Binding) SettlePending(ctx context.Context, sessionID, challenge string) error {
 	if binding == nil || binding.store == nil {
 		return ErrProviderUnavailable
+	}
+	if sessionID != binding.sessionID || challenge != binding.challenge {
+		return ErrBindingQuarantined
+	}
+	locked, err := binding.store.acquire(ctx, binding.name, true)
+	if err != nil {
+		return err
+	}
+	defer locked.Release()
+	if _, err := binding.currentGeneration(ctx, quarantineCleanupPending); err != nil {
+		return err
 	}
 	return binding.store.markers.MarkRecoverable(ctx, binding.name)
 }
@@ -205,8 +271,11 @@ func (binding *Binding) MarkRecoverable(ctx context.Context) error {
 // DeleteMarkerAfterProjectionRemoval must be called only after the upper
 // lifecycle has physically removed the Session projection.
 func (binding *Binding) DeleteMarkerAfterProjectionRemoval(ctx context.Context) error {
-	if binding == nil || binding.store == nil {
+	if binding == nil || binding.store == nil || binding.lock == nil {
 		return ErrProviderUnavailable
+	}
+	if _, err := binding.currentGeneration(ctx, quarantinePrepared, quarantineCleanupPending, quarantineRecoverable); err != nil {
+		return err
 	}
 	return binding.store.markers.Delete(ctx, binding.name)
 }
@@ -284,12 +353,20 @@ func (binding *Binding) Project(home string) error {
 	return nil
 }
 
-// CommitLogin validates and creates only. The input is a private projection
-// read by the upper Session lifecycle and is not returned to it.
-func (binding *Binding) CommitLogin(ctx context.Context, auth []byte) (IdentityMetadata, error) {
-	if binding == nil || binding.hasRecord {
+// CommitLogin reads, validates, and creates only from a protected Session
+// root.  Credential bytes never cross the resource boundary.
+func (binding *Binding) CommitLogin(ctx context.Context, root string) (IdentityMetadata, error) {
+	if binding == nil || binding.store == nil || binding.lock == nil || binding.hasRecord {
 		return IdentityMetadata{}, ErrProviderUnavailable
 	}
+	if _, err := binding.currentGeneration(ctx, quarantineRecoverable); err != nil {
+		return IdentityMetadata{}, err
+	}
+	auth, err := readSessionAuthFile(root)
+	if err != nil {
+		return IdentityMetadata{}, ErrUnsupportedAuth
+	}
+	defer ClearBytes(auth)
 	metadata, err := ValidateAuthJSON(binding.name, auth)
 	if err != nil {
 		return IdentityMetadata{}, err

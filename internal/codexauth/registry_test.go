@@ -3,6 +3,7 @@ package codexauth
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -17,8 +18,7 @@ import (
 
 func TestRegistryLoginCreatesWithoutReplacingNamedIdentity(t *testing.T) {
 	provider := newFakeProvider()
-	runner := &fakeLoginRunner{result: loginRunResult{
-		auth:               testChatGPTAuthJSON(t, "user", "workspace"),
+	runner := &fakeLoginRunner{auth: testChatGPTAuthJSON(t, "user", "workspace"), result: loginRunResult{
 		containedRunResult: containedRunResult{cleanupProven: true},
 	}}
 	registry, err := newRegistry(provider, runner, newFileIdentityLocker(t.TempDir()))
@@ -39,6 +39,9 @@ func TestRegistryLoginCreatesWithoutReplacingNamedIdentity(t *testing.T) {
 	}
 	if runner.calls != 1 {
 		t.Fatalf("duplicate login invoked Codex: calls = %d", runner.calls)
+	}
+	if runner.prepareCalls != 1 {
+		t.Fatalf("duplicate login prepared executable: calls = %d", runner.prepareCalls)
 	}
 }
 
@@ -61,6 +64,46 @@ func TestRegistryDefersPrivateWorkspaceRejectionToContainedOperations(t *testing
 	}
 	if _, err := registry.status.Prepare(context.Background()); !errors.Is(err, ErrStatusFailed) {
 		t.Fatalf("contained status preparation error = %v", err)
+	}
+}
+
+func TestProductionRegistryLoginUsesResourceAcquireBeforePreparation(t *testing.T) {
+	root := t.TempDir()
+	registry, err := New(Config{
+		BinaryPath:        "/usr/bin/true",
+		ACSHome:           filepath.Join(root, "acs"),
+		SessionsDirectory: filepath.Join(root, "sessions"),
+		WorkingDirectory:  root,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := &fakeLoginRunner{}
+	registry.login = runner
+	if _, err := registry.Login(context.Background(), LoginRequest{Name: "work"}); !errors.Is(err, ErrProviderUnavailable) {
+		t.Fatalf("production resource acquisition error = %v", err)
+	}
+	if runner.prepareCalls != 0 {
+		t.Fatalf("resource failure prepared target: calls = %d", runner.prepareCalls)
+	}
+}
+
+func TestRegistryLoginProviderInspectionFailurePrecedesPreparation(t *testing.T) {
+	providerFailure := errors.New("synthetic provider inspection failure")
+	provider := newFakeProvider()
+	provider.metadataErr = providerFailure
+	runner := &fakeLoginRunner{}
+	registry, err := newRegistry(provider, runner, newFileIdentityLocker(t.TempDir()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	configureRegistryTestLifecycle(t, registry)
+
+	if _, err := registry.Login(context.Background(), LoginRequest{Name: "work"}); !errors.Is(err, providerFailure) {
+		t.Fatalf("provider inspection error = %v", err)
+	}
+	if runner.prepareCalls != 0 {
+		t.Fatalf("provider inspection failure prepared target: calls = %d", runner.prepareCalls)
 	}
 }
 
@@ -226,6 +269,160 @@ func TestRegistryLoginCleanupUncertaintyQuarantinesNameAndProjection(t *testing.
 		t.Fatalf("login recovery = (%q, %v)", disposition, err)
 	}
 	assertNoSessionDirectories(t, sessionsDirectory)
+}
+
+func TestRegistryLoginWithoutProcessProofPreservesOwnedProjection(t *testing.T) {
+	runner := &fakeLoginRunner{result: loginRunResult{containedRunResult: containedRunResult{
+		err: ErrLoginCleanupUncertain, cleanupProven: false,
+	}}}
+	registry, err := newRegistry(newFakeProvider(), runner, newFileIdentityLocker(t.TempDir()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	configureRegistryTestLifecycle(t, registry)
+
+	if _, err := registry.Login(context.Background(), LoginRequest{Name: "work"}); !errors.Is(err, ErrLoginCleanupUncertain) {
+		t.Fatalf("login error = %v", err)
+	}
+	if _, err := os.Stat(runner.sessionRoot); err != nil {
+		t.Fatalf("unproven projection was not retained: %v", err)
+	}
+	marker, exists, err := registry.quarantine.Inspect(context.Background(), "work")
+	if err != nil || !exists || marker.Phase != quarantineCleanupPending {
+		t.Fatalf("pending ownership = (%#v, %v, %v)", marker, exists, err)
+	}
+	if _, err := registry.Login(context.Background(), LoginRequest{Name: "work"}); !errors.Is(err, ErrIdentityBusy) {
+		t.Fatalf("pending ownership did not block reuse: %v", err)
+	}
+}
+
+func TestResourcePendingTransferWaitsForLateCleanupNotification(t *testing.T) {
+	root := t.TempDir()
+	workingDirectory := filepath.Join(root, "workspace")
+	if err := os.Mkdir(workingDirectory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	created, err := session.Create(filepath.Join(root, "sessions"), workingDirectory, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := created.ProtectForRecovery(); err != nil {
+		t.Fatal(err)
+	}
+	cleanupDone := make(chan struct{})
+	settled := make(chan struct{})
+	binding := &lateSettlementBinding{settled: settled}
+	(&Registry{}).transferResourcePendingBinding(created, binding, "challenge", lateCleanupProcess{done: cleanupDone})
+	select {
+	case <-settled:
+		t.Fatal("pending binding settled before cleanup notification")
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(cleanupDone)
+	select {
+	case <-settled:
+	case <-time.After(time.Second):
+		t.Fatal("pending binding did not settle after late cleanup notification")
+	}
+}
+
+func TestRegistryLoginProviderFailureRemovesProjectionBeforeMarker(t *testing.T) {
+	providerFailure := errors.New("synthetic provider failure")
+	provider := newFakeProvider()
+	provider.createErr = providerFailure
+	runner := &fakeLoginRunner{auth: testChatGPTAuthJSON(t, "user", "workspace"), result: loginRunResult{
+		containedRunResult: containedRunResult{cleanupProven: true},
+	}}
+	registry, err := newRegistry(provider, runner, newFileIdentityLocker(t.TempDir()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionsDirectory := configureRegistryTestLifecycle(t, registry)
+	underlyingQuarantine := registry.quarantine
+	order := &projectionRemovalOrderQuarantine{bindingQuarantine: underlyingQuarantine, sessionsDirectory: sessionsDirectory}
+	registry.quarantine = order
+	releaseOrder := &cleanupReleaseOrder{
+		sessionsDirectory: sessionsDirectory,
+		markerAbsent: func() bool {
+			_, exists, inspectErr := underlyingQuarantine.Inspect(context.Background(), "work")
+			return inspectErr == nil && !exists
+		},
+	}
+	registry.locks = releaseOrderLocker{identityLocker: registry.locks, order: releaseOrder}
+
+	if _, err := registry.Login(context.Background(), LoginRequest{Name: "work"}); !errors.Is(err, providerFailure) {
+		t.Fatalf("provider failure = %v", err)
+	}
+	if !order.deletedAfterProjection {
+		t.Fatal("marker deletion preceded physical projection removal")
+	}
+	if !releaseOrder.releasedAfterCleanup {
+		t.Fatal("identity unlock preceded projection or marker cleanup")
+	}
+	assertNoSessionDirectories(t, sessionsDirectory)
+}
+
+func TestRegistryLoginUnsupportedAuthRemovesProjectionAndDoesNotCreate(t *testing.T) {
+	provider := newFakeProvider()
+	runner := &fakeLoginRunner{auth: []byte(`{"auth_mode":"api_key","OPENAI_API_KEY":"secret"}`), result: loginRunResult{
+		containedRunResult: containedRunResult{cleanupProven: true},
+	}}
+	registry, err := newRegistry(provider, runner, newFileIdentityLocker(t.TempDir()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionsDirectory := configureRegistryTestLifecycle(t, registry)
+
+	if _, err := registry.Login(context.Background(), LoginRequest{Name: "work"}); err != ErrUnsupportedAuth {
+		t.Fatalf("unsupported auth error = %v", err)
+	}
+	if provider.createCalls != 0 {
+		t.Fatalf("unsupported auth create calls = %d", provider.createCalls)
+	}
+	assertNoSessionDirectories(t, sessionsDirectory)
+}
+
+func TestRegistryLoginContainedFailureRemovesProjectionAndDoesNotCreate(t *testing.T) {
+	provider := newFakeProvider()
+	runner := &fakeLoginRunner{result: loginRunResult{containedRunResult: containedRunResult{
+		err: ErrLoginFailed, cleanupProven: true,
+	}}}
+	registry, err := newRegistry(provider, runner, newFileIdentityLocker(t.TempDir()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionsDirectory := configureRegistryTestLifecycle(t, registry)
+
+	if _, err := registry.Login(context.Background(), LoginRequest{Name: "work"}); err != ErrLoginFailed {
+		t.Fatalf("contained failure = %v", err)
+	}
+	if provider.createCalls != 0 {
+		t.Fatalf("contained failure create calls = %d", provider.createCalls)
+	}
+	assertNoSessionDirectories(t, sessionsDirectory)
+}
+
+func TestRegistryLoginMarkerRemovalFailureRetainsQuarantineAfterPhysicalCleanup(t *testing.T) {
+	provider := newFakeProvider()
+	runner := &fakeLoginRunner{auth: testChatGPTAuthJSON(t, "user", "workspace"), result: loginRunResult{
+		containedRunResult: containedRunResult{cleanupProven: true},
+	}}
+	registry, err := newRegistry(provider, runner, newFileIdentityLocker(t.TempDir()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionsDirectory := configureRegistryTestLifecycle(t, registry)
+	underlying := registry.quarantine
+	registry.quarantine = deleteFailureQuarantine{bindingQuarantine: underlying}
+
+	if _, err := registry.Login(context.Background(), LoginRequest{Name: "work"}); !errors.Is(err, ErrLoginCleanupUncertain) {
+		t.Fatalf("marker removal error = %v", err)
+	}
+	assertNoSessionDirectories(t, sessionsDirectory)
+	marker, exists, err := underlying.Inspect(context.Background(), "work")
+	if err != nil || !exists || marker.Phase != quarantineRecoverable {
+		t.Fatalf("retained cleanup marker = (%#v, %v, %v)", marker, exists, err)
+	}
 }
 
 func TestRegistryRecoverWaitsForRecoverableSettlementLockHandoff(t *testing.T) {
@@ -459,8 +656,7 @@ func TestRegistryRecoverWaitsOnlyForTheObservedRecoverableGeneration(t *testing.
 
 func TestRegistryLoginPublishedMarkerFailurePreservesRecoverableSession(t *testing.T) {
 	provider := newFakeProvider()
-	runner := &fakeLoginRunner{result: loginRunResult{
-		auth:               testChatGPTAuthJSON(t, "user", "workspace"),
+	runner := &fakeLoginRunner{auth: testChatGPTAuthJSON(t, "user", "workspace"), result: loginRunResult{
 		containedRunResult: containedRunResult{cleanupProven: true},
 	}}
 	registry, err := newRegistry(provider, runner, newFileIdentityLocker(t.TempDir()))
@@ -487,10 +683,23 @@ func TestRegistryLoginPublishedMarkerFailurePreservesRecoverableSession(t *testi
 	assertNoSessionDirectories(t, sessionsDirectory)
 }
 
-func TestRegistryLoginPublishedMarkerTransitionFailureRemovesUnstartedSession(t *testing.T) {
+func TestRegistryLoginUnpublishedMarkerFailurePreservesOriginalError(t *testing.T) {
+	registry, err := newRegistry(newFakeProvider(), &fakeLoginRunner{}, newFileIdentityLocker(t.TempDir()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionsDirectory := configureRegistryTestLifecycle(t, registry)
+	registry.quarantine = createFailureQuarantine{bindingQuarantine: registry.quarantine}
+
+	if _, err := registry.Login(context.Background(), LoginRequest{Name: "work"}); err != ErrProviderUnavailable {
+		t.Fatalf("unpublished marker error = %v", err)
+	}
+	assertNoSessionDirectories(t, sessionsDirectory)
+}
+
+func TestRegistryLoginPublishedMarkerTransitionFailureRetainsRecoverableSession(t *testing.T) {
 	provider := newFakeProvider()
-	runner := &fakeLoginRunner{result: loginRunResult{
-		auth:               testChatGPTAuthJSON(t, "user", "workspace"),
+	runner := &fakeLoginRunner{auth: testChatGPTAuthJSON(t, "user", "workspace"), result: loginRunResult{
 		containedRunResult: containedRunResult{cleanupProven: true},
 	}}
 	registry, err := newRegistry(provider, runner, newFileIdentityLocker(t.TempDir()))
@@ -506,10 +715,37 @@ func TestRegistryLoginPublishedMarkerTransitionFailureRemovesUnstartedSession(t 
 	if runner.calls != 0 {
 		t.Fatalf("published marker failure ran login %d times", runner.calls)
 	}
-	if _, exists, err := registry.quarantine.Inspect(context.Background(), "work"); err != nil || exists {
-		t.Fatalf("marker after rollback = (%v, %v)", exists, err)
+	marker, exists, err := registry.quarantine.Inspect(context.Background(), "work")
+	if err != nil || !exists || marker.Phase != quarantinePrepared {
+		t.Fatalf("retained marker = (%#v, %v, %v)", marker, exists, err)
+	}
+	disposition, err := registry.Recover(context.Background(), "work")
+	if err != nil || disposition != DiscardedProjection {
+		t.Fatalf("prepared recovery = (%q, %v)", disposition, err)
 	}
 	assertNoSessionDirectories(t, sessionsDirectory)
+}
+
+func TestRegistryLoginUncertainMarkerInspectionNeverDeletesPossiblePublication(t *testing.T) {
+	registry, err := newRegistry(newFakeProvider(), &fakeLoginRunner{}, newFileIdentityLocker(t.TempDir()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionsDirectory := configureRegistryTestLifecycle(t, registry)
+	underlying := registry.quarantine
+	registry.quarantine = &inspectErrorAfterPublishQuarantine{bindingQuarantine: underlying}
+
+	if _, err := registry.Login(context.Background(), LoginRequest{Name: "work"}); !errors.Is(err, ErrLoginCleanupUncertain) {
+		t.Fatalf("login error = %v", err)
+	}
+	entries, err := os.ReadDir(sessionsDirectory)
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("preserved Sessions = (%d, %v)", len(entries), err)
+	}
+	marker, exists, err := underlying.Inspect(context.Background(), "work")
+	if err != nil || !exists || marker.Phase != quarantinePrepared {
+		t.Fatalf("possible publication = (%#v, %v, %v)", marker, exists, err)
+	}
 }
 
 func TestRegistryListUsesMetadataOnlyAndSortsNames(t *testing.T) {
@@ -558,11 +794,13 @@ func TestRegistryLogoutIsIdempotentAndHonorsIdentityLock(t *testing.T) {
 }
 
 type fakeLoginRunner struct {
-	result      loginRunResult
-	calls       int
-	deviceAuth  bool
-	cleanupDone chan struct{}
-	sessionRoot string
+	auth         []byte
+	result       loginRunResult
+	prepareCalls int
+	calls        int
+	deviceAuth   bool
+	cleanupDone  chan struct{}
+	sessionRoot  string
 }
 
 type busySignalingIdentityLocker struct {
@@ -617,6 +855,105 @@ func (store *recoverableHandoffQuarantine) MarkRecoverable(ctx context.Context, 
 
 type createAndTransitionErrorQuarantine struct{ bindingQuarantine }
 
+type createFailureQuarantine struct{ bindingQuarantine }
+
+type deleteFailureQuarantine struct{ bindingQuarantine }
+
+func (deleteFailureQuarantine) Delete(context.Context, CredentialRef) error {
+	return ErrProviderUnavailable
+}
+
+func (createFailureQuarantine) Create(context.Context, quarantineMarker) error {
+	return ErrProviderUnavailable
+}
+
+type projectionRemovalOrderQuarantine struct {
+	bindingQuarantine
+	sessionsDirectory      string
+	deletedAfterProjection bool
+}
+
+type cleanupReleaseOrder struct {
+	sessionsDirectory    string
+	markerAbsent         func() bool
+	releasedAfterCleanup bool
+}
+
+type releaseOrderLocker struct {
+	identityLocker
+	order *cleanupReleaseOrder
+}
+
+func (locker releaseOrderLocker) TryLock(name CredentialRef) (identityLock, error) {
+	locked, err := locker.identityLocker.TryLock(name)
+	if err != nil {
+		return nil, err
+	}
+	return releaseOrderLock{identityLock: locked, order: locker.order}, nil
+}
+
+type releaseOrderLock struct {
+	identityLock
+	order *cleanupReleaseOrder
+}
+
+func (lock releaseOrderLock) Release() error {
+	entries, err := os.ReadDir(lock.order.sessionsDirectory)
+	lock.order.releasedAfterCleanup = err == nil && len(entries) == 0 && lock.order.markerAbsent()
+	return lock.identityLock.Release()
+}
+
+type lateCleanupProcess struct{ done <-chan struct{} }
+
+func (lateCleanupProcess) Start() error                         { return nil }
+func (lateCleanupProcess) Wait() error                          { return nil }
+func (lateCleanupProcess) Signal(os.Signal) error               { return nil }
+func (process lateCleanupProcess) CleanupDone() <-chan struct{} { return process.done }
+
+type lateSettlementBinding struct{ settled chan struct{} }
+
+func (*lateSettlementBinding) Release() error                                        { return nil }
+func (*lateSettlementBinding) PublishPrepared(context.Context, string, string) error { return nil }
+func (*lateSettlementBinding) Published(context.Context, string, string) (bool, error) {
+	return false, nil
+}
+func (*lateSettlementBinding) MarkCleanupPending(context.Context) error { return nil }
+func (*lateSettlementBinding) MarkRecoverable(context.Context) error    { return nil }
+func (binding *lateSettlementBinding) SettlePending(context.Context, string, string) error {
+	close(binding.settled)
+	return nil
+}
+func (*lateSettlementBinding) DeleteMarkerAfterProjectionRemoval(context.Context) error { return nil }
+func (*lateSettlementBinding) CommitLogin(context.Context, string) (IdentityMetadata, error) {
+	return IdentityMetadata{}, nil
+}
+
+func (store *projectionRemovalOrderQuarantine) Delete(ctx context.Context, name CredentialRef) error {
+	entries, err := os.ReadDir(store.sessionsDirectory)
+	store.deletedAfterProjection = err == nil && len(entries) == 0
+	return store.bindingQuarantine.Delete(ctx, name)
+}
+
+type inspectErrorAfterPublishQuarantine struct {
+	bindingQuarantine
+	published bool
+}
+
+func (store *inspectErrorAfterPublishQuarantine) Create(ctx context.Context, marker quarantineMarker) error {
+	if err := store.bindingQuarantine.Create(ctx, marker); err != nil {
+		return err
+	}
+	store.published = true
+	return ErrBindingQuarantined
+}
+
+func (store *inspectErrorAfterPublishQuarantine) Inspect(ctx context.Context, name CredentialRef) (quarantineMarker, bool, error) {
+	if store.published {
+		return quarantineMarker{}, false, ErrProviderUnavailable
+	}
+	return store.bindingQuarantine.Inspect(ctx, name)
+}
+
 func (store createAndTransitionErrorQuarantine) Create(ctx context.Context, marker quarantineMarker) error {
 	if err := store.bindingQuarantine.Create(ctx, marker); err != nil {
 		return err
@@ -629,6 +966,7 @@ func (createAndTransitionErrorQuarantine) MarkRecoverable(context.Context, Crede
 }
 
 func (runner *fakeLoginRunner) Prepare(context.Context) (loginPreparation, error) {
+	runner.prepareCalls++
 	return loginPreparation{run: runner.Run}, nil
 }
 
@@ -640,6 +978,7 @@ func (runner *fakeLoginRunner) Run(
 	deviceAuth bool,
 	_ launch.Terminal,
 ) loginRunResult {
+	runner.sessionRoot = created.RootDirectory()
 	if beginProcess != nil {
 		if err := beginProcess(); err != nil {
 			return loginRunResult{containedRunResult: containedRunResult{
@@ -650,7 +989,17 @@ func (runner *fakeLoginRunner) Run(
 	runner.calls++
 	runner.deviceAuth = deviceAuth
 	result := runner.result
-	result.auth = append([]byte(nil), result.auth...)
+	if len(runner.auth) != 0 {
+		codexHome := filepath.Join(created.HomeDirectory(), ".codex")
+		if err := os.MkdirAll(codexHome, 0o700); err != nil {
+			return loginRunResult{containedRunResult: containedRunResult{err: ErrLoginFailed, cleanupProven: true}}
+		}
+		if err := os.WriteFile(filepath.Join(codexHome, "auth.json"), runner.auth, 0o600); err != nil {
+			return loginRunResult{containedRunResult: containedRunResult{err: ErrLoginFailed, cleanupProven: true}}
+		}
+		// The fake target writes the projection; it does not return credentials
+		// to Registry.Login.
+	}
 	if runner.cleanupDone != nil {
 		runner.sessionRoot = created.RootDirectory()
 		process, err := created.RetainUntilProcessDone(pendingCleanupProcess{done: runner.cleanupDone})
@@ -675,7 +1024,86 @@ func configureRegistryTestLifecycle(t *testing.T, registry *Registry) string {
 	registry.sessionsDirectory = filepath.Join(root, "sessions")
 	registry.workingDirectory = workingDirectory
 	registry.quarantine = newFileBindingQuarantine(filepath.Join(root, "quarantine"))
+	registry.resources = testLoginResources{registry: registry}
 	return registry.sessionsDirectory
+}
+
+// testLoginResources is an upper-layer capability fixture.  It has the same
+// opaque root-path commit contract as the lower Store; lower Store tests cover
+// its durable provider and marker implementation independently.
+type testLoginResources struct{ registry *Registry }
+
+func (resources testLoginResources) AcquireLogin(ctx context.Context, value string) (loginResourceBinding, error) {
+	name, err := ParseCredentialRef(value)
+	if err != nil {
+		return nil, err
+	}
+	locked, err := resources.registry.tryLock(ctx, name, false)
+	if err != nil {
+		return nil, err
+	}
+	if _, exists, err := resources.registry.provider.Metadata(ctx, name); err != nil {
+		_ = locked.Release()
+		return nil, fmt.Errorf("inspect Codex authentication identity %q: %w", name, err)
+	} else if exists {
+		_ = locked.Release()
+		return nil, fmt.Errorf("%w: %q", ErrIdentityExists, name)
+	}
+	return testLoginBinding{registry: resources.registry, name: name, lock: locked}, nil
+}
+
+type testLoginBinding struct {
+	registry *Registry
+	name     CredentialRef
+	lock     identityLock
+}
+
+func (binding testLoginBinding) Release() error { return binding.lock.Release() }
+func (binding testLoginBinding) PublishPrepared(ctx context.Context, sessionID, challenge string) error {
+	return binding.registry.quarantine.Create(ctx, quarantineMarker{Version: recordVersion, Name: binding.name, SessionID: sessionID, Phase: quarantinePrepared, ProofChallenge: challenge})
+}
+func (binding testLoginBinding) Published(ctx context.Context, sessionID, challenge string) (bool, error) {
+	marker, exists, err := binding.registry.quarantine.Inspect(ctx, binding.name)
+	if err != nil {
+		return false, err
+	}
+	return exists && marker.SessionID == sessionID && marker.ProofChallenge == challenge && marker.Phase == quarantinePrepared, nil
+}
+func (binding testLoginBinding) MarkCleanupPending(ctx context.Context) error {
+	return binding.registry.quarantine.MarkCleanupPending(ctx, binding.name)
+}
+func (binding testLoginBinding) MarkRecoverable(ctx context.Context) error {
+	return binding.registry.quarantine.MarkRecoverable(ctx, binding.name)
+}
+func (binding testLoginBinding) SettlePending(ctx context.Context, sessionID, challenge string) error {
+	locked, err := binding.registry.locks.TryLock(binding.name)
+	if err != nil {
+		return err
+	}
+	defer locked.Release()
+	marker, exists, err := binding.registry.quarantine.Inspect(ctx, binding.name)
+	if err != nil || !exists || marker.SessionID != sessionID || marker.ProofChallenge != challenge || marker.Phase != quarantineCleanupPending {
+		return ErrBindingQuarantined
+	}
+	return binding.registry.quarantine.MarkRecoverable(ctx, binding.name)
+}
+func (binding testLoginBinding) DeleteMarkerAfterProjectionRemoval(ctx context.Context) error {
+	return binding.registry.quarantine.Delete(ctx, binding.name)
+}
+func (binding testLoginBinding) CommitLogin(ctx context.Context, root string) (IdentityMetadata, error) {
+	auth, err := readSessionAuthFile(root)
+	if err != nil {
+		return IdentityMetadata{}, ErrUnsupportedAuth
+	}
+	defer clearBytes(auth)
+	metadata, err := validateAuthJSON(binding.name, auth)
+	if err != nil {
+		return IdentityMetadata{}, err
+	}
+	if err := binding.registry.provider.Create(ctx, credentialRecord{Metadata: metadata, Auth: auth}); err != nil {
+		return IdentityMetadata{}, fmt.Errorf("store Codex authentication identity %q: %w", binding.name, err)
+	}
+	return metadata, nil
 }
 
 type fakeProvider struct {
@@ -684,6 +1112,9 @@ type fakeProvider struct {
 	loadCalls    int
 	replaceCalls int
 	replaceErr   error
+	metadataErr  error
+	createErr    error
+	createCalls  int
 }
 
 func newFakeProvider() *fakeProvider {
@@ -694,12 +1125,16 @@ func (provider *fakeProvider) Metadata(_ context.Context, name CredentialRef) (I
 	provider.mutex.Lock()
 	defer provider.mutex.Unlock()
 	record, exists := provider.records[name]
-	return record.Metadata, exists, nil
+	return record.Metadata, exists, provider.metadataErr
 }
 
 func (provider *fakeProvider) Create(_ context.Context, record credentialRecord) error {
 	provider.mutex.Lock()
 	defer provider.mutex.Unlock()
+	provider.createCalls++
+	if provider.createErr != nil {
+		return provider.createErr
+	}
 	if _, exists := provider.records[record.Metadata.Name]; exists {
 		return ErrIdentityExists
 	}

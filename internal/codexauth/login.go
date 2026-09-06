@@ -168,11 +168,10 @@ func (runner *codexLoginRunner) runOperation(
 		}
 	}
 
-	auth, err := readSessionAuthFile(created.RootDirectory())
-	if err != nil {
-		return loginRunResult{containedRunResult: containedRunResult{err: ErrUnsupportedAuth, cleanupProven: true}}
-	}
-	return loginRunResult{auth: auth, containedRunResult: containedRunResult{cleanupProven: true}}
+	// The resource binding reads auth.json from the protected Session root only
+	// after process cleanup has settled.  Do not carry credential bytes through
+	// the executable orchestration result.
+	return loginRunResult{containedRunResult: containedRunResult{cleanupProven: true}}
 }
 
 func readPrivateAuthFile(path string) ([]byte, error) {
