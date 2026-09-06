@@ -299,14 +299,36 @@ func TestPromotedArtifactSharedTargetConformance(t *testing.T) {
 }
 
 func TestSharedTargetFixtureDoesNotInventPreflightEvidence(t *testing.T) {
-	home := t.TempDir()
-	workspace := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	for _, test := range []struct {
+		name   string
+		skills bool
+		auth   bool
+	}{
+		{name: "neither Session marker"},
+		{name: "skills only", skills: true},
+		{name: "auth only", auth: true},
+		{name: "both", skills: true, auth: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			home := t.TempDir()
+			workspace := t.TempDir()
+			t.Setenv("HOME", home)
+			t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+			if test.skills {
+				writeFakeDevinMarker(filepath.Join(home, fakeDevinSkillsProbeMarker))
+			}
+			if test.auth {
+				writeFakeDevinMarker(filepath.Join(home, fakeDevinAuthProbeMarker))
+			}
 
-	result := observeFakeDevinSharedTargetConformance(fakeDevinConfiguration{}, workspace)
-	if result.PreflightSkills || result.PreflightAuthentication {
-		t.Fatalf("attached fixture invented missing preflight evidence: %#v", result)
+			result := observeFakeDevinSharedTargetConformance(fakeDevinConfiguration{}, workspace)
+			if result.PreflightSkills != test.skills {
+				t.Fatalf("skills preflight observation = %v, want %v", result.PreflightSkills, test.skills)
+			}
+			if result.PreflightAuthentication != test.auth {
+				t.Fatalf("authentication preflight observation = %v, want %v", result.PreflightAuthentication, test.auth)
+			}
+		})
 	}
 }
 
