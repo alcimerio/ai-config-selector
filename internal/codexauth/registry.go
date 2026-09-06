@@ -5,26 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
-	"sort"
 
 	"github.com/alcimerio/ai-config-selector/internal/codexauthresource"
 	"github.com/alcimerio/ai-config-selector/internal/launch"
 	"github.com/alcimerio/ai-config-selector/internal/session"
 )
-
-type credentialRecord struct {
-	Metadata IdentityMetadata
-	Auth     []byte
-}
-
-type credentialProvider interface {
-	Metadata(context.Context, CredentialRef) (IdentityMetadata, bool, error)
-	Create(context.Context, credentialRecord) error
-	Replace(context.Context, credentialRecord) error
-	List(context.Context) ([]IdentityMetadata, error)
-	Load(context.Context, CredentialRef) (credentialRecord, bool, error)
-	Delete(context.Context, CredentialRef) error
-}
 
 type loginRunResult struct {
 	containedRunResult
@@ -57,14 +42,6 @@ type loginRunner interface {
 	Prepare(context.Context) (loginPreparation, error)
 }
 
-type identityLocker interface {
-	TryLock(CredentialRef) (identityLock, error)
-}
-
-type identityLock interface {
-	Release() error
-}
-
 // Config contains production paths and the version-pinned Codex executable.
 type Config struct {
 	BinaryPath        string
@@ -86,12 +63,9 @@ type LoginRequest struct {
 // Registry is the deep named-auth module used by the CLI. Provider records,
 // login Sessions, credential bytes, and identity locks stay behind this seam.
 type Registry struct {
-	resources         loginResourceStore
-	provider          credentialProvider
+	resources         authResourceStore
 	login             loginRunner
-	locks             identityLocker
 	status            statusRunner
-	quarantine        bindingQuarantine
 	verifyCleanup     func(string, []byte) (bool, error)
 	sessionsDirectory string
 	workingDirectory  string
@@ -135,14 +109,6 @@ func New(config Config) (*Registry, error) {
 	if err != nil {
 		return nil, errors.New("create Codex authentication registry: authentication quarantine directory must be private")
 	}
-	locks := newFileIdentityLocker(locksDirectory)
-	if locks.initErr != nil {
-		return nil, errors.New("create Codex authentication registry: authentication locks directory must be private")
-	}
-	quarantine := newFileBindingQuarantine(quarantineDirectory)
-	if quarantine.initErr != nil {
-		return nil, errors.New("create Codex authentication registry: authentication quarantine directory must be private")
-	}
 	resources, err := codexauthresource.New(locksDirectory, quarantineDirectory)
 	if err != nil {
 		return nil, errors.New("create Codex authentication registry: authentication resource directories must be private")
@@ -151,39 +117,23 @@ func New(config Config) (*Registry, error) {
 		config.SessionsDirectory = filepath.Join(acsHome, "sessions")
 	}
 	sandbox := launch.NewProcessSandbox()
-	registry, err := newRegistry(
-		newKeychainProvider(),
-		newCodexLoginRunner(codexLoginConfig{
+	registry := &Registry{
+		resources: productionAuthResources{store: resources},
+		login: newCodexLoginRunner(codexLoginConfig{
 			BinaryPath: config.BinaryPath, SupportedVersion: config.SupportedVersion,
 			RuntimeInputs: config.RuntimeInputs, SessionsDirectory: config.SessionsDirectory,
 			WorkingDirectory: config.WorkingDirectory, PrivateRoot: acsHome,
 		}, sandbox),
-		locks,
-	)
-	if err != nil {
-		return nil, err
+		verifyCleanup: launch.VerifySessionCleanupProof,
 	}
 	registry.status = newCodexStatusRunner(codexLoginConfig{
 		BinaryPath: config.BinaryPath, SupportedVersion: config.SupportedVersion,
 		RuntimeInputs: config.RuntimeInputs, SessionsDirectory: config.SessionsDirectory,
 		WorkingDirectory: config.WorkingDirectory, PrivateRoot: acsHome,
 	}, sandbox)
-	registry.quarantine = quarantine
-	registry.resources = productionLoginResources{store: resources}
 	registry.sessionsDirectory = config.SessionsDirectory
 	registry.workingDirectory = config.WorkingDirectory
 	return registry, nil
-}
-
-func newRegistry(provider credentialProvider, login loginRunner, locks identityLocker) (*Registry, error) {
-	if provider == nil || login == nil || locks == nil {
-		return nil, errors.New("create Codex authentication registry: provider, login runner, and identity locker are required")
-	}
-	return &Registry{
-		provider: provider, login: login, locks: locks, quarantine: noBindingQuarantine{},
-		resources:     unavailableLoginResources{},
-		verifyCleanup: launch.VerifySessionCleanupProof,
-	}, nil
 }
 
 // Login creates one new identity. An existing name is never replaced.
@@ -194,51 +144,10 @@ func (registry *Registry) Login(ctx context.Context, request LoginRequest) (Iden
 // List returns only provider attributes; it does not retrieve credential
 // payloads from Keychain.
 func (registry *Registry) List(ctx context.Context) ([]IdentityMetadata, error) {
-	identities, err := registry.provider.List(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("list Codex authentication identities: %w", err)
-	}
-	sort.Slice(identities, func(left, right int) bool { return identities[left].Name < identities[right].Name })
-	return identities, nil
+	return registry.resources.List(ctx)
 }
 
 // Logout removes only the selected ACS-owned identity. Absence is idempotent.
 func (registry *Registry) Logout(ctx context.Context, value string) error {
-	name, err := ParseCredentialRef(value)
-	if err != nil {
-		return err
-	}
-	locked, err := registry.tryLock(ctx, name, false)
-	if err != nil {
-		return err
-	}
-	defer locked.Release()
-	if err := registry.provider.Delete(ctx, name); err != nil {
-		return fmt.Errorf("remove Codex authentication identity %q: %w", name, err)
-	}
-	return nil
-}
-
-func (registry *Registry) tryLock(
-	ctx context.Context,
-	name CredentialRef,
-	allowQuarantine bool,
-) (identityLock, error) {
-	locked, err := registry.locks.TryLock(name)
-	if err != nil {
-		return nil, err
-	}
-	if allowQuarantine {
-		return locked, nil
-	}
-	_, exists, err := registry.quarantine.Inspect(ctx, name)
-	if err != nil {
-		_ = locked.Release()
-		return nil, fmt.Errorf("inspect Codex authentication binding %q: %w", name, err)
-	}
-	if exists {
-		_ = locked.Release()
-		return nil, fmt.Errorf("%w: %q", ErrIdentityBusy, name)
-	}
-	return locked, nil
+	return registry.resources.Logout(ctx, value)
 }

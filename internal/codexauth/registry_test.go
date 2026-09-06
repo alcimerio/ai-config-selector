@@ -1,17 +1,20 @@
 package codexauth
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/alcimerio/ai-config-selector/internal/codexauthresource"
 	"github.com/alcimerio/ai-config-selector/internal/launch"
 	"github.com/alcimerio/ai-config-selector/internal/session"
 )
@@ -88,6 +91,33 @@ func TestProductionRegistryLoginUsesResourceAcquireBeforePreparation(t *testing.
 	}
 }
 
+func TestProductionRegistryRoutesStatusListAndLogoutThroughResourceStore(t *testing.T) {
+	root := t.TempDir()
+	registry, err := New(Config{
+		BinaryPath:        "/usr/bin/true",
+		ACSHome:           filepath.Join(root, "acs"),
+		SessionsDirectory: filepath.Join(root, "sessions"),
+		WorkingDirectory:  root,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := &fakeStatusRunner{}
+	registry.status = runner
+	if _, err := registry.Status(context.Background(), "work"); !errors.Is(err, ErrProviderUnavailable) {
+		t.Fatalf("production Status resource error = %v", err)
+	}
+	if runner.checkCalls != 0 {
+		t.Fatalf("resource failure prepared status target: calls = %d", runner.checkCalls)
+	}
+	if _, err := registry.List(context.Background()); !errors.Is(err, ErrProviderUnavailable) {
+		t.Fatalf("production List resource error = %v", err)
+	}
+	if err := registry.Logout(context.Background(), "work"); !errors.Is(err, ErrProviderUnavailable) {
+		t.Fatalf("production Logout resource error = %v", err)
+	}
+}
+
 func TestRegistryLoginProviderInspectionFailurePrecedesPreparation(t *testing.T) {
 	providerFailure := errors.New("synthetic provider inspection failure")
 	provider := newFakeProvider()
@@ -153,73 +183,6 @@ func TestRegistryRejectsLinkedPrivateAncestorsWithoutChangingTheirTargets(t *tes
 	}
 }
 
-func TestRegistriesDoNotShareOwnershipAcrossCanonicalACSHomeReplacement(t *testing.T) {
-	root := t.TempDir()
-	ancestor := filepath.Join(root, "canonical")
-	acsHome := filepath.Join(ancestor, "acs")
-	workspace := filepath.Join(root, "workspace")
-	if err := os.MkdirAll(ancestor, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(workspace, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	config := Config{
-		BinaryPath: "/usr/bin/true", ACSHome: acsHome,
-		SessionsDirectory: filepath.Join(acsHome, "sessions"), WorkingDirectory: workspace,
-	}
-	oldRegistry, err := New(config)
-	if err != nil {
-		t.Fatal(err)
-	}
-	moved := filepath.Join(root, "canonical-detached")
-	if err := os.Rename(ancestor, moved); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Mkdir(ancestor, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	newRegistry, err := New(config)
-	if err != nil {
-		t.Fatalf("replacement registry: %v", err)
-	}
-
-	if locked, err := oldRegistry.locks.TryLock("work"); !errors.Is(err, ErrProviderUnavailable) || locked != nil {
-		t.Fatalf("detached registry lock = (%v, %v)", locked, err)
-	}
-	marker := quarantineMarker{
-		Version: recordVersion, Name: "work", SessionID: "session-replacement",
-		Phase: quarantinePrepared, ProofChallenge: strings.Repeat("b", 64),
-	}
-	if err := oldRegistry.quarantine.Create(context.Background(), marker); !errors.Is(err, ErrProviderUnavailable) {
-		t.Fatalf("detached registry marker error = %v", err)
-	}
-	for _, path := range []string{
-		filepath.Join(moved, "acs", "locks", "codex-auth", "work.lock"),
-		filepath.Join(moved, "acs", "quarantine", "codex-auth", "work.json"),
-		filepath.Join(acsHome, "locks", "codex-auth", "work.lock"),
-		filepath.Join(acsHome, "quarantine", "codex-auth", "work.json"),
-	} {
-		if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
-			t.Fatalf("detached registry wrote %q: %v", path, err)
-		}
-	}
-
-	locked, err := newRegistry.locks.TryLock("work")
-	if err != nil {
-		t.Fatalf("replacement registry lock: %v", err)
-	}
-	if err := locked.Release(); err != nil {
-		t.Fatal(err)
-	}
-	if err := newRegistry.quarantine.Create(context.Background(), marker); err != nil {
-		t.Fatalf("replacement registry marker: %v", err)
-	}
-	if got, exists, err := newRegistry.quarantine.Inspect(context.Background(), "work"); err != nil || !exists || got != marker {
-		t.Fatalf("replacement registry ownership = (%#v, %v, %v)", got, exists, err)
-	}
-}
-
 func TestRegistryLoginCleanupUncertaintyQuarantinesNameAndProjection(t *testing.T) {
 	provider := newFakeProvider()
 	cleanupDone := make(chan struct{})
@@ -238,7 +201,7 @@ func TestRegistryLoginCleanupUncertaintyQuarantinesNameAndProjection(t *testing.
 	if _, err := registry.Login(context.Background(), LoginRequest{Name: "work"}); !errors.Is(err, ErrLoginCleanupUncertain) {
 		t.Fatalf("login error = %v", err)
 	}
-	marker, exists, err := registry.quarantine.Inspect(context.Background(), "work")
+	marker, exists, err := registryTestResources(registry).quarantine.Inspect(context.Background(), "work")
 	if err != nil || !exists || marker.Phase != quarantineCleanupPending {
 		t.Fatalf("pending quarantine marker = (%#v, %v, %v)", marker, exists, err)
 	}
@@ -255,7 +218,7 @@ func TestRegistryLoginCleanupUncertaintyQuarantinesNameAndProjection(t *testing.
 	close(cleanupDone)
 	deadline := time.Now().Add(time.Second)
 	for {
-		marker, exists, err = registry.quarantine.Inspect(context.Background(), "work")
+		marker, exists, err = registryTestResources(registry).quarantine.Inspect(context.Background(), "work")
 		if err == nil && exists && marker.Phase == quarantineRecoverable {
 			break
 		}
@@ -287,7 +250,7 @@ func TestRegistryLoginWithoutProcessProofPreservesOwnedProjection(t *testing.T) 
 	if _, err := os.Stat(runner.sessionRoot); err != nil {
 		t.Fatalf("unproven projection was not retained: %v", err)
 	}
-	marker, exists, err := registry.quarantine.Inspect(context.Background(), "work")
+	marker, exists, err := registryTestResources(registry).quarantine.Inspect(context.Background(), "work")
 	if err != nil || !exists || marker.Phase != quarantineCleanupPending {
 		t.Fatalf("pending ownership = (%#v, %v, %v)", marker, exists, err)
 	}
@@ -338,9 +301,9 @@ func TestRegistryLoginProviderFailureRemovesProjectionBeforeMarker(t *testing.T)
 		t.Fatal(err)
 	}
 	sessionsDirectory := configureRegistryTestLifecycle(t, registry)
-	underlyingQuarantine := registry.quarantine
+	underlyingQuarantine := registryTestResources(registry).quarantine
 	order := &projectionRemovalOrderQuarantine{bindingQuarantine: underlyingQuarantine, sessionsDirectory: sessionsDirectory}
-	registry.quarantine = order
+	registryTestResources(registry).quarantine = order
 	releaseOrder := &cleanupReleaseOrder{
 		sessionsDirectory: sessionsDirectory,
 		markerAbsent: func() bool {
@@ -348,7 +311,7 @@ func TestRegistryLoginProviderFailureRemovesProjectionBeforeMarker(t *testing.T)
 			return inspectErr == nil && !exists
 		},
 	}
-	registry.locks = releaseOrderLocker{identityLocker: registry.locks, order: releaseOrder}
+	registryTestResources(registry).locks = releaseOrderLocker{identityLocker: registryTestResources(registry).locks, order: releaseOrder}
 
 	if _, err := registry.Login(context.Background(), LoginRequest{Name: "work"}); !errors.Is(err, providerFailure) {
 		t.Fatalf("provider failure = %v", err)
@@ -412,8 +375,8 @@ func TestRegistryLoginMarkerRemovalFailureRetainsQuarantineAfterPhysicalCleanup(
 		t.Fatal(err)
 	}
 	sessionsDirectory := configureRegistryTestLifecycle(t, registry)
-	underlying := registry.quarantine
-	registry.quarantine = deleteFailureQuarantine{bindingQuarantine: underlying}
+	underlying := registryTestResources(registry).quarantine
+	registryTestResources(registry).quarantine = deleteFailureQuarantine{bindingQuarantine: underlying}
 
 	if _, err := registry.Login(context.Background(), LoginRequest{Name: "work"}); !errors.Is(err, ErrLoginCleanupUncertain) {
 		t.Fatalf("marker removal error = %v", err)
@@ -446,8 +409,8 @@ func TestRegistryRecoverWaitsForRecoverableSettlementLockHandoff(t *testing.T) {
 	sessionsDirectory := configureRegistryTestLifecycle(t, registry)
 	markedRecoverable := make(chan struct{})
 	releaseSettlement := make(chan struct{})
-	registry.quarantine = &recoverableHandoffQuarantine{
-		bindingQuarantine: registry.quarantine,
+	registryTestResources(registry).quarantine = &recoverableHandoffQuarantine{
+		bindingQuarantine: registryTestResources(registry).quarantine,
 		marked:            markedRecoverable,
 		release:           releaseSettlement,
 	}
@@ -492,13 +455,13 @@ func TestRegistryRecoverWaitsOnlyForTheObservedRecoverableGeneration(t *testing.
 				t.Fatal(err)
 			}
 			configureRegistryTestLifecycle(t, registry)
-			if err := registry.quarantine.Create(context.Background(), quarantineMarker{
+			if err := registryTestResources(registry).quarantine.Create(context.Background(), quarantineMarker{
 				Version: recordVersion, Name: "work", SessionID: "session-contended",
 				Phase: phase, ProofChallenge: testCleanupProofChallenge,
 			}); err != nil {
 				t.Fatal(err)
 			}
-			held, err := registry.locks.TryLock("work")
+			held, err := registryTestResources(registry).locks.TryLock("work")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -517,13 +480,13 @@ func TestRegistryRecoverWaitsOnlyForTheObservedRecoverableGeneration(t *testing.
 			t.Fatal(err)
 		}
 		configureRegistryTestLifecycle(t, registry)
-		if err := registry.quarantine.Create(context.Background(), quarantineMarker{
+		if err := registryTestResources(registry).quarantine.Create(context.Background(), quarantineMarker{
 			Version: recordVersion, Name: "work", SessionID: "session-contended",
 			Phase: quarantineRecoverable, ProofChallenge: testCleanupProofChallenge,
 		}); err != nil {
 			t.Fatal(err)
 		}
-		held, err := registry.locks.TryLock("work")
+		held, err := registryTestResources(registry).locks.TryLock("work")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -544,15 +507,15 @@ func TestRegistryRecoverWaitsOnlyForTheObservedRecoverableGeneration(t *testing.
 			t.Fatal(err)
 		}
 		configureRegistryTestLifecycle(t, registry)
-		underlyingQuarantine := registry.quarantine
+		underlyingQuarantine := registryTestResources(registry).quarantine
 		observedRecoverable := make(chan struct{})
 		continueRecovery := make(chan struct{})
-		registry.quarantine = &recoverableInspectGate{
+		registryTestResources(registry).quarantine = &recoverableInspectGate{
 			bindingQuarantine: underlyingQuarantine,
 			observed:          observedRecoverable,
 			proceed:           continueRecovery,
 		}
-		if err := registry.quarantine.Create(context.Background(), quarantineMarker{
+		if err := registryTestResources(registry).quarantine.Create(context.Background(), quarantineMarker{
 			Version: recordVersion, Name: "work", SessionID: "session-contended",
 			Phase: quarantineRecoverable, ProofChallenge: testCleanupProofChallenge,
 		}); err != nil {
@@ -596,10 +559,10 @@ func TestRegistryRecoverWaitsOnlyForTheObservedRecoverableGeneration(t *testing.
 			t.Fatal(err)
 		}
 		configureRegistryTestLifecycle(t, registry)
-		underlyingQuarantine := registry.quarantine
+		underlyingQuarantine := registryTestResources(registry).quarantine
 		observedRecoverable := make(chan struct{})
 		continueRecovery := make(chan struct{})
-		registry.quarantine = &recoverableInspectGate{
+		registryTestResources(registry).quarantine = &recoverableInspectGate{
 			bindingQuarantine: underlyingQuarantine,
 			observed:          observedRecoverable,
 			proceed:           continueRecovery,
@@ -608,7 +571,7 @@ func TestRegistryRecoverWaitsOnlyForTheObservedRecoverableGeneration(t *testing.
 			Version: recordVersion, Name: "work", SessionID: "session-original",
 			Phase: quarantineRecoverable, ProofChallenge: testCleanupProofChallenge,
 		}
-		if err := registry.quarantine.Create(context.Background(), original); err != nil {
+		if err := registryTestResources(registry).quarantine.Create(context.Background(), original); err != nil {
 			t.Fatal(err)
 		}
 		held, err := underlyingLocks.TryLock("work")
@@ -647,7 +610,7 @@ func TestRegistryRecoverWaitsOnlyForTheObservedRecoverableGeneration(t *testing.
 		if !errors.Is(recovered.err, ErrIdentityBusy) || recovered.disposition != QuarantinedUncertain {
 			t.Fatalf("replacement generation recovery = (%q, %v)", recovered.disposition, recovered.err)
 		}
-		marker, exists, err := registry.quarantine.Inspect(context.Background(), "work")
+		marker, exists, err := registryTestResources(registry).quarantine.Inspect(context.Background(), "work")
 		if err != nil || !exists || marker != replacement {
 			t.Fatalf("replacement marker = (%#v, %v, %v)", marker, exists, err)
 		}
@@ -664,7 +627,7 @@ func TestRegistryLoginPublishedMarkerFailurePreservesRecoverableSession(t *testi
 		t.Fatal(err)
 	}
 	sessionsDirectory := configureRegistryTestLifecycle(t, registry)
-	registry.quarantine = createErrorAfterPublishQuarantine{bindingQuarantine: registry.quarantine}
+	registryTestResources(registry).quarantine = createErrorAfterPublishQuarantine{bindingQuarantine: registryTestResources(registry).quarantine}
 
 	if _, err := registry.Login(context.Background(), LoginRequest{Name: "work"}); !errors.Is(err, ErrLoginCleanupUncertain) {
 		t.Fatalf("login error = %v", err)
@@ -672,7 +635,7 @@ func TestRegistryLoginPublishedMarkerFailurePreservesRecoverableSession(t *testi
 	if runner.calls != 0 {
 		t.Fatalf("published marker failure ran login %d times", runner.calls)
 	}
-	marker, exists, err := registry.quarantine.Inspect(context.Background(), "work")
+	marker, exists, err := registryTestResources(registry).quarantine.Inspect(context.Background(), "work")
 	if err != nil || !exists || marker.Phase != quarantineRecoverable {
 		t.Fatalf("recoverable marker = (%#v, %v, %v)", marker, exists, err)
 	}
@@ -689,7 +652,7 @@ func TestRegistryLoginUnpublishedMarkerFailurePreservesOriginalError(t *testing.
 		t.Fatal(err)
 	}
 	sessionsDirectory := configureRegistryTestLifecycle(t, registry)
-	registry.quarantine = createFailureQuarantine{bindingQuarantine: registry.quarantine}
+	registryTestResources(registry).quarantine = createFailureQuarantine{bindingQuarantine: registryTestResources(registry).quarantine}
 
 	if _, err := registry.Login(context.Background(), LoginRequest{Name: "work"}); err != ErrProviderUnavailable {
 		t.Fatalf("unpublished marker error = %v", err)
@@ -707,7 +670,7 @@ func TestRegistryLoginPublishedMarkerTransitionFailureRetainsRecoverableSession(
 		t.Fatal(err)
 	}
 	sessionsDirectory := configureRegistryTestLifecycle(t, registry)
-	registry.quarantine = createAndTransitionErrorQuarantine{bindingQuarantine: registry.quarantine}
+	registryTestResources(registry).quarantine = createAndTransitionErrorQuarantine{bindingQuarantine: registryTestResources(registry).quarantine}
 
 	if _, err := registry.Login(context.Background(), LoginRequest{Name: "work"}); !errors.Is(err, ErrLoginCleanupUncertain) {
 		t.Fatalf("login error = %v", err)
@@ -715,7 +678,7 @@ func TestRegistryLoginPublishedMarkerTransitionFailureRetainsRecoverableSession(
 	if runner.calls != 0 {
 		t.Fatalf("published marker failure ran login %d times", runner.calls)
 	}
-	marker, exists, err := registry.quarantine.Inspect(context.Background(), "work")
+	marker, exists, err := registryTestResources(registry).quarantine.Inspect(context.Background(), "work")
 	if err != nil || !exists || marker.Phase != quarantinePrepared {
 		t.Fatalf("retained marker = (%#v, %v, %v)", marker, exists, err)
 	}
@@ -732,8 +695,8 @@ func TestRegistryLoginUncertainMarkerInspectionNeverDeletesPossiblePublication(t
 		t.Fatal(err)
 	}
 	sessionsDirectory := configureRegistryTestLifecycle(t, registry)
-	underlying := registry.quarantine
-	registry.quarantine = &inspectErrorAfterPublishQuarantine{bindingQuarantine: underlying}
+	underlying := registryTestResources(registry).quarantine
+	registryTestResources(registry).quarantine = &inspectErrorAfterPublishQuarantine{bindingQuarantine: underlying}
 
 	if _, err := registry.Login(context.Background(), LoginRequest{Name: "work"}); !errors.Is(err, ErrLoginCleanupUncertain) {
 		t.Fatalf("login error = %v", err)
@@ -927,6 +890,11 @@ func (*lateSettlementBinding) DeleteMarkerAfterProjectionRemoval(context.Context
 func (*lateSettlementBinding) CommitLogin(context.Context, string) (IdentityMetadata, error) {
 	return IdentityMetadata{}, nil
 }
+func (*lateSettlementBinding) Project(string) error                     { return nil }
+func (*lateSettlementBinding) MarkRefreshAllowed(context.Context) error { return nil }
+func (*lateSettlementBinding) FinalizeStatus(context.Context, string) (codexauthresource.BindingDisposition, error) {
+	return codexauthresource.DiscardedProjection, nil
+}
 
 func (store *projectionRemovalOrderQuarantine) Delete(ctx context.Context, name CredentialRef) error {
 	entries, err := os.ReadDir(store.sessionsDirectory)
@@ -1023,15 +991,77 @@ func configureRegistryTestLifecycle(t *testing.T, registry *Registry) string {
 	}
 	registry.sessionsDirectory = filepath.Join(root, "sessions")
 	registry.workingDirectory = workingDirectory
-	registry.quarantine = newFileBindingQuarantine(filepath.Join(root, "quarantine"))
-	registry.resources = testLoginResources{registry: registry}
+	registryTestResources(registry).quarantine = newFileBindingQuarantine(filepath.Join(root, "quarantine"))
 	return registry.sessionsDirectory
+}
+
+type credentialRecord struct {
+	Metadata IdentityMetadata
+	Auth     []byte
+}
+
+type credentialProvider interface {
+	Metadata(context.Context, CredentialRef) (IdentityMetadata, bool, error)
+	Create(context.Context, credentialRecord) error
+	Replace(context.Context, credentialRecord) error
+	List(context.Context) ([]IdentityMetadata, error)
+	Load(context.Context, CredentialRef) (credentialRecord, bool, error)
+	Delete(context.Context, CredentialRef) error
+}
+
+type identityLocker interface {
+	TryLock(CredentialRef) (identityLock, error)
+}
+
+type identityLock interface{ Release() error }
+
+func newRegistry(provider credentialProvider, login loginRunner, locks identityLocker) (*Registry, error) {
+	registry := &Registry{
+		login:         login,
+		status:        &fakeStatusRunner{},
+		verifyCleanup: launch.VerifySessionCleanupProof,
+	}
+	resources := &testLoginResources{
+		registry:   registry,
+		provider:   provider,
+		locks:      locks,
+		quarantine: noBindingQuarantine{},
+	}
+	registry.resources = resources
+	return registry, nil
+}
+
+func registryTestResources(registry *Registry) *testLoginResources {
+	resources, ok := registry.resources.(*testLoginResources)
+	if !ok {
+		panic("registry does not use test authentication resources")
+	}
+	return resources
+}
+
+func (registry *Registry) tryLock(ctx context.Context, name CredentialRef, recoverable bool) (identityLock, error) {
+	locked, err := registryTestResources(registry).locks.TryLock(name)
+	if err == nil {
+		return locked, nil
+	}
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return nil, ctxErr
+	}
+	if errors.Is(err, ErrIdentityBusy) && recoverable {
+		return nil, err
+	}
+	return nil, err
 }
 
 // testLoginResources is an upper-layer capability fixture.  It has the same
 // opaque root-path commit contract as the lower Store; lower Store tests cover
 // its durable provider and marker implementation independently.
-type testLoginResources struct{ registry *Registry }
+type testLoginResources struct {
+	registry   *Registry
+	provider   credentialProvider
+	locks      identityLocker
+	quarantine bindingQuarantine
+}
 
 func (resources testLoginResources) AcquireLogin(ctx context.Context, value string) (loginResourceBinding, error) {
 	name, err := ParseCredentialRef(value)
@@ -1042,7 +1072,7 @@ func (resources testLoginResources) AcquireLogin(ctx context.Context, value stri
 	if err != nil {
 		return nil, err
 	}
-	if _, exists, err := resources.registry.provider.Metadata(ctx, name); err != nil {
+	if _, exists, err := registryTestResources(resources.registry).provider.Metadata(ctx, name); err != nil {
 		_ = locked.Release()
 		return nil, fmt.Errorf("inspect Codex authentication identity %q: %w", name, err)
 	} else if exists {
@@ -1052,43 +1082,149 @@ func (resources testLoginResources) AcquireLogin(ctx context.Context, value stri
 	return testLoginBinding{registry: resources.registry, name: name, lock: locked}, nil
 }
 
+func (resources testLoginResources) AcquireStatus(ctx context.Context, value string) (loginResourceBinding, IdentityMetadata, error) {
+	name, err := ParseCredentialRef(value)
+	if err != nil {
+		return nil, IdentityMetadata{}, err
+	}
+	locked, err := resources.registry.tryLock(ctx, name, false)
+	if err != nil {
+		return nil, IdentityMetadata{}, err
+	}
+	record, exists, err := registryTestResources(resources.registry).provider.Load(ctx, name)
+	if err != nil {
+		_ = locked.Release()
+		return nil, IdentityMetadata{}, fmt.Errorf("load Codex authentication identity %q: %w", name, err)
+	}
+	if !exists {
+		_ = locked.Release()
+		return nil, IdentityMetadata{}, fmt.Errorf("%w: %q", ErrIdentityNotFound, name)
+	}
+	return testLoginBinding{registry: resources.registry, name: name, lock: locked, record: record, hasRecord: true}, record.Metadata, nil
+}
+
+func (resources testLoginResources) AcquireRecovery(ctx context.Context, value string) (recoveryResourceBinding, error) {
+	name, err := ParseCredentialRef(value)
+	if err != nil {
+		return nil, err
+	}
+	var expected *quarantineMarker
+	for {
+		locked, err := resources.registry.tryLock(ctx, name, true)
+		if err == nil {
+			marker, exists, inspectErr := registryTestResources(resources.registry).quarantine.Inspect(ctx, name)
+			if inspectErr != nil {
+				_ = locked.Release()
+				return nil, inspectErr
+			}
+			if !exists {
+				_ = locked.Release()
+				return nil, nil
+			}
+			if expected != nil && marker != *expected {
+				_ = locked.Release()
+				return nil, testRecoveryGenerationChanged{name: name}
+			}
+			return &testRecoveryBinding{registry: resources.registry, name: name, lock: locked, marker: marker}, nil
+		}
+		if !errors.Is(err, ErrIdentityBusy) {
+			return nil, err
+		}
+		marker, exists, inspectErr := registryTestResources(resources.registry).quarantine.Inspect(ctx, name)
+		if inspectErr != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return nil, ctxErr
+			}
+			return nil, err
+		}
+		if expected == nil {
+			if !exists || marker.Phase != quarantineRecoverable {
+				return nil, err
+			}
+			expected = &marker
+		} else if exists && marker != *expected {
+			return nil, testRecoveryGenerationChanged{name: name}
+		}
+		timer := time.NewTimer(10 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			return nil, ctx.Err()
+		case <-timer.C:
+		}
+	}
+}
+
+func (resources testLoginResources) List(ctx context.Context) ([]IdentityMetadata, error) {
+	identities, err := registryTestResources(resources.registry).provider.List(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list Codex authentication identities: %w", err)
+	}
+	sort.Slice(identities, func(left, right int) bool { return identities[left].Name < identities[right].Name })
+	return identities, nil
+}
+
+func (resources testLoginResources) Logout(ctx context.Context, value string) error {
+	name, err := ParseCredentialRef(value)
+	if err != nil {
+		return err
+	}
+	locked, err := resources.registry.tryLock(ctx, name, false)
+	if err != nil {
+		return err
+	}
+	defer locked.Release()
+	if err := registryTestResources(resources.registry).provider.Delete(ctx, name); err != nil {
+		return fmt.Errorf("remove Codex authentication identity %q: %w", name, err)
+	}
+	return nil
+}
+
 type testLoginBinding struct {
-	registry *Registry
-	name     CredentialRef
-	lock     identityLock
+	registry  *Registry
+	name      CredentialRef
+	lock      identityLock
+	record    credentialRecord
+	hasRecord bool
 }
 
 func (binding testLoginBinding) Release() error { return binding.lock.Release() }
-func (binding testLoginBinding) PublishPrepared(ctx context.Context, sessionID, challenge string) error {
-	return binding.registry.quarantine.Create(ctx, quarantineMarker{Version: recordVersion, Name: binding.name, SessionID: sessionID, Phase: quarantinePrepared, ProofChallenge: challenge})
+func (binding testLoginBinding) PublishPrepared(ctx context.Context, root, challenge string) error {
+	sessionID := filepath.Base(root)
+	return registryTestResources(binding.registry).quarantine.Create(ctx, quarantineMarker{Version: recordVersion, Name: binding.name, SessionID: sessionID, Phase: quarantinePrepared, ProofChallenge: challenge})
 }
 func (binding testLoginBinding) Published(ctx context.Context, sessionID, challenge string) (bool, error) {
-	marker, exists, err := binding.registry.quarantine.Inspect(ctx, binding.name)
+	marker, exists, err := registryTestResources(binding.registry).quarantine.Inspect(ctx, binding.name)
 	if err != nil {
 		return false, err
 	}
 	return exists && marker.SessionID == sessionID && marker.ProofChallenge == challenge && marker.Phase == quarantinePrepared, nil
 }
 func (binding testLoginBinding) MarkCleanupPending(ctx context.Context) error {
-	return binding.registry.quarantine.MarkCleanupPending(ctx, binding.name)
+	return registryTestResources(binding.registry).quarantine.MarkCleanupPending(ctx, binding.name)
 }
 func (binding testLoginBinding) MarkRecoverable(ctx context.Context) error {
-	return binding.registry.quarantine.MarkRecoverable(ctx, binding.name)
+	return registryTestResources(binding.registry).quarantine.MarkRecoverable(ctx, binding.name)
 }
 func (binding testLoginBinding) SettlePending(ctx context.Context, sessionID, challenge string) error {
-	locked, err := binding.registry.locks.TryLock(binding.name)
+	locked, err := registryTestResources(binding.registry).locks.TryLock(binding.name)
 	if err != nil {
 		return err
 	}
 	defer locked.Release()
-	marker, exists, err := binding.registry.quarantine.Inspect(ctx, binding.name)
+	marker, exists, err := registryTestResources(binding.registry).quarantine.Inspect(ctx, binding.name)
 	if err != nil || !exists || marker.SessionID != sessionID || marker.ProofChallenge != challenge || marker.Phase != quarantineCleanupPending {
 		return ErrBindingQuarantined
 	}
-	return binding.registry.quarantine.MarkRecoverable(ctx, binding.name)
+	return registryTestResources(binding.registry).quarantine.MarkRecoverable(ctx, binding.name)
 }
 func (binding testLoginBinding) DeleteMarkerAfterProjectionRemoval(ctx context.Context) error {
-	return binding.registry.quarantine.Delete(ctx, binding.name)
+	return registryTestResources(binding.registry).quarantine.Delete(ctx, binding.name)
 }
 func (binding testLoginBinding) CommitLogin(ctx context.Context, root string) (IdentityMetadata, error) {
 	auth, err := readSessionAuthFile(root)
@@ -1100,10 +1236,101 @@ func (binding testLoginBinding) CommitLogin(ctx context.Context, root string) (I
 	if err != nil {
 		return IdentityMetadata{}, err
 	}
-	if err := binding.registry.provider.Create(ctx, credentialRecord{Metadata: metadata, Auth: auth}); err != nil {
+	if err := registryTestResources(binding.registry).provider.Create(ctx, credentialRecord{Metadata: metadata, Auth: auth}); err != nil {
 		return IdentityMetadata{}, fmt.Errorf("store Codex authentication identity %q: %w", binding.name, err)
 	}
 	return metadata, nil
+}
+
+func (binding testLoginBinding) Project(home string) error {
+	return projectCredentialForTest(home, binding.record)
+}
+
+func (binding testLoginBinding) MarkRefreshAllowed(ctx context.Context) error {
+	return registryTestResources(binding.registry).quarantine.MarkRefreshAllowed(ctx, binding.name)
+}
+
+func (binding testLoginBinding) FinalizeStatus(ctx context.Context, root string) (codexauthresource.BindingDisposition, error) {
+	if !binding.hasRecord {
+		return codexauthresource.QuarantinedUncertain, ErrProviderUnavailable
+	}
+	projected, err := readSessionAuthFile(root)
+	if err != nil {
+		return codexauthresource.DiscardedProjection, ErrProjectedAuthInvalid
+	}
+	defer clearBytes(projected)
+	metadata, err := validateAuthJSON(binding.name, projected)
+	if err != nil || metadata != binding.record.Metadata {
+		return codexauthresource.DiscardedProjection, ErrProjectedAuthInvalid
+	}
+	if bytes.Equal(projected, binding.record.Auth) {
+		return codexauthresource.DiscardedProjection, nil
+	}
+	if err := registryTestResources(binding.registry).provider.Replace(ctx, credentialRecord{Metadata: metadata, Auth: projected}); err != nil {
+		return codexauthresource.QuarantinedUncertain, ErrBindingQuarantined
+	}
+	return codexauthresource.CommittedSameIdentityRefresh, nil
+}
+
+type testRecoveryGenerationChanged struct{ name CredentialRef }
+
+func (err testRecoveryGenerationChanged) Error() string {
+	return fmt.Sprintf("%v: %q", ErrIdentityBusy, err.name)
+}
+func (testRecoveryGenerationChanged) Unwrap() error              { return ErrIdentityBusy }
+func (testRecoveryGenerationChanged) RecoveryGenerationChanged() {}
+
+type testRecoveryBinding struct {
+	registry *Registry
+	name     CredentialRef
+	lock     identityLock
+	marker   quarantineMarker
+}
+
+func (binding *testRecoveryBinding) Release() error    { return binding.lock.Release() }
+func (binding *testRecoveryBinding) SessionID() string { return binding.marker.SessionID }
+func (binding *testRecoveryBinding) Prepared() bool {
+	return binding.marker.Phase == quarantinePrepared
+}
+func (binding *testRecoveryBinding) CleanupPending() bool {
+	return binding.marker.Phase == quarantineCleanupPending
+}
+func (binding *testRecoveryBinding) CleanupChallenge() string { return binding.marker.ProofChallenge }
+func (binding *testRecoveryBinding) DeleteMarkerAfterProjectionRemoval(ctx context.Context) error {
+	marker, exists, err := registryTestResources(binding.registry).quarantine.Inspect(ctx, binding.name)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return nil
+	}
+	if marker != binding.marker {
+		return ErrBindingQuarantined
+	}
+	return registryTestResources(binding.registry).quarantine.Delete(ctx, binding.name)
+}
+func (binding *testRecoveryBinding) FinalizeRecovery(ctx context.Context, root string) (codexauthresource.BindingDisposition, error) {
+	record, exists, err := registryTestResources(binding.registry).provider.Load(ctx, binding.name)
+	if err != nil {
+		return codexauthresource.QuarantinedUncertain, ErrBindingQuarantined
+	}
+	if !exists || !binding.marker.RefreshAllowed {
+		return codexauthresource.DiscardedProjection, nil
+	}
+	defer clearBytes(record.Auth)
+	projected, err := readSessionAuthFile(root)
+	if err != nil {
+		return codexauthresource.DiscardedProjection, nil
+	}
+	defer clearBytes(projected)
+	metadata, err := validateAuthJSON(binding.name, projected)
+	if err != nil || metadata != record.Metadata || bytes.Equal(projected, record.Auth) {
+		return codexauthresource.DiscardedProjection, nil
+	}
+	if err := registryTestResources(binding.registry).provider.Replace(ctx, credentialRecord{Metadata: metadata, Auth: projected}); err != nil {
+		return codexauthresource.QuarantinedUncertain, ErrBindingQuarantined
+	}
+	return codexauthresource.CommittedSameIdentityRefresh, nil
 }
 
 type fakeProvider struct {
@@ -1181,5 +1408,26 @@ func (provider *fakeProvider) Delete(_ context.Context, name CredentialRef) erro
 	provider.mutex.Lock()
 	defer provider.mutex.Unlock()
 	delete(provider.records, name)
+	return nil
+}
+
+func projectCredentialForTest(home string, record credentialRecord) error {
+	if _, err := validateAuthJSON(record.Metadata.Name, record.Auth); err != nil {
+		return ErrProjectedAuthInvalid
+	}
+	codexHome := filepath.Join(home, ".codex")
+	if err := os.Mkdir(codexHome, 0o700); err != nil {
+		return ErrProjectedAuthInvalid
+	}
+	configuration := "cli_auth_credentials_store = \"file\"\nforced_login_method = \"chatgpt\"\n"
+	if record.Metadata.Workspace != "" {
+		configuration += fmt.Sprintf("forced_chatgpt_workspace_id = %q\n", record.Metadata.Workspace)
+	}
+	if err := os.WriteFile(filepath.Join(codexHome, "config.toml"), []byte(configuration), 0o600); err != nil {
+		return ErrProjectedAuthInvalid
+	}
+	if err := os.WriteFile(filepath.Join(codexHome, "auth.json"), record.Auth, 0o600); err != nil {
+		return ErrProjectedAuthInvalid
+	}
 	return nil
 }

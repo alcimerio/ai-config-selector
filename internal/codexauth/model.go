@@ -48,12 +48,12 @@ type IdentityMetadata = codexauthresource.IdentityMetadata
 
 // BindingDisposition is the terminal, secret-free outcome of one projected
 // identity lifecycle.
-type BindingDisposition string
+type BindingDisposition = codexauthresource.BindingDisposition
 
 const (
-	CommittedSameIdentityRefresh BindingDisposition = "committed_same_identity_refresh"
-	DiscardedProjection          BindingDisposition = "discarded_projection"
-	QuarantinedUncertain         BindingDisposition = "quarantined_uncertain"
+	CommittedSameIdentityRefresh = codexauthresource.CommittedSameIdentityRefresh
+	DiscardedProjection          = codexauthresource.DiscardedProjection
+	QuarantinedUncertain         = codexauthresource.QuarantinedUncertain
 )
 
 // IdentityStatus reports only durable metadata and the binding disposition.

@@ -9,7 +9,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"syscall"
+	"time"
 
 	"golang.org/x/sys/unix"
 )
@@ -50,6 +52,7 @@ type Binding struct {
 	lock      identityLock
 	record    credentialRecord
 	hasRecord bool
+	root      string
 	sessionID string
 	challenge string
 }
@@ -63,6 +66,14 @@ type RecoveryBinding struct {
 	lock   identityLock
 	marker quarantineMarker
 }
+
+type recoveryGenerationChangedError struct{ name CredentialRef }
+
+func (err recoveryGenerationChangedError) Error() string {
+	return fmt.Sprintf("%v: %q", ErrIdentityBusy, err.name)
+}
+func (recoveryGenerationChangedError) Unwrap() error              { return ErrIdentityBusy }
+func (recoveryGenerationChangedError) RecoveryGenerationChanged() {}
 
 // New creates the production durable authority from already validated private
 // directories. Session creation/removal stays above this layer.
@@ -149,20 +160,84 @@ func (store *Store) AcquireRecovery(ctx context.Context, value string) (*Recover
 	if err != nil {
 		return nil, err
 	}
-	binding, err := store.acquire(ctx, name, true)
+	var expected *quarantineMarker
+	for {
+		binding, err := store.acquire(ctx, name, true)
+		if err == nil {
+			marker, exists, inspectErr := store.markers.Inspect(ctx, name)
+			if inspectErr != nil {
+				_ = binding.Release()
+				return nil, inspectErr
+			}
+			if !exists {
+				_ = binding.Release()
+				return nil, nil
+			}
+			if expected != nil && marker != *expected {
+				_ = binding.Release()
+				return nil, recoveryGenerationChangedError{name: name}
+			}
+			return &RecoveryBinding{store: store, name: name, lock: binding.lock, marker: marker}, nil
+		}
+		if !errors.Is(err, ErrIdentityBusy) {
+			return nil, err
+		}
+		marker, exists, inspectErr := store.markers.Inspect(ctx, name)
+		if inspectErr != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return nil, ctxErr
+			}
+			return nil, err
+		}
+		if expected == nil {
+			if !exists || marker.Phase != quarantineRecoverable {
+				return nil, err
+			}
+			expected = &marker
+		} else if exists && marker != *expected {
+			return nil, recoveryGenerationChangedError{name: name}
+		}
+		timer := time.NewTimer(10 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			return nil, ctx.Err()
+		case <-timer.C:
+		}
+	}
+}
+
+func (store *Store) List(ctx context.Context) ([]IdentityMetadata, error) {
+	if store == nil || store.provider == nil {
+		return nil, ErrProviderUnavailable
+	}
+	identities, err := store.provider.List(ctx)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("list Codex authentication identities: %w", err)
 	}
-	marker, exists, err := store.markers.Inspect(ctx, name)
+	sort.Slice(identities, func(left, right int) bool { return identities[left].Name < identities[right].Name })
+	return identities, nil
+}
+
+func (store *Store) Logout(ctx context.Context, value string) error {
+	name, err := ParseCredentialRef(value)
 	if err != nil {
-		_ = binding.Release()
-		return nil, err
+		return err
 	}
-	if !exists {
-		_ = binding.Release()
-		return nil, nil
+	binding, err := store.acquire(ctx, name, false)
+	if err != nil {
+		return err
 	}
-	return &RecoveryBinding{store: store, name: name, lock: binding.lock, marker: marker}, nil
+	defer binding.Release()
+	if err := store.provider.Delete(ctx, name); err != nil {
+		return fmt.Errorf("remove Codex authentication identity %q: %w", name, err)
+	}
+	return nil
 }
 
 func (binding *Binding) Name() CredentialRef {
@@ -174,11 +249,16 @@ func (binding *Binding) Name() CredentialRef {
 
 // PublishPrepared records the Session identity before it is protected for
 // recovery. The caller owns the Session but never a marker writer.
-func (binding *Binding) PublishPrepared(ctx context.Context, sessionID, challenge string) error {
+func (binding *Binding) PublishPrepared(ctx context.Context, root, challenge string) error {
 	if binding == nil || binding.store == nil || binding.lock == nil {
 		return ErrProviderUnavailable
 	}
-	binding.sessionID, binding.challenge = sessionID, challenge
+	root = filepath.Clean(root)
+	sessionID := filepath.Base(root)
+	if !filepath.IsAbs(root) || filepath.Dir(root) == root || sessionID == "." {
+		return ErrBindingQuarantined
+	}
+	binding.root, binding.sessionID, binding.challenge = root, sessionID, challenge
 	return binding.store.markers.Create(ctx, quarantineMarker{Version: recordVersion, Name: binding.name, SessionID: sessionID, Phase: quarantinePrepared, ProofChallenge: challenge})
 }
 
@@ -233,6 +313,9 @@ func (binding *Binding) MarkCleanupPending(ctx context.Context) error {
 func (binding *Binding) MarkRefreshAllowed(ctx context.Context) error {
 	if binding == nil || binding.store == nil || binding.lock == nil {
 		return ErrProviderUnavailable
+	}
+	if _, err := binding.currentGeneration(ctx, quarantineCleanupPending, quarantineRecoverable); err != nil {
+		return err
 	}
 	return binding.store.markers.MarkRefreshAllowed(ctx, binding.name)
 }
@@ -309,6 +392,9 @@ func (binding *RecoveryBinding) SessionID() string {
 func (binding *RecoveryBinding) Prepared() bool {
 	return binding != nil && binding.marker.Phase == quarantinePrepared
 }
+func (binding *RecoveryBinding) CleanupPending() bool {
+	return binding != nil && binding.marker.Phase == quarantineCleanupPending
+}
 func (binding *RecoveryBinding) CleanupChallenge() string {
 	if binding == nil {
 		return ""
@@ -317,16 +403,60 @@ func (binding *RecoveryBinding) CleanupChallenge() string {
 }
 
 func (binding *RecoveryBinding) DeleteMarkerAfterProjectionRemoval(ctx context.Context) error {
-	if binding == nil || binding.store == nil {
+	if binding == nil || binding.store == nil || binding.lock == nil {
 		return ErrProviderUnavailable
 	}
+	marker, exists, err := binding.store.markers.Inspect(ctx, binding.name)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return nil
+	}
+	if marker != binding.marker {
+		return ErrBindingQuarantined
+	}
 	return binding.store.markers.Delete(ctx, binding.name)
+}
+
+func (binding *RecoveryBinding) FinalizeRecovery(ctx context.Context, root string) (BindingDisposition, error) {
+	if binding == nil || binding.store == nil || binding.lock == nil || binding.marker.Phase == quarantinePrepared {
+		return QuarantinedUncertain, ErrBindingQuarantined
+	}
+	marker, exists, err := binding.store.markers.Inspect(ctx, binding.name)
+	if err != nil || !exists || marker != binding.marker {
+		return QuarantinedUncertain, ErrBindingQuarantined
+	}
+	if !filepath.IsAbs(root) || filepath.Base(filepath.Clean(root)) != binding.marker.SessionID || !hasRecoveryProtection(root) {
+		return QuarantinedUncertain, ErrBindingQuarantined
+	}
+	record, exists, err := binding.store.provider.Load(ctx, binding.name)
+	if err != nil {
+		return QuarantinedUncertain, ErrBindingQuarantined
+	}
+	if !exists || !binding.marker.RefreshAllowed {
+		return DiscardedProjection, nil
+	}
+	defer ClearBytes(record.Auth)
+	projected, err := readSessionAuthFile(root)
+	if err != nil {
+		return DiscardedProjection, nil
+	}
+	defer ClearBytes(projected)
+	metadata, err := ValidateAuthJSON(binding.name, projected)
+	if err != nil || metadata != record.Metadata || bytes.Equal(projected, record.Auth) {
+		return DiscardedProjection, nil
+	}
+	if err := binding.store.provider.Replace(ctx, credentialRecord{Metadata: metadata, Auth: projected}); err != nil {
+		return QuarantinedUncertain, ErrBindingQuarantined
+	}
+	return CommittedSameIdentityRefresh, nil
 }
 
 // Project writes only a validated durable record into the supplied private
 // home. Credential bytes never leave the Store API.
 func (binding *Binding) Project(home string) error {
-	if binding == nil || !binding.hasRecord {
+	if binding == nil || binding.lock == nil || !binding.hasRecord || filepath.Clean(home) != filepath.Join(binding.root, "home") || !hasRecoveryProtection(binding.root) {
 		return ErrProjectedAuthInvalid
 	}
 	if err := validateMetadata(binding.record.Metadata); err != nil {
@@ -362,6 +492,9 @@ func (binding *Binding) CommitLogin(ctx context.Context, root string) (IdentityM
 	if _, err := binding.currentGeneration(ctx, quarantineRecoverable); err != nil {
 		return IdentityMetadata{}, err
 	}
+	if filepath.Clean(root) != binding.root || !hasRecoveryProtection(binding.root) {
+		return IdentityMetadata{}, ErrBindingQuarantined
+	}
 	auth, err := readSessionAuthFile(root)
 	if err != nil {
 		return IdentityMetadata{}, ErrUnsupportedAuth
@@ -380,8 +513,15 @@ func (binding *Binding) CommitLogin(ctx context.Context, root string) (IdentityM
 // FinalizeStatus reads a projection and replaces only a changed, valid record
 // with precisely the acquired identity metadata.
 func (binding *Binding) FinalizeStatus(ctx context.Context, root string) (BindingDisposition, error) {
-	if binding == nil || !binding.hasRecord {
+	if binding == nil || binding.lock == nil || !binding.hasRecord {
 		return QuarantinedUncertain, ErrProviderUnavailable
+	}
+	marker, err := binding.currentGeneration(ctx, quarantineRecoverable)
+	if err != nil || !marker.RefreshAllowed {
+		return QuarantinedUncertain, ErrBindingQuarantined
+	}
+	if filepath.Clean(root) != binding.root || !hasRecoveryProtection(binding.root) {
+		return QuarantinedUncertain, ErrBindingQuarantined
 	}
 	projected, err := readSessionAuthFile(root)
 	if err != nil {
@@ -399,6 +539,26 @@ func (binding *Binding) FinalizeStatus(ctx context.Context, root string) (Bindin
 		return QuarantinedUncertain, ErrBindingQuarantined
 	}
 	return CommittedSameIdentityRefresh, nil
+}
+
+func hasRecoveryProtection(root string) bool {
+	path := filepath.Join(filepath.Dir(root)+".leases", filepath.Base(root)+".recovery")
+	descriptor, err := unix.Open(path, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+	if err != nil {
+		return false
+	}
+	file := os.NewFile(uintptr(descriptor), path)
+	if file == nil {
+		_ = unix.Close(descriptor)
+		return false
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 || info.Size() != 0 {
+		return false
+	}
+	native, ok := info.Sys().(*syscall.Stat_t)
+	return ok && native.Uid == uint32(os.Geteuid()) && native.Nlink == 1
 }
 
 func writeExclusivePrivateFile(path string, contents []byte) error {

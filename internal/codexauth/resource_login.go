@@ -17,8 +17,12 @@ import (
 // one opaque binding but cannot obtain providers, locks, markers, or auth.
 // Production wraps the concrete lower Store; package tests replace only this
 // fixed capability while exercising the same Registry.Login sequence.
-type loginResourceStore interface {
+type authResourceStore interface {
 	AcquireLogin(context.Context, string) (loginResourceBinding, error)
+	AcquireStatus(context.Context, string) (loginResourceBinding, IdentityMetadata, error)
+	AcquireRecovery(context.Context, string) (recoveryResourceBinding, error)
+	List(context.Context) ([]IdentityMetadata, error)
+	Logout(context.Context, string) error
 }
 
 type loginResourceBinding interface {
@@ -30,21 +34,56 @@ type loginResourceBinding interface {
 	SettlePending(context.Context, string, string) error
 	DeleteMarkerAfterProjectionRemoval(context.Context) error
 	CommitLogin(context.Context, string) (codexauthresource.IdentityMetadata, error)
+	Project(string) error
+	MarkRefreshAllowed(context.Context) error
+	FinalizeStatus(context.Context, string) (codexauthresource.BindingDisposition, error)
 }
 
-type productionLoginResources struct{ store *codexauthresource.Store }
+type recoveryResourceBinding interface {
+	Release() error
+	SessionID() string
+	Prepared() bool
+	CleanupPending() bool
+	CleanupChallenge() string
+	FinalizeRecovery(context.Context, string) (codexauthresource.BindingDisposition, error)
+	DeleteMarkerAfterProjectionRemoval(context.Context) error
+}
 
-func (resources productionLoginResources) AcquireLogin(ctx context.Context, name string) (loginResourceBinding, error) {
+type productionAuthResources struct{ store *codexauthresource.Store }
+
+func (resources productionAuthResources) AcquireLogin(ctx context.Context, name string) (loginResourceBinding, error) {
 	if resources.store == nil {
 		return nil, ErrProviderUnavailable
 	}
 	return resources.store.AcquireLogin(ctx, name)
 }
 
-type unavailableLoginResources struct{}
+func (resources productionAuthResources) AcquireStatus(ctx context.Context, name string) (loginResourceBinding, IdentityMetadata, error) {
+	if resources.store == nil {
+		return nil, IdentityMetadata{}, ErrProviderUnavailable
+	}
+	return resources.store.AcquireStatus(ctx, name)
+}
 
-func (unavailableLoginResources) AcquireLogin(context.Context, string) (loginResourceBinding, error) {
-	return nil, ErrProviderUnavailable
+func (resources productionAuthResources) AcquireRecovery(ctx context.Context, name string) (recoveryResourceBinding, error) {
+	if resources.store == nil {
+		return nil, ErrProviderUnavailable
+	}
+	return resources.store.AcquireRecovery(ctx, name)
+}
+
+func (resources productionAuthResources) List(ctx context.Context) ([]IdentityMetadata, error) {
+	if resources.store == nil {
+		return nil, ErrProviderUnavailable
+	}
+	return resources.store.List(ctx)
+}
+
+func (resources productionAuthResources) Logout(ctx context.Context, name string) error {
+	if resources.store == nil {
+		return ErrProviderUnavailable
+	}
+	return resources.store.Logout(ctx, name)
 }
 
 func (registry *Registry) transferResourcePendingBinding(created *session.Session, binding loginResourceBinding, challenge string, process launch.Process) {
@@ -117,7 +156,7 @@ func (registry *Registry) loginWithResource(ctx context.Context, request LoginRe
 		}
 		return nil
 	}
-	if err := binding.PublishPrepared(ctx, filepath.Base(created.RootDirectory()), encoded); err != nil {
+	if err := binding.PublishPrepared(ctx, created.RootDirectory(), encoded); err != nil {
 		// Create may have durably published its marker before reporting a
 		// directory-sync failure.  Preserve the projection: Recover can consume
 		// the unchanged marker format, while deleting it here could orphan a

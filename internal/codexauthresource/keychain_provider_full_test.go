@@ -1,4 +1,4 @@
-package codexauth
+package codexauthresource
 
 import (
 	"context"

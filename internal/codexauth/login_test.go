@@ -308,7 +308,7 @@ func TestContainedStatusPinsAuthPolicyAtRuntimePrecedence(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer created.Remove()
-	if err := projectCredential(created.HomeDirectory(), credentialRecord{Metadata: metadata, Auth: auth}); err != nil {
+	if err := projectCredentialForTest(created.HomeDirectory(), credentialRecord{Metadata: metadata, Auth: auth}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -480,7 +480,7 @@ func TestContainedStatusExecutesOnePrivateSnapshotAcrossBothSubprocesses(t *test
 		t.Fatal(err)
 	}
 	defer created.Remove()
-	if err := projectCredential(created.HomeDirectory(), credentialRecord{Metadata: metadata, Auth: auth}); err != nil {
+	if err := projectCredentialForTest(created.HomeDirectory(), credentialRecord{Metadata: metadata, Auth: auth}); err != nil {
 		t.Fatal(err)
 	}
 
