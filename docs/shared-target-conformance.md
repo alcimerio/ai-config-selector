@@ -62,18 +62,28 @@ being replaced by a table of test names:
   quarantined Sessions until cleanup is confirmed.
 
 On macOS 26 Apple Silicon, `TestPromotedArtifactSharedTargetConformance` runs
-both public dry-run paths against the supplied ACS candidate without rebuilding
-it. The same native job preserves the real Seatbelt, PTY, race, Keychain,
-recovery, zombie/descendant and checksum-locked `codex-cli 0.149.1` gates.
+both public dry-run paths and attached Devin v3 execution against the supplied
+ACS candidate without rebuilding it. The credential-free Devin executable is a
+behavioral fixture: it consumes selected common and projected bytes, observes
+project-local reads, exercises both workspace grants and unrelated-path denial,
+and reports before ACS proves Session cleanup. The same native job preserves
+the real Seatbelt, PTY, race, Keychain, recovery, zombie/descendant and
+checksum-locked `codex-cli 0.149.1` gates. In particular,
+`TestNativeInstalledACSExecutesLockedCodexToolThroughNamedIdentity` and
+`TestNativeDirectInstalledTargetInteractiveLifecycle` remain the actual locked
+Codex evidence; this change does not replace them with the Devin fixture.
+
 Behavioral target fixtures prove ACS orchestration and placement only. They do
-not prove actual installed Devin discovery, a real account, target-origin
+not prove actual installed Devin discovery, a real Devin account, target-origin
 refresh or week-long work. Linux and Intel are not native support evidence.
 
 ## Ten-minute quickstart target
 
-The following is a practical target, not a measured claim. On a supported Mac
-with a source-built candidate, one existing Skill and the required target
-already installed, aim to reach a useful Profile within ten minutes:
+The following is a practical target, not a measured claim. It applies to a
+development/source artifact containing these workflows, not to the historical
+published v0.4.0 binary that predates them. On a supported Mac with one existing
+Skill and the required target already installed, aim to reach a useful Profile
+within ten minutes:
 
 ```sh
 acs doctor
@@ -96,7 +106,9 @@ commands above are valid.
 
 The full milestone is pending until a person completes these observations with
 authorized accounts. For two real projects, use both Devin and Codex for one
-week and record the exact ACS artifact SHA-256/version and exact target versions.
+week and record the exact development source revision (commit SHA), ACS
+artifact SHA-256/version and exact target versions. A CI candidate labeled
+v0.4.0 is not evidence that the published v0.4.0 release contains this contract.
 For each project and target:
 
 - inspect with `profile show` and `profile validate`; safely exercise clone,
@@ -126,6 +138,7 @@ accounts, projects, target refresh and actual daily-use success are
 Date (timezone):
 Project alias (not a private path):
 Target: Devin | Codex
+Development source revision (commit SHA):
 ACS artifact version and SHA-256:
 Target version:
 Profile envelope version:

@@ -270,8 +270,11 @@ func TestSharedTargetConformanceDocumentationAndNativeGateStayExplicit(t *testin
 		"two real projects",
 		"one week",
 		"unperformed/pending",
+		"Development source revision (commit SHA):",
 		"ACS artifact version and SHA-256",
 		"Target version:",
+		"historical published v0.4.0 binary that predates them",
+		"TestNativeInstalledACSExecutesLockedCodexToolThroughNamedIdentity",
 		"no credentials, account data, target output, paths or Session contents",
 	} {
 		if !strings.Contains(normalizedGuide, required) {
