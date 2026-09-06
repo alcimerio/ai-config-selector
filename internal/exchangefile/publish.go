@@ -120,11 +120,16 @@ func (publisher Publisher) Publish(ctx context.Context, destination string, data
 	if err = validateParent(); err != nil {
 		return
 	}
-	if err = publisher.step("publish", func() error { return renameAtNoReplace(int(parent.Fd()), temporary, leaf) }); err != nil {
+	if err = publisher.step("publish", func() error {
+		if renameErr := renameAtNoReplace(int(parent.Fd()), temporary, leaf); renameErr != nil {
+			return renameErr
+		}
+		temporaryExists = false
+		out.Published = true
+		return nil
+	}); err != nil {
 		return
 	}
-	temporaryExists = false
-	out.Published = true
 	if err = publisher.step("directory-sync", parent.Sync); err != nil {
 		return
 	}

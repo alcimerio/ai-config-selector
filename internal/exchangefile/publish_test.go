@@ -38,24 +38,28 @@ func TestPublishNoClobberAndAtomicFailure(t *testing.T) {
 }
 
 func TestPublishReportsPostPublicationFailure(t *testing.T) {
-	destination := filepath.Join(t.TempDir(), "profile.json")
-	publisher := Publisher{Hook: func(point string) error {
-		if point == "directory-sync.before" {
-			return errors.New("injected")
-		}
-		return nil
-	}}
-	outcome, err := publisher.Publish(context.Background(), destination, []byte("complete"))
-	if err == nil || !outcome.Published {
-		t.Fatalf("outcome = %#v, %v", outcome, err)
-	}
-	contents, readErr := os.ReadFile(destination)
-	if readErr != nil || string(contents) != "complete" {
-		t.Fatalf("published = %q, %v", contents, readErr)
-	}
-	info, statErr := os.Stat(destination)
-	if statErr != nil || info.Mode().Perm() != 0o600 {
-		t.Fatalf("mode = %v, %v", info, statErr)
+	for _, point := range []string{"publish.after", "directory-sync.before", "directory-sync.after"} {
+		t.Run(point, func(t *testing.T) {
+			destination := filepath.Join(t.TempDir(), "profile.json")
+			publisher := Publisher{Hook: func(observed string) error {
+				if observed == point {
+					return errors.New("injected")
+				}
+				return nil
+			}}
+			outcome, err := publisher.Publish(context.Background(), destination, []byte("complete"))
+			if err == nil || !outcome.Published {
+				t.Fatalf("outcome = %#v, %v", outcome, err)
+			}
+			contents, readErr := os.ReadFile(destination)
+			if readErr != nil || string(contents) != "complete" {
+				t.Fatalf("published = %q, %v", contents, readErr)
+			}
+			info, statErr := os.Stat(destination)
+			if statErr != nil || info.Mode().Perm() != 0o600 {
+				t.Fatalf("mode = %v, %v", info, statErr)
+			}
+		})
 	}
 }
 
