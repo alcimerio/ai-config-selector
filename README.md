@@ -15,7 +15,7 @@ v0.3.3 is the final release with Linux support. The Bubblewrap implementation
 remains in the source tree for possible future work, but v0.4.0 has no Linux
 binary, installer path, native gate, or support commitment.
 
-## Inspect saved Profiles
+## Inspect saved Profiles (development source)
 
 Use `acs profile list` to find stored Profiles and `acs profile show NAME` to
 inspect persisted versions and selected Skills, including references to Skills
@@ -96,6 +96,13 @@ to `~/.local/bin`, does not use `sudo`, and never edits shell startup files.
 Release archives are unsigned and unnotarized. GitHub attestations and SHA-256
 prove origin and byte identity; they do not represent Apple notarization or
 malware review.
+
+For an existing installation, follow the [manual upgrade, rollback and data
+recovery guide](docs/manual-upgrade-recovery.md). It stages a pinned release in a
+separate directory, retains the old binary, checks actual command resolution and
+explains the compatibility boundary between binary rollback and stored data.
+Profile transaction and named-authentication recovery described there require
+compatible development source; the published v0.4.0 binary does not provide them.
 
 ## macOS quickstart (development source)
 
@@ -393,8 +400,8 @@ refresh observation remains supplemental and is never a CI credential gate.
 
 - Devin is the only production CLI adapter.
 - Skills is the only production Profile category.
-- Profiles cannot yet be listed, edited, deleted, imported, or exported through
-  the CLI.
+- The published v0.4.0 CLI cannot list, edit or delete Profiles; current development
+  source provides those commands. Neither provides CLI import or export.
 - Repository-local Skills remain under Devin's control and are not copied into
   the credential-free sandbox shell.
 - macOS 26 arm64 and amd64 are the only v0.4.0 supported platforms.
@@ -417,10 +424,12 @@ ACS is available under the [MIT License](LICENSE).
 
 ### Profile repository transactions
 
-Development-source Profile creation uses a revisioned byte repository with checked
-synchronization and explicit process-interruption recovery. Existing inspection
-and diagnostics remain passive. If creation reports an uncertain or committed
-transaction error, rerun the same create-profile command interactively to reach
-recovery before its duplicate-name check. See the [repository transaction
-contract](docs/profile-repository-transactions.md) for outcomes, byte revisions,
-filesystem limits and native evidence; no edit/rename/delete commands are added.
+Development-source Profile creation and mutations use a revisioned byte repository
+with checked synchronization and explicit process-interruption recovery. Inspection
+and diagnostics remain passive. For an Unknown or recovery-required outcome, use
+the interactive create-profile recovery entry point, cancel the builder if it opens,
+then inspect stored state. A committed result with only reporting failure and no
+recovery requirement needs inspection instead of replay. See the [repository
+transaction contract](docs/profile-repository-transactions.md) for outcomes, byte
+revisions, filesystem limits and native evidence, and the [recovery guide](docs/manual-upgrade-recovery.md#recover-a-profile-transaction-with-compatible-development-source)
+for supported steps and evidence preservation.
