@@ -6,7 +6,6 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
-	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -28,7 +27,6 @@ import (
 	"time"
 
 	"github.com/alcimerio/ai-config-selector/internal/codexauthresource"
-	"github.com/alcimerio/ai-config-selector/internal/session"
 	"github.com/creack/pty"
 )
 
@@ -76,7 +74,8 @@ func TestNativeInstalledACSExecutesLockedCodexToolThroughNamedIdentity(t *testin
 	if err := os.WriteFile(globalAuth, []byte("unrelated-global-auth"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	seedNativeIdentityInFreshProcess(t, home, workspace, "interactive")
+	buildSyntheticLoginTarget(t, filepath.Join(tools, "codex"))
+	runInstalledSyntheticLogin(t, candidate, home, tools, workspace, "interactive")
 	assertInstalledIdentityVisible(t, candidate, home, tools, workspace, "interactive")
 	writeNativeCodexProfile(t, home, "coding", "interactive", "read-write")
 	writeNativeCodexProfile(t, home, "readonly", "interactive", "read-only")
@@ -135,30 +134,48 @@ func TestNativeInstalledACSExecutesLockedCodexToolThroughNamedIdentity(t *testin
 	}
 }
 
-func TestNativeInteractiveIdentitySeedHelper(t *testing.T) {
-	if os.Getenv("ACS_NATIVE_INTERACTIVE_SEED_HELPER") != "1" {
-		t.Skip("internal fresh-process Keychain seed helper")
-	}
-	home := os.Getenv("ACS_NATIVE_INTERACTIVE_SEED_HOME")
-	workspace := os.Getenv("ACS_NATIVE_INTERACTIVE_SEED_WORKSPACE")
-	name := os.Getenv("ACS_NATIVE_INTERACTIVE_SEED_NAME")
-	if !filepath.IsAbs(home) || !filepath.IsAbs(workspace) || name != "interactive" {
-		t.Fatal("invalid fresh-process Keychain seed input")
-	}
-	seedNativeIdentity(t, home, workspace, name)
-}
-
-func seedNativeIdentityInFreshProcess(t *testing.T, home, workspace, name string) {
+func runInstalledSyntheticLogin(t *testing.T, candidate, home, tools, workspace, name string) {
 	t.Helper()
-	command := exec.Command(os.Args[0], "-test.run=^TestNativeInteractiveIdentitySeedHelper$", "-test.count=1")
-	command.Env = append(os.Environ(),
-		"ACS_NATIVE_INTERACTIVE_SEED_HELPER=1",
-		"ACS_NATIVE_INTERACTIVE_SEED_HOME="+home,
-		"ACS_NATIVE_INTERACTIVE_SEED_WORKSPACE="+workspace,
-		"ACS_NATIVE_INTERACTIVE_SEED_NAME="+name,
-	)
-	if output, err := command.CombinedOutput(); err != nil {
-		t.Fatalf("fresh-process synthetic identity seed failed: %v; output=%q", err, output)
+	master, terminal, err := pty.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer master.Close()
+	defer terminal.Close()
+	command := exec.Command(candidate, "codex", "auth", "login", "--name", name)
+	command.Dir = workspace
+	command.Env = []string{"HOME=" + home, "PATH=" + tools + ":/usr/bin:/bin", "LANG=C", "LC_ALL=C", "TERM=xterm", "COLORTERM=truecolor"}
+	command.Stdin, command.Stdout, command.Stderr = terminal, terminal, terminal
+	command.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true, Ctty: 0}
+	var output nativeSafeCapture
+	copyDone := make(chan struct{})
+	go func() { _, _ = io.Copy(&output, master); close(copyDone) }()
+	if err := command.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if err := terminal.Close(); err != nil {
+		t.Fatal(err)
+	}
+	wait := make(chan error, 1)
+	go func() { wait <- command.Wait() }()
+	select {
+	case err := <-wait:
+		if err != nil {
+			t.Fatalf("installed ACS synthetic login seed failed: %v; terminal=%q", err, output.String())
+		}
+	case <-time.After(20 * time.Second):
+		_ = command.Process.Kill()
+		<-wait
+		t.Fatalf("installed ACS synthetic login seed timed out; terminal=%q", output.String())
+	}
+	_ = master.Close()
+	select {
+	case <-copyDone:
+	case <-time.After(time.Second):
+		t.Fatal("installed ACS synthetic login capture did not drain")
+	}
+	if !strings.Contains(output.String(), `Stored Codex authentication identity "`+name+`".`) {
+		t.Fatalf("installed ACS did not confirm synthetic identity creation: terminal=%q", output.String())
 	}
 }
 
@@ -434,55 +451,37 @@ int main(int argc, char **argv) {
 	}
 }
 
-func seedNativeIdentity(t *testing.T, home, workspace, name string) {
+func buildSyntheticLoginTarget(t *testing.T, destination string) {
 	t.Helper()
-	locks, markers := filepath.Join(home, ".acs", "locks", "codex-auth"), filepath.Join(home, ".acs", "quarantine", "codex-auth")
-	for _, directory := range []string{locks, markers} {
-		if err := os.MkdirAll(directory, 0o700); err != nil {
-			t.Fatal(err)
-		}
+	auth := compositionAuth(t)
+	encoded := make([]string, len(auth))
+	for index, value := range auth {
+		encoded[index] = strconv.Itoa(int(value))
 	}
-	store, err := codexauthresource.New(locks, markers)
-	if err != nil {
+	source := filepath.Join(t.TempDir(), "synthetic-login.c")
+	program := `#include <fcntl.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+static const unsigned char auth[] = {` + strings.Join(encoded, ",") + `};
+int main(int argc, char **argv) {
+  if (argc == 2 && strcmp(argv[1], "--version") == 0) { puts("codex-cli 0.149.1"); return 0; }
+  const char *home = getenv("HOME");
+  if (!home) return 10;
+  char path[4096];
+  if (snprintf(path, sizeof(path), "%s/.codex/auth.json", home) <= 0) return 11;
+  int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+  if (fd < 0) return 12;
+  if (write(fd, auth, sizeof(auth)) != sizeof(auth) || fsync(fd) != 0 || close(fd) != 0) return 13;
+  return 0;
+}
+`
+	if err := os.WriteFile(source, []byte(program), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	binding, err := store.AcquireLogin(context.Background(), name)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer binding.Release()
-	created, err := session.Create(filepath.Join(home, ".acs", "seed-sessions"), workspace, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer created.Remove()
-	if err := binding.PublishPrepared(context.Background(), created.RootDirectory(), strings.Repeat("a", 64)); err != nil {
-		t.Fatal(err)
-	}
-	if err := created.ProtectForRecovery(); err != nil {
-		t.Fatal(err)
-	}
-	authDirectory := filepath.Join(created.HomeDirectory(), ".codex")
-	if err := os.Mkdir(authDirectory, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(authDirectory, "auth.json"), compositionAuth(t), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := binding.MarkRecoverable(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := binding.CommitLogin(context.Background(), created.RootDirectory()); err != nil {
-		t.Fatal(err)
-	}
-	if err := created.Remove(); err != nil {
-		t.Fatal(err)
-	}
-	if err := binding.DeleteMarkerAfterProjectionRemoval(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if err := binding.Release(); err != nil {
-		t.Fatal(err)
+	if output, err := exec.Command("/usr/bin/clang", "-Os", source, "-o", destination).CombinedOutput(); err != nil {
+		t.Fatalf("compile synthetic login target: %v: %s", err, output)
 	}
 }
 
