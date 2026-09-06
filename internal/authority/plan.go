@@ -20,6 +20,7 @@ type Recipe string
 const (
 	RecipeShell Recipe = "shell"
 	RecipeDevin Recipe = "devin"
+	RecipeCodex Recipe = "codex"
 )
 
 // TargetRequirements are registered once during application assembly. They
@@ -38,6 +39,7 @@ type Plan struct {
 	sourceVersion   int
 	overlay         string
 	requirements    TargetRequirements
+	authRef         string
 }
 
 func New(contributions []Contribution, workspaceAccess launch.WorkspaceAccess, sourceVersion int, overlay string, supplied ...TargetRequirements) Plan {
@@ -59,6 +61,11 @@ func (plan Plan) WorkspaceAccess() launch.WorkspaceAccess {
 }
 func (plan Plan) SourceVersion() int { return plan.sourceVersion }
 func (plan Plan) Overlay() string    { return plan.overlay }
+func (plan Plan) AuthRef() string    { return plan.authRef }
+
+// WithAuthRef returns an independent resolved plan with one canonical opaque
+// authentication reference. Validation belongs to the target adapter.
+func (plan Plan) WithAuthRef(value string) Plan { plan.authRef = value; return plan }
 func (plan Plan) Requirements() TargetRequirements {
 	result := plan.requirements
 	result.RuntimeInputs = append([]string(nil), result.RuntimeInputs...)
@@ -71,6 +78,17 @@ func (plan Plan) DevinExpectedCatalog() []skills.SkillReference {
 			DevinExpectedCatalog() []skills.SkillReference
 		}); ok {
 			return append([]skills.SkillReference(nil), expected.DevinExpectedCatalog()...)
+		}
+	}
+	return nil
+}
+
+func (plan Plan) CodexExpectedCatalog() []skills.SkillReference {
+	for _, entry := range plan.contributions {
+		if expected, ok := entry.Value.(interface {
+			CodexExpectedCatalog() []skills.SkillReference
+		}); ok {
+			return append([]skills.SkillReference(nil), expected.CodexExpectedCatalog()...)
 		}
 	}
 	return nil
@@ -92,6 +110,10 @@ func (plan Plan) Plan(ctx context.Context, workingDirectory string) (launch.Plan
 			{Label: "intrinsic target/runtime inputs", Details: []launch.PlanDetail{{Label: "authority", Value: "registered by ACS"}}},
 		},
 	}}}
+	if plan.requirements.Recipe == RecipeCodex {
+		explanation.Sections[0].Items = append(explanation.Sections[0].Items,
+			launch.PlanItem{Label: "authentication", Details: []launch.PlanDetail{{Label: "reference", Value: plan.authRef}, {Label: "existence/status", Value: "unchecked"}}})
+	}
 	for _, entry := range plan.contributions {
 		var err error
 		if resolved, ok := entry.Value.(interface {

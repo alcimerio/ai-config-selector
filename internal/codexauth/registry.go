@@ -56,3 +56,6 @@ func (registry *Registry) List(ctx context.Context) ([]IdentityMetadata, error) 
 func (registry *Registry) Logout(ctx context.Context, name string) error {
 	return registry.service.Logout(ctx, name)
 }
+func (registry *Registry) ExecuteCodex(ctx context.Context, request executor.CodexRequest) (int, error) {
+	return registry.service.ExecuteCodex(ctx, request)
+}

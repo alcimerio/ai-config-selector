@@ -17,6 +17,12 @@ func (a *Adapter) DiscoverGlobalSkillCatalog(ctx context.Context) ([]skills.Skil
 	return discoverSkillCatalog(ctx, a.existingHomeDir, nil)
 }
 
+// DiscoverCommonSkillCatalog returns the shared selectable source catalog for
+// target adapters that consume the same common Profile capability.
+func DiscoverCommonSkillCatalog(ctx context.Context, home string) ([]skills.SkillBundle, error) {
+	return discoverSkillCatalog(ctx, home, nil)
+}
+
 // DiscoverSelectedSkillCatalog uses the same discovery rules as launch, restricted
 // to sources actually selected by validation. It creates no Adapter or Session.
 func DiscoverSelectedSkillCatalog(ctx context.Context, home string, references []skills.SkillReference) ([]skills.SkillBundle, error) {

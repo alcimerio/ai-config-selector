@@ -65,6 +65,7 @@ type mutationSnapshot struct {
 	destination profilerepo.Revision
 	entry       profileinspect.Entry
 	draft       category.Draft
+	profile     profile.Profile
 }
 
 func (app App) readMutation(ctx context.Context, inv invocation) (mutationSnapshot, error) {
@@ -87,6 +88,7 @@ func (app App) readMutation(ctx context.Context, inv invocation) (mutationSnapsh
 		if err != nil {
 			return snapshot, fmt.Errorf("decode strictly inspected Profile: %w", err)
 		}
+		snapshot.profile = decoded
 		snapshot.draft, err = app.Categories.DraftFromProfile(decoded)
 		if err != nil {
 			return snapshot, err
@@ -164,6 +166,12 @@ func (app App) mutateProfile(ctx context.Context, inv invocation) int {
 			}
 			if err != nil {
 				return builder.PreparedMutation{}, err
+			}
+			if snapshot.entry.StoredVersion != nil && *snapshot.entry.StoredVersion == profile.CurrentVersion && inv.command.path != "profile migrate" {
+				candidate.Overlays = make(map[string]profile.OverlayPayload, len(snapshot.profile.Overlays))
+				for id, payload := range snapshot.profile.Overlays {
+					candidate.Overlays[id] = payload
+				}
 			}
 			var canonical bytes.Buffer
 			encoder := json.NewEncoder(&canonical)

@@ -9,6 +9,7 @@ import (
 	"runtime/debug"
 	"strings"
 
+	codexadapter "github.com/alcimerio/ai-config-selector/internal/adapter/codex"
 	"github.com/alcimerio/ai-config-selector/internal/adapter/devin"
 	"github.com/alcimerio/ai-config-selector/internal/cli"
 	"github.com/alcimerio/ai-config-selector/internal/codexauth"
@@ -77,6 +78,13 @@ func main() {
 		fmt.Fprintf(os.Stderr, "acs: configure Codex authentication: %v\n", err)
 		os.Exit(1)
 	}
+	codexTarget, err := codexadapter.New(codexadapter.Config{
+		BinaryPath: "codex", ExistingHomeDir: existingHome, Executor: codexAuth,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "acs: configure Codex Adapter: %v\n", err)
+		os.Exit(1)
+	}
 	shellLauncher := sandboxshell.New()
 
 	application := cli.App{
@@ -88,6 +96,10 @@ func main() {
 		SandboxPlanner:    shellLauncher,
 		SandboxLauncher:   shellLauncher,
 		CodexAuth:         codexAuth,
+		CodexTarget:       codexTarget,
+		CodexCategories:   codexTarget.Categories(),
+		CodexBuilder:      codexTarget,
+		CodexProfiles:     profile.NewStore(acsHome, codexTarget.Categories()),
 		Profiles:          profile.NewStore(acsHome, adapter.Categories()),
 		SessionsDirectory: sessionsDirectory,
 		WorkingDirectory:  workingDirectory,

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"github.com/alcimerio/ai-config-selector/internal/codexauth"
 	"github.com/alcimerio/ai-config-selector/internal/profile"
 	"strings"
 )
@@ -11,9 +12,11 @@ import (
 type commandSpec struct {
 	path, syntax, description, example string
 	valueFlag, boolFlag                string
+	auxValueFlag                       string
 	group                              bool
 	nameOperand                        bool
 	optionalValue                      bool
+	optionalAuxValue                   bool
 }
 
 var commands = []commandSpec{
@@ -32,7 +35,8 @@ var commands = []commandSpec{
 	{path: "devin", syntax: "acs devin --profile <name> [--dry-run]", description: "Launch Devin with a saved Profile. --dry-run inspects the plan without creating a Session.\nUse create-profile to open the interactive Profile Builder.", example: "acs devin --profile backend-review --dry-run\n  acs devin --profile backend-review", valueFlag: "--profile", boolFlag: "--dry-run"},
 	{path: "devin create-profile", syntax: "acs devin create-profile --name <name>", description: "Create a new Profile using interactive stdin and stdout. Existing names are never overwritten.\nSelect Skills with Space/Enter; return with Left/Esc; choose Create Profile to save.\nCtrl+C cancels without saving (exit 130).", example: "acs devin create-profile --name backend-review", valueFlag: "--name"},
 	{path: "sandbox", syntax: "acs sandbox --profile <name> [--dry-run]", description: "Open /bin/zsh -f in the Profile sandbox without Devin credentials.\n--dry-run inspects the plan without creating a Session or starting a shell.", example: "acs sandbox --dry-run --profile backend-review\n  acs sandbox --profile backend-review", valueFlag: "--profile", boolFlag: "--dry-run"},
-	{path: "codex", syntax: "acs codex auth <command> [flags]", description: "Manage named Codex authentication identities.", example: "acs codex auth list", group: true},
+	{path: "codex", syntax: "acs codex --profile <name> [--auth <ref>] [--dry-run]", description: "Launch interactive Codex with a common Profile and one ACS-owned named ChatGPT identity.\n--auth overrides the Profile authRef for this run. --dry-run validates syntax only and reports authentication unchecked.", example: "acs codex --profile backend-review --auth work --dry-run\n  acs codex --profile backend-review", valueFlag: "--profile", auxValueFlag: "--auth", optionalAuxValue: true, boolFlag: "--dry-run"},
+	{path: "codex create-profile", syntax: "acs codex create-profile --name <name> --auth <ref>", description: "Create a common Profile with a supported Codex overlay through the interactive Profile Builder.\nOnly the opaque named authentication reference is stored; credentials are never stored in a Profile.", example: "acs codex create-profile --name backend-review --auth work", valueFlag: "--name", auxValueFlag: "--auth"},
 	{path: "codex auth", syntax: "acs codex auth <command> [flags]", description: "Manage ACS-owned ChatGPT identities in the macOS Keychain.\nLogin and status require codex-cli 0.149.1 and the required sandbox.\nThese commands do not launch interactive Codex or use the global Codex login.", example: "acs codex auth login --name work\n  acs codex auth status --name work", group: true},
 	{path: "codex auth login", syntax: "acs codex auth login --name <name> [--device-auth]", description: "Create a named ChatGPT identity; requires interactive stdin/stdout and codex-cli 0.149.1.\n--device-auth selects the device login flow. Existing names are never replaced.", example: "acs codex auth login --device-auth --name work", valueFlag: "--name", boolFlag: "--device-auth"},
 	{path: "codex auth list", syntax: "acs codex auth list", description: "List non-secret metadata for ACS-owned identities in the macOS Keychain.", example: "acs codex auth list"},
@@ -45,6 +49,7 @@ var commands = []commandSpec{
 type invocation struct {
 	command       commandSpec
 	value         string
+	auxValue      string
 	operand       string
 	enabled, help bool
 }
@@ -80,7 +85,7 @@ func parseCommand(args []string) (inv invocation, problem string) {
 			return inv, "unsupported positional argument"
 		}
 		flag, _, hasEquals := strings.Cut(arg, "=")
-		if helpCommand || (flag != "--help" && flag != inv.command.valueFlag && flag != inv.command.boolFlag) {
+		if helpCommand || (flag != "--help" && flag != inv.command.valueFlag && flag != inv.command.auxValueFlag && flag != inv.command.boolFlag) {
 			return inv, "unsupported flag " + publicToken(flag)
 		}
 		if hasEquals {
@@ -99,6 +104,12 @@ func parseCommand(args []string) (inv invocation, problem string) {
 			}
 			i++
 			inv.value = args[i]
+		case inv.command.auxValueFlag:
+			if i+1 >= len(args) || args[i+1] == "" || strings.HasPrefix(args[i+1], "-") {
+				return inv, "missing value for " + flag
+			}
+			i++
+			inv.auxValue = args[i]
 		case inv.command.boolFlag:
 			inv.enabled = true
 		}
@@ -117,6 +128,14 @@ func parseCommand(args []string) (inv invocation, problem string) {
 	}
 	if inv.command.valueFlag != "" && !inv.command.optionalValue && inv.value == "" {
 		return inv, "missing required flag " + inv.command.valueFlag
+	}
+	if inv.command.auxValueFlag != "" && !inv.command.optionalAuxValue && inv.auxValue == "" {
+		return inv, "missing required flag " + inv.command.auxValueFlag
+	}
+	if inv.auxValue != "" {
+		if _, err := codexauth.ParseCredentialRef(inv.auxValue); err != nil {
+			return inv, "invalid Codex authentication reference"
+		}
 	}
 	if isMutation(inv.command.path) {
 		if profile.ValidateName(inv.operand) != nil {
@@ -159,7 +178,7 @@ func helpPath(command commandSpec) string {
 
 func (app App) printHelp(command commandSpec) {
 	fmt.Fprintf(app.Output, "Usage: %s\n\n%s\n", command.syntax, command.description)
-	if command.group || command.path == "devin" {
+	if command.group || command.path == "devin" || command.path == "codex" {
 		fmt.Fprintln(app.Output, "\nCommands:")
 		for _, child := range commands[1:] {
 			if command.path == "" || strings.HasPrefix(child.path, command.path+" ") {
@@ -176,6 +195,13 @@ func (app App) printHelp(command commandSpec) {
 		} else {
 			fmt.Fprintf(app.Output, "  %s <name>  Required name\n", command.valueFlag)
 		}
+	}
+	if command.auxValueFlag != "" {
+		requirement := "Required"
+		if command.optionalAuxValue {
+			requirement = "Optional"
+		}
+		fmt.Fprintf(app.Output, "  %s <ref>  %s canonical named authentication reference\n", command.auxValueFlag, requirement)
 	}
 	if command.boolFlag != "" {
 		fmt.Fprintf(app.Output, "  %s  %s\n", command.boolFlag, map[string]string{"--dry-run": "Inspect without launching", "--device-auth": "Use device login", "--json": "Emit versioned JSON format 1"}[command.boolFlag])

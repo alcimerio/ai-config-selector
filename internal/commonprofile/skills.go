@@ -171,6 +171,9 @@ func (SkillsContribution) Verify(context.Context, launch.VerificationContext) er
 func (contribution SkillsContribution) DevinExpectedCatalog() []skills.SkillReference {
 	return append([]skills.SkillReference(nil), contribution.expected...)
 }
+func (contribution SkillsContribution) CodexExpectedCatalog() []skills.SkillReference {
+	return append([]skills.SkillReference(nil), contribution.expected...)
+}
 
 func commonDestination(home string, reference skills.SkillReference) string {
 	return filepath.Join(home, ".acs", "common", "v1", SkillsCapabilityID, string(reference.Source), filepath.Clean(reference.RelativePath))

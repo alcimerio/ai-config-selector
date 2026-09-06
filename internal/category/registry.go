@@ -199,7 +199,7 @@ func NewRegistryWithRequirements(target string, requirements authority.TargetReq
 	if target == "" {
 		return nil, errors.New("category Registry target is required")
 	}
-	if requirements.Recipe != authority.RecipeDevin {
+	if requirements.Recipe != authority.RecipeDevin && requirements.Recipe != authority.RecipeCodex {
 		return nil, fmt.Errorf("category Registry target %q requires an unsupported execution recipe %q", target, requirements.Recipe)
 	}
 	registry := &Registry{
@@ -352,6 +352,12 @@ func (draft Draft) Summaries() []Summary {
 // NewProfile encodes every Draft selection into the strict version-3 common
 // envelope. New Profiles default through each common capability's Empty value.
 func (registry *Registry) NewProfile(name string, draft Draft) (profile.Profile, error) {
+	return registry.NewProfileWithOverlay(name, draft, profile.OverlayPayload{Version: supportedOverlayVersion})
+}
+
+// NewProfileWithOverlay creates a v3 Profile with the registry's independently
+// versioned target overlay. Target adapters supply only their typed payload.
+func (registry *Registry) NewProfileWithOverlay(name string, draft Draft, overlay profile.OverlayPayload) (profile.Profile, error) {
 	if err := profile.ValidateName(name); err != nil {
 		return profile.Profile{}, err
 	}
@@ -366,7 +372,7 @@ func (registry *Registry) NewProfile(name string, draft Draft) (profile.Profile,
 		Name:          name,
 		SourceVersion: profile.CurrentVersion,
 		Common:        make(map[string]profile.CommonPayload, len(registry.ordered)),
-		Overlays:      map[string]profile.OverlayPayload{registry.target: {Version: supportedOverlayVersion}},
+		Overlays:      map[string]profile.OverlayPayload{registry.target: overlay},
 	}
 	for _, registration := range registry.ordered {
 		selection, err := registration.encode(draft.selections[registration.id])
@@ -614,6 +620,9 @@ func (registry *Registry) ResolveFor(ctx context.Context, candidate profile.Prof
 		if overlay != registry.target || payload.Version != supportedOverlayVersion || (payload.Support != "" && payload.Support != "supported") {
 			return ResolvedProfile{}, fmt.Errorf("selected target overlay %q uses unsupported version %d", overlay, payload.Version)
 		}
+		if overlay == "codex" && payload.AuthRef == "" {
+			return ResolvedProfile{}, errors.New("selected target overlay \"codex\" requires authRef")
+		}
 	}
 	workspaceAccess := launch.WorkspaceAccessReadWrite
 	if _, ownsWorkspace := registry.byID["workspace"]; normalized.Version == profile.CurrentVersion && ownsWorkspace {
@@ -658,7 +667,11 @@ func (registry *Registry) ResolveFor(ctx context.Context, candidate profile.Prof
 	if overlay == "" {
 		requirements = authority.TargetRequirements{Recipe: authority.RecipeShell}
 	}
-	return authority.New(contributions, workspaceAccess, normalized.SourceVersion, overlay, requirements), nil
+	resolved := authority.New(contributions, workspaceAccess, normalized.SourceVersion, overlay, requirements)
+	if overlay == "codex" {
+		resolved = resolved.WithAuthRef(normalized.Overlays[overlay].AuthRef)
+	}
+	return resolved, nil
 }
 
 func (registry *Registry) payloadFor(candidate profile.Profile, registration *Registration) (profile.CategoryPayload, error) {
