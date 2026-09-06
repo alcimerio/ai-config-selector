@@ -76,7 +76,8 @@ func TestNativeInstalledACSExecutesLockedCodexToolThroughNamedIdentity(t *testin
 	if err := os.WriteFile(globalAuth, []byte("unrelated-global-auth"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	seedNativeIdentity(t, home, workspace, "interactive")
+	seedNativeIdentityInFreshProcess(t, home, workspace, "interactive")
+	assertInstalledIdentityVisible(t, candidate, home, tools, workspace, "interactive")
 	writeNativeCodexProfile(t, home, "coding", "interactive", "read-write")
 	writeNativeCodexProfile(t, home, "readonly", "interactive", "read-only")
 	grantedTarget := filepath.Join(workspace, "locked-codex-target")
@@ -131,6 +132,47 @@ func TestNativeInstalledACSExecutesLockedCodexToolThroughNamedIdentity(t *testin
 	}
 	if _, err := os.Stat(hostileMCPMarker); !os.IsNotExist(err) {
 		t.Fatalf("interactive launch started hostile project MCP configuration: %v", err)
+	}
+}
+
+func TestNativeInteractiveIdentitySeedHelper(t *testing.T) {
+	if os.Getenv("ACS_NATIVE_INTERACTIVE_SEED_HELPER") != "1" {
+		t.Skip("internal fresh-process Keychain seed helper")
+	}
+	home := os.Getenv("ACS_NATIVE_INTERACTIVE_SEED_HOME")
+	workspace := os.Getenv("ACS_NATIVE_INTERACTIVE_SEED_WORKSPACE")
+	name := os.Getenv("ACS_NATIVE_INTERACTIVE_SEED_NAME")
+	if !filepath.IsAbs(home) || !filepath.IsAbs(workspace) || name != "interactive" {
+		t.Fatal("invalid fresh-process Keychain seed input")
+	}
+	seedNativeIdentity(t, home, workspace, name)
+}
+
+func seedNativeIdentityInFreshProcess(t *testing.T, home, workspace, name string) {
+	t.Helper()
+	command := exec.Command(os.Args[0], "-test.run=^TestNativeInteractiveIdentitySeedHelper$", "-test.count=1")
+	command.Env = append(os.Environ(),
+		"ACS_NATIVE_INTERACTIVE_SEED_HELPER=1",
+		"ACS_NATIVE_INTERACTIVE_SEED_HOME="+home,
+		"ACS_NATIVE_INTERACTIVE_SEED_WORKSPACE="+workspace,
+		"ACS_NATIVE_INTERACTIVE_SEED_NAME="+name,
+	)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("fresh-process synthetic identity seed failed: %v; output=%q", err, output)
+	}
+}
+
+func assertInstalledIdentityVisible(t *testing.T, candidate, home, tools, workspace, name string) {
+	t.Helper()
+	command := exec.Command(candidate, "codex", "auth", "list")
+	command.Dir = workspace
+	command.Env = []string{"HOME=" + home, "PATH=" + tools + ":/usr/bin:/bin", "LANG=C", "LC_ALL=C", "TERM=xterm", "COLORTERM=truecolor"}
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("installed ACS cannot enumerate seeded synthetic identity: %v; output=%q", err, output)
+	}
+	if !strings.Contains(string(output), name) || !strings.Contains(string(output), "synthetic-workspace") {
+		t.Fatalf("installed ACS did not enumerate the selected synthetic identity: output=%q", output)
 	}
 }
 
