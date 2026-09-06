@@ -11,6 +11,7 @@ import (
 
 	"github.com/alcimerio/ai-config-selector/internal/adapter/devin"
 	"github.com/alcimerio/ai-config-selector/internal/profile"
+	"github.com/alcimerio/ai-config-selector/internal/profileinspect"
 	"github.com/alcimerio/ai-config-selector/internal/skills"
 )
 
@@ -25,6 +26,37 @@ func TestStoreDoesNotWriteWhenCreateContextIsCancelled(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(acsHome, "profiles", "cancelled.json")); !os.IsNotExist(err) {
 		t.Fatalf("cancelled CreateContext wrote a Profile: %v", err)
+	}
+}
+
+func TestStoreCreateWithRealDevinCodecKeepsLegacyProfileReadable(t *testing.T) {
+	home := t.TempDir()
+	editor, err := devin.NewProfileEditor(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate := profile.Profile{Version: profile.LegacyCurrentVersion, Name: "legacy", Target: "devin", Categories: map[string]profile.CategoryPayload{
+		"skills": {SchemaVersion: 1, Selection: []byte(`[]`)},
+	}}
+	store := profile.NewStore(filepath.Join(home, ".acs"), editor.Categories())
+	path, err := store.Create(candidate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(contents), `"workspace"`) || strings.Contains(string(contents), `"version": 3`) {
+		t.Fatalf("legacy Create changed format or inserted a common capability: %s", contents)
+	}
+	result := (profileinspect.Store{Home: home}).Show("legacy")
+	if len(result.Entries) != 1 || result.Entries[0].Status != "valid" {
+		t.Fatalf("successful legacy Create produced unreadable Profile: %#v", result)
+	}
+	loaded, err := store.Load("legacy")
+	if err != nil || loaded.Version != profile.LegacyCurrentVersion || loaded.SourceVersion != profile.LegacyCurrentVersion {
+		t.Fatalf("successful legacy Create cannot Load: %#v %v", loaded, err)
 	}
 }
 

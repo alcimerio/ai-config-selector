@@ -291,10 +291,9 @@ func (registry *Registry) DraftFromProfile(candidate profile.Profile) (Draft, er
 	}
 	draft := registry.NewDraft()
 	for _, registration := range registry.ordered {
-		payload := normalized.Categories[registration.id]
-		if normalized.Version == profile.CurrentVersion {
-			common := normalized.Common[registration.id]
-			payload = profile.CategoryPayload{SchemaVersion: common.Version, Selection: common.Selection}
+		payload, err := registry.payloadFor(normalized, registration)
+		if err != nil {
+			return Draft{}, err
 		}
 		selection, err := registration.decode(payload.Selection)
 		if err != nil {
@@ -463,11 +462,15 @@ func (registry *Registry) Normalize(candidate profile.Profile) (profile.Profile,
 		}
 	}
 	for id := range known {
-		if _, exists := registry.byID[id]; !exists {
+		registration, exists := registry.byID[id]
+		if !exists {
 			if candidate.Version == profile.LegacyCurrentVersion {
 				return profile.Profile{}, fmt.Errorf("unknown Profile category %q", id)
 			}
 			return profile.Profile{}, fmt.Errorf("unknown common capability %q", id)
+		}
+		if candidate.Version == profile.LegacyCurrentVersion && registration.legacyEmpty != nil {
+			return profile.Profile{}, fmt.Errorf("common capability %q is not valid in a legacy Profile", id)
 		}
 	}
 	if known == nil {
@@ -479,10 +482,13 @@ func (registry *Registry) Normalize(candidate profile.Profile) (profile.Profile,
 			if candidate.Version == profile.CurrentVersion {
 				return profile.Profile{}, fmt.Errorf("missing common capability %q", registration.id)
 			}
-			empty := registration.empty()
-			if candidate.Version == profile.LegacyCurrentVersion && registration.legacyEmpty != nil {
-				empty = registration.legacyEmpty()
+			// A LegacyEmpty registration is common-only. Its legacy value is
+			// synthesized for drafts and resolution, never serialized into the
+			// supported v2 categories map.
+			if registration.legacyEmpty != nil {
+				continue
 			}
+			empty := registration.empty()
 			encoded, err := registration.encode(empty)
 			if err != nil {
 				return profile.Profile{}, fmt.Errorf("encode empty %s category selection: %w", registration.id, err)
@@ -627,10 +633,9 @@ func (registry *Registry) ResolveFor(ctx context.Context, candidate profile.Prof
 	}
 	contributions := make([]authority.Contribution, 0, len(registry.ordered))
 	for _, registration := range registry.ordered {
-		payload := normalized.Categories[registration.id]
-		if normalized.Version == profile.CurrentVersion {
-			common := normalized.Common[registration.id]
-			payload = profile.CategoryPayload{SchemaVersion: common.Version, Selection: common.Selection}
+		payload, err := registry.payloadFor(normalized, registration)
+		if err != nil {
+			return ResolvedProfile{}, err
 		}
 		selection, err := registration.decode(payload.Selection)
 		if err != nil {
@@ -654,6 +659,27 @@ func (registry *Registry) ResolveFor(ctx context.Context, candidate profile.Prof
 		requirements = authority.TargetRequirements{Recipe: authority.RecipeShell}
 	}
 	return authority.New(contributions, workspaceAccess, normalized.SourceVersion, overlay, requirements), nil
+}
+
+func (registry *Registry) payloadFor(candidate profile.Profile, registration *Registration) (profile.CategoryPayload, error) {
+	if candidate.Version == profile.CurrentVersion {
+		common, exists := candidate.Common[registration.id]
+		if !exists {
+			return profile.CategoryPayload{}, fmt.Errorf("missing common capability %q", registration.id)
+		}
+		return profile.CategoryPayload{SchemaVersion: common.Version, Selection: common.Selection}, nil
+	}
+	if payload, exists := candidate.Categories[registration.id]; exists {
+		return payload, nil
+	}
+	if registration.legacyEmpty == nil {
+		return profile.CategoryPayload{}, fmt.Errorf("missing legacy category %q", registration.id)
+	}
+	selection, err := registration.encode(registration.legacyEmpty())
+	if err != nil {
+		return profile.CategoryPayload{}, fmt.Errorf("encode legacy %s default: %w", registration.id, err)
+	}
+	return profile.CategoryPayload{SchemaVersion: registration.schemaVersion, Selection: selection}, nil
 }
 
 func isNilContribution(contribution launch.Contribution) bool {
