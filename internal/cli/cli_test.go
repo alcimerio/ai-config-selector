@@ -17,11 +17,13 @@ import (
 	"strings"
 	"testing"
 
+	codexadapter "github.com/alcimerio/ai-config-selector/internal/adapter/codex"
 	"github.com/alcimerio/ai-config-selector/internal/adapter/devin"
 	"github.com/alcimerio/ai-config-selector/internal/builder"
 	"github.com/alcimerio/ai-config-selector/internal/category"
 	"github.com/alcimerio/ai-config-selector/internal/cli"
 	"github.com/alcimerio/ai-config-selector/internal/codexauth"
+	"github.com/alcimerio/ai-config-selector/internal/executor"
 	"github.com/alcimerio/ai-config-selector/internal/launch"
 	"github.com/alcimerio/ai-config-selector/internal/profile"
 	"github.com/alcimerio/ai-config-selector/internal/skills"
@@ -52,6 +54,81 @@ func TestUsageIncludesTheVersionCommand(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "acs version") {
 		t.Fatalf("usage omits version command: %q", stderr.String())
+	}
+}
+
+type rejectingCodexExecution struct{ calls int }
+
+func (execution *rejectingCodexExecution) ExecuteCodex(context.Context, executor.CodexRequest) (int, error) {
+	execution.calls++
+	return 1, errors.New("execution must not run")
+}
+
+func TestCodexDryRunUsesOverrideAndDoesNotAcquireAuthenticationOrRunTarget(t *testing.T) {
+	home := t.TempDir()
+	execution := &rejectingCodexExecution{}
+	adapter, err := codexadapter.New(codexadapter.Config{BinaryPath: "/missing/codex", ExistingHomeDir: home, Executor: execution})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := profile.NewStore(filepath.Join(home, ".acs"), adapter.Categories())
+	candidate, err := adapter.Categories().NewProfileWithOverlay("example", adapter.Categories().NewDraft(), profile.OverlayPayload{Version: 1, AuthRef: "stored"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Create(candidate); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	app := cli.App{CodexTarget: adapter, CodexCategories: adapter.Categories(), CodexProfiles: store, WorkingDirectory: home, Output: &stdout, ErrorOutput: &stderr}
+	if code := app.Run(context.Background(), []string{"codex", "--profile", "example", "--auth", "override", "--dry-run"}); code != 0 {
+		t.Fatalf("code=%d stderr=%q", code, stderr.String())
+	}
+	if execution.calls != 0 {
+		t.Fatalf("dry-run executed target %d times", execution.calls)
+	}
+	for _, want := range []string{"override", "existence/status: unchecked", "No identity lock, executable probe, Session, or process was created."} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("dry-run missing %q: %s", want, stdout.String())
+		}
+	}
+}
+
+func TestCodexProfileCreationWithoutDefaultPersistsOverlayAndDryRunsWithOverride(t *testing.T) {
+	home := t.TempDir()
+	adapter, err := codexadapter.New(codexadapter.Config{BinaryPath: "/missing/codex", ExistingHomeDir: home})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := profile.NewStore(filepath.Join(home, ".acs"), adapter.Categories())
+	stub := &staticBuilder{outcome: builder.Outcome{Create: true, Draft: adapter.Categories().NewDraft()}}
+	var stdout, stderr bytes.Buffer
+	app := cli.App{
+		CodexTarget: adapter, CodexCategories: adapter.Categories(), CodexBuilder: stub, CodexProfiles: store,
+		WorkingDirectory: home, Input: strings.NewReader(""), Output: &stdout, ErrorOutput: &stderr,
+		Interactive: func(io.Reader, io.Writer) bool { return true },
+	}
+	if code := app.Run(context.Background(), []string{"codex", "create-profile", "--name", "example"}); code != 0 {
+		t.Fatalf("create code=%d stderr=%q", code, stderr.String())
+	}
+	saved, err := store.Load("example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if overlay, ok := saved.Overlays["codex"]; !ok || overlay.Version != 1 || overlay.AuthRef != "" {
+		t.Fatalf("saved overlay = %#v", saved.Overlays)
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := app.Run(context.Background(), []string{"codex", "--profile", "example", "--dry-run"}); code != 1 || !strings.Contains(stderr.String(), "invalid Codex authentication identity name") {
+		t.Fatalf("missing reference = code %d stderr %q", code, stderr.String())
+	}
+	stderr.Reset()
+	if code := app.Run(context.Background(), []string{"codex", "--profile", "example", "--auth", "override", "--dry-run"}); code != 0 {
+		t.Fatalf("override dry-run code=%d stderr=%q", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "override") || strings.Contains(stdout.String(), "auth.json") {
+		t.Fatalf("dry-run output = %q", stdout.String())
 	}
 }
 

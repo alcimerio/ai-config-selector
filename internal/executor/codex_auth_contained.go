@@ -28,6 +28,16 @@ func prepareContainedOperation(
 	sandbox launch.ProcessSandbox,
 	operationFailure error,
 ) (*containedOperationPreparation, error) {
+	return prepareContainedOperationWithAccess(ctx, config, sandbox, launch.WorkspaceAccessLegacy, operationFailure)
+}
+
+func prepareContainedOperationWithAccess(
+	ctx context.Context,
+	config codexLoginConfig,
+	sandbox launch.ProcessSandbox,
+	workspaceAccess launch.WorkspaceAccess,
+	operationFailure error,
+) (*containedOperationPreparation, error) {
 	if sandbox == nil {
 		return nil, operationFailure
 	}
@@ -47,7 +57,7 @@ func prepareContainedOperation(
 	preparedConfig.BinaryPath = executable
 	preparation := &containedOperationPreparation{config: preparedConfig, cleanup: cleanup}
 	if err := sandbox.Check(ctx, launch.SandboxCheck{
-		Workspace: config.WorkingDirectory, SessionsDirectory: config.SessionsDirectory,
+		Workspace: config.WorkingDirectory, WorkspaceAccess: workspaceAccess, SessionsDirectory: config.SessionsDirectory,
 		Executable: executable, RuntimeInputs: config.RuntimeInputs,
 		RuntimeProbePaths: config.RuntimeProbePaths,
 	}); err != nil {

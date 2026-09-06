@@ -13,7 +13,7 @@ import (
 )
 
 func TestContextualHelpWithoutRuntime(t *testing.T) {
-	for _, command := range []string{"", "profile", "profile list", "profile show", "devin", "devin create-profile", "sandbox", "codex", "codex auth", "codex auth login", "codex auth list", "codex auth status", "codex auth recover", "codex auth logout", "version"} {
+	for _, command := range []string{"", "profile", "profile list", "profile show", "devin", "devin create-profile", "sandbox", "codex", "codex create-profile", "codex auth", "codex auth login", "codex auth list", "codex auth status", "codex auth recover", "codex auth logout", "version"} {
 		for _, args := range [][]string{strings.Fields("help " + command), strings.Fields(command + " --help")} {
 			t.Run(strings.Join(args, " "), func(t *testing.T) {
 				var out, errOut bytes.Buffer
@@ -28,6 +28,26 @@ func TestContextualHelpWithoutRuntime(t *testing.T) {
 					}
 				}
 			})
+		}
+	}
+}
+
+func TestCodexLaunchGrammarPreservesAuthSubcommandPrecedence(t *testing.T) {
+	for _, tc := range []struct {
+		args string
+		want string
+	}{
+		{"codex", "missing required flag --profile"},
+		{"codex --auth work", "missing required flag --profile"},
+		{"codex --profile example --auth", "missing value for --auth"},
+		{"codex --profile example --auth=work", "flag \"--auth\" requires separate arguments"},
+		{"codex --profile example --auth work --auth other", "duplicate flag \"--auth\""},
+		{"codex auth", "missing command"},
+	} {
+		var out, errOut bytes.Buffer
+		code := (cli.App{Output: &out, ErrorOutput: &errOut}).Run(context.Background(), strings.Fields(tc.args))
+		if code != 1 || out.Len() != 0 || !strings.Contains(errOut.String(), tc.want) {
+			t.Fatalf("%q: code=%d stdout=%q stderr=%q", tc.args, code, out.String(), errOut.String())
 		}
 	}
 }

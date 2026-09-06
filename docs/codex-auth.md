@@ -1,8 +1,7 @@
 # Named Codex authentication and contained status
 
-This document describes the named-authentication management slice present in
-the development source. It is not part of the published v0.4.0 release and does
-not yet launch an interactive Codex process.
+This document describes named authentication and interactive Codex in the
+development source. It is not part of the published v0.4.0 release.
 
 ## The three authentication states
 
@@ -15,7 +14,7 @@ Keep these states separate:
    a name such as `work` in the macOS Keychain service
    `com.alcimerio.ai-config-selector.codex-auth`.
 3. **A Session-local projection** is a private `auth.json` created for one
-   contained status probe. It is owned by one leased synthetic home and never
+   contained status probe or interactive launch. It is owned by one leased synthetic home and never
    becomes a shared Codex cache.
 
 ACS named-auth commands never read, import, replace, delete, or fall back to
@@ -239,10 +238,48 @@ state through a writable workspace, reading quarantine proof challenges, or
 modifying operation-scoped executable snapshots through workspace permissions.
 
 Logout deletes only the selected ACS Keychain item and succeeds when a valid
-name is already absent. It refuses a quarantined name. The same binding
-lifecycle is not yet connected to an interactive Codex run: there is no
-`acs codex --auth`, Codex Profile overlay, plan/dry-run auth selection, or Codex
-target adapter in this source.
+name is already absent. It refuses a quarantined name.
+
+## Interactive launch
+
+`acs codex create-profile --name NAME --auth REF` uses the common Profile
+Builder and the revisioned Profile repository. Its independently versioned
+Codex overlay stores only `authRef`; credentials and arbitrary Codex settings
+are not Profile data. `acs codex --profile NAME [--auth REF] [--dry-run]`
+selects that overlay. The command-line reference takes precedence for one run.
+
+Dry-run is deliberately syntax-only. It may load the selected stored Profile,
+but performs no source discovery, Keychain/provider/status access, identity
+locking, executable or sandbox probe, Session allocation, or subprocess work.
+Its explanation reports identity existence and status as unchecked.
+
+Real launch acquires exactly one effective reference before Session creation.
+The shared executor pins the supported executable, materializes common Skills,
+projects only those copies into `.codex/skills/<source>/<relativePath>`, projects
+the selected identity, checks the exact version, and starts interactive Codex.
+The fixed recipe forces file credential storage, ChatGPT login, the bound
+workspace restriction, the official ChatGPT endpoint, the OpenAI provider,
+untrusted project configuration, `sandbox_mode="danger-full-access"`, and
+`approval_policy="never"` at runtime precedence. The last two settings are the
+locked target's supported externally sandboxed no-prompt mode: ACS alone
+enforces the Profile's read-only or coding-write workspace access and owns all
+tool approval decisions. This prevents hostile project configuration from
+selecting another credential store, endpoint, provider, plugin, project-local
+MCP configuration, sandbox mode, or approval policy. A missing or uncertain ACS
+outer sandbox fails closed; Codex is never launched directly as a fallback.
+ACS does not configure MCP servers in this delivery, and its empty ordinary MCP
+table is not represented as clearing every account-service or enterprise
+policy source. Repository
+`.agents/skills` inheritance and bundled system behavior remain Codex-owned;
+ACS's selected-only statement applies to ACS-managed global projections, not
+every readable workspace file.
+
+Successful target-authored credential changes are eligible for the same
+same-identity validation used by status. Failed runs, deletion/logout, identity
+or workspace changes, unknown schema, and invalid projections cannot replace
+the last valid record. Process settlement, projection removal, marker deletion,
+and identity release use the same quarantine and recovery machinery described
+above; ordinary target success never overrides cleanup uncertainty.
 
 Profiles persist neither credentials nor Keychain records. Deleting a Profile
 therefore never deletes a named Codex authentication identity.

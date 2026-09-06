@@ -9,6 +9,7 @@ import (
 	"runtime/debug"
 	"strings"
 
+	codexadapter "github.com/alcimerio/ai-config-selector/internal/adapter/codex"
 	"github.com/alcimerio/ai-config-selector/internal/adapter/devin"
 	"github.com/alcimerio/ai-config-selector/internal/cli"
 	"github.com/alcimerio/ai-config-selector/internal/codexauth"
@@ -45,6 +46,30 @@ func main() {
 	if handled, code := informational.RunProfileMutations(context.Background(), os.Args[1:], os.UserHomeDir); handled {
 		os.Exit(code)
 	}
+	if cli.CodexDryRunRequested(os.Args[1:]) {
+		existingHome, err := os.UserHomeDir()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "acs: resolve user home for Codex dry-run")
+			os.Exit(1)
+		}
+		workingDirectory, err := os.Getwd()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "acs: resolve working directory for Codex dry-run")
+			os.Exit(1)
+		}
+		codexTarget, err := codexadapter.New(codexadapter.Config{BinaryPath: "codex", ExistingHomeDir: existingHome})
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "acs: configure Codex dry-run: %v\n", err)
+			os.Exit(1)
+		}
+		acsHome := filepath.Join(existingHome, ".acs")
+		app := cli.App{
+			CodexTarget: codexTarget, CodexCategories: codexTarget.Categories(),
+			CodexProfiles:    profile.NewStore(acsHome, codexTarget.Categories()),
+			WorkingDirectory: workingDirectory, Input: os.Stdin, Output: os.Stdout, ErrorOutput: os.Stderr,
+		}
+		os.Exit(app.Run(context.Background(), os.Args[1:]))
+	}
 
 	existingHome, err := os.UserHomeDir()
 	if err != nil {
@@ -77,6 +102,13 @@ func main() {
 		fmt.Fprintf(os.Stderr, "acs: configure Codex authentication: %v\n", err)
 		os.Exit(1)
 	}
+	codexTarget, err := codexadapter.New(codexadapter.Config{
+		BinaryPath: "codex", ExistingHomeDir: existingHome, Executor: codexAuth,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "acs: configure Codex Adapter: %v\n", err)
+		os.Exit(1)
+	}
 	shellLauncher := sandboxshell.New()
 
 	application := cli.App{
@@ -88,6 +120,10 @@ func main() {
 		SandboxPlanner:    shellLauncher,
 		SandboxLauncher:   shellLauncher,
 		CodexAuth:         codexAuth,
+		CodexTarget:       codexTarget,
+		CodexCategories:   codexTarget.Categories(),
+		CodexBuilder:      codexTarget,
+		CodexProfiles:     profile.NewStore(acsHome, codexTarget.Categories()),
 		Profiles:          profile.NewStore(acsHome, adapter.Categories()),
 		SessionsDirectory: sessionsDirectory,
 		WorkingDirectory:  workingDirectory,

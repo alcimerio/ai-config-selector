@@ -111,14 +111,18 @@ func (registry *CodexAuthService) Status(ctx context.Context, value string) (Ide
 }
 
 func (registry *CodexAuthService) createStatusBinding(ctx context.Context, binding loginResourceBinding, name CredentialRef) (*session.Session, string, error) {
+	return registry.createResourceBinding(ctx, binding, name, nil, ErrStatusFailed)
+}
+
+func (registry *CodexAuthService) createResourceBinding(ctx context.Context, binding loginResourceBinding, name CredentialRef, materializer session.Materializer, operationFailure error) (*session.Session, string, error) {
 	challenge := make([]byte, launch.RecoveryProofChallengeSize)
 	if _, err := rand.Read(challenge); err != nil {
 		return nil, "", ErrStatusFailed
 	}
 	encoded := hex.EncodeToString(challenge)
-	created, err := session.Create(registry.sessionsDirectory, registry.workingDirectory, nil)
+	created, err := session.Create(registry.sessionsDirectory, registry.workingDirectory, materializer)
 	if err != nil {
-		return nil, "", ErrStatusFailed
+		return nil, "", operationFailure
 	}
 	remove := func() error {
 		if err := created.Remove(); err != nil {
@@ -159,7 +163,7 @@ func (registry *CodexAuthService) createStatusBinding(ctx context.Context, bindi
 		if cleanupErr := remove(); cleanupErr != nil {
 			return nil, "", cleanupErr
 		}
-		return nil, "", ErrStatusFailed
+		return nil, "", operationFailure
 	}
 	return created, encoded, nil
 }

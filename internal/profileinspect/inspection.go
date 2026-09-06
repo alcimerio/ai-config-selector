@@ -13,6 +13,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/alcimerio/ai-config-selector/internal/codexauthresource"
 	"github.com/alcimerio/ai-config-selector/internal/profile"
 	"github.com/alcimerio/ai-config-selector/internal/skills"
 )
@@ -280,6 +281,21 @@ func decodeVersionThree(entry Entry, envelope map[string]json.RawMessage) Entry 
 			support = "unsupported"
 			if overlayVersion == 1 && !unknown(payload, "version") {
 				support = "supported"
+			}
+		} else if id == "codex" {
+			if overlayVersion == 1 {
+				support = "unsupported"
+				if !unknown(payload, "version", "authRef") {
+					support = "supported"
+					if encoded, exists := payload["authRef"]; exists {
+						var authRef string
+						if json.Unmarshal(encoded, &authRef) != nil || authRef == "" {
+							support = "unsupported"
+						} else if _, err := codexauthresource.ParseCredentialRef(authRef); err != nil {
+							support = "unsupported"
+						}
+					}
+				}
 			}
 		}
 		entry.Overlays = append(entry.Overlays, Overlay{ID: id, Version: &overlayVersion, Support: support})

@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/alcimerio/ai-config-selector/internal/adapter/devin"
@@ -292,6 +293,33 @@ func TestSupportedVersionThreeEditDoesNotDowngradeOrRewriteOverlayVersion(t *tes
 	entry := profileinspect.InspectBytes("old", stored.Bytes)
 	if entry.Status != "valid" || entry.StoredVersion == nil || *entry.StoredVersion != 3 || len(entry.Overlays) != 1 || entry.Overlays[0].ID != "devin" || entry.Overlays[0].Version == nil || *entry.Overlays[0].Version != 1 {
 		t.Fatalf("v3 edit downgraded or changed overlay: %#v", entry)
+	}
+}
+
+func TestSupportedInactiveCodexOverlayIsPreservedByVersionThreeMutation(t *testing.T) {
+	raw := []byte(`{"version":3,"name":"old","common":{"skills":{"version":1,"selection":[]},"workspace":{"version":1,"selection":{"access":"read-only"}}},"overlays":{"devin":{"version":1},"codex":{"version":1,"authRef":"work"}}}`)
+	app, repository, _, output := mutationFixture(t, raw)
+	app.MutationBuilder = mutationEditorFunc(func(ctx context.Context, _ string, draft category.Draft, options builder.MutationOptions, _ io.Reader, _ io.Writer) (builder.Outcome, error) {
+		prepared, err := options.Prepare(draft)
+		if err != nil {
+			return builder.Outcome{}, err
+		}
+		path, err := prepared.Save(ctx, draft)
+		return builder.Outcome{Create: err == nil, Draft: draft, Path: path}, err
+	})
+	if code := app.Run(context.Background(), []string{"profile", "edit", "old"}); code != 0 {
+		t.Fatalf("edit exit %d: %s", code, output)
+	}
+	stored, err := repository.Read(context.Background(), "old")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var candidate profile.Profile
+	if err := json.Unmarshal(stored.Bytes, &candidate); err != nil {
+		t.Fatal(err)
+	}
+	if got := candidate.Overlays["codex"]; got.Version != 1 || got.AuthRef != "work" {
+		t.Fatalf("Codex overlay changed: %#v", got)
 	}
 }
 

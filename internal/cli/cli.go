@@ -42,6 +42,11 @@ type ProfileLauncher interface {
 	Launch(context.Context, string, string, category.ResolvedProfile, launch.Terminal) (int, error)
 }
 
+type CodexTarget interface {
+	PlanLaunch(context.Context, string, category.ResolvedProfile, string) (launch.Plan, error)
+	Launch(context.Context, string, string, category.ResolvedProfile, string, launch.Terminal) (int, error)
+}
+
 type CodexAuthRegistry interface {
 	Login(context.Context, codexauth.LoginRequest) (codexauth.IdentityMetadata, error)
 	List(context.Context) ([]codexauth.IdentityMetadata, error)
@@ -73,6 +78,10 @@ type App struct {
 	SandboxPlanner    LaunchPlanner
 	SandboxLauncher   ProfileLauncher
 	CodexAuth         CodexAuthRegistry
+	CodexTarget       CodexTarget
+	CodexCategories   *category.Registry
+	CodexBuilder      ProfileBuilder
+	CodexProfiles     ProfileStore
 	Profiles          ProfileStore
 	SessionsDirectory string
 	WorkingDirectory  string
@@ -119,6 +128,10 @@ func (app App) Run(ctx context.Context, args []string) int {
 			return app.dryRun(ctx, inv.value, "", app.SandboxPlanner, "No Session was created and no sandbox shell was started.")
 		}
 		return app.launchProfile(ctx, inv.value, "", app.SandboxLauncher, "launch sandbox")
+	case "codex create-profile":
+		return app.createCodexProfile(ctx, inv.value, inv.auxValue)
+	case "codex":
+		return app.runCodex(ctx, inv.value, inv.auxValue, inv.enabled)
 	case "codex auth login":
 		return app.loginCodexAuth(ctx, inv.value, inv.enabled)
 	case "codex auth list":
@@ -131,6 +144,108 @@ func (app App) Run(ctx context.Context, args []string) int {
 		return app.recoverCodexAuth(ctx, inv.value)
 	}
 	return app.fail("unavailable command; try acs help")
+}
+
+func (app App) runCodex(ctx context.Context, name, authOverride string, dryRun bool) int {
+	if app.CodexTarget == nil || app.CodexCategories == nil || app.CodexProfiles == nil {
+		return app.fail("interactive Codex is unavailable")
+	}
+	if err := profile.ValidateName(name); err != nil {
+		return app.fail("%v", err)
+	}
+	loaded, err := app.CodexProfiles.Load(name)
+	if err != nil {
+		return app.fail("load Profile %q: %v", name, err)
+	}
+	var resolved category.ResolvedProfile
+	if dryRun {
+		resolved, err = app.CodexCategories.ResolveSyntaxFor(ctx, loaded, "codex")
+	} else {
+		resolved, err = app.CodexCategories.ResolveFor(ctx, loaded, "codex")
+	}
+	if err != nil {
+		return app.fail("resolve Profile %q: %v", name, err)
+	}
+	if dryRun {
+		plan, err := app.CodexTarget.PlanLaunch(ctx, app.WorkingDirectory, resolved, authOverride)
+		if err != nil {
+			return app.fail("plan Profile %q Codex launch: %v", name, err)
+		}
+		fmt.Fprintf(app.Output, "Dry run for Profile %q\n", name)
+		for _, section := range plan.Sections {
+			fmt.Fprintln(app.Output, "\n"+safeTerminalText(section.Title))
+			if len(section.Items) == 0 {
+				fmt.Fprintln(app.Output, "  (none)")
+			}
+			for _, item := range section.Items {
+				fmt.Fprintf(app.Output, "  %s\n", safeTerminalText(item.Label))
+				for _, detail := range item.Details {
+					fmt.Fprintf(app.Output, "    %s: %s\n", safeTerminalText(detail.Label), safeTerminalText(detail.Value))
+				}
+			}
+		}
+		fmt.Fprintln(app.Output, "\nAuthentication existence and status were not checked. No identity lock, executable probe, Session, or process was created.")
+		return 0
+	}
+	exitCode, err := app.CodexTarget.Launch(ctx, app.SessionsDirectory, app.WorkingDirectory, resolved, authOverride, launch.Terminal{Input: app.Input, Output: app.Output, ErrorOutput: app.ErrorOutput})
+	if err != nil {
+		var targetExit exitCodeError
+		if errors.As(err, &targetExit) {
+			return targetExit.ExitCode()
+		}
+		return app.fail("launch Codex Profile %q: %v", name, err)
+	}
+	return exitCode
+}
+
+func (app App) createCodexProfile(ctx context.Context, name, authRef string) int {
+	if app.CodexProfiles == nil || app.CodexCategories == nil || app.CodexBuilder == nil {
+		return app.fail("Codex Profile Builder is unavailable")
+	}
+	if err := profile.ValidateName(name); err != nil {
+		return app.fail("%v", err)
+	}
+	if authRef != "" {
+		if _, err := codexauth.ParseCredentialRef(authRef); err != nil {
+			return app.fail("invalid Codex authentication reference")
+		}
+	}
+	if app.Interactive == nil || !app.Interactive(app.Input, app.Output) {
+		return app.fail("create Profile requires interactive stdin and stdout")
+	}
+	if err := app.CodexProfiles.RecoverContext(ctx); err != nil {
+		return app.fail("recover Profile repository before creation: %v", err)
+	}
+	if _, err := app.CodexProfiles.Load(name); err == nil {
+		return app.fail("create Profile %q: %v: %q", name, profile.ErrProfileExists, name)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return app.fail("check Profile %q: %v", name, err)
+	}
+	draft := app.CodexCategories.NewDraft()
+	save := func(saveContext context.Context, snapshot category.Draft) (string, error) {
+		created, err := app.CodexCategories.NewProfileWithOverlay(name, snapshot, profile.OverlayPayload{Version: 1, AuthRef: authRef})
+		if err != nil {
+			return "", fmt.Errorf("build Profile %q: %w", name, err)
+		}
+		path, err := app.CodexProfiles.CreateContext(saveContext, created)
+		if err != nil {
+			return "", fmt.Errorf("create Profile %q: %w", name, err)
+		}
+		return path, nil
+	}
+	outcome, err := app.CodexBuilder.BuildProfile(ctx, name, draft, save, app.Input, app.Output)
+	if err != nil {
+		return app.fail("edit Profile %q: %v", name, err)
+	}
+	if outcome.Cancelled {
+		fmt.Fprintln(app.Output, "Profile creation cancelled.")
+		return 130
+	}
+	if !outcome.Create {
+		return app.fail("edit Profile %q: Profile Builder ended without an outcome", name)
+	}
+	fmt.Fprintf(app.Output, "\nCreated Codex Profile %q at %s\n", name, safeTerminalText(outcome.Path))
+	return 0
 }
 
 func (app App) loginCodexAuth(ctx context.Context, name string, deviceAuth bool) int {

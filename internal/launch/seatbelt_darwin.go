@@ -725,10 +725,16 @@ func buildSeatbeltPolicy(request validatedProcessRequest) (string, []string, err
 		"-DEXECUTABLE=" + request.executable,
 	}
 	var executableAncestorRules strings.Builder
-	for index, ancestor := range seatbeltExecutableAncestors(request.executable) {
+	for index, ancestor := range seatbeltPathAncestors(request.executable) {
 		name := "EXECUTABLE_ANCESTOR_" + strconv.Itoa(index)
 		definitions = append(definitions, "-D"+name+"="+ancestor)
 		fmt.Fprintf(&executableAncestorRules, "\n  (literal (param %q))", name)
+	}
+	var sessionAncestorRules strings.Builder
+	for index, ancestor := range seatbeltPathAncestors(request.sessionDirectory) {
+		name := "SESSION_ANCESTOR_" + strconv.Itoa(index)
+		definitions = append(definitions, "-D"+name+"="+ancestor)
+		fmt.Fprintf(&sessionAncestorRules, "\n  (literal (param %q))", name)
 	}
 	var runtimeRules strings.Builder
 	for index, input := range request.runtimeInputs {
@@ -787,9 +793,14 @@ func buildSeatbeltPolicy(request validatedProcessRequest) (string, []string, err
   (literal (param "SESSION")) (subpath (param "SESSION"))` + runtimeRules.String() + runtimeProbeRules.String() + `)
 
 ; Security.framework creates TLS policies by inspecting the running executable.
-; Metadata access is restricted to the already validated executable's ancestors;
-; it does not permit reading any directory's contents.
+; Metadata access is restricted to ancestors of the already validated
+; executable.
 (allow file-read-metadata` + executableAncestorRules.String() + `)
+
+; SQLite canonicalizes its database path with lstat on every prefix. Literal
+; metadata grants for validated Session ancestors do not permit directory
+; contents.
+(allow file-read-metadata` + sessionAncestorRules.String() + `)
 
 ; Writes are limited to the leased Session and, only when explicitly granted,
 ; the selected workspace.
@@ -830,9 +841,9 @@ func buildSeatbeltPolicy(request validatedProcessRequest) (string, []string, err
 	return policy, definitions, nil
 }
 
-func seatbeltExecutableAncestors(executable string) []string {
+func seatbeltPathAncestors(path string) []string {
 	ancestors := make([]string, 0, 8)
-	for ancestor := filepath.Dir(executable); ; ancestor = filepath.Dir(ancestor) {
+	for ancestor := filepath.Dir(path); ; ancestor = filepath.Dir(ancestor) {
 		ancestors = append(ancestors, ancestor)
 		if ancestor == string(filepath.Separator) {
 			return ancestors

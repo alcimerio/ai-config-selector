@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"path/filepath"
 
+	"github.com/alcimerio/ai-config-selector/internal/authority"
 	"github.com/alcimerio/ai-config-selector/internal/codexauthresource"
 	"github.com/alcimerio/ai-config-selector/internal/launch"
 	"github.com/alcimerio/ai-config-selector/internal/session"
@@ -26,6 +27,8 @@ var (
 	ErrStatusFailed          = codexauthresource.ErrStatusFailed
 	ErrProjectedAuthInvalid  = codexauthresource.ErrProjectedAuthInvalid
 	ErrBindingQuarantined    = codexauthresource.ErrBindingQuarantined
+	ErrCodexFailed           = errors.New("contained interactive Codex failed")
+	ErrCodexCleanupUncertain = errors.New("contained interactive Codex cleanup is uncertain")
 )
 
 type CredentialRef = codexauthresource.CredentialRef
@@ -58,10 +61,18 @@ type CodexLoginRequest struct {
 	Terminal   launch.Terminal
 }
 
+// CodexRequest is the fixed interactive recipe input. The resolved plan owns
+// all materialization, workspace, target and opaque identity authority.
+type CodexRequest struct {
+	ResolvedPlan *authority.Plan
+	Terminal     launch.Terminal
+}
+
 type CodexAuthService struct {
 	resources         authResourceStore
 	login             loginRunner
 	status            statusRunner
+	execution         *codexExecutionRunner
 	verifyCleanup     func(string, []byte) (bool, error)
 	sessionsDirectory string
 	workingDirectory  string
@@ -140,6 +151,11 @@ func NewCodexAuth(config CodexAuthConfig) (*CodexAuthService, error) {
 		verifyCleanup: launch.VerifySessionCleanupProof,
 	}
 	service.status = newCodexStatusRunner(codexLoginConfig{
+		BinaryPath: config.BinaryPath, SupportedVersion: config.SupportedVersion,
+		RuntimeInputs: config.RuntimeInputs, SessionsDirectory: config.SessionsDirectory,
+		WorkingDirectory: config.WorkingDirectory, PrivateRoot: acsHome,
+	}, sandbox)
+	service.execution = newCodexExecutionRunner(codexLoginConfig{
 		BinaryPath: config.BinaryPath, SupportedVersion: config.SupportedVersion,
 		RuntimeInputs: config.RuntimeInputs, SessionsDirectory: config.SessionsDirectory,
 		WorkingDirectory: config.WorkingDirectory, PrivateRoot: acsHome,

@@ -28,6 +28,7 @@ type Definition[S, R any, C launch.Contribution] struct {
 	Encode        func(S) (json.RawMessage, error)
 	Decode        func(json.RawMessage) (S, error)
 	Resolve       func(context.Context, S) (R, error)
+	ResolveSyntax func(S) (R, error)
 	Contribute    func(R) (C, error)
 	Count         func(S) int
 }
@@ -61,6 +62,7 @@ type Registration struct {
 	encode        func(any) (json.RawMessage, error)
 	decode        func(json.RawMessage) (any, error)
 	resolve       func(context.Context, any) (any, error)
+	resolveSyntax func(any) (any, error)
 	contribute    func(any) (launch.Contribution, error)
 	count         func(any) int
 	token         *struct{ marker byte }
@@ -141,6 +143,15 @@ func Bind[S, R any, C launch.Contribution](definition Definition[S, R, C]) (Bind
 		},
 		token: &struct{ marker byte }{marker: 1},
 	}
+	if definition.ResolveSyntax != nil {
+		registration.resolveSyntax = func(value any) (any, error) {
+			selection, ok := value.(S)
+			if !ok {
+				return nil, fmt.Errorf("category %q selection type mismatch", definition.ID)
+			}
+			return definition.ResolveSyntax(selection)
+		}
+	}
 	if definition.LegacyEmpty != nil {
 		registration.legacyEmpty = func() any { return definition.LegacyEmpty() }
 	}
@@ -199,7 +210,7 @@ func NewRegistryWithRequirements(target string, requirements authority.TargetReq
 	if target == "" {
 		return nil, errors.New("category Registry target is required")
 	}
-	if requirements.Recipe != authority.RecipeDevin {
+	if requirements.Recipe != authority.RecipeDevin && requirements.Recipe != authority.RecipeCodex {
 		return nil, fmt.Errorf("category Registry target %q requires an unsupported execution recipe %q", target, requirements.Recipe)
 	}
 	registry := &Registry{
@@ -352,6 +363,12 @@ func (draft Draft) Summaries() []Summary {
 // NewProfile encodes every Draft selection into the strict version-3 common
 // envelope. New Profiles default through each common capability's Empty value.
 func (registry *Registry) NewProfile(name string, draft Draft) (profile.Profile, error) {
+	return registry.NewProfileWithOverlay(name, draft, profile.OverlayPayload{Version: supportedOverlayVersion})
+}
+
+// NewProfileWithOverlay creates a v3 Profile with the registry's independently
+// versioned target overlay. Target adapters supply only their typed payload.
+func (registry *Registry) NewProfileWithOverlay(name string, draft Draft, overlay profile.OverlayPayload) (profile.Profile, error) {
 	if err := profile.ValidateName(name); err != nil {
 		return profile.Profile{}, err
 	}
@@ -366,7 +383,7 @@ func (registry *Registry) NewProfile(name string, draft Draft) (profile.Profile,
 		Name:          name,
 		SourceVersion: profile.CurrentVersion,
 		Common:        make(map[string]profile.CommonPayload, len(registry.ordered)),
-		Overlays:      map[string]profile.OverlayPayload{registry.target: {Version: supportedOverlayVersion}},
+		Overlays:      map[string]profile.OverlayPayload{registry.target: overlay},
 	}
 	for _, registration := range registry.ordered {
 		selection, err := registration.encode(draft.selections[registration.id])
@@ -601,6 +618,16 @@ func (registry *Registry) Resolve(ctx context.Context, candidate profile.Profile
 // ResolveFor selects exactly one supported overlay, or none for common shell
 // execution. Unknown inactive overlays remain inert.
 func (registry *Registry) ResolveFor(ctx context.Context, candidate profile.Profile, overlay string) (ResolvedProfile, error) {
+	return registry.resolveFor(ctx, candidate, overlay, false)
+}
+
+// ResolveSyntaxFor builds a non-executable explanation plan from stored
+// selections without source discovery or runtime access.
+func (registry *Registry) ResolveSyntaxFor(ctx context.Context, candidate profile.Profile, overlay string) (ResolvedProfile, error) {
+	return registry.resolveFor(ctx, candidate, overlay, true)
+}
+
+func (registry *Registry) resolveFor(ctx context.Context, candidate profile.Profile, overlay string, syntaxOnly bool) (ResolvedProfile, error) {
 	normalized, err := registry.Normalize(candidate)
 	if err != nil {
 		return ResolvedProfile{}, err
@@ -641,7 +668,12 @@ func (registry *Registry) ResolveFor(ctx context.Context, candidate profile.Prof
 		if err != nil {
 			return ResolvedProfile{}, fmt.Errorf("decode %s category selection: %w", registration.id, err)
 		}
-		value, err := registration.resolve(ctx, selection)
+		var value any
+		if syntaxOnly && registration.resolveSyntax != nil {
+			value, err = registration.resolveSyntax(selection)
+		} else {
+			value, err = registration.resolve(ctx, selection)
+		}
 		if err != nil {
 			return ResolvedProfile{}, fmt.Errorf("resolve %s category selection: %w", registration.id, err)
 		}
@@ -658,7 +690,11 @@ func (registry *Registry) ResolveFor(ctx context.Context, candidate profile.Prof
 	if overlay == "" {
 		requirements = authority.TargetRequirements{Recipe: authority.RecipeShell}
 	}
-	return authority.New(contributions, workspaceAccess, normalized.SourceVersion, overlay, requirements), nil
+	resolved := authority.New(contributions, workspaceAccess, normalized.SourceVersion, overlay, requirements)
+	if overlay == "codex" {
+		resolved = resolved.WithAuthRef(normalized.Overlays[overlay].AuthRef)
+	}
+	return resolved, nil
 }
 
 func (registry *Registry) payloadFor(candidate profile.Profile, registration *Registration) (profile.CategoryPayload, error) {

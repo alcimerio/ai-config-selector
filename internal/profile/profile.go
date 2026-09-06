@@ -46,6 +46,7 @@ type CommonPayload struct {
 // overlay. Version one is intentionally empty and bounded.
 type OverlayPayload struct {
 	Version int    `json:"version"`
+	AuthRef string `json:"authRef,omitempty"`
 	Support string `json:"-"`
 }
 
