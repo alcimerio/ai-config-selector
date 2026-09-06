@@ -91,7 +91,7 @@ func TestNativeInstalledACSExecutesLockedCodexToolThroughNamedIdentity(t *testin
 	if err := os.WriteFile(outsideSecret, []byte("unrelated"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	isolationProbe := fmt.Sprintf(`; printf private > "$HOME/codex-private-proof" && printf private-ok; printf ' session-home-begin:%%s:session-home-end' "$HOME"; if cat %s >/dev/null 2>&1; then printf global-auth-read-bad; else printf global-auth-read-denied; fi; if cat %s >/dev/null 2>&1; then printf outside-read-bad; else printf outside-read-denied; fi; if printf bad > %s 2>/dev/null; then printf outside-write-bad; else printf outside-write-denied; fi; sleep 30 </dev/null >/dev/null 2>&1 & printf descendant-pid:%%s "$!"`, strconv.Quote(globalAuth), strconv.Quote(outsideSecret), strconv.Quote(outsideWrite))
+	isolationProbe := fmt.Sprintf(`; printf private > "$HOME/codex-private-proof" && printf private-ok; printf ' session-home-begin:%%s:session-home-end' "$HOME"; printf ' terminal-size:'; stty size </dev/tty 2>/dev/null; if cat %s >/dev/null 2>&1; then printf global-auth-read-bad; else printf global-auth-read-denied; fi; if cat %s >/dev/null 2>&1; then printf outside-read-bad; else printf outside-read-denied; fi; if printf bad > %s 2>/dev/null; then printf outside-write-bad; else printf outside-write-denied; fi; sleep 30 </dev/null >/dev/null 2>&1 & printf descendant-pid:%%s "$!"`, strconv.Quote(globalAuth), strconv.Quote(outsideSecret), strconv.Quote(outsideWrite))
 	for _, test := range []struct {
 		name, profile, command, marker string
 		wantWrite                      bool
@@ -226,6 +226,9 @@ func runInstalledCodexPTY(t *testing.T, candidate, home, tools, workspace, profi
 		t.Fatalf("installed ACS or locked target exited before interactive input: %v; terminal=%q", err, output.String())
 	case <-time.After(1500 * time.Millisecond):
 	}
+	if err := pty.Setsize(master, &pty.Winsize{Rows: 43, Cols: 117}); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := master.Write([]byte("Use the shell tool exactly once as requested by the fixture.\r")); err != nil {
 		t.Fatalf("write interactive input: %v; terminal=%q", err, output.String())
 	}
@@ -349,7 +352,7 @@ func (fixture *nativeResponsesFixture) assert(t *testing.T) int {
 	if err != nil {
 		t.Fatalf("second request tool output: %v", err)
 	}
-	for _, sentinel := range []string{"Process exited with code 0", "codex-native-tool-output", "private-ok", "global-auth-read-denied", "outside-read-denied", "outside-write-denied"} {
+	for _, sentinel := range []string{"Process exited with code 0", "codex-native-tool-output", "private-ok", "terminal-size:43 117", "global-auth-read-denied", "outside-read-denied", "outside-write-denied"} {
 		if !strings.Contains(toolOutput, sentinel) {
 			t.Fatalf("second request omitted real shell result %q", sentinel)
 		}
