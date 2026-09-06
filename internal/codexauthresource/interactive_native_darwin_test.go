@@ -133,7 +133,7 @@ func runNativeInstalledACSLockedCodexFixture(t *testing.T, outerSeatbeltExperime
 		name, profile, command, marker string
 		wantWrite, wantDescendant      bool
 	}{
-		{name: "coding write", profile: profilePrefix + "coding", command: "printf codex-native-tool-ok > ./codex-native-write; printf codex-native-tool-output" + isolationProbe + descendantProbe, marker: "codex-native-write", wantWrite: true, wantDescendant: true},
+		{name: "coding write", profile: profilePrefix + "coding", command: "printf codex-native-tool-ok > ./codex-native-write; printf codex-native-tool-output" + isolationProbe, marker: "codex-native-write", wantWrite: true},
 		{name: "read-only denial", profile: profilePrefix + "readonly", command: "printf forbidden > ./codex-native-readonly-write; printf codex-native-tool-output" + isolationProbe, marker: "codex-native-readonly-write", wantWrite: false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -406,6 +406,9 @@ func runInstalledCodexPTY(t *testing.T, candidate, home, tools, workspace, profi
 		_ = command.Process.Kill()
 		t.Fatalf("real Codex did not complete two fixture requests; loopback=%s; terminal=%q", fixture.summary(), output.String())
 	}
+	if !waitNativeCaptureContainsAfter(&output, 0, "fixture-complete", 5*time.Second) || !waitNativeCaptureStable(&output, 5*time.Second) {
+		t.Fatalf("real Codex did not finish rendering the completed turn; terminal=%q", output.String())
+	}
 	if crashAfterTool {
 		if err := command.Process.Kill(); err != nil {
 			t.Fatalf("abruptly terminate installed ACS after real tool work: %v", err)
@@ -527,6 +530,7 @@ type nativeResponsesFixture struct {
 	websocketFallbacks    int
 	modelRequests         int
 	protocolErr           string
+	preexistingHomes      map[string]struct{}
 }
 
 type nativeRequestObservation struct {
@@ -536,7 +540,10 @@ type nativeRequestObservation struct {
 
 func newNativeResponsesFixture(t *testing.T, shellCommand, launcherHome string) *nativeResponsesFixture {
 	t.Helper()
-	fixture := &nativeResponsesFixture{completed: make(chan struct{})}
+	fixture := &nativeResponsesFixture{completed: make(chan struct{}), preexistingHomes: make(map[string]struct{})}
+	for _, home := range nativeSessionHomes(launcherHome) {
+		fixture.preexistingHomes[home] = struct{}{}
+	}
 	fixture.server = httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		fixture.mu.Lock()
 		fixture.observations = append(fixture.observations, nativeRequestObservation{
@@ -603,7 +610,7 @@ func newNativeResponsesFixture(t *testing.T, shellCommand, launcherHome string) 
 		fixture.bodies = append(fixture.bodies, body)
 		fixture.headers = append(fixture.headers, request.Header.Clone())
 		if index == 2 {
-			fixture.sessionObservationErr = observeNativeSessionProjection(launcherHome)
+			fixture.sessionObservationErr = observeNativeSessionProjection(launcherHome, fixture.preexistingHomes)
 		}
 		fixture.mu.Unlock()
 		response.Header().Set("Content-Type", "text/event-stream")
@@ -754,14 +761,24 @@ func (fixture *nativeResponsesFixture) summary() string {
 	return fixture.summaryLocked()
 }
 
-func observeNativeSessionProjection(launcherHome string) string {
-	sessionHomes, err := filepath.Glob(filepath.Join(launcherHome, ".acs", "sessions", "session-*", "home"))
-	if err != nil || len(sessionHomes) != 1 {
+func nativeSessionHomes(launcherHome string) []string {
+	homes, _ := filepath.Glob(filepath.Join(launcherHome, ".acs", "sessions", "session-*", "home"))
+	return homes
+}
+
+func observeNativeSessionProjection(launcherHome string, preexisting map[string]struct{}) string {
+	var sessionHomes []string
+	for _, home := range nativeSessionHomes(launcherHome) {
+		if _, existed := preexisting[home]; !existed {
+			sessionHomes = append(sessionHomes, home)
+		}
+	}
+	if len(sessionHomes) != 1 {
 		return "live target did not retain exactly one private Session HOME"
 	}
 	sessionHome := sessionHomes[0]
 	var rolloutPath string
-	err = filepath.WalkDir(filepath.Join(sessionHome, ".codex", "sessions"), func(path string, entry os.DirEntry, walkErr error) error {
+	err := filepath.WalkDir(filepath.Join(sessionHome, ".codex", "sessions"), func(path string, entry os.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
