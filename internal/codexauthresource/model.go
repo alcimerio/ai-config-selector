@@ -10,6 +10,7 @@ import (
 const (
 	SupportedCodexVersion = "0.149.1"
 	RecordVersion         = 1
+	recordVersion         = RecordVersion
 )
 
 var (
