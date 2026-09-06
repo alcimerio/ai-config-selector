@@ -75,7 +75,7 @@ func TestNativeInstalledACSExecutesLockedCodexToolThroughNamedIdentity(t *testin
 		t.Fatal(err)
 	}
 	copyLockedTarget(t, target, filepath.Join(tools, "codex"))
-	seedInstalledCandidateIdentity(t, candidate, home, "interactive")
+	seedInstalledCandidateIdentity(t, candidate, home, tools, "interactive")
 	assertInstalledIdentityVisible(t, candidate, home, tools, workspace, "interactive")
 	writeNativeCodexProfile(t, home, "coding", "interactive", "read-write")
 	writeNativeCodexProfile(t, home, "readonly", "interactive", "read-only")
@@ -134,9 +134,9 @@ func TestNativeInstalledACSExecutesLockedCodexToolThroughNamedIdentity(t *testin
 	}
 }
 
-func seedInstalledCandidateIdentity(t *testing.T, candidate, home, name string) {
+func seedInstalledCandidateIdentity(t *testing.T, candidate, home, tools, name string) {
 	t.Helper()
-	keychain := configureInstalledCandidateKeychainContext(t, home)
+	keychain := configureInstalledCandidateKeychainContext(t, home, tools)
 	comment, payload, err := codexauthresource.PrepareIsolatedKeychainRecordForComposition(
 		codexauthresource.CredentialRef(name), compositionAuth(t),
 	)
@@ -159,14 +159,14 @@ func seedInstalledCandidateIdentity(t *testing.T, candidate, home, name string) 
 	}
 }
 
-func configureInstalledCandidateKeychainContext(t *testing.T, home string) string {
+func configureInstalledCandidateKeychainContext(t *testing.T, home, tools string) string {
 	t.Helper()
 	parentDefault, parentDefaultOK := queryNativeKeychainSelection(nil, "default-keychain")
 	parentSearch, parentSearchOK := queryNativeKeychainSelection(nil, "list-keychains")
 	if !parentDefaultOK || !parentSearchOK {
 		t.Fatal("isolated parent Keychain selection is unavailable")
 	}
-	fixtureEnvironment := environmentWithHome(home)
+	fixtureEnvironment := nativeCandidateEnvironment(home, tools)
 	fixtureDefaultBefore, fixtureDefaultBeforeOK := queryNativeKeychainSelection(fixtureEnvironment, "default-keychain")
 	fixtureSearchBefore, fixtureSearchBeforeOK := queryNativeKeychainSelection(fixtureEnvironment, "list-keychains")
 	t.Logf(
@@ -177,6 +177,9 @@ func configureInstalledCandidateKeychainContext(t *testing.T, home string) strin
 	keychain := strings.Trim(strings.TrimSpace(parentDefault), `"`)
 	if keychain == "" || !filepath.IsAbs(keychain) {
 		t.Fatal("isolated default Keychain selection is unavailable")
+	}
+	if err := os.MkdirAll(filepath.Join(home, "Library", "Preferences"), 0o700); err != nil {
+		t.Fatal("prepare synthetic HOME Keychain preferences")
 	}
 	for _, arguments := range [][]string{
 		{"list-keychains", "-d", "user", "-s", keychain},
@@ -190,10 +193,12 @@ func configureInstalledCandidateKeychainContext(t *testing.T, home string) strin
 	}
 	fixtureDefaultAfter, fixtureDefaultAfterOK := queryNativeKeychainSelection(fixtureEnvironment, "default-keychain")
 	fixtureSearchAfter, fixtureSearchAfterOK := queryNativeKeychainSelection(fixtureEnvironment, "list-keychains")
-	if !fixtureDefaultAfterOK || !fixtureSearchAfterOK || fixtureDefaultAfter != parentDefault || fixtureSearchAfter != parentSearch {
+	defaultMatches := fixtureDefaultAfterOK && fixtureDefaultAfter == parentDefault
+	searchMatches := fixtureSearchAfterOK && fixtureSearchAfter == parentSearch
+	t.Logf("synthetic HOME Keychain selection after setup: default-match=%t search-list-match=%t", defaultMatches, searchMatches)
+	if !defaultMatches || !searchMatches {
 		t.Fatal("synthetic HOME did not select the disposable Keychain")
 	}
-	t.Log("synthetic HOME Keychain selection after setup: default-match=true search-list-match=true")
 	return keychain
 }
 
@@ -209,21 +214,15 @@ func queryNativeKeychainSelection(environment []string, operation string) (strin
 	return strings.TrimSpace(string(output)), true
 }
 
-func environmentWithHome(home string) []string {
-	environment := make([]string, 0, len(os.Environ())+1)
-	for _, value := range os.Environ() {
-		if !strings.HasPrefix(value, "HOME=") {
-			environment = append(environment, value)
-		}
-	}
-	return append(environment, "HOME="+home)
+func nativeCandidateEnvironment(home, tools string) []string {
+	return []string{"HOME=" + home, "PATH=" + tools + ":/usr/bin:/bin", "LANG=C", "LC_ALL=C", "TERM=xterm", "COLORTERM=truecolor"}
 }
 
 func assertInstalledIdentityVisible(t *testing.T, candidate, home, tools, workspace, name string) {
 	t.Helper()
 	command := exec.Command(candidate, "codex", "auth", "list")
 	command.Dir = workspace
-	command.Env = []string{"HOME=" + home, "PATH=" + tools + ":/usr/bin:/bin", "LANG=C", "LC_ALL=C", "TERM=xterm", "COLORTERM=truecolor"}
+	command.Env = nativeCandidateEnvironment(home, tools)
 	output, err := command.CombinedOutput()
 	if err != nil {
 		t.Fatalf("installed ACS cannot enumerate seeded synthetic identity: %v; output=%q", err, output)
@@ -246,7 +245,7 @@ func runInstalledCodexPTY(t *testing.T, candidate, home, tools, workspace, profi
 	}
 	command := exec.Command(candidate, "codex", "--profile", profile)
 	command.Dir = workspace
-	command.Env = []string{"HOME=" + home, "PATH=" + tools + ":/usr/bin:/bin", "LANG=C", "LC_ALL=C", "TERM=xterm", "COLORTERM=truecolor"}
+	command.Env = nativeCandidateEnvironment(home, tools)
 	command.Stdin, command.Stdout, command.Stderr = terminal, terminal, terminal
 	command.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true, Ctty: 0}
 	var output nativeSafeCapture
