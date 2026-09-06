@@ -87,20 +87,35 @@ func runNativeInstalledACSLockedCodexFixture(t *testing.T, outerSeatbeltExperime
 	if err := os.WriteFile(globalAuth, []byte("unrelated-global-auth"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	identityName, profilePrefix := "login-proof", ""
+	profilePrefix := ""
+	identities := map[string]string{"coding": "login-proof", "readonly": "login-proof", "recovery": "login-proof"}
 	if outerSeatbeltExperiment {
-		identityName, profilePrefix = "outer-seatbelt-experiment", "outer-"
+		profilePrefix = "outer-"
+		identities = map[string]string{
+			"coding":   "outer-seatbelt-coding",
+			"readonly": "outer-seatbelt-readonly",
+			"recovery": "outer-seatbelt-recovery",
+		}
 	}
 	configureInstalledCandidateKeychainContext(t, home, tools)
 	buildSyntheticLoginTarget(t, filepath.Join(tools, "codex"))
-	if !t.Run("installed ACS synthetic login transaction", func(t *testing.T) {
-		runInstalledSyntheticLogin(t, candidate, home, tools, workspace, identityName)
-		assertInstalledIdentityVisible(t, candidate, home, tools, workspace, identityName)
-	}) {
-		t.FailNow()
+	loginNames := []string{identities["coding"]}
+	if outerSeatbeltExperiment {
+		loginNames = []string{identities["coding"], identities["readonly"], identities["recovery"]}
 	}
-	writeNativeCodexProfile(t, home, profilePrefix+"coding", identityName, "read-write")
-	writeNativeCodexProfile(t, home, profilePrefix+"readonly", identityName, "read-only")
+	for _, identityName := range loginNames {
+		if !t.Run("installed ACS synthetic login transaction "+identityName, func(t *testing.T) {
+			runInstalledSyntheticLogin(t, candidate, home, tools, workspace, identityName)
+			assertInstalledIdentityVisible(t, candidate, home, tools, workspace, identityName)
+		}) {
+			t.FailNow()
+		}
+	}
+	writeNativeCodexProfile(t, home, profilePrefix+"coding", identities["coding"], "read-write")
+	writeNativeCodexProfile(t, home, profilePrefix+"readonly", identities["readonly"], "read-only")
+	if outerSeatbeltExperiment {
+		writeNativeCodexProfile(t, home, profilePrefix+"recovery", identities["recovery"], "read-write")
+	}
 	grantedTarget := filepath.Join(workspace, "locked-codex-target")
 	copyLockedTarget(t, target, grantedTarget)
 	outside, err := os.MkdirTemp("/tmp", "acs-codex-unrelated-")
@@ -112,12 +127,13 @@ func runNativeInstalledACSLockedCodexFixture(t *testing.T, outerSeatbeltExperime
 	if err := os.WriteFile(outsideSecret, []byte("unrelated"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	isolationProbe := fmt.Sprintf(`; if cat %s >/dev/null 2>&1; then printf global-auth-read-bad; else printf global-auth-read-denied; fi; if cat %s >/dev/null 2>&1; then printf outside-read-bad; else printf outside-read-denied; fi; if printf bad > %s 2>/dev/null; then printf outside-write-bad; else printf outside-write-denied; fi; sleep 30 </dev/null >/dev/null 2>&1 & printf descendant-pid:%%s "$!"`, strconv.Quote(globalAuth), strconv.Quote(outsideSecret), strconv.Quote(outsideWrite))
+	isolationProbe := fmt.Sprintf(`; if cat %s >/dev/null 2>&1; then printf global-auth-read-bad; else printf global-auth-read-denied; fi; if cat %s >/dev/null 2>&1; then printf outside-read-bad; else printf outside-read-denied; fi; if printf bad > %s 2>/dev/null; then printf outside-write-bad; else printf outside-write-denied; fi`, strconv.Quote(globalAuth), strconv.Quote(outsideSecret), strconv.Quote(outsideWrite))
+	descendantProbe := `; sleep 30 </dev/null >/dev/null 2>&1 & printf descendant-pid:%s "$!"`
 	for _, test := range []struct {
 		name, profile, command, marker string
-		wantWrite                      bool
+		wantWrite, wantDescendant      bool
 	}{
-		{name: "coding write", profile: profilePrefix + "coding", command: "printf codex-native-tool-ok > ./codex-native-write; printf codex-native-tool-output" + isolationProbe, marker: "codex-native-write", wantWrite: true},
+		{name: "coding write", profile: profilePrefix + "coding", command: "printf codex-native-tool-ok > ./codex-native-write; printf codex-native-tool-output" + isolationProbe + descendantProbe, marker: "codex-native-write", wantWrite: true, wantDescendant: true},
 		{name: "read-only denial", profile: profilePrefix + "readonly", command: "printf forbidden > ./codex-native-readonly-write; printf codex-native-tool-output" + isolationProbe, marker: "codex-native-readonly-write", wantWrite: false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -127,13 +143,9 @@ func runNativeInstalledACSLockedCodexFixture(t *testing.T, outerSeatbeltExperime
 			buildFixedCodexTrampoline(t, grantedTarget, fixture.server.URL+"/backend-api", trampoline, outerSeatbeltExperiment)
 			t.Logf("harness executable sha256=%s; locked target member sha256=%s", fileSHA256(t, trampoline), fileSHA256(t, grantedTarget))
 			runInstalledCodexPTY(t, candidate, home, tools, workspace, test.profile, fixture, false)
-			descendantPID := fixture.assert(t)
-			deadline := time.Now().Add(3 * time.Second)
-			for time.Now().Before(deadline) && syscall.Kill(descendantPID, 0) == nil {
-				time.Sleep(20 * time.Millisecond)
-			}
-			if err := syscall.Kill(descendantPID, 0); !errors.Is(err, syscall.ESRCH) {
-				t.Fatalf("Codex tool descendant %d survived settlement: %v", descendantPID, err)
+			descendantPID := fixture.assert(t, test.wantDescendant)
+			if test.wantDescendant {
+				assertNativeProcessRemoved(t, descendantPID, "Codex tool descendant survived settlement")
 			}
 			contents, err := os.ReadFile(filepath.Join(workspace, test.marker))
 			if test.wantWrite && (err != nil || string(contents) != "codex-native-tool-ok") {
@@ -147,25 +159,19 @@ func runNativeInstalledACSLockedCodexFixture(t *testing.T, outerSeatbeltExperime
 	}
 	if outerSeatbeltExperiment {
 		t.Run("abrupt ACS termination and public recovery", func(t *testing.T) {
-			fixture := newNativeResponsesFixture(t, "printf codex-native-tool-output"+isolationProbe, home)
+			fixture := newNativeResponsesFixture(t, "printf codex-native-tool-output"+isolationProbe+descendantProbe, home)
 			defer fixture.server.Close()
 			buildFixedCodexTrampoline(t, grantedTarget, fixture.server.URL+"/backend-api", filepath.Join(tools, "codex"), true)
-			runInstalledCodexPTY(t, candidate, home, tools, workspace, profilePrefix+"coding", fixture, true)
-			descendantPID := fixture.assert(t)
-			deadline := time.Now().Add(5 * time.Second)
-			for time.Now().Before(deadline) && syscall.Kill(descendantPID, 0) == nil {
-				time.Sleep(20 * time.Millisecond)
-			}
-			if err := syscall.Kill(descendantPID, 0); !errors.Is(err, syscall.ESRCH) {
-				t.Fatalf("Codex tool descendant %d survived abrupt ACS settlement: %v", descendantPID, err)
-			}
+			runInstalledCodexPTY(t, candidate, home, tools, workspace, profilePrefix+"recovery", fixture, true)
+			descendantPID := fixture.assert(t, true)
+			assertNativeProcessRemoved(t, descendantPID, "Codex tool descendant survived abrupt ACS settlement")
 			sessions, err := filepath.Glob(filepath.Join(home, ".acs", "sessions", "session-*"))
 			if err != nil || len(sessions) != 1 {
 				t.Fatalf("abrupt ACS termination retained %d recoverable Sessions", len(sessions))
 			}
-			runInstalledCodexRecovery(t, candidate, home, tools, workspace, identityName)
+			runInstalledCodexRecovery(t, candidate, home, tools, workspace, identities["recovery"])
 			assertNoNativeSessions(t, filepath.Join(home, ".acs", "sessions"))
-			assertInstalledIdentityVisible(t, candidate, home, tools, workspace, identityName)
+			assertInstalledIdentityVisible(t, candidate, home, tools, workspace, identities["recovery"])
 		})
 	}
 	if contents, err := os.ReadFile(globalAuth); err != nil || string(contents) != "unrelated-global-auth" {
@@ -446,6 +452,17 @@ func runInstalledCodexRecovery(t *testing.T, candidate, home, tools, workspace, 
 	}
 }
 
+func assertNativeProcessRemoved(t *testing.T, pid int, message string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) && syscall.Kill(pid, 0) == nil {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if err := syscall.Kill(pid, 0); !errors.Is(err, syscall.ESRCH) {
+		t.Fatalf("%s: pid=%d err=%v", message, pid, err)
+	}
+}
+
 func waitNativeCaptureStable(capture *nativeSafeCapture, timeout time.Duration) bool {
 	deadline := time.Now().Add(timeout)
 	last := -1
@@ -668,7 +685,7 @@ func (fixture *nativeResponsesFixture) rejectProtocol(response http.ResponseWrit
 	http.Error(response, "fixture protocol rejected", http.StatusBadRequest)
 }
 
-func (fixture *nativeResponsesFixture) assert(t *testing.T) int {
+func (fixture *nativeResponsesFixture) assert(t *testing.T, wantDescendant bool) int {
 	t.Helper()
 	fixture.mu.Lock()
 	defer fixture.mu.Unlock()
@@ -701,13 +718,16 @@ func (fixture *nativeResponsesFixture) assert(t *testing.T) int {
 	if err != nil {
 		t.Fatalf("second request tool output: %v", err)
 	}
-	for _, sentinel := range []string{"Process exited with code 0", "codex-native-tool-output", "global-auth-read-denied", "outside-read-denied", "outside-write-denied"} {
+	for _, sentinel := range []string{"codex-native-tool-output", "global-auth-read-denied", "outside-read-denied", "outside-write-denied"} {
 		if !strings.Contains(toolOutput, sentinel) {
 			t.Fatalf("second request omitted real shell result %q", sentinel)
 		}
 	}
 	if strings.Contains(toolOutput, "global-auth-read-bad") || strings.Contains(toolOutput, "outside-read-bad") || strings.Contains(toolOutput, "outside-write-bad") {
 		t.Fatal("matching function output reports an isolation escape")
+	}
+	if !wantDescendant {
+		return 0
 	}
 	match := regexp.MustCompile(`descendant-pid:(\d+)`).FindStringSubmatch(toolOutput)
 	if len(match) != 2 {
