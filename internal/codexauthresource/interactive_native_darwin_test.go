@@ -323,7 +323,6 @@ func runInstalledCodexPTY(t *testing.T, candidate, home, tools, workspace, profi
 	select {
 	case err := <-wait:
 		finished = true
-		logRecentNativeSandboxDenials(t)
 		t.Fatalf("installed ACS or locked target exited before interactive input: %v; terminal=%q", err, output.String())
 	case <-time.After(1500 * time.Millisecond):
 	}
@@ -337,7 +336,6 @@ func runInstalledCodexPTY(t *testing.T, candidate, home, tools, workspace, profi
 	case <-completed:
 	case <-time.After(30 * time.Second):
 		_ = command.Process.Kill()
-		logRecentNativeSandboxDenials(t)
 		t.Fatalf("real Codex did not complete two fixture requests; terminal=%q", output.String())
 	}
 	time.Sleep(500 * time.Millisecond)
@@ -355,23 +353,6 @@ func runInstalledCodexPTY(t *testing.T, candidate, home, tools, workspace, profi
 		t.Fatal("interactive Codex did not terminate after PTY cancellation")
 	}
 	return output.String()
-}
-
-func logRecentNativeSandboxDenials(t *testing.T) {
-	t.Helper()
-	command := exec.Command(
-		"/usr/bin/log", "show", "--last", "2m", "--style", "compact",
-		"--predicate", `process == "sandboxd" AND eventMessage CONTAINS[c] "deny"`,
-	)
-	output, err := command.CombinedOutput()
-	if err != nil {
-		t.Logf("sandbox denial diagnostic unavailable: %v", err)
-		return
-	}
-	if len(output) > 16<<10 {
-		output = output[len(output)-(16<<10):]
-	}
-	t.Logf("recent sandbox denial diagnostic:\n%s", output)
 }
 
 type nativeSafeCapture struct {
@@ -546,12 +527,8 @@ func writeSSE(writer io.Writer, events ...map[string]any) {
 func buildFixedCodexTrampoline(t *testing.T, target, baseURL, destination string) {
 	t.Helper()
 	source := filepath.Join(filepath.Dir(destination), "codex-trampoline.c")
-	program := fmt.Sprintf(`#include <sqlite3.h>
-#include <errno.h>
-#include <stdio.h>
-#include <stdlib.h>
+	program := fmt.Sprintf(`#include <stdlib.h>
 #include <string.h>
-#include <sys/stat.h>
 #include <unistd.h>
 int main(int argc, char **argv) {
   char **next = calloc((size_t)argc + 3, sizeof(char *));
@@ -563,42 +540,6 @@ int main(int argc, char **argv) {
     if (strcmp(argv[i], "--version") == 0) version = 1;
 	}
 	if (!version) {
-		const char *home = getenv("HOME");
-		char path[4096];
-		sqlite3 *db = NULL;
-		if (!home || snprintf(path, sizeof(path), "%%s/.codex/acs-sqlite-preflight.sqlite", home) <= 0) return 122;
-		char prefix[4096];
-		strncpy(prefix, path, sizeof(prefix));
-		prefix[sizeof(prefix) - 1] = 0;
-		int prefix_index = 0;
-		for (char *cursor = prefix + 1; ; cursor++) {
-			if (*cursor != '/' && *cursor != 0) continue;
-			char saved = *cursor;
-			*cursor = 0;
-			struct stat status;
-			if (lstat(prefix, &status) != 0 && errno != ENOENT) {
-				fprintf(stderr, "acs-session-prefix-lstat:failed:%%d:%%d\n", prefix_index, errno);
-				return 124;
-			}
-			prefix_index++;
-			*cursor = saved;
-			if (saved == 0) break;
-		}
-		fprintf(stderr, "acs-session-prefix-lstat:passed:%%d\n", prefix_index);
-		int rc = sqlite3_open_v2(path, &db, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE, NULL);
-		if (rc == SQLITE_OK) rc = sqlite3_exec(db, "PRAGMA journal_mode=WAL; CREATE TABLE proof(value INTEGER); INSERT INTO proof VALUES(1);", NULL, NULL, NULL);
-		if (rc != SQLITE_OK) {
-			fprintf(stderr, "acs-sqlite-preflight:failed:%%d:%%d\n", rc, db ? sqlite3_extended_errcode(db) : -1);
-			if (db) sqlite3_close(db);
-			return 123;
-		}
-		sqlite3_close(db);
-		unlink(path);
-		char sidecar[4100];
-		snprintf(sidecar, sizeof(sidecar), "%%s-wal", path); unlink(sidecar);
-		snprintf(sidecar, sizeof(sidecar), "%%s-shm", path); unlink(sidecar);
-		fputs("acs-sqlite-preflight:passed\n", stderr);
-		fflush(stderr);
 		next[argc] = "-c";
     next[argc + 1] = %s;
   }
@@ -618,7 +559,7 @@ int main(int argc, char **argv) {
 		t.Fatal("prepare fixed Codex trampoline replacement")
 	}
 	defer os.Remove(replacementPath)
-	if output, err := exec.Command("/usr/bin/clang", "-Os", source, "-lsqlite3", "-o", replacementPath).CombinedOutput(); err != nil {
+	if output, err := exec.Command("/usr/bin/clang", "-Os", source, "-o", replacementPath).CombinedOutput(); err != nil {
 		t.Fatalf("compile fixed Codex trampoline: %v: %s", err, output)
 	}
 	if err := os.Chmod(replacementPath, 0o500); err != nil {
