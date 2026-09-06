@@ -41,7 +41,7 @@ func TestPlanLaunchValidatesButHidesExecutableArgumentsAndLegacyPaths(t *testing
 	resolved := authority.New([]authority.Contribution{{ID: "test", Value: pathContribution(privatePath)}}, launch.WorkspaceAccessReadOnly, 2, "")
 	fake := &recordingExecutor{}
 	target := &Target{executor: fake}
-	plan, err := target.PlanLaunch(context.Background(), t.TempDir(), resolved, []string{"/bin/true", "private-value", ""})
+	plan, err := target.PlanLaunch(context.Background(), t.TempDir(), resolved, []string{"/usr/bin/true", "private-value", ""})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,7 +54,7 @@ func TestPlanLaunchValidatesButHidesExecutableArgumentsAndLegacyPaths(t *testing
 			}
 		}
 	}
-	if strings.Contains(rendered.String(), privatePath) || strings.Contains(rendered.String(), "/bin/true") || strings.Contains(rendered.String(), "private-value") {
+	if strings.Contains(rendered.String(), privatePath) || strings.Contains(rendered.String(), "/usr/bin/true") || strings.Contains(rendered.String(), "private-value") {
 		t.Fatalf("plan leaked private input: %s", rendered.String())
 	}
 	for _, marker := range []string{"(validated path hidden)", "2 (values hidden)", "none"} {

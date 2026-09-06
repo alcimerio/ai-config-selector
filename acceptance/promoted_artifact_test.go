@@ -134,14 +134,14 @@ func TestPromotedArtifactGenericDryRunIsLiteralSanitizedAndSideEffectFree(t *tes
 	beforeHome := snapshotInspectionHome(t, home)
 	beforeWorkspace := snapshotInspectionHome(t, workspace)
 	privateArgument := "private-command-argument"
-	command := exec.Command(binary, "run", "--dry-run", "--profile", "reviews", "--", "/bin/true", privateArgument, "", "--")
+	command := exec.Command(binary, "run", "--dry-run", "--profile", "reviews", "--", "/usr/bin/true", privateArgument, "", "--")
 	command.Dir = workspace
 	command.Env = promotedEnvironment(home, path)
 	output, err := command.CombinedOutput()
 	if err != nil {
 		t.Fatalf("generic dry-run failed: %v; output=%s", err, output)
 	}
-	for _, forbidden := range []string{"/bin/true", privateArgument, filepath.Join(home, ".config", "devin", "skills")} {
+	for _, forbidden := range []string{"/usr/bin/true", privateArgument, filepath.Join(home, ".config", "devin", "skills")} {
 		if bytes.Contains(output, []byte(forbidden)) {
 			t.Fatalf("generic dry-run leaked %q: %s", forbidden, output)
 		}
