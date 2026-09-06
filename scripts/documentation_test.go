@@ -176,6 +176,39 @@ func TestPromotedArtifactAcceptanceCoversSandboxShell(t *testing.T) {
 	}
 }
 
+func TestGenericRunDocumentationAndCandidateGateStayBoundToLiteralContainment(t *testing.T) {
+	document := readRepositoryFile(t, "..", filepath.Join("docs", "generic-run.md"))
+	for _, required := range []string{
+		"acs run --profile backend-review -- /usr/bin/git status",
+		"/usr/local/bin:/usr/bin:/bin",
+		"workspace-relative executable must",
+		"does not infer a filesystem or network grant catalog",
+		"not a claim that path-based execution provides an atomic kernel",
+		"multi-project real-use",
+	} {
+		if !strings.Contains(document, required) {
+			t.Errorf("generic run documentation omits %q", required)
+		}
+	}
+	acceptance := readRepositoryFile(t, "..", filepath.Join("acceptance", "promoted_artifact_native_test.go"))
+	for _, required := range []string{
+		"assertPromotedArtifactGenericRun",
+		"--acs-generic-command-helper",
+		"private-argument-must-not-appear",
+		"generic-descendant.pid",
+		"generic-pty-size:97:31",
+	} {
+		if !strings.Contains(acceptance, required) {
+			t.Errorf("generic candidate acceptance omits %q", required)
+		}
+	}
+	workflow := readRepositoryFile(t, "..", filepath.Join(".github", "workflows", "promoted-artifacts.yml"))
+	if !strings.Contains(workflow, "Exercise generic contained command through supplied candidate") ||
+		!strings.Contains(workflow, "TestPromotedArtifactNativeContainmentContract") {
+		t.Fatal("promoted candidate gate omits the explicit generic command observation")
+	}
+}
+
 func TestPromotedArtifactGateUsesLockedNativeAuthenticationTargets(t *testing.T) {
 	workflow := readRepositoryFile(t, "..", filepath.Join(".github", "workflows", "promoted-artifacts.yml"))
 	for _, required := range []string{

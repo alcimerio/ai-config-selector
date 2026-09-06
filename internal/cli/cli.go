@@ -47,6 +47,11 @@ type CodexTarget interface {
 	Launch(context.Context, string, string, category.ResolvedProfile, string, launch.Terminal) (int, error)
 }
 
+type GenericTarget interface {
+	PlanLaunch(context.Context, string, category.ResolvedProfile, []string) (launch.Plan, error)
+	Launch(context.Context, string, string, category.ResolvedProfile, []string, launch.Terminal) (int, error)
+}
+
 type CodexAuthRegistry interface {
 	Login(context.Context, codexauth.LoginRequest) (codexauth.IdentityMetadata, error)
 	List(context.Context) ([]codexauth.IdentityMetadata, error)
@@ -79,6 +84,7 @@ type App struct {
 	SandboxLauncher   ProfileLauncher
 	CodexAuth         CodexAuthRegistry
 	CodexTarget       CodexTarget
+	GenericTarget     GenericTarget
 	CodexCategories   *category.Registry
 	CodexBuilder      ProfileBuilder
 	CodexProfiles     ProfileStore
@@ -123,6 +129,8 @@ func (app App) Run(ctx context.Context, args []string) int {
 			return app.dryRun(ctx, inv.value, "devin", app.Planner, "No Session was created and Devin was not started.")
 		}
 		return app.launchProfile(ctx, inv.value, "devin", app.Launcher, "launch")
+	case "run":
+		return app.runGeneric(ctx, inv.value, inv.arguments, inv.enabled)
 	case "sandbox":
 		if inv.enabled {
 			return app.dryRun(ctx, inv.value, "", app.SandboxPlanner, "No Session was created and no sandbox shell was started.")
@@ -144,6 +152,52 @@ func (app App) Run(ctx context.Context, args []string) int {
 		return app.recoverCodexAuth(ctx, inv.value)
 	}
 	return app.fail("unavailable command; try acs help")
+}
+
+func (app App) runGeneric(ctx context.Context, name string, arguments []string, dryRun bool) int {
+	if app.GenericTarget == nil || app.Categories == nil || app.Profiles == nil {
+		return app.fail("generic command execution is unavailable")
+	}
+	if err := profile.ValidateName(name); err != nil {
+		return app.fail("%v", err)
+	}
+	loaded, err := app.Profiles.Load(name)
+	if err != nil {
+		return app.fail("load Profile %q: %v", name, err)
+	}
+	var resolved category.ResolvedProfile
+	resolved, err = app.Categories.ResolveFor(ctx, loaded, "")
+	if err != nil {
+		return app.fail("resolve Profile %q: %v", name, err)
+	}
+	if dryRun {
+		plan, err := app.GenericTarget.PlanLaunch(ctx, app.WorkingDirectory, resolved, arguments)
+		if err != nil {
+			return app.fail("plan Profile %q command: %v", name, err)
+		}
+		fmt.Fprintf(app.Output, "Dry run for Profile %q\n", name)
+		for _, section := range plan.Sections {
+			fmt.Fprintln(app.Output, "\n"+safeTerminalText(section.Title))
+			for _, item := range section.Items {
+				fmt.Fprintf(app.Output, "  %s\n", safeTerminalText(item.Label))
+				for _, detail := range item.Details {
+					fmt.Fprintf(app.Output, "    %s: %s\n", safeTerminalText(detail.Label), safeTerminalText(detail.Value))
+				}
+			}
+		}
+		fmt.Fprintln(app.Output, "\nThe executable was validated without exposing its path or arguments. No Session or process was created.")
+		return 0
+	}
+	code, err := app.GenericTarget.Launch(ctx, app.SessionsDirectory, app.WorkingDirectory, resolved, arguments,
+		launch.Terminal{Input: app.Input, Output: app.Output, ErrorOutput: app.ErrorOutput})
+	if err != nil {
+		var targetExit exitCodeError
+		if errors.As(err, &targetExit) {
+			return targetExit.ExitCode()
+		}
+		return app.fail("launch command for Profile %q: %v", name, err)
+	}
+	return code
 }
 
 func (app App) runCodex(ctx context.Context, name, authOverride string, dryRun bool) int {

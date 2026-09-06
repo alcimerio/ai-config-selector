@@ -10,6 +10,7 @@ The current development and future release contract is Apple Silicon-only:
 - Skills discovered from `~/.config/devin/skills` and `~/.agents/skills`;
 - Devin launches with selected Skills and its allowlisted credential;
 - a credential-free sandbox shell for inspecting the same isolation directly.
+- literal generic argv execution under common Profile authority, without a shell.
 
 v0.3.3 is the final release with Linux support. The Bubblewrap implementation
 remains in the source tree for possible future work, but v0.4.0 has no Linux
@@ -139,6 +140,20 @@ For a Devin launch, install and authenticate Devin separately so `devin` is on
 neither Devin nor a Devin account; it uses the system `/bin/zsh -f`. Named
 Codex login/status additionally require exactly `codex-cli 0.149.1` and an
 available macOS Keychain, as described in the authentication section below.
+
+Run ordinary tools without adding a target adapter or inheriting host PATH or
+credentials:
+
+```sh
+acs run --profile backend-review -- /usr/bin/git status
+acs run --dry-run --profile backend-review -- ./scripts/check --format short
+```
+
+The first `--` is the required ACS boundary; later arguments remain literal.
+Bare executable names search only `/usr/local/bin:/usr/bin:/bin`. Use an
+absolute path for tools elsewhere. See the [generic command contract](docs/generic-run.md)
+for executable forms, common Skills paths, workspace modes, environment,
+descriptor, exit, dry-run, and recovery behavior.
 
 ACS discovers selectable global Skills only in `~/.config/devin/skills` and
 `~/.agents/skills`. Each immediate child directory must contain a regular

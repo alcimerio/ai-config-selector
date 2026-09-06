@@ -13,6 +13,7 @@ import (
 	"github.com/alcimerio/ai-config-selector/internal/adapter/devin"
 	"github.com/alcimerio/ai-config-selector/internal/cli"
 	"github.com/alcimerio/ai-config-selector/internal/codexauth"
+	"github.com/alcimerio/ai-config-selector/internal/genericrun"
 	"github.com/alcimerio/ai-config-selector/internal/launch"
 	"github.com/alcimerio/ai-config-selector/internal/profile"
 	"github.com/alcimerio/ai-config-selector/internal/sandboxshell"
@@ -69,6 +70,28 @@ func main() {
 			WorkingDirectory: workingDirectory, Input: os.Stdin, Output: os.Stdout, ErrorOutput: os.Stderr,
 		}
 		os.Exit(app.Run(context.Background(), os.Args[1:]))
+	}
+	if cli.GenericRunRequested(os.Args[1:]) {
+		existingHome, err := os.UserHomeDir()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "acs: resolve user home for generic command")
+			os.Exit(1)
+		}
+		workingDirectory, err := os.Getwd()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "acs: resolve working directory for generic command")
+			os.Exit(1)
+		}
+		adapter, err := devin.New(devin.Config{BinaryPath: "devin", ExistingHomeDir: existingHome})
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "acs: configure common Profile authority")
+			os.Exit(1)
+		}
+		acsHome := filepath.Join(existingHome, ".acs")
+		application := cli.App{Categories: adapter.Categories(), Profiles: profile.NewStore(acsHome, adapter.Categories()),
+			GenericTarget: genericrun.New(), SessionsDirectory: filepath.Join(acsHome, "sessions"), WorkingDirectory: workingDirectory,
+			Input: os.Stdin, Output: os.Stdout, ErrorOutput: os.Stderr}
+		os.Exit(application.Run(context.Background(), os.Args[1:]))
 	}
 
 	existingHome, err := os.UserHomeDir()

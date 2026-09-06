@@ -49,6 +49,7 @@ type fakeSandbox struct {
 	request              launch.ProcessRequest
 	check                launch.SandboxCheck
 	inspect              func(launch.ProcessRequest) error
+	checkFn              func() error
 }
 
 type invalidPreparedProcessSandbox struct {
@@ -186,6 +187,9 @@ func (*fakeSandbox) Readiness(context.Context) (launch.SandboxReadiness, error) 
 }
 func (s *fakeSandbox) Check(_ context.Context, check launch.SandboxCheck) error {
 	s.check = check
+	if s.checkFn != nil {
+		return s.checkFn()
+	}
 	return s.checkErr
 }
 func (s *fakeSandbox) Prepare(_ context.Context, request launch.ProcessRequest) (launch.Process, error) {

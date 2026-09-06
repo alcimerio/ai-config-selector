@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"syscall"
@@ -124,6 +125,36 @@ func TestPromotedArtifactSandboxContract(t *testing.T) {
 		t.Fatalf("ACS_PROMOTED_SANDBOX_BACKEND = %q, want unavailable or available", capability)
 	}
 	t.Run(capability, contract)
+}
+
+func TestPromotedArtifactGenericDryRunIsLiteralSanitizedAndSideEffectFree(t *testing.T) {
+	binary := promotedBinary(t)
+	home, path := prepareRuntimeHome(t)
+	workspace := realTemporaryDirectory(t)
+	beforeHome := snapshotInspectionHome(t, home)
+	beforeWorkspace := snapshotInspectionHome(t, workspace)
+	privateArgument := "private-command-argument"
+	command := exec.Command(binary, "run", "--dry-run", "--profile", "reviews", "--", "/bin/true", privateArgument, "", "--")
+	command.Dir = workspace
+	command.Env = promotedEnvironment(home, path)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("generic dry-run failed: %v; output=%s", err, output)
+	}
+	for _, forbidden := range []string{"/bin/true", privateArgument, filepath.Join(home, ".config", "devin", "skills")} {
+		if bytes.Contains(output, []byte(forbidden)) {
+			t.Fatalf("generic dry-run leaked %q: %s", forbidden, output)
+		}
+	}
+	for _, marker := range []string{"recipe\n    selected: command", "literal child arguments: 3 (values hidden)", "implicit evaluation: none", "No Session or process was created."} {
+		if !bytes.Contains(output, []byte(marker)) {
+			t.Fatalf("generic dry-run omitted %q: %s", marker, output)
+		}
+	}
+	assertNoSessions(t, home)
+	if !reflect.DeepEqual(beforeHome, snapshotInspectionHome(t, home)) || !reflect.DeepEqual(beforeWorkspace, snapshotInspectionHome(t, workspace)) {
+		t.Fatal("generic dry-run changed bytes, modes, modification times or tree")
+	}
 }
 
 func assertPromotedArtifactFailsClosedWithoutABackend(t *testing.T) {

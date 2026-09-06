@@ -6,6 +6,13 @@ authentication operations. Its production
 constructor selects the required native sandbox internally; adapters cannot
 provide a backend, probe ordering, Session retention, or cleanup policy.
 
+`RunCommand` accepts one immutable declarative command resolved by ACS plus a
+common authority plan. It adds no adapter callback or process handle. The
+executor repeats executable identity validation after Session materialization
+and immediately before native preparation, then uses the shared attached
+settlement path. Generic execution selects no target overlay, credentials, or
+additional authority.
+
 `RunShell` accepts only Session and working directories, target-independent
 Profile materialization, and terminal streams. It checks the native sandbox,
 creates and materializes a credential-free Session, prepares exactly
