@@ -1,132 +1,96 @@
-// Package executor owns the contained-process lifecycle shared by targets.
+// Package executor owns the contained-process lifecycle for ACS's fixed shell.
 package executor
 
 import (
-	"bytes"
 	"context"
 	"errors"
-	"fmt"
-	"io"
-	"os"
 	"os/exec"
-	"path/filepath"
 
 	"github.com/alcimerio/ai-config-selector/internal/launch"
 	"github.com/alcimerio/ai-config-selector/internal/session"
 )
 
-// Recipe is validated target intent. It deliberately contains no backend,
-// process handle, or lifecycle callback.
-type Recipe struct {
-	Executable    string
-	RuntimeInputs []string
-	Arguments     []string
-	Probes        [][]string
-	Projection    *Projection
+const systemShell = "/bin/zsh"
+
+// ShellRequest contains the target-independent inputs needed to create a
+// credential-free Session and attach ACS's fixed interactive shell.
+type ShellRequest struct {
+	SessionsDirectory string
+	WorkingDirectory  string
+	Materializer      session.Materializer
+	Terminal          launch.Terminal
 }
 
-// Projection describes the one allowlisted file copied into a Session.
-type Projection struct{ Source, RelativeDestination string }
-
-// Request binds a recipe to one materialized Session and interactive terminal.
-type Request struct {
-	SessionsDirectory, WorkingDirectory string
-	Materializer                        session.Materializer
-	Recipe                              Recipe
-	Terminal                            launch.Terminal
-}
-
-// Result contains captured probe stdout and the raw contained target result.
-// Callers translate only their target-specific output and ordinary exit errors.
-type Result struct {
-	ProbeOutput [][]byte
-	RunErr      error
-}
-
+// Executor owns the fixed shell's sandbox check, Session lifecycle, and
+// process settlement. Its backend is selected by ACS, never by an adapter.
 type Executor struct{ sandbox launch.ProcessSandbox }
 
-func New(sandbox launch.ProcessSandbox) *Executor { return &Executor{sandbox: sandbox} }
+// New returns the production executor using ACS's required native sandbox.
+func New() *Executor { return newExecutor(launch.NewProcessSandbox()) }
 
-func (e *Executor) Run(ctx context.Context, request Request) (result Result, resultErr error) {
-	if e == nil || e.sandbox == nil || request.Recipe.Executable == "" {
-		return result, errors.New("contained execution recipe is invalid")
+// newExecutor exists only for executor package tests. Production callers must
+// use New so they cannot choose a sandbox backend.
+func newExecutor(sandbox launch.ProcessSandbox) *Executor { return &Executor{sandbox: sandbox} }
+
+// Readiness reports the fixed shell backend's passive readiness. It neither
+// creates a Session nor prepares a process.
+func (e *Executor) Readiness(ctx context.Context) (launch.SandboxReadiness, error) {
+	if e == nil || e.sandbox == nil {
+		return launch.SandboxReadiness{}, errors.New("contained shell executor is unavailable")
 	}
-	if err := e.sandbox.Check(ctx, launch.SandboxCheck{Workspace: request.WorkingDirectory, SessionsDirectory: request.SessionsDirectory, Executable: request.Recipe.Executable, RuntimeInputs: request.Recipe.RuntimeInputs}); err != nil {
-		return result, err
+	return e.sandbox.Readiness(ctx)
+}
+
+// RunShell creates and materializes a Session, then runs exactly /bin/zsh -f.
+// A Session is retained until backend cleanup proves the whole process tree is
+// gone; cleanup uncertainty and finalization failures outrank an ordinary exit.
+func (e *Executor) RunShell(ctx context.Context, request ShellRequest) (resultErr error) {
+	if e == nil || e.sandbox == nil {
+		return errors.New("contained shell executor is unavailable")
+	}
+	if err := e.sandbox.Check(ctx, launch.SandboxCheck{
+		Workspace: request.WorkingDirectory, SessionsDirectory: request.SessionsDirectory,
+		Executable: systemShell,
+	}); err != nil {
+		return err
 	}
 	created, err := session.Create(request.SessionsDirectory, request.WorkingDirectory, request.Materializer)
 	if err != nil {
-		return result, err
+		return err
 	}
 	defer func() {
 		if err := created.Remove(); err != nil {
-			var exit *exec.ExitError
-			if errors.As(resultErr, &exit) {
-				resultErr = err
-			} else if resultErr != nil {
-				resultErr = errors.Join(resultErr, err)
-			} else {
-				resultErr = err
-			}
+			resultErr = cleanupPrecedence(resultErr, err)
 		}
 	}()
-	if projection := request.Recipe.Projection; projection != nil {
-		if filepath.IsAbs(projection.RelativeDestination) || projection.RelativeDestination == "" {
-			return result, errors.New("contained execution projection is invalid")
-		}
-		if err := copyFileIfPresent(projection.Source, filepath.Join(created.HomeDirectory(), projection.RelativeDestination)); err != nil {
-			return result, err
-		}
-	}
-	for _, arguments := range request.Recipe.Probes {
-		output, err := e.run(ctx, created, request.Recipe, arguments, launch.Terminal{})
-		result.ProbeOutput = append(result.ProbeOutput, output)
-		if err != nil {
-			return result, err
-		}
-	}
-	_, result.RunErr = e.run(ctx, created, request.Recipe, request.Recipe.Arguments, request.Terminal)
-	return result, result.RunErr
-}
-
-func (e *Executor) run(ctx context.Context, created *session.Session, recipe Recipe, arguments []string, terminal launch.Terminal) ([]byte, error) {
-	var output bytes.Buffer
-	if terminal.Output == nil {
-		terminal.Output = &output
-	}
-	if terminal.ErrorOutput == nil {
-		terminal.ErrorOutput = io.Discard
-	}
-	process, err := e.sandbox.Prepare(ctx, launch.ProcessRequest{Workspace: created.WorkingDirectory(), SessionsDirectory: created.SessionsDirectory(), SessionDirectory: created.RootDirectory(), SessionHome: created.HomeDirectory(), TemporaryDirectory: created.TemporaryDirectory(), Executable: recipe.Executable, RuntimeInputs: recipe.RuntimeInputs, Arguments: append([]string(nil), arguments...), Terminal: terminal})
+	process, err := e.sandbox.Prepare(ctx, launch.ProcessRequest{
+		Workspace: created.WorkingDirectory(), SessionsDirectory: created.SessionsDirectory(),
+		SessionDirectory: created.RootDirectory(), SessionHome: created.HomeDirectory(),
+		TemporaryDirectory: created.TemporaryDirectory(), Executable: systemShell,
+		Arguments: []string{"-f"}, Terminal: request.Terminal,
+	})
 	if err != nil {
-		return nil, err
+		return err
 	}
 	process, err = created.RetainUntilProcessDone(process)
 	if err != nil {
-		return nil, err
-	}
-	// RunAttached captures signals immediately before Start. A successful Start
-	// is therefore reaped once; a failed Start is never waited a second time.
-	runErr := launch.RunAttached(process)
-	if cleanupErr := launch.AwaitRetainedSessionCleanup(process); cleanupErr != nil {
-		if runErr != nil {
-			return nil, errors.Join(runErr, cleanupErr)
-		}
-		return nil, cleanupErr
-	}
-	return output.Bytes(), runErr
-}
-
-func copyFileIfPresent(source, destination string) error {
-	contents, err := os.ReadFile(source)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
-	}
-	if err != nil {
-		return fmt.Errorf("project contained credential: %w", err)
-	}
-	if err := os.MkdirAll(filepath.Dir(destination), 0o700); err != nil {
 		return err
 	}
-	return os.WriteFile(destination, contents, 0o600)
+	runErr := launch.RunAttached(process)
+	if cleanupErr := launch.AwaitRetainedSessionCleanup(process); cleanupErr != nil {
+		return cleanupPrecedence(runErr, cleanupErr)
+	}
+	return runErr
+}
+
+func cleanupPrecedence(outcome, cleanup error) error {
+	if outcome == nil {
+		return cleanup
+	}
+	var targetExit *exec.ExitError
+	var exitCoder interface{ ExitCode() int }
+	if errors.As(outcome, &targetExit) || errors.As(outcome, &exitCoder) {
+		return cleanup
+	}
+	return errors.Join(outcome, cleanup)
 }

@@ -14,23 +14,16 @@ import (
 	"github.com/alcimerio/ai-config-selector/internal/launch"
 )
 
-const systemShell = "/bin/zsh"
-
 // Launcher owns the target-independent Profile materialization and launches
 // the fixed system shell through the native sandbox selected by ACS.
 type Launcher struct {
-	sandbox  launch.ProcessSandbox
 	executor *executor.Executor
 }
 
 // New returns the production sandbox-shell launcher. The executable and
 // sandbox backend cannot be selected or bypassed by callers.
 func New() *Launcher {
-	return newLauncher(launch.NewProcessSandbox())
-}
-
-func newLauncher(sandbox launch.ProcessSandbox) *Launcher {
-	return &Launcher{sandbox: sandbox, executor: executor.New(sandbox)}
+	return &Launcher{executor: executor.New()}
 }
 
 // Launch creates a credential-free Session, materializes the selected Profile,
@@ -42,7 +35,11 @@ func (launcher *Launcher) Launch(
 	resolved category.ResolvedProfile,
 	terminal launch.Terminal,
 ) (exitCode int, resultErr error) {
-	_, err := launcher.executor.Run(ctx, executor.Request{SessionsDirectory: sessionsDirectory, WorkingDirectory: workingDirectory, Materializer: resolved, Recipe: executor.Recipe{Executable: systemShell, Arguments: []string{"-f"}}, Terminal: terminal})
+	err := launcher.executor.RunShell(ctx, executor.ShellRequest{SessionsDirectory: sessionsDirectory, WorkingDirectory: workingDirectory, Materializer: resolved, Terminal: terminal})
+	return shellResult(err)
+}
+
+func shellResult(err error) (exitCode int, resultErr error) {
 	if err != nil {
 		var targetExit *exec.ExitError
 		if errors.As(err, &targetExit) {
@@ -74,7 +71,7 @@ func (launcher *Launcher) PlanLaunch(ctx context.Context, workingDirectory strin
 	if err != nil {
 		return launch.Plan{}, err
 	}
-	readiness, err := launcher.sandbox.Readiness(ctx)
+	readiness, err := launcher.executor.Readiness(ctx)
 	if err != nil {
 		return launch.Plan{}, fmt.Errorf("inspect required process sandbox readiness: %w", err)
 	}
