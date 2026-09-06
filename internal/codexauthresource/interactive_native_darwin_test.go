@@ -128,16 +128,18 @@ func runNativeInstalledACSLockedCodexFixture(t *testing.T, outerSeatbeltExperime
 		t.Fatal(err)
 	}
 	isolationProbe := fmt.Sprintf(`; if cat %s >/dev/null 2>&1; then printf global-auth-read-bad; else printf global-auth-read-denied; fi; if cat %s >/dev/null 2>&1; then printf outside-read-bad; else printf outside-read-denied; fi; if printf bad > %s 2>/dev/null; then printf outside-write-bad; else printf outside-write-denied; fi`, strconv.Quote(globalAuth), strconv.Quote(outsideSecret), strconv.Quote(outsideWrite))
-	descendantProbe := `; sleep 30 </dev/null >/dev/null 2>&1 & printf descendant-pid:%s "$!"`
+	normalDescendantReady := filepath.Join(workspace, ".acs-normal-descendant-ready")
+	recoveryDescendantReady := filepath.Join(workspace, ".acs-recovery-descendant-ready")
 	for _, test := range []struct {
-		name, profile, command, marker string
-		wantWrite, wantDescendant      bool
+		name, profile, command, marker, descendantReady string
+		wantWrite, wantDescendant                       bool
 	}{
-		{name: "coding write", profile: profilePrefix + "coding", command: "printf codex-native-tool-ok > ./codex-native-write; printf codex-native-tool-output" + isolationProbe, marker: "codex-native-write", wantWrite: true},
+		{name: "coding write", profile: profilePrefix + "coding", command: "printf codex-native-tool-ok > ./codex-native-write; printf codex-native-tool-output" + isolationProbe + nativeControlledDescendantCommand(normalDescendantReady), marker: "codex-native-write", descendantReady: normalDescendantReady, wantWrite: true, wantDescendant: true},
 		{name: "read-only denial", profile: profilePrefix + "readonly", command: "printf forbidden > ./codex-native-readonly-write; printf codex-native-tool-output" + isolationProbe, marker: "codex-native-readonly-write", wantWrite: false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			fixture := newNativeResponsesFixture(t, test.command, home)
+			fixture.descendantReady = test.descendantReady
 			defer fixture.server.Close()
 			trampoline := filepath.Join(tools, "codex")
 			buildFixedCodexTrampoline(t, grantedTarget, fixture.server.URL+"/backend-api", trampoline, outerSeatbeltExperiment)
@@ -159,7 +161,8 @@ func runNativeInstalledACSLockedCodexFixture(t *testing.T, outerSeatbeltExperime
 	}
 	if outerSeatbeltExperiment {
 		t.Run("abrupt ACS termination and public recovery", func(t *testing.T) {
-			fixture := newNativeResponsesFixture(t, "printf codex-native-tool-output"+isolationProbe+descendantProbe, home)
+			fixture := newNativeResponsesFixture(t, "printf codex-native-tool-output"+isolationProbe+nativeControlledDescendantCommand(recoveryDescendantReady), home)
+			fixture.descendantReady = recoveryDescendantReady
 			defer fixture.server.Close()
 			buildFixedCodexTrampoline(t, grantedTarget, fixture.server.URL+"/backend-api", filepath.Join(tools, "codex"), true)
 			runInstalledCodexPTY(t, candidate, home, tools, workspace, profilePrefix+"recovery", fixture, true)
@@ -171,7 +174,12 @@ func runNativeInstalledACSLockedCodexFixture(t *testing.T, outerSeatbeltExperime
 			}
 			runInstalledCodexRecovery(t, candidate, home, tools, workspace, identities["recovery"])
 			assertNoNativeSessions(t, filepath.Join(home, ".acs", "sessions"))
-			assertInstalledIdentityVisible(t, candidate, home, tools, workspace, identities["recovery"])
+			reuseFixture := newNativeResponsesFixture(t, "printf codex-native-tool-output"+isolationProbe, home)
+			defer reuseFixture.server.Close()
+			buildFixedCodexTrampoline(t, grantedTarget, reuseFixture.server.URL+"/backend-api", filepath.Join(tools, "codex"), true)
+			runInstalledCodexPTY(t, candidate, home, tools, workspace, profilePrefix+"recovery", reuseFixture, false)
+			reuseFixture.assert(t, false)
+			assertNoNativeSessions(t, filepath.Join(home, ".acs", "sessions"))
 		})
 	}
 	if contents, err := os.ReadFile(globalAuth); err != nil || string(contents) != "unrelated-global-auth" {
@@ -183,6 +191,11 @@ func runNativeInstalledACSLockedCodexFixture(t *testing.T, outerSeatbeltExperime
 	if _, err := os.Stat(hostileMCPMarker); !os.IsNotExist(err) {
 		t.Fatalf("interactive launch started hostile project MCP configuration: %v", err)
 	}
+}
+
+func nativeControlledDescendantCommand(readyPath string) string {
+	quotedReady := strconv.Quote(readyPath)
+	return `; /bin/sh -c 'printf "%s" "$$" > "$1"; exec /bin/sleep 30' descendant-sh ` + quotedReady + ` </dev/null >/dev/null 2>&1 & descendant_pid=$!; for descendant_wait in {1..100}; do [ -s ` + quotedReady + ` ] && break; /bin/sleep 0.02; done; printf descendant-pid:%s "$descendant_pid"`
 }
 
 func runInstalledSyntheticLogin(t *testing.T, candidate, home, tools, workspace, name string) {
@@ -375,6 +388,9 @@ func runInstalledCodexPTY(t *testing.T, candidate, home, tools, workspace, profi
 	if !waitNativeCaptureStable(&output, 2*time.Second) {
 		t.Fatalf("real Codex TUI did not reach a stable pre-resize frame; terminal=%q", output.String())
 	}
+	if !strings.Contains(output.String(), "\x1b[1;42H") {
+		t.Fatalf("real Codex TUI did not render the initial 120-column frame; terminal=%q", output.String())
+	}
 	resizeOffset := output.Len()
 	if err := pty.Setsize(master, &pty.Winsize{Rows: 43, Cols: 117}); err != nil {
 		t.Fatal(err)
@@ -383,8 +399,8 @@ func runInstalledCodexPTY(t *testing.T, candidate, home, tools, workspace, profi
 	if err != nil || size.Rows != 43 || size.Cols != 117 {
 		t.Fatalf("resized outer PTY geometry=%v err=%v", size, err)
 	}
-	if !waitNativeCaptureContainsAfter(&output, resizeOffset, "\x1b[1;43r", 2*time.Second) {
-		t.Fatalf("real Codex TUI did not render the resized 43-row terminal geometry; terminal=%q", output.String())
+	if !waitNativeCaptureContainsAfter(&output, resizeOffset, "\x1b[1;41H", 2*time.Second) {
+		t.Fatalf("real Codex TUI did not redraw for the resized 117-column terminal geometry; terminal=%q", output.String())
 	}
 	// Emulate a real terminal paste and let Codex's 120ms paste-burst window
 	// settle before sending the separately encoded enhanced Enter key.
@@ -409,6 +425,7 @@ func runInstalledCodexPTY(t *testing.T, candidate, home, tools, workspace, profi
 	if !waitNativeCaptureContainsAfter(&output, 0, "fixture-complete", 5*time.Second) || !waitNativeCaptureStable(&output, 5*time.Second) {
 		t.Fatalf("real Codex did not finish rendering the completed turn; terminal=%q", output.String())
 	}
+	fixture.assertLiveDescendant(t)
 	if crashAfterTool {
 		if err := command.Process.Kill(); err != nil {
 			t.Fatalf("abruptly terminate installed ACS after real tool work: %v", err)
@@ -531,6 +548,8 @@ type nativeResponsesFixture struct {
 	modelRequests         int
 	protocolErr           string
 	preexistingHomes      map[string]struct{}
+	descendantReady       string
+	liveDescendantPID     int
 }
 
 type nativeRequestObservation struct {
@@ -744,7 +763,49 @@ func (fixture *nativeResponsesFixture) assert(t *testing.T, wantDescendant bool)
 	if err != nil || pid < 2 {
 		t.Fatal("second request contained invalid descendant process identity")
 	}
+	if fixture.liveDescendantPID != pid {
+		t.Fatalf("controlled descendant pid=%d was not the live pre-teardown descendant pid=%d", pid, fixture.liveDescendantPID)
+	}
 	return pid
+}
+
+func (fixture *nativeResponsesFixture) assertLiveDescendant(t *testing.T) {
+	t.Helper()
+	if fixture.descendantReady == "" {
+		return
+	}
+	fixture.mu.Lock()
+	if len(fixture.bodies) != 2 {
+		fixture.mu.Unlock()
+		t.Fatal("cannot verify controlled descendant before the completed tool exchange")
+	}
+	toolOutput, err := nativeFunctionCallOutput(fixture.bodies[1], "acs-call-1")
+	fixture.mu.Unlock()
+	if err != nil {
+		t.Fatalf("controlled descendant output: %v", err)
+	}
+	match := regexp.MustCompile(`descendant-pid:(\d+)`).FindStringSubmatch(toolOutput)
+	if len(match) != 2 {
+		t.Fatal("controlled descendant did not publish its process identity")
+	}
+	pid, err := strconv.Atoi(match[1])
+	if err != nil || pid < 2 {
+		t.Fatal("controlled descendant published an invalid process identity")
+	}
+	ready, err := os.ReadFile(fixture.descendantReady)
+	if err != nil || strings.TrimSpace(string(ready)) != strconv.Itoa(pid) {
+		t.Fatalf("controlled descendant readiness=%q err=%v, want child pid %d", ready, err, pid)
+	}
+	if err := syscall.Kill(pid, 0); err != nil {
+		t.Fatalf("controlled descendant pid %d was not live before teardown: %v", pid, err)
+	}
+	command, err := exec.Command("/bin/ps", "-p", strconv.Itoa(pid), "-o", "comm=").Output()
+	if err != nil || filepath.Base(strings.TrimSpace(string(command))) != "sleep" {
+		t.Fatalf("controlled descendant pid %d identity=%q err=%v, want sleep", pid, command, err)
+	}
+	fixture.mu.Lock()
+	fixture.liveDescendantPID = pid
+	fixture.mu.Unlock()
 }
 
 func (fixture *nativeResponsesFixture) summaryLocked() string {

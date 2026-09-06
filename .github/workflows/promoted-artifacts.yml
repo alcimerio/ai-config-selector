@@ -145,6 +145,7 @@ jobs:
         run: go test ./internal/codexauthresource -run '^TestNativeInstalledACSOuterSeatbeltExperiment$' -count=1 -v
 
       - name: Run required nested Seatbelt Codex gate
+        if: always()
         env:
           ACS_RUN_NATIVE_AUTH_GATE: "1"
           ACS_NATIVE_AUTH_RECOVERY_ROOT: ${{ runner.temp }}/acs-native-auth-recovery
