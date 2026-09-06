@@ -12,7 +12,9 @@ import (
 	"github.com/alcimerio/ai-config-selector/internal/adapter/devin"
 	"github.com/alcimerio/ai-config-selector/internal/profile"
 	"github.com/alcimerio/ai-config-selector/internal/profileinspect"
+	"github.com/alcimerio/ai-config-selector/internal/profilerepo"
 	"github.com/alcimerio/ai-config-selector/internal/skills"
+	"golang.org/x/sys/unix"
 )
 
 func TestStoreDoesNotWriteWhenCreateContextIsCancelled(t *testing.T) {
@@ -57,6 +59,58 @@ func TestStoreCreateWithRealDevinCodecKeepsLegacyProfileReadable(t *testing.T) {
 	loaded, err := store.Load("legacy")
 	if err != nil || loaded.Version != profile.LegacyCurrentVersion || loaded.SourceVersion != profile.LegacyCurrentVersion {
 		t.Fatalf("successful legacy Create cannot Load: %#v %v", loaded, err)
+	}
+}
+
+func TestStoreCreateRejectsCanonicalVersionThreeWithoutRequiredOverlay(t *testing.T) {
+	home := t.TempDir()
+	store := newDevinStore(t, filepath.Join(home, ".acs"))
+	candidate := devin.NewSkillsProfile("broken-v3", nil)
+	candidate.Overlays = nil
+	if _, err := store.Create(candidate); err == nil || !strings.Contains(err.Error(), "admit canonical Profile") {
+		t.Fatalf("Create accepted invalid canonical v3: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".acs", "profiles", "broken-v3.json")); !os.IsNotExist(err) {
+		t.Fatalf("rejected canonical v3 was published: %v", err)
+	}
+}
+
+func TestStoreLoadUsesRepositoryFileAdmission(t *testing.T) {
+	for _, kind := range []string{"symlink", "hardlink", "fifo", "oversize"} {
+		t.Run(kind, func(t *testing.T) {
+			acsHome := t.TempDir()
+			profiles := filepath.Join(acsHome, "profiles")
+			if err := os.Mkdir(profiles, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(profiles, "unsafe.json")
+			outside := filepath.Join(t.TempDir(), "outside")
+			valid := []byte(`{"version":2,"name":"unsafe","target":"devin","categories":{"skills":{"schemaVersion":1,"selection":[]}}}`)
+			if err := os.WriteFile(outside, valid, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			switch kind {
+			case "symlink":
+				if err := os.Symlink(outside, path); err != nil {
+					t.Fatal(err)
+				}
+			case "hardlink":
+				if err := os.Link(outside, path); err != nil {
+					t.Fatal(err)
+				}
+			case "fifo":
+				if err := unix.Mkfifo(path, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			case "oversize":
+				if err := os.WriteFile(path, make([]byte, profilerepo.MaxDocumentBytes+1), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := newDevinStore(t, acsHome).Load("unsafe"); !errors.Is(err, profilerepo.ErrUnsafe) {
+				t.Fatalf("Load %s error = %v, want repository unsafe admission", kind, err)
+			}
+		})
 	}
 }
 

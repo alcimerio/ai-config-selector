@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"syscall"
 
 	"github.com/alcimerio/ai-config-selector/internal/profilerepo"
 )
@@ -53,6 +54,13 @@ func (store *Store) CreateContext(ctx context.Context, profile Profile) (string,
 	if err := encoder.Encode(normalized); err != nil {
 		return "", fmt.Errorf("encode Profile: %w", err)
 	}
+	if strict, ok := store.codec.(interface {
+		DecodeNamed(string, []byte) (Profile, error)
+	}); ok {
+		if _, err := strict.DecodeNamed(profile.Name, canonical.Bytes()); err != nil {
+			return "", fmt.Errorf("admit canonical Profile %q: %w", profile.Name, err)
+		}
+	}
 	repository := profilerepo.New(filepath.Dir(store.profilesDir))
 	// An absent condition is name-bound and reusable; reading an occupied name
 	// must not turn Create into replacement.
@@ -74,17 +82,20 @@ func (store *Store) Load(name string) (Profile, error) {
 	if err := ValidateName(name); err != nil {
 		return Profile{}, err
 	}
-	contents, err := os.ReadFile(store.profilePath(name))
+	snapshot, err := profilerepo.New(filepath.Dir(store.profilesDir)).Read(context.Background(), name)
 	if err != nil {
 		return Profile{}, err
+	}
+	if !snapshot.Exists {
+		return Profile{}, &os.PathError{Op: "open", Path: store.profilePath(name), Err: syscall.ENOENT}
 	}
 	var loaded Profile
 	if strict, ok := store.codec.(interface {
 		DecodeNamed(string, []byte) (Profile, error)
 	}); ok {
-		loaded, err = strict.DecodeNamed(name, contents)
+		loaded, err = strict.DecodeNamed(name, snapshot.Bytes)
 	} else {
-		loaded, err = store.codec.Decode(contents)
+		loaded, err = store.codec.Decode(snapshot.Bytes)
 	}
 	if err != nil {
 		return Profile{}, fmt.Errorf("decode Profile %q: %w", name, err)

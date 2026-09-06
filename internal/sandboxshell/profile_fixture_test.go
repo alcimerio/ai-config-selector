@@ -59,7 +59,7 @@ func resolvedShellProfile(t *testing.T) category.ResolvedProfile {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resolved, err := registry.Resolve(context.Background(), profile)
+	resolved, err := registry.ResolveFor(context.Background(), profile, "")
 	if err != nil {
 		t.Fatal(err)
 	}
