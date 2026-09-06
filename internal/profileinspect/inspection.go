@@ -101,6 +101,16 @@ func (result Result) ExitCode() int {
 	return 0
 }
 
+// InspectBytes strictly inspects one bounded exact stored representation, bound
+// to its requested filename identity. It performs no filesystem or codec work.
+func InspectBytes(name string, data []byte) Entry {
+	entry := Entry{Name: &name, Categories: []Category{}}
+	if profile.ValidateName(name) != nil || len(data) > maxProfileBytes {
+		return entry.failed("invalid_structure")
+	}
+	return decode(entry, data)
+}
+
 func decode(entry Entry, data []byte) Entry {
 	// Reject ambiguous duplicate keys and invalid UTF-8 before map decoding.
 	if !utf8.Valid(data) || !pairedUnicodeEscapes(data) || uniqueJSON(data) != nil {

@@ -14,6 +14,26 @@ import (
 	"github.com/alcimerio/ai-config-selector/internal/skills"
 )
 
+// NewProfileEditor assembles only category codecs, source discovery and editors.
+// Stored selection editing does not need an installed client or sandbox probe.
+func NewProfileEditor(home string) (*Adapter, error) {
+	if home == "" {
+		return nil, errors.New("Profile editor home is required")
+	}
+	a := &Adapter{existingHomeDir: home}
+	registry, binding, err := newCategoryRegistry(a)
+	if err != nil {
+		return nil, err
+	}
+	a.categories, a.skillsCategory = registry, binding
+	registration, err := builder.RegisterSkillsRepairEditor(a.skillsCategory, a.discoverProfileSkills)
+	if err != nil {
+		return nil, err
+	}
+	a.editors, err = builder.NewEditorRegistry(a.categories, registration)
+	return a, err
+}
+
 // BuildProfile runs the first complete Profile Builder using this adapter's
 // typed Skills category. The root model is the only Bubble Tea program.
 func (a *Adapter) BuildProfile(ctx context.Context, name string, draft category.Draft, save builder.SaveFunc, input io.Reader, output io.Writer) (builder.Outcome, error) {
@@ -98,4 +118,17 @@ func parseSelection(input string, catalog []skills.SkillBundle) ([]skills.SkillB
 func safeTerminalText(value string) string {
 	quoted := strconv.QuoteToASCII(value)
 	return quoted[1 : len(quoted)-1]
+}
+
+// MutateProfile runs the same root builder with mandatory transaction previews.
+func (a *Adapter) MutateProfile(ctx context.Context, name string, draft category.Draft, options builder.MutationOptions, input io.Reader, output io.Writer) (builder.Outcome, error) {
+	model, err := builder.NewModel(name, draft, a.editors)
+	if err != nil {
+		return builder.Outcome{}, err
+	}
+	model, err = model.WithMutation(options)
+	if err != nil {
+		return builder.Outcome{}, err
+	}
+	return builder.Run(ctx, model, input, output)
 }

@@ -16,7 +16,7 @@ func (app App) RunDiagnostics(args []string, home func() (string, error)) (bool,
 	if inv.command.path == "doctor" {
 		result = diagnostics.Doctor(inv.value)
 	} else {
-		result = diagnostics.Validate(inv.value, home)
+		result = diagnostics.Validate(inv.operand, home)
 	}
 	if inv.enabled {
 		if json.NewEncoder(app.Output).Encode(result) != nil {

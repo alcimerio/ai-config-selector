@@ -18,7 +18,7 @@ func (app App) RunProfileInspection(args []string, home func() (string, error)) 
 	}
 	// Store.Show validates names without opening storage. Route invalid operands
 	// there before home discovery so their diagnostic does not depend on HOME.
-	if inv.command.path == "profile show" && profile.ValidateName(inv.value) != nil {
+	if inv.command.path == "profile show" && profile.ValidateName(inv.operand) != nil {
 		app.Inspector = profileinspect.Store{}
 		return true, app.inspectProfiles(inv)
 	}
@@ -38,7 +38,7 @@ func (app App) inspectProfiles(inv invocation) int {
 		if operation == "list" {
 			result = app.Inspector.List()
 		} else {
-			result = app.Inspector.Show(inv.value)
+			result = app.Inspector.Show(inv.operand)
 		}
 	}
 	if inv.enabled {

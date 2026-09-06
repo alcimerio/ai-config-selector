@@ -260,6 +260,25 @@ func (registry *Registry) NewDraft() Draft {
 	return draft
 }
 
+// DraftFromProfile seeds typed selections using the registered category decoders.
+// Callers admitting stored bytes must strictly validate those same bytes first;
+// this conversion neither discovers sources nor builds launch contributions.
+func (registry *Registry) DraftFromProfile(candidate profile.Profile) (Draft, error) {
+	normalized, err := registry.Normalize(candidate)
+	if err != nil {
+		return Draft{}, err
+	}
+	draft := registry.NewDraft()
+	for _, registration := range registry.ordered {
+		selection, err := registration.decode(normalized.Categories[registration.id].Selection)
+		if err != nil {
+			return Draft{}, fmt.Errorf("seed %s category: %w", registration.id, err)
+		}
+		draft.selections[registration.id] = selection
+	}
+	return draft, nil
+}
+
 // SetSelection replaces one category's selection through its typed Binding.
 func SetSelection[S, R any, C launch.Contribution](draft *Draft, binding Binding[S, R, C], selection S) error {
 	if draft == nil || draft.registry == nil || binding.registration == nil {

@@ -61,6 +61,8 @@ type ProfileInspector interface {
 }
 
 type App struct {
+	Repository        ProfileRepository
+	MutationBuilder   ProfileMutationBuilder
 	Inspector         ProfileInspector
 	Version           string
 	Categories        *category.Registry
@@ -93,6 +95,9 @@ func StandardStreamsInteractive(input io.Reader, output io.Writer) bool {
 
 func (app App) Run(ctx context.Context, args []string) int {
 	if handled, code := app.RunInformational(args); handled {
+		return code
+	}
+	if handled, code := app.RunProfileMutations(ctx, args, os.UserHomeDir); handled {
 		return code
 	}
 	if handled, code := app.RunDiagnostics(args, os.UserHomeDir); handled {

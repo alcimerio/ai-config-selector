@@ -33,6 +33,19 @@ func RegisterSkillsEditor[C launch.Contribution](binding category.Binding[[]skil
 	})
 }
 
+// RegisterSkillsRepairEditor shares the typed Skills editor and binding while
+// admitting partial discovery evidence for stored selection repair.
+func RegisterSkillsRepairEditor[C launch.Contribution](binding category.Binding[[]skills.SkillReference, []skills.SkillBundle, C], discover func(context.Context) (skills.Discovery, error)) (EditorRegistration, error) {
+	return RegisterEditor(EditorDefinition[skills.Discovery, skillsEditor]{
+		ID: binding.ID(), Category: binding.Registration(), New: func(draft category.Draft) skillsEditor { return NewSkillsEditor(draft, binding) }, Discover: discover,
+		Loaded: func(editor skillsEditor, result skills.Discovery) (skillsEditor, error) {
+			editor = editor.WithCatalog(result.Bundles)
+			editor.unavailable = result.UnavailableSources
+			return editor, nil
+		},
+	})
+}
+
 // NewSkillsEditor constructs the Skills child model. It never starts a
 // Bubble Tea program; the root model remains the runtime owner.
 func NewSkillsEditor[C launch.Contribution](draft category.Draft, binding category.Binding[[]skills.SkillReference, []skills.SkillBundle, C], catalog ...[]skills.SkillBundle) skillsEditor {
@@ -50,7 +63,7 @@ func NewSkillsEditor[C launch.Contribution](draft category.Draft, binding catego
 		setSelection: func(draft *category.Draft, selection []skills.SkillReference) error {
 			return category.SetSelection(draft, binding, selection)
 		},
-		id: binding.ID(), catalog: ordered,
+		id: binding.ID(), catalog: ordered, discovered: len(catalog) != 0,
 	}
 }
 
@@ -58,6 +71,7 @@ func (m skillsEditor) WithCatalog(catalog []skills.SkillBundle) skillsEditor {
 	ordered := append([]skills.SkillBundle(nil), catalog...)
 	sort.SliceStable(ordered, func(left, right int) bool { return catalogOrder(ordered[left], ordered[right]) })
 	m.catalog = ordered
+	m.discovered = true
 	m.clamp()
 	return m
 }
@@ -68,6 +82,8 @@ type skillsEditor struct {
 	setSelection func(*category.Draft, []skills.SkillReference) error
 	id           string
 	catalog      []skills.SkillBundle
+	discovered   bool
+	unavailable  map[skills.Source]bool
 	query        string
 	queryCursor  int
 	searchFocus  bool
@@ -109,7 +125,7 @@ func (m skillsEditor) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	case key.Matches(press, controls.toggle):
 		visible := m.visible()
 		if len(visible) > 0 {
-			m.toggle(m.catalog[visible[m.cursor]].Reference)
+			m.toggle(m.rows()[visible[m.cursor]].Reference)
 		}
 	}
 	m.clamp()
@@ -168,16 +184,17 @@ func (m *skillsEditor) toggle(reference skills.SkillReference) {
 	}
 	for index, current := range selected {
 		if current == reference {
-			selected = append(selected[:index], selected[index+1:]...)
+			selected = append(append([]skills.SkillReference(nil), selected[:index]...), selected[index+1:]...)
 			_ = m.setSelection(&m.draft, selected)
 			return
 		}
 	}
-	selected = append(selected, reference)
+	selected = append(append([]skills.SkillReference(nil), selected...), reference)
 	_ = m.setSelection(&m.draft, selected)
 }
 
 func (m skillsEditor) View() tea.View {
+	rows := m.rows()
 	var content strings.Builder
 	selected, _ := m.selection(m.draft)
 	content.WriteString("Skills                         " + strconv.Itoa(len(selected)) + " selected\n")
@@ -190,7 +207,7 @@ func (m skillsEditor) View() tea.View {
 	visible := m.visible()
 	end := min(m.scrollOffset+skillsViewportRows, len(visible))
 	for position := m.scrollOffset; position < end; position++ {
-		bundle := m.catalog[visible[position]]
+		bundle := rows[visible[position]]
 		marker, selected := "  ", "[ ]"
 		if position == m.cursor {
 			marker = "> "
@@ -198,15 +215,15 @@ func (m skillsEditor) View() tea.View {
 		if m.isSelected(bundle.Reference) {
 			selected = "[x]"
 		}
-		content.WriteString(marker + selected + " " + safe(bundle.DisplayName) + " [" + safe(string(bundle.Reference.Source)) + "]\n")
+		content.WriteString(marker + selected + " " + safe(bundle.DisplayName) + " [" + safe(string(bundle.Reference.Source)) + ":" + safe(bundle.Reference.RelativePath) + "] " + m.availability(bundle.Reference) + "\n")
 	}
-	if len(m.catalog) == 0 {
+	if len(rows) == 0 {
 		content.WriteString("  No Skills discovered.\n  Add a bundle using name/SKILL.md under:\n  ~/.config/devin/skills or ~/.agents/skills\n  Then restart Profile creation to discover it.\n")
 	} else if len(visible) == 0 {
 		content.WriteString("  No matching Skills. Press Esc to clear the search.\n")
 	}
 	if len(visible) > 0 {
-		bundle := m.catalog[visible[m.cursor]]
+		bundle := rows[visible[m.cursor]]
 		content.WriteString("\nSource: " + safe(string(bundle.Reference.Source)) + "\nPath: " + safe(bundle.BundlePath) + "\n")
 	}
 	if m.searchFocus {
@@ -218,16 +235,17 @@ func (m skillsEditor) View() tea.View {
 }
 
 func (m skillsEditor) visible() []int {
+	rows := m.rows()
 	if m.query == "" {
-		visible := make([]int, len(m.catalog))
-		for i := range m.catalog {
+		visible := make([]int, len(rows))
+		for i := range rows {
 			visible[i] = i
 		}
 		return visible
 	}
 	type match struct{ index, field, score int }
 	matches := make([]match, 0)
-	for index, bundle := range m.catalog {
+	for index, bundle := range rows {
 		field, score, ok := bundleMatch(bundle, m.query)
 		if ok {
 			matches = append(matches, match{index, field, score})
@@ -240,7 +258,7 @@ func (m skillsEditor) visible() []int {
 		if matches[left].score != matches[right].score {
 			return matches[left].score < matches[right].score
 		}
-		return catalogOrder(m.catalog[matches[left].index], m.catalog[matches[right].index])
+		return catalogOrder(rows[matches[left].index], rows[matches[right].index])
 	})
 	visible := make([]int, len(matches))
 	for i, match := range matches {
@@ -318,3 +336,60 @@ func min(left, right int) int {
 	}
 	return right
 }
+
+// rows is the exact-identity union, never a display-name join. A saved row
+// survives incomplete discovery and remains explicitly removable.
+func (m skillsEditor) rows() []skills.SkillBundle {
+	rows := make([]skills.SkillBundle, 0, len(m.catalog))
+	seen := map[skills.SkillReference]bool{}
+	for _, bundle := range m.catalog {
+		if !seen[bundle.Reference] {
+			rows = append(rows, bundle)
+			seen[bundle.Reference] = true
+		}
+	}
+	selected, _ := m.selection(m.draft)
+	for _, reference := range selected {
+		if !seen[reference] {
+			rows = append(rows, skills.SkillBundle{Reference: reference, DisplayName: reference.RelativePath, BundlePath: reference.RelativePath})
+			seen[reference] = true
+		}
+	}
+	sort.SliceStable(rows, func(i, j int) bool { return catalogOrder(rows[i], rows[j]) })
+	return rows
+}
+
+func (m skillsEditor) availability(reference skills.SkillReference) string {
+	if !m.discovered || m.unavailable[reference.Source] {
+		return "unavailable/unchecked"
+	}
+	count := 0
+	for _, bundle := range m.catalog {
+		if bundle.Reference == reference {
+			count++
+		}
+	}
+	switch count {
+	case 0:
+		return "missing"
+	case 1:
+		return "available"
+	default:
+		return "ambiguous"
+	}
+}
+
+// Unresolved reports selected identities whose availability is not established.
+func (m skillsEditor) Unresolved() []string {
+	var warnings []string
+	selected, _ := m.selection(m.draft)
+	for _, reference := range selected {
+		status := m.availability(reference)
+		if status != "available" {
+			warnings = append(warnings, safe(string(reference.Source))+":"+safe(reference.RelativePath)+" ("+status+")")
+		}
+	}
+	return warnings
+}
+
+func (m skillsEditor) DiscoveryFailed() Editor { m.discovered = false; return m }

@@ -28,6 +28,26 @@ also accepted. See the [inspection and JSON contract](docs/profile-inspection.md
 for status codes, exit behavior, limits, and examples. Run `acs profile --help`
 for contextual help.
 
+## Edit and repair Profiles (development source)
+
+Use the seeded Profile Builder to change stored selections or create a copy:
+
+```sh
+acs profile edit backend-review
+acs profile clone backend-review --name frontend-review
+acs profile rename backend-review --name service-review
+acs profile delete service-review
+```
+
+Edit and clone retain missing selections until explicitly removed. Every rewrite
+previews exact canonical bytes, including explicit legacy v1 → v2 conversion;
+unresolved selections require a separate warning acknowledgement. Rename confirms
+both filename and embedded identity. Deletion requires typing the exact name, or
+an exact `--confirm NAME` for deliberate noninteractive use. Destination collisions
+and stale revisions never overwrite newer data. These commands need no client,
+credentials or Session. See the [mutation and recovery guide](docs/profile-mutations.md)
+for selection repair, preview controls, cancellation and uncertain outcomes.
+
 ## Passive diagnostics (development source)
 
 Run `acs doctor` for core host and trusted backend-file checks without an account

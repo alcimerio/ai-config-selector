@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
+	"syscall"
 
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
@@ -38,25 +40,32 @@ type Outcome struct {
 // Model is the root Bubble Tea model. It owns navigation, dimensions, the
 // Profile Draft, modal state, and the one child category editor.
 type Model struct {
-	name           string
-	draft          category.Draft
-	initialDraft   category.Draft
-	initialValid   bool
-	editors        []editorSlot
-	activeCategory int
-	context        context.Context
-	save           SaveFunc
-	saveCancel     context.CancelFunc
-	confirmFailed  bool
-	screen         screen
-	returnScreen   screen
-	overviewCursor int
-	width          int
-	height         int
-	sizeKnown      bool
-	saveError      error
-	outcome        Outcome
-	terminalError  error
+	name                string
+	draft               category.Draft
+	initialDraft        category.Draft
+	initialValid        bool
+	editors             []editorSlot
+	activeCategory      int
+	context             context.Context
+	save                SaveFunc
+	saveCancel          context.CancelFunc
+	confirmFailed       bool
+	screen              screen
+	returnScreen        screen
+	overviewCursor      int
+	width               int
+	height              int
+	sizeKnown           bool
+	saveError           error
+	outcome             Outcome
+	terminalError       error
+	runtimeSaves        *saveRuntime
+	mutation            *MutationOptions
+	prepared            PreparedMutation
+	previewDraft        category.Draft
+	previewOffset       int
+	warningAcknowledged bool
+	confirmInput        string
 }
 
 type loadState int
@@ -75,9 +84,10 @@ type discoveryCompletedMsg struct {
 }
 
 type saveCompletedMsg struct {
-	draft category.Draft
-	path  string
-	err   error
+	draft   category.Draft
+	path    string
+	err     error
+	attempt *runtimeAttempt
 }
 
 type screen int
@@ -92,6 +102,8 @@ const (
 	cancellingSaveScreen
 	saveFailureScreen
 	discardScreen
+	mutationPreviewScreen
+	reloadScreen
 )
 
 var controls = struct {
@@ -146,23 +158,20 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if message.err != nil {
 			m.editors[index].loadState, m.editors[index].loadError = loadFailed, message.err
-			if index == m.activeCategory {
-				m.screen = loadFailureScreen
+			if editor, ok := m.editors[index].editor.(interface{ DiscoveryFailed() Editor }); ok {
+				m.editors[index].editor = editor.DiscoveryFailed()
 			}
+			m.completeDiscovery(index, loadFailureScreen)
 			return m, nil
 		}
 		editor, err := m.editors[index].registration.loaded(m.editors[index].editor, message.discovered)
 		if err != nil {
 			m.editors[index].loadState, m.editors[index].loadError = loadFailed, err
-			if index == m.activeCategory {
-				m.screen = loadFailureScreen
-			}
+			m.completeDiscovery(index, loadFailureScreen)
 			return m, nil
 		}
 		m.editors[index].editor, m.editors[index].loadState, m.editors[index].loadError = editor, loaded, nil
-		if index == m.activeCategory {
-			m.screen = categoryScreen
-		}
+		m.completeDiscovery(index, categoryScreen)
 		return m, nil
 	case saveCompletedMsg:
 		if m.screen != savingScreen && m.screen != cancellingSaveScreen {
@@ -175,6 +184,9 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			// may have happened, or while cleanup still needs recovery.
 			m.terminalError = message.err
 			return m, tea.Quit
+		}
+		if m.runtimeSaves != nil {
+			m.runtimeSaves.acknowledge(message)
 		}
 		if m.screen == cancellingSaveScreen && errors.Is(message.err, context.Canceled) {
 			m.screen = overviewScreen
@@ -191,12 +203,12 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.sizeKnown = true
 		return m, nil
 	case tea.KeyPressMsg:
-		if message.String() == "ctrl+c" && m.screen == savingScreen {
+		if (message.String() == "ctrl+c" || message.String() == "ctrl+d") && m.screen == savingScreen {
 			m.saveCancel()
 			m.screen = cancellingSaveScreen
 			return m, nil
 		}
-		if message.String() == "ctrl+c" && m.screen != cancellingSaveScreen && m.screen != discardScreen {
+		if (message.String() == "ctrl+c" || message.String() == "ctrl+d") && m.screen != cancellingSaveScreen && m.screen != discardScreen {
 			return m.beginCancellation()
 		}
 		if m.tooSmall() {
@@ -215,9 +227,26 @@ func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateSaveFailure(message)
 		case discardScreen:
 			return m.updateDiscard(message)
+		case mutationPreviewScreen:
+			return m.updateMutationPreview(message)
+		case reloadScreen:
+			return m.updateReload(message)
 		}
 	}
 	return m, nil
+}
+
+// Discovery updates the underlying editor, not the user's pending decision.
+// Declining discard must return to the completed state rather than loading.
+func (m *Model) completeDiscovery(index int, completed screen) {
+	if index != m.activeCategory {
+		return
+	}
+	if m.screen == loadingScreen {
+		m.screen = completed
+	} else if m.screen == discardScreen && m.returnScreen == loadingScreen {
+		m.returnScreen = completed
+	}
 }
 
 func (m Model) updateOverview(press tea.KeyPressMsg) (tea.Model, tea.Cmd) {
@@ -234,6 +263,14 @@ func (m Model) updateOverview(press tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(press, controls.open):
 		switch m.overviewCursor {
 		case len(categories):
+			if m.mutation != nil {
+				prepared, err := m.prepareMutation()
+				if err != nil {
+					m.saveError, m.screen = err, saveFailureScreen
+					return m, nil
+				}
+				return prepared, nil
+			}
 			if len(m.failedCategoryNames()) != 0 {
 				m.confirmFailed, m.screen = true, confirmScreen
 				return m, nil
@@ -265,6 +302,10 @@ func (m Model) updateOverview(press tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 func (m Model) updateEditor(press tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	slot := &m.editors[m.activeCategory]
+	if m.mutation != nil && slot.editor.ListFocused() && press.String() == "r" {
+		slot.loadState, m.screen = loading, loadingScreen
+		return m, m.discoveryCommand(m.activeCategory)
+	}
 	if slot.editor.ListFocused() && key.Matches(press, controls.back) {
 		m.draft, m.screen = slot.editor.Draft(), overviewScreen
 		return m, nil
@@ -292,6 +333,10 @@ func (m Model) discoveryCommand(index int) tea.Cmd {
 }
 
 func (m Model) updateLoadFailure(press tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	if press.String() == "e" {
+		m.screen = categoryScreen
+		return m, nil
+	}
 	if key.Matches(press, controls.retry) {
 		m.editors[m.activeCategory].loadState, m.screen = loading, loadingScreen
 		return m, m.discoveryCommand(m.activeCategory)
@@ -334,12 +379,19 @@ func (m Model) startSave() (tea.Model, tea.Cmd) {
 	attemptContext, cancel := context.WithCancel(m.context)
 	m.saveCancel = cancel
 	return m, func() tea.Msg {
+		defer cancel()
+		if m.runtimeSaves != nil {
+			return m.runtimeSaves.execute(attemptContext, snapshot, save)
+		}
 		path, err := save(attemptContext, snapshot)
 		return saveCompletedMsg{draft: snapshot, path: path, err: err}
 	}
 }
 
 func (m Model) updateSaveFailure(press tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	if m.mutation != nil {
+		return m.mutationSaveFailure(press)
+	}
 	if key.Matches(press, controls.retry) {
 		return m.startSave()
 	}
@@ -398,14 +450,91 @@ func finishRuntime(runtime programRuntime) (Outcome, error) {
 
 // Run starts the sole Bubble Tea program for a Profile Builder session.
 func Run(ctx context.Context, model Model, input io.Reader, output io.Writer) (Outcome, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	// Keep terminal shutdown orderly: Bubble Tea killed shutdown can close a
+	// macOS cancellable reader before joining it. Our context still cancels
+	// discovery and saves; the watcher requests Quit and settlement follows.
+	runContext, cancel := context.WithCancel(ctx)
+	defer cancel()
+	tracker := &saveRuntime{}
+	model.runtimeSaves = tracker
 	program := tea.NewProgram(
-		model.WithContext(ctx),
-		tea.WithContext(ctx),
+		model.WithContext(runContext),
+		tea.WithContext(context.WithoutCancel(ctx)),
+		tea.WithoutSignalHandler(),
 		tea.WithInput(input),
 		tea.WithOutput(output),
 		tea.WithEnvironment(os.Environ()),
 	)
-	return finishRuntime(program)
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM)
+	defer signal.Stop(signals)
+	stopped, watcherDone := make(chan struct{}), make(chan struct{})
+	interrupted := make(chan struct{}, 1)
+	go func() {
+		defer close(watcherDone)
+		select {
+		case <-ctx.Done():
+		case <-signals:
+		case <-stopped:
+			return
+		}
+		cancel()
+		tracker.stop()
+		interrupted <- struct{}{}
+		program.Quit()
+	}()
+	outcome, err := finishRuntime(program)
+	close(stopped)
+	<-watcherDone
+	select {
+	case <-interrupted:
+		if err == nil {
+			err = context.Canceled
+		}
+	default:
+	}
+
+	settled := tracker.settle()
+	if settled != nil {
+		if settled.err == nil {
+			committed := Outcome{Draft: settled.draft, Path: settled.path, Create: true}
+			if err != nil && !cancellationOnly(err) {
+				return committed, &profilerepo.OutcomeError{Outcome: profilerepo.Outcome{State: profilerepo.Committed}, Err: err}
+			}
+			return committed, nil
+		}
+		var transaction *profilerepo.OutcomeError
+		uncertain := errors.As(settled.err, &transaction) && (transaction.Outcome.State != profilerepo.NotCommitted || transaction.Outcome.RecoveryRequired)
+		if uncertain || err != nil || (!outcome.Create && !outcome.Cancelled) {
+			return Outcome{}, errors.Join(err, settled.err)
+		}
+	}
+
+	return outcome, err
+}
+
+// Suppress only cancellation after a known commit. Joined infrastructure errors
+// must remain visible even when another branch also reports cancellation.
+func cancellationOnly(err error) bool {
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		children := joined.Unwrap()
+		if len(children) == 0 {
+			return false
+		}
+		for _, child := range children {
+			if !cancellationOnly(child) {
+				return false
+			}
+		}
+		return true
+	}
+	if wrapped, ok := err.(interface{ Unwrap() error }); ok {
+		return cancellationOnly(wrapped.Unwrap())
+	}
+	return err == context.Canceled || err == context.DeadlineExceeded
 }
 
 // View renders the single alternate-screen builder UI.
@@ -430,7 +559,11 @@ func (m Model) View() tea.View {
 	var content strings.Builder
 	switch m.screen {
 	case overviewScreen:
-		content.WriteString("Create Profile \"")
+		label := "Create"
+		if m.mutation != nil {
+			label = m.mutation.Label
+		}
+		content.WriteString(label + " Profile \"")
 		content.WriteString(m.name)
 		content.WriteString("\"\n\n")
 		categories := m.categories()
@@ -438,7 +571,11 @@ func (m Model) View() tea.View {
 		for _, summary := range categories {
 			rows = append(rows, categoryName(summary.ID)+"                         "+plural(summary.Count, "selected"))
 		}
-		rows = append(rows, "Create Profile", "Cancel")
+		action := "Create Profile"
+		if m.mutation != nil {
+			action = "Preview " + m.mutation.Label
+		}
+		rows = append(rows, action, "Cancel")
 		for index, row := range rows {
 			marker := "  "
 			if index == m.overviewCursor {
@@ -449,6 +586,9 @@ func (m Model) View() tea.View {
 		content.WriteString("\nUp/Down navigate  Space/Enter/Right open\nEsc cancel  Ctrl+C cancel")
 	case categoryScreen:
 		content.WriteString(m.editors[m.activeCategory].editor.View().Content)
+		if m.mutation != nil {
+			content.WriteString("\nR refresh sources (list focus)")
+		}
 	case confirmScreen:
 		if m.confirmFailed {
 			content.WriteString("Confirm: These categories failed to load: " + strings.Join(m.failedCategoryNames(), ", ") + ". Create Profile anyway?\n\nY/Enter create  N/Esc/Left return\nCtrl+C cancel")
@@ -458,15 +598,29 @@ func (m Model) View() tea.View {
 	case loadingScreen:
 		content.WriteString("Loading " + categoryName(m.editors[m.activeCategory].registration.id) + "...\n\nCtrl+C cancel")
 	case loadFailureScreen:
-		content.WriteString("Error: " + categoryName(m.editors[m.activeCategory].registration.id) + " failed to load.\n\nR/Enter/Space retry  Left/Esc back\nCtrl+C cancel")
+		content.WriteString("Error: " + categoryName(m.editors[m.activeCategory].registration.id) + " failed to load.\n\nR/Enter/Space retry  E edit saved selections  Left/Esc back\nCtrl+C cancel")
 	case savingScreen:
 		content.WriteString("Saving Profile...\n\nCtrl+C cancel save")
 	case cancellingSaveScreen:
 		content.WriteString("Cancelling save...\n\nPlease wait")
+	case mutationPreviewScreen:
+		content.WriteString(m.mutationPreviewView())
+	case reloadScreen:
+		content.WriteString("Reload stored Profile? This discards your preserved draft.\n\nY reload and build a new preview  N/Esc keep draft")
 	case saveFailureScreen:
+		if m.mutation != nil {
+			text := "Save failed. Your draft is preserved. " + safe(m.saveError.Error())
+			if errors.Is(m.saveError, profilerepo.ErrConflict) {
+				text = "Storage changed. Your draft and newer stored data are preserved.\nNo force retry is permitted. Reload explicitly to create a new preview."
+			} else {
+				text += "\nR/Enter new preview"
+			}
+			content.WriteString(text + "\n\nL request reload  Esc cancel  Ctrl+C cancel")
+			break
+		}
 		content.WriteString("Error: Profile could not be saved: " + safe(m.saveError.Error()) + "\n\nR/Enter/Space retry  Esc cancel\nCtrl+C cancel")
 	case discardScreen:
-		content.WriteString("Confirm: Discard changes?\n\nNo Profile will be created.\n\nY/Enter discard  N/Esc/Left keep editing")
+		content.WriteString("Confirm: Discard changes?\n\nNo Profile mutation will be published.\n\nY/Enter discard  N/Esc/Left keep editing")
 	}
 	rendered := content.String()
 	if m.sizeKnown {

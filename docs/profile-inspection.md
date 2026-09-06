@@ -3,7 +3,9 @@
 `acs profile list [--json]` lists direct `.json` entries in `~/.acs/profiles`.
 `acs profile show NAME [--json]` inspects one saved Profile, even when its selected
 Skills have been removed. `acs profile show --json NAME` is also accepted.
-`show` and `validate` accept one name operand; other existing commands still accept no operands.
+Among the inspection commands, `show` and `validate` accept one name operand;
+`list` accepts none. [Profile mutation commands](profile-mutations.md) also require
+one name operand.
 Flags occur once. Extra operands, unknown options, `=`, `--`, target pass-through,
 and sandbox bypass are rejected. Use `acs help profile`, `acs profile list --help`,
 or `acs profile show --help` for contextual help.

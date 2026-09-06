@@ -4,8 +4,9 @@ The development source stores direct `NAME.json` documents through
 `internal/profilerepo`. This internal boundary accepts canonical desired bytes;
 it has no Profile decoder, category registry, Session dependency, or authentication
 provider. Store creation still normalizes and encodes the existing Profile schema
-above this boundary. No new Profile schema or edit, rename, delete, migration,
-history, updater, or execution command is introduced.
+above this boundary. The [Profile mutation commands](profile-mutations.md) now use
+this same boundary for conditional editing, cloning, renaming and deletion. The
+repository itself introduces no Profile schema, category codec or history format.
 
 ## Calls and conditions
 
