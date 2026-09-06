@@ -37,8 +37,9 @@ authenticated smoke. It performs Check, Session creation and materialization,
 credential copy, ordered probes, settlement, and removal internally; it never
 returns a Session path, process, retention lease, or execution callback.
 
-Each shell, Devin probe, and Codex probe uses one private retained-process
-foundation with an explicit fixed signal mode. Each process is retained before Start. A failed Start is not waited;
+Every registered process uses one private retained-process foundation with an
+explicit probe, attached, or reserved Devin signal mode. Each process is
+retained before Start. A failed Start is not waited;
 a successful Start is waited exactly once, and cleanup uncertainty blocks the
 next probe or target and retains the Session. The Devin adapter translates the
 lower redacted preflight error to its existing public compatibility wrapper and
@@ -46,10 +47,10 @@ does not regain process lifecycle authority.
 
 `codexauth.Registry` is a typed configuration and API facade only. The executor
 acquires the named resource before taking one immutable executable snapshot,
-creates and recovery-protects the Session, publishes the exact marker
-generation, projects or reads credentials through `codexauthresource`, runs
-the fixed version plus login/status commands, settles cleanup proof, finalizes
-the typed resource outcome, and physically removes the Session before marker
+creates the Session, publishes the exact marker generation, then protects it
+for recovery before projecting credentials through `codexauthresource`. It runs
+the fixed version plus login/status commands, settles cleanup proof, reads
+credentials and finalizes the typed resource outcome, and physically removes the Session before marker
 deletion and identity unlock. Login remains Create-only; Status and recovery
 can replace only a valid changed projection with the same identity metadata.
 Uncertain cleanup retains the protected Session and generation-bound marker,
