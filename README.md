@@ -35,6 +35,14 @@ credential lookup or Skill discovery. See the [declarative Profile creation
 contract](docs/profile-creation.md) for input safety, previews, collisions and
 recovery.
 
+Move sanitized version-3 intent between machines with `acs profile export NAME`,
+`acs profile import validate --file FILE`, and conditional no-overwrite `acs
+profile import --file FILE --as NAME [--bindings FILE] [--dry-run]`. Local JSON
+is not an export, and Skills or credentials are never embedded. See the
+[portable Profile exchange contract](docs/portable-profile-exchange.md) for the
+independent schema, explicit source/auth bindings, stdout/report separation,
+hostile-input limits, and unchecked readiness boundary.
+
 New development-source Profiles use independently versioned common Skills,
 workspace intent, and explicit target overlays. See the [common Profile format,
 migration, grants and projection contract](docs/common-profile-format.md) and

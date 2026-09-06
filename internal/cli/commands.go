@@ -14,15 +14,17 @@ type commandSpec struct {
 	path, syntax, description, example string
 	valueFlag, boolFlag                string
 	auxValueFlag                       string
+	thirdValueFlag                     string
 	group                              bool
 	nameOperand                        bool
 	optionalValue                      bool
 	optionalAuxValue                   bool
+	optionalThirdValue                 bool
 }
 
 var commands = []commandSpec{
 	{path: "", syntax: "acs <command> [flags]", description: "Create capability Profiles and use the required native sandbox.", example: "acs devin create-profile --name backend-review", group: true},
-	{path: "profile", syntax: "acs profile <command> [flags]", description: "Create, inspect, validate, edit, clone, rename or delete stored Profiles.", example: "acs profile create --file profile.json\n  acs profile show backend-review", group: true},
+	{path: "profile", syntax: "acs profile <command> [flags]", description: "Create, inspect, validate, exchange, edit, clone, rename or delete Profiles.", example: "acs profile create --file profile.json\n  acs profile show backend-review", group: true},
 	{path: "profile list", syntax: "acs profile list [--json]", description: "List direct stored Profiles, including per-entry structural errors. Missing storage is empty.\nNo sources, targets, credentials or Sessions are accessed. No files are changed.", example: "acs profile list\n  acs profile list --json", boolFlag: "--json"},
 	{path: "profile show", syntax: "acs profile show NAME [--json]", description: "Show persisted Profile versions and selections, even with missing Skill sources.\nSupported structure does not imply launch readiness. No files are changed.", example: "acs profile show backend-review\n  acs profile show --json backend-review", boolFlag: "--json", nameOperand: true},
 	{path: "profile create", syntax: "acs profile create --file FILE [--dry-run]", description: "Create one machine-local Profile from a strict version-3 JSON document. The document supplies its validated name.\nMissing Skill material and named authentication remain unchecked. Existing Profiles are never overwritten.", example: "acs profile create --file profile.json\n  acs profile create --file profile.json --dry-run", valueFlag: "--file", boolFlag: "--dry-run"},
@@ -31,6 +33,9 @@ var commands = []commandSpec{
 	{path: "profile rename", syntax: "acs profile rename NAME --name NEW", description: "Preview and confirm coordinated filename and embedded-name changes interactively.\nAn occupied destination is never overwritten. Legacy conversion requires a canonical representation preview.", example: "acs profile rename backend-review --name service-review", nameOperand: true, valueFlag: "--name"},
 	{path: "profile delete", syntax: "acs profile delete NAME [--confirm NAME]", description: "Delete only the named stored Profile at its captured revision.\nInteractive deletion requires typing the exact name; noninteractive use requires an exact --confirm NAME.\nSafely readable unsupported documents may be deleted. Identities, Sessions and other Profiles are unaffected.", example: "acs profile delete backend-review\n  acs profile delete backend-review --confirm backend-review", nameOperand: true, valueFlag: "--confirm", optionalValue: true},
 	{path: "profile migrate", syntax: "acs profile migrate NAME", description: "Preview and explicitly migrate one legacy v1/v2 Profile to v3 through the revisioned repository.\nLegacy workspace write is preserved explicitly; common and target projection paths change only after confirmation.", example: "acs profile migrate backend-review", nameOperand: true},
+	{path: "profile export", syntax: "acs profile export NAME [--file FILE]", description: "Export supported version-3 stored intent as deterministic sanitized exchange JSON.\nWithout --file, JSON is stdout and the classification report is stderr. Existing files are never replaced.", example: "acs profile export backend-review\n  acs profile export backend-review --file backend-review.acs-profile.json", nameOperand: true, valueFlag: "--file", optionalValue: true},
+	{path: "profile import", syntax: "acs profile import --file FILE --as NAME [--bindings FILE] [--dry-run]", description: "Import one untrusted exchange document through bounded validation and conditional no-overwrite creation.\nAll symbolic bindings must be explicit; --dry-run is passive and publishes nothing.", example: "acs profile import --file shared.acs-profile.json --as backend-review --bindings local-bindings.json --dry-run", valueFlag: "--file", auxValueFlag: "--as", thirdValueFlag: "--bindings", optionalThirdValue: true, boolFlag: "--dry-run"},
+	{path: "profile import validate", syntax: "acs profile import validate --file FILE [--bindings FILE] [--json]", description: "Passively validate one bounded exchange document and optional local bindings.\nThis does not change the existing acs profile validate NAME command and creates no storage or runtime state.", example: "acs profile import validate --file shared.acs-profile.json --json", valueFlag: "--file", auxValueFlag: "--bindings", optionalAuxValue: true, boolFlag: "--json"},
 
 	{path: "doctor", syntax: "acs doctor [--target devin|sandbox|codex-auth] [--json]", description: "Inspect passive host and backend-file prerequisites. Optional targets check executable availability only.\nVersions, authentication and actual sandbox enforcement remain unchecked. No processes run or files change.\ncodex-auth describes named authentication workflows; use Codex dry-run to inspect a Profile launch plan.", example: "acs doctor\n  acs doctor --target devin --json", valueFlag: "--target", boolFlag: "--json", optionalValue: true},
 	{path: "profile validate", syntax: "acs profile validate NAME [--json]", description: "Validate stored Profile structure and selected Skill-source resolution without a launch plan.\nPlatform, backend, executables, authentication and runtime remain unchecked. No files change.", example: "acs profile validate backend-review\n  acs profile validate --json backend-review", boolFlag: "--json", nameOperand: true},
@@ -53,6 +58,7 @@ type invocation struct {
 	command       commandSpec
 	value         string
 	auxValue      string
+	thirdValue    string
 	operand       string
 	enabled, help bool
 	arguments     []string
@@ -112,7 +118,7 @@ func parseCommand(args []string) (inv invocation, problem string) {
 			return inv, "unsupported positional argument"
 		}
 		flag, _, hasEquals := strings.Cut(arg, "=")
-		if helpCommand || (flag != "--help" && flag != inv.command.valueFlag && flag != inv.command.auxValueFlag && flag != inv.command.boolFlag) {
+		if helpCommand || (flag != "--help" && flag != inv.command.valueFlag && flag != inv.command.auxValueFlag && flag != inv.command.thirdValueFlag && flag != inv.command.boolFlag) {
 			return inv, "unsupported flag " + publicToken(flag)
 		}
 		if hasEquals {
@@ -137,6 +143,12 @@ func parseCommand(args []string) (inv invocation, problem string) {
 			}
 			i++
 			inv.auxValue = args[i]
+		case inv.command.thirdValueFlag:
+			if i+1 >= len(args) || args[i+1] == "" || strings.HasPrefix(args[i+1], "-") {
+				return inv, "missing value for " + flag
+			}
+			i++
+			inv.thirdValue = args[i]
 		case inv.command.boolFlag:
 			inv.enabled = true
 		}
@@ -162,7 +174,10 @@ func parseCommand(args []string) (inv invocation, problem string) {
 	if inv.command.auxValueFlag != "" && !inv.command.optionalAuxValue && inv.auxValue == "" {
 		return inv, "missing required flag " + inv.command.auxValueFlag
 	}
-	if inv.auxValue != "" {
+	if inv.command.thirdValueFlag != "" && !inv.command.optionalThirdValue && inv.thirdValue == "" {
+		return inv, "missing required flag " + inv.command.thirdValueFlag
+	}
+	if inv.command.auxValueFlag == "--auth" && inv.auxValue != "" {
 		if _, err := codexauth.ParseCredentialRef(inv.auxValue); err != nil {
 			return inv, "invalid Codex authentication reference"
 		}
@@ -183,6 +198,15 @@ func parseCommand(args []string) (inv invocation, problem string) {
 		if inv.command.valueFlag == "--name" && strings.EqualFold(inv.operand, inv.value) {
 			return inv, "source and destination must have distinct names (including case)"
 		}
+	}
+	if inv.command.path == "profile export" && profile.ValidateName(inv.operand) != nil {
+		return inv, "invalid Profile name"
+	}
+	if inv.command.path == "profile import" && profile.ValidateName(inv.auxValue) != nil {
+		return inv, "invalid destination Profile name"
+	}
+	if (inv.command.path == "profile import" || inv.command.path == "profile import validate") && (strings.IndexByte(inv.value, 0) >= 0 || strings.IndexByte(inv.auxValue, 0) >= 0 || strings.IndexByte(inv.thirdValue, 0) >= 0) {
+		return inv, "invalid file argument"
 	}
 
 	return inv, ""
@@ -207,6 +231,13 @@ func CodexDryRunRequested(args []string) bool {
 func ProfileCreateRequested(args []string) bool {
 	inv, problem := parseCommand(args)
 	return problem == "" && !inv.help && inv.command.path == "profile create"
+}
+
+// ProfileExchangeRequested identifies the syntax-validated early route so the
+// executable does not assemble targets, credentials, Sessions, or runtime state.
+func ProfileExchangeRequested(args []string) bool {
+	inv, problem := parseCommand(args)
+	return problem == "" && !inv.help && (inv.command.path == "profile export" || inv.command.path == "profile import" || inv.command.path == "profile import validate")
 }
 
 // publicToken identifies command/flag spellings without echoing attached values,
@@ -243,7 +274,11 @@ func (app App) printHelp(command commandSpec) {
 	fmt.Fprintln(app.Output, "\nFlags:")
 	if command.valueFlag != "" {
 		if command.valueFlag == "--file" {
-			fmt.Fprintln(app.Output, "  --file FILE  Required explicit JSON input file")
+			if command.path == "profile export" {
+				fmt.Fprintln(app.Output, "  --file FILE  Optional exclusive new output file")
+			} else {
+				fmt.Fprintln(app.Output, "  --file FILE  Required explicit JSON input file")
+			}
 		} else if command.valueFlag == "--confirm" {
 			fmt.Fprintln(app.Output, "  --confirm NAME  Exact name confirmation for deliberate noninteractive deletion")
 		} else if command.optionalValue {
@@ -257,12 +292,23 @@ func (app App) printHelp(command commandSpec) {
 		if command.optionalAuxValue {
 			requirement = "Optional"
 		}
-		fmt.Fprintf(app.Output, "  %s <ref>  %s canonical named authentication reference\n", command.auxValueFlag, requirement)
+		if command.auxValueFlag == "--as" {
+			fmt.Fprintf(app.Output, "  --as NAME  %s destination Profile name\n", requirement)
+		} else if command.auxValueFlag == "--bindings" {
+			fmt.Fprintf(app.Output, "  --bindings FILE  %s explicit local binding document\n", requirement)
+		} else {
+			fmt.Fprintf(app.Output, "  %s <ref>  %s canonical named authentication reference\n", command.auxValueFlag, requirement)
+		}
+	}
+	if command.thirdValueFlag != "" {
+		fmt.Fprintf(app.Output, "  %s FILE  Optional explicit local binding document\n", command.thirdValueFlag)
 	}
 	if command.boolFlag != "" {
 		description := map[string]string{"--dry-run": "Inspect without launching", "--device-auth": "Use device login", "--json": "Emit versioned JSON format 1"}[command.boolFlag]
 		if command.path == "profile create" {
 			description = "Validate and preview without changing Profile storage"
+		} else if command.path == "profile import" {
+			description = "Validate and preview without publishing a Profile"
 		}
 		fmt.Fprintf(app.Output, "  %s  %s\n", command.boolFlag, description)
 	}

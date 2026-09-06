@@ -1,0 +1,51 @@
+{
+  "exchangeVersion": 1,
+  "profile": {
+    "common": {
+      "skills": {
+        "version": 1,
+        "selection": [
+          {
+            "sourceBinding": "source-1",
+            "relativePath": "frontend-review"
+          },
+          {
+            "sourceBinding": "source-2",
+            "relativePath": "backend-review"
+          }
+        ]
+      },
+      "workspace": {
+        "version": 1,
+        "selection": {
+          "access": "read-write"
+        }
+      }
+    },
+    "overlays": {
+      "codex": {
+        "version": 1,
+        "authBinding": "authentication-1"
+      },
+      "devin": {
+        "version": 1
+      }
+    }
+  },
+  "requirements": {
+    "sources": [
+      {
+        "id": "source-1"
+      },
+      {
+        "id": "source-2"
+      }
+    ],
+    "authentications": [
+      {
+        "id": "authentication-1",
+        "kind": "codex-chatgpt"
+      }
+    ]
+  }
+}

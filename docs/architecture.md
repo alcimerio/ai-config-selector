@@ -190,6 +190,16 @@ inside legacy version-2 envelopes and independently versioned common payloads
 inside version 3; unknown capabilities and unsupported schema
 versions fail strict resolution.
 
+Portable exchange is a separate codec and version. It reads strictly admitted
+v3 bytes as pure stored intent, replaces machine-local source/auth references
+with symbolic requirements, and never exports a resolved authority plan or raw
+local JSON. Passive import validation remains outside target, credential,
+Session, discovery, network, and recovery composition. Complete explicit local
+bindings build one immutable canonical candidate; only actual import passes that
+candidate to the existing conditional Create transaction. Export file output
+uses an exchange-owned exclusive no-replace helper and does not alter executor or
+authentication lifecycle ownership.
+
 v0.4.0 preserves the existing Profile format and Devin command grammar. It adds
 `acs sandbox --profile NAME [--dry-run]` and removes Linux from the supported
 runtime and artifact matrix.

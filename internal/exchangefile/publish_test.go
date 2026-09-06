@@ -1,0 +1,79 @@
+package exchangefile
+
+import (
+	"context"
+	"errors"
+	"os"
+	"path/filepath"
+	"testing"
+)
+
+func TestPublishNoClobberAndAtomicFailure(t *testing.T) {
+	directory := t.TempDir()
+	destination := filepath.Join(directory, "profile.json")
+	if err := os.WriteFile(destination, []byte("existing"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if outcome, err := (Publisher{}).Publish(context.Background(), destination, []byte("new")); err == nil || outcome.Published {
+		t.Fatalf("collision = %#v, %v", outcome, err)
+	}
+	contents, _ := os.ReadFile(destination)
+	if string(contents) != "existing" {
+		t.Fatalf("destination = %q", contents)
+	}
+
+	failing := Publisher{Hook: func(point string) error {
+		if point == "file-sync.before" {
+			return errors.New("injected")
+		}
+		return nil
+	}}
+	other := filepath.Join(directory, "other.json")
+	if outcome, err := failing.Publish(context.Background(), other, []byte("new")); err == nil || outcome.Published {
+		t.Fatalf("failure = %#v, %v", outcome, err)
+	}
+	if _, err := os.Lstat(other); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("partial destination: %v", err)
+	}
+}
+
+func TestPublishReportsPostPublicationFailure(t *testing.T) {
+	destination := filepath.Join(t.TempDir(), "profile.json")
+	publisher := Publisher{Hook: func(point string) error {
+		if point == "directory-sync.before" {
+			return errors.New("injected")
+		}
+		return nil
+	}}
+	outcome, err := publisher.Publish(context.Background(), destination, []byte("complete"))
+	if err == nil || !outcome.Published {
+		t.Fatalf("outcome = %#v, %v", outcome, err)
+	}
+	contents, readErr := os.ReadFile(destination)
+	if readErr != nil || string(contents) != "complete" {
+		t.Fatalf("published = %q, %v", contents, readErr)
+	}
+	info, statErr := os.Stat(destination)
+	if statErr != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("mode = %v, %v", info, statErr)
+	}
+}
+
+func TestPublishRefusesExistingSymlink(t *testing.T) {
+	directory := t.TempDir()
+	target := filepath.Join(directory, "target")
+	destination := filepath.Join(directory, "exchange.json")
+	if err := os.WriteFile(target, []byte("sentinel"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, destination); err != nil {
+		t.Fatal(err)
+	}
+	if outcome, err := (Publisher{}).Publish(context.Background(), destination, []byte("new")); err == nil || outcome.Published {
+		t.Fatalf("symlink = %#v, %v", outcome, err)
+	}
+	contents, _ := os.ReadFile(target)
+	if string(contents) != "sentinel" {
+		t.Fatalf("target = %q", contents)
+	}
+}
