@@ -1,4 +1,4 @@
-package codexauth
+package codexauthresource
 
 import (
 	"bytes"
@@ -11,8 +11,6 @@ import (
 	"io"
 	"strings"
 	"time"
-
-	"github.com/alcimerio/ai-config-selector/internal/codexauthresource"
 )
 
 const maximumAuthJSONSize = 128 * 1024
@@ -38,9 +36,7 @@ type idTokenClaims struct {
 	} `json:"https://api.openai.com/auth"`
 }
 
-// legacyValidateAuthJSON remains temporarily for package-private fixture
-// compatibility while validation ownership has moved to codexauthresource.
-func legacyValidateAuthJSON(name CredentialRef, contents []byte) (IdentityMetadata, error) {
+func validateAuthJSON(name CredentialRef, contents []byte) (IdentityMetadata, error) {
 	if len(contents) == 0 || len(contents) > maximumAuthJSONSize {
 		return IdentityMetadata{}, ErrUnsupportedAuth
 	}
@@ -223,7 +219,7 @@ func consumeJSONValue(decoder *json.Decoder) error {
 }
 
 func encodeEnvelope(auth []byte) ([]byte, error) {
-	return json.Marshal(authEnvelope{Version: recordVersion, Auth: append(json.RawMessage(nil), auth...)})
+	return json.Marshal(authEnvelope{Version: RecordVersion, Auth: append(json.RawMessage(nil), auth...)})
 }
 
 func decodeEnvelope(payload []byte) ([]byte, error) {
@@ -233,7 +229,7 @@ func decodeEnvelope(payload []byte) ([]byte, error) {
 	decoder := json.NewDecoder(bytes.NewReader(payload))
 	decoder.DisallowUnknownFields()
 	var envelope authEnvelope
-	if err := decoder.Decode(&envelope); err != nil || envelope.Version != recordVersion || len(envelope.Auth) == 0 {
+	if err := decoder.Decode(&envelope); err != nil || envelope.Version != RecordVersion || len(envelope.Auth) == 0 {
 		return nil, ErrUnsupportedAuth
 	}
 	var additional any
@@ -247,8 +243,4 @@ func clearBytes(value []byte) {
 	for index := range value {
 		value[index] = 0
 	}
-}
-
-func validateAuthJSON(name CredentialRef, contents []byte) (IdentityMetadata, error) {
-	return codexauthresource.ValidateAuthJSON(name, contents)
 }
