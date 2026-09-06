@@ -1,4 +1,4 @@
-package codexauth
+package executor
 
 import (
 	"crypto/sha256"

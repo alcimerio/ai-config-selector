@@ -1,4 +1,4 @@
-package codexauth
+package executor
 
 import (
 	"context"
@@ -13,10 +13,10 @@ import (
 	"github.com/alcimerio/ai-config-selector/internal/session"
 )
 
-// loginResourceStore is deliberately narrow: Login orchestration can acquire
-// one opaque binding but cannot obtain providers, locks, markers, or auth.
+// authResourceStore is deliberately narrow: the executor can acquire opaque
+// typed authority but cannot obtain providers, locks, markers, or credentials.
 // Production wraps the concrete lower Store; package tests replace only this
-// fixed capability while exercising the same Registry.Login sequence.
+// fixed capability while exercising the same executor sequence.
 type authResourceStore interface {
 	AcquireLogin(context.Context, string) (loginResourceBinding, error)
 	AcquireStatus(context.Context, string) (loginResourceBinding, IdentityMetadata, error)
@@ -86,7 +86,7 @@ func (resources productionAuthResources) Logout(ctx context.Context, name string
 	return resources.store.Logout(ctx, name)
 }
 
-func (registry *Registry) transferResourcePendingBinding(created *session.Session, binding loginResourceBinding, challenge string, process launch.Process) {
+func (registry *CodexAuthService) transferResourcePendingBinding(created *session.Session, binding loginResourceBinding, challenge string, process launch.Process) {
 	if process == nil {
 		_ = created.PreserveForRecovery()
 		return
@@ -121,9 +121,9 @@ func (registry *Registry) transferResourcePendingBinding(created *session.Sessio
 	}()
 }
 
-// loginWithResource leaves executable and Session ownership in the facade, but
-// every durable decision is made by the opaque resource binding.
-func (registry *Registry) loginWithResource(ctx context.Context, request LoginRequest) (IdentityMetadata, error) {
+// loginWithResource owns executable and Session orchestration while every
+// durable credential decision remains on the opaque resource binding.
+func (registry *CodexAuthService) loginWithResource(ctx context.Context, request CodexLoginRequest) (IdentityMetadata, error) {
 	binding, err := registry.resources.AcquireLogin(ctx, request.Name)
 	if err != nil {
 		return IdentityMetadata{}, err
@@ -197,7 +197,7 @@ func (registry *Registry) loginWithResource(ctx context.Context, request LoginRe
 		}
 		return IdentityMetadata{}, ErrLoginFailed
 	}
-	run := preparation.Run(ctx, created, encoded, func() error { return binding.MarkCleanupPending(ctx) }, request.DeviceAuth, request.Terminal)
+	run := preparation.Run(ctx, created, encoded, binding, request.DeviceAuth, request.Terminal)
 	if !run.cleanupProven {
 		registry.transferResourcePendingBinding(created, binding, encoded, run.cleanupProcess)
 		return IdentityMetadata{}, ErrLoginCleanupUncertain

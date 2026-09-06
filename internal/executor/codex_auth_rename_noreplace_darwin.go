@@ -1,6 +1,6 @@
 //go:build darwin
 
-package codexauth
+package executor
 
 import "golang.org/x/sys/unix"
 

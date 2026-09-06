@@ -1,15 +1,10 @@
 // Package codexauth owns ACS-managed named Codex authentication identities.
 package codexauth
 
-import (
-	"errors"
-
-	"github.com/alcimerio/ai-config-selector/internal/codexauthresource"
-)
+import "github.com/alcimerio/ai-config-selector/internal/codexauthresource"
 
 const (
-	SupportedCodexVersion = "0.149.1"
-	recordVersion         = codexauthresource.RecordVersion
+	SupportedCodexVersion = codexauthresource.SupportedCodexVersion
 )
 
 var (
@@ -18,13 +13,13 @@ var (
 	ErrIdentityNotFound      = codexauthresource.ErrIdentityNotFound
 	ErrIdentityBusy          = codexauthresource.ErrIdentityBusy
 	ErrProviderUnavailable   = codexauthresource.ErrProviderUnavailable
-	ErrLoginFailed           = errors.New("contained Codex login failed")
-	ErrLoginCleanupUncertain = errors.New("contained Codex login cleanup is uncertain")
-	ErrUnsupportedVersion    = errors.New("unsupported Codex CLI version")
+	ErrLoginFailed           = codexauthresource.ErrLoginFailed
+	ErrLoginCleanupUncertain = codexauthresource.ErrLoginCleanupUncertain
+	ErrUnsupportedVersion    = codexauthresource.ErrUnsupportedVersion
 	ErrUnsupportedAuth       = codexauthresource.ErrUnsupportedAuth
-	ErrStatusFailed          = errors.New("contained Codex authentication status failed")
-	ErrProjectedAuthInvalid  = errors.New("projected Codex authentication changed identity or became invalid")
-	ErrBindingQuarantined    = errors.New("Codex authentication binding is quarantined")
+	ErrStatusFailed          = codexauthresource.ErrStatusFailed
+	ErrProjectedAuthInvalid  = codexauthresource.ErrProjectedAuthInvalid
+	ErrBindingQuarantined    = codexauthresource.ErrBindingQuarantined
 )
 
 // CredentialRef is the canonical, secret-free name of one ACS-owned Codex
@@ -57,7 +52,4 @@ const (
 )
 
 // IdentityStatus reports only durable metadata and the binding disposition.
-type IdentityStatus struct {
-	Metadata    IdentityMetadata
-	Disposition BindingDisposition
-}
+type IdentityStatus = codexauthresource.IdentityStatus

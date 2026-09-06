@@ -1,4 +1,4 @@
-package codexauth
+package executor
 
 import (
 	"encoding/base64"

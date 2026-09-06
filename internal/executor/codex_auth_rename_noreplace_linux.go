@@ -1,6 +1,6 @@
 //go:build linux
 
-package codexauth
+package executor
 
 import "golang.org/x/sys/unix"
 

@@ -1,7 +1,8 @@
 # Contained process executor
 
 `internal/executor` owns the protected Session lifecycle for the fixed
-interactive shell and the registered Devin lifecycle. Its production
+interactive shell, the registered Devin lifecycle, and named Codex
+authentication operations. Its production
 constructor selects the required native sandbox internally; adapters cannot
 provide a backend, probe ordering, Session retention, or cleanup policy.
 
@@ -36,12 +37,29 @@ authenticated smoke. It performs Check, Session creation and materialization,
 credential copy, ordered probes, settlement, and removal internally; it never
 returns a Session path, process, retention lease, or execution callback.
 
-Each probe and target is retained before Start. A failed Start is not waited;
+Each shell, Devin probe, and Codex probe uses one private retained-process
+foundation with an explicit fixed signal mode. Each process is retained before Start. A failed Start is not waited;
 a successful Start is waited exactly once, and cleanup uncertainty blocks the
 next probe or target and retains the Session. The Devin adapter translates the
 lower redacted preflight error to its existing public compatibility wrapper and
-does not regain process lifecycle authority. Codex authentication remains on
-its existing lifecycle in this stage.
+does not regain process lifecycle authority.
+
+`codexauth.Registry` is a typed configuration and API facade only. The executor
+acquires the named resource before taking one immutable executable snapshot,
+creates and recovery-protects the Session, publishes the exact marker
+generation, projects or reads credentials through `codexauthresource`, runs
+the fixed version plus login/status commands, settles cleanup proof, finalizes
+the typed resource outcome, and physically removes the Session before marker
+deletion and identity unlock. Login remains Create-only; Status and recovery
+can replace only a valid changed projection with the same identity metadata.
+Uncertain cleanup retains the protected Session and generation-bound marker,
+and recovery never turns an interrupted Login into a credential record.
+
+`codexauthresource` remains non-executing and owns credential validation,
+Keychain access, locks, marker generations, secure projection/readback, and
+commit/discard decisions. It imports neither the executor nor Session/process
+packages. The facade never receives a provider, credential payload, lock,
+marker writer, process, Session lease, or lifecycle callback.
 
 During the reserved startup handoff, resize notifications may coalesce but
 cannot replace an already queued termination signal.

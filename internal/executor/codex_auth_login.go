@@ -1,4 +1,4 @@
-package codexauth
+package executor
 
 import (
 	"bytes"
@@ -90,11 +90,11 @@ func (runner *codexLoginRunner) Prepare(ctx context.Context) (loginPreparation, 
 			ctx context.Context,
 			created *session.Session,
 			proofChallenge string,
-			beginProcess func() error,
+			binding loginResourceBinding,
 			deviceAuth bool,
 			terminal launch.Terminal,
 		) loginRunResult {
-			return runner.runOperation(ctx, operation.config, created, proofChallenge, beginProcess, deviceAuth, terminal)
+			return runner.runOperation(ctx, operation.config, created, proofChallenge, binding, deviceAuth, terminal)
 		},
 		operation: operation,
 	}, nil
@@ -123,7 +123,7 @@ func (runner *codexLoginRunner) runOperation(
 	config codexLoginConfig,
 	created *session.Session,
 	proofChallenge string,
-	beginProcess func() error,
+	binding loginResourceBinding,
 	deviceAuth bool,
 	terminal launch.Terminal,
 ) loginRunResult {
@@ -143,7 +143,7 @@ func (runner *codexLoginRunner) runOperation(
 		return loginRunResult{containedRunResult: containedRunResult{err: ErrLoginFailed, cleanupProven: true}}
 	}
 	versionOutput := boundedBuffer{limit: maximumVersionOutputSize}
-	versionRun := runner.run(ctx, config, created, proofChallenge, beginProcess, []string{"--version"}, launch.Terminal{
+	versionRun := runner.run(ctx, config, created, proofChallenge, binding, []string{"--version"}, launch.Terminal{
 		Output: &versionOutput, ErrorOutput: io.Discard,
 	})
 	if versionRun.err != nil || !versionRun.cleanupProven {
@@ -159,7 +159,7 @@ func (runner *codexLoginRunner) runOperation(
 	if deviceAuth {
 		arguments = append(arguments, "--device-auth")
 	}
-	loginRun := runner.run(ctx, config, created, proofChallenge, beginProcess, arguments, terminal)
+	loginRun := runner.run(ctx, config, created, proofChallenge, binding, arguments, terminal)
 	if loginRun.err != nil || !loginRun.cleanupProven {
 		return loginRunResult{
 			containedRunResult: loginRun,
@@ -177,12 +177,12 @@ func (runner *codexLoginRunner) run(
 	config codexLoginConfig,
 	created *session.Session,
 	proofChallenge string,
-	beginProcess func() error,
+	binding loginResourceBinding,
 	arguments []string,
 	terminal launch.Terminal,
 ) statusRunResult {
 	return runContainedCodex(
-		ctx, config, runner.sandbox, created, "", proofChallenge, beginProcess, arguments, terminal,
+		ctx, config, runner.sandbox, created, "", proofChallenge, binding, arguments, terminal,
 		ErrLoginFailed, ErrLoginCleanupUncertain,
 	)
 }

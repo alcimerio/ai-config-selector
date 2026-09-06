@@ -1,4 +1,4 @@
-package codexauth
+package executor
 
 import (
 	"context"
@@ -16,7 +16,7 @@ import (
 // Status acquires one durable identity before executable preparation, projects
 // it into a private Session, and delegates every record decision to the opaque
 // lower binding.
-func (registry *Registry) Status(ctx context.Context, value string) (IdentityStatus, error) {
+func (registry *CodexAuthService) Status(ctx context.Context, value string) (IdentityStatus, error) {
 	if registry.status == nil || registry.sessionsDirectory == "" {
 		return IdentityStatus{}, ErrProviderUnavailable
 	}
@@ -57,9 +57,7 @@ func (registry *Registry) Status(ctx context.Context, value string) (IdentitySta
 		result.Disposition = DiscardedProjection
 		return result, ErrProjectedAuthInvalid
 	}
-	run := preparation.Run(ctx, created, metadata.Workspace, challenge, func() error {
-		return binding.MarkCleanupPending(ctx)
-	})
+	run := preparation.Run(ctx, created, metadata.Workspace, challenge, binding)
 	run.err = sanitizeStatusError(run.err)
 	if run.err == nil {
 		if err := binding.MarkRefreshAllowed(ctx); err != nil {
@@ -112,7 +110,7 @@ func (registry *Registry) Status(ctx context.Context, value string) (IdentitySta
 	return result, nil
 }
 
-func (registry *Registry) createStatusBinding(ctx context.Context, binding loginResourceBinding, name CredentialRef) (*session.Session, string, error) {
+func (registry *CodexAuthService) createStatusBinding(ctx context.Context, binding loginResourceBinding, name CredentialRef) (*session.Session, string, error) {
 	challenge := make([]byte, launch.RecoveryProofChallengeSize)
 	if _, err := rand.Read(challenge); err != nil {
 		return nil, "", ErrStatusFailed
@@ -168,7 +166,7 @@ func (registry *Registry) createStatusBinding(ctx context.Context, binding login
 
 // Recover finalizes one exact durable marker generation. Session ownership and
 // supervisor proof verification remain above the non-executing resource layer.
-func (registry *Registry) Recover(ctx context.Context, value string) (BindingDisposition, error) {
+func (registry *CodexAuthService) Recover(ctx context.Context, value string) (BindingDisposition, error) {
 	binding, err := registry.resources.AcquireRecovery(ctx, value)
 	if err != nil {
 		if _, changed := err.(interface{ RecoveryGenerationChanged() }); changed {

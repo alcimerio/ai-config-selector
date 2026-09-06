@@ -1,4 +1,4 @@
-package codexauth
+package executor
 
 import (
 	"bytes"
@@ -128,7 +128,7 @@ func TestContainedLoginArmsRecoveryBeforePublishingProcessIntent(t *testing.T) {
 		t.Fatal(err)
 	}
 	callbackCalls := 0
-	result := preparation.Run(context.Background(), created, testCleanupProofChallenge, func() error {
+	binding := processIntentTestBinding{mark: func(context.Context) error {
 		callbackCalls++
 		if len(sandbox.requests) != 0 {
 			t.Fatalf("sandbox prepared before process intent: %#v", sandbox.requests)
@@ -138,13 +138,49 @@ func TestContainedLoginArmsRecoveryBeforePublishingProcessIntent(t *testing.T) {
 			t.Fatalf("pre-process recovery proof = (%v, %v)", proven, verifyErr)
 		}
 		return errors.New("stop before process preparation")
-	}, false, launch.Terminal{})
+	}}
+	result := preparation.Run(context.Background(), created, testCleanupProofChallenge, binding, false, launch.Terminal{})
 	if !errors.Is(result.err, ErrLoginFailed) || !result.cleanupProven {
 		t.Fatalf("result = %#v", result)
 	}
 	if callbackCalls != 1 || len(sandbox.requests) != 0 {
 		t.Fatalf("callback calls = %d, requests = %#v", callbackCalls, sandbox.requests)
 	}
+}
+
+func TestContainedLoginClassifiesRetentionFailureAsCleanupUncertain(t *testing.T) {
+	created, err := session.Create(filepath.Join(t.TempDir(), "sessions"), t.TempDir(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	process := &fakeProcess{}
+	sandbox := &fakeSandbox{process: process}
+	binding := processIntentTestBinding{mark: func(context.Context) error {
+		return created.Remove()
+	}}
+	result := runContainedCodex(
+		context.Background(), codexLoginConfig{BinaryPath: "/usr/bin/true"}, sandbox,
+		created, "", testCleanupProofChallenge, binding, []string{"--version"}, launch.Terminal{},
+		ErrLoginFailed, ErrLoginCleanupUncertain,
+	)
+	if !errors.Is(result.err, ErrLoginCleanupUncertain) || result.cleanupProven || result.cleanupProcess != nil {
+		t.Fatalf("retention failure classification = %#v", result)
+	}
+	if sandbox.prepares != 1 || process.starts != 0 || process.waits != 0 {
+		t.Fatalf("process calls = prepare %d, start %d, wait %d", sandbox.prepares, process.starts, process.waits)
+	}
+}
+
+type processIntentTestBinding struct {
+	loginResourceBinding
+	mark func(context.Context) error
+}
+
+func (binding processIntentTestBinding) MarkCleanupPending(ctx context.Context) error {
+	if binding.mark == nil {
+		return nil
+	}
+	return binding.mark(ctx)
 }
 
 func TestContainedLoginRejectsWrongVersionBeforeLogin(t *testing.T) {
@@ -284,7 +320,7 @@ func runLoginRunnerForTest(
 	if err != nil {
 		t.Fatal(err)
 	}
-	return preparation.Run(context.Background(), created, testCleanupProofChallenge, nil, deviceAuth, terminal), created
+	return preparation.Run(context.Background(), created, testCleanupProofChallenge, processIntentTestBinding{}, deviceAuth, terminal), created
 }
 
 func prepareLoginRunnerForTest(t *testing.T, runner *codexLoginRunner) loginPreparation {
@@ -322,7 +358,7 @@ func TestContainedStatusPinsAuthPolicyAtRuntimePrecedence(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer preparation.Close()
-	result := preparation.Run(context.Background(), created, "workspace", testCleanupProofChallenge, nil)
+	result := preparation.Run(context.Background(), created, "workspace", testCleanupProofChallenge, processIntentTestBinding{})
 	if result.err != nil || !result.cleanupProven {
 		t.Fatalf("status result = %#v", result)
 	}
@@ -378,7 +414,7 @@ func TestContainedLoginSnapshotsExecutableReplacementForCurrentOperation(t *test
 	}
 	defer created.Remove()
 
-	result := preparation.Run(context.Background(), created, testCleanupProofChallenge, nil, false, launch.Terminal{})
+	result := preparation.Run(context.Background(), created, testCleanupProofChallenge, processIntentTestBinding{}, false, launch.Terminal{})
 	if result.err != nil || !result.cleanupProven {
 		t.Fatalf("result = %#v", result)
 	}
@@ -417,7 +453,7 @@ func TestContainedLoginSnapshotsInPlaceRewriteForCurrentOperation(t *testing.T) 
 	}
 	defer created.Remove()
 
-	result := preparation.Run(context.Background(), created, testCleanupProofChallenge, nil, false, launch.Terminal{})
+	result := preparation.Run(context.Background(), created, testCleanupProofChallenge, processIntentTestBinding{}, false, launch.Terminal{})
 	if result.err != nil || !result.cleanupProven {
 		t.Fatalf("result = %#v", result)
 	}
@@ -505,7 +541,7 @@ func TestContainedStatusExecutesOnePrivateSnapshotAcrossBothSubprocesses(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	result := preparation.Run(context.Background(), created, "workspace", testCleanupProofChallenge, nil)
+	result := preparation.Run(context.Background(), created, "workspace", testCleanupProofChallenge, processIntentTestBinding{})
 	if result.err != nil || !result.cleanupProven {
 		t.Fatalf("result = %#v", result)
 	}

@@ -1,4 +1,4 @@
-package codexauth
+package executor
 
 import (
 	"context"
@@ -13,7 +13,7 @@ import (
 type statusRunResult = containedRunResult
 
 type statusPreparation struct {
-	run       func(context.Context, *session.Session, string, string, func() error) statusRunResult
+	run       func(context.Context, *session.Session, string, string, loginResourceBinding) statusRunResult
 	operation *containedOperationPreparation
 }
 
@@ -22,12 +22,12 @@ func (preparation statusPreparation) Run(
 	created *session.Session,
 	workspace string,
 	proofChallenge string,
-	beginProcess func() error,
+	binding loginResourceBinding,
 ) statusRunResult {
 	if preparation.run == nil {
 		return statusRunResult{err: ErrStatusFailed, cleanupProven: true}
 	}
-	return preparation.run(ctx, created, workspace, proofChallenge, beginProcess)
+	return preparation.run(ctx, created, workspace, proofChallenge, binding)
 }
 
 func (preparation statusPreparation) Close() {
@@ -65,9 +65,9 @@ func (runner *codexStatusRunner) Prepare(ctx context.Context) (statusPreparation
 			created *session.Session,
 			workspace string,
 			proofChallenge string,
-			beginProcess func() error,
+			binding loginResourceBinding,
 		) statusRunResult {
-			return runner.runOperation(ctx, operation.config, created, workspace, proofChallenge, beginProcess)
+			return runner.runOperation(ctx, operation.config, created, workspace, proofChallenge, binding)
 		},
 		operation: operation,
 	}, nil
@@ -79,10 +79,10 @@ func (runner *codexStatusRunner) runOperation(
 	created *session.Session,
 	workspace string,
 	proofChallenge string,
-	beginProcess func() error,
+	binding loginResourceBinding,
 ) statusRunResult {
 	versionOutput := boundedBuffer{limit: maximumVersionOutputSize}
-	result := runner.run(ctx, config, created, workspace, proofChallenge, beginProcess, []string{"--version"}, launch.Terminal{
+	result := runner.run(ctx, config, created, workspace, proofChallenge, binding, []string{"--version"}, launch.Terminal{
 		Output: &versionOutput, ErrorOutput: io.Discard,
 	})
 	if result.err != nil || !result.cleanupProven {
@@ -91,7 +91,7 @@ func (runner *codexStatusRunner) runOperation(
 	if versionOutput.overflow || strings.TrimSpace(versionOutput.String()) != "codex-cli "+runner.config.SupportedVersion {
 		return statusRunResult{err: ErrUnsupportedVersion, cleanupProven: true}
 	}
-	return runner.run(ctx, config, created, workspace, proofChallenge, beginProcess, []string{"login", "status"}, launch.Terminal{
+	return runner.run(ctx, config, created, workspace, proofChallenge, binding, []string{"login", "status"}, launch.Terminal{
 		Output: io.Discard, ErrorOutput: io.Discard,
 	})
 }
@@ -102,12 +102,12 @@ func (runner *codexStatusRunner) run(
 	created *session.Session,
 	workspace string,
 	proofChallenge string,
-	beginProcess func() error,
+	binding loginResourceBinding,
 	arguments []string,
 	terminal launch.Terminal,
 ) statusRunResult {
 	return runContainedCodex(
-		ctx, config, runner.sandbox, created, workspace, proofChallenge, beginProcess, arguments, terminal,
+		ctx, config, runner.sandbox, created, workspace, proofChallenge, binding, arguments, terminal,
 		ErrStatusFailed, ErrBindingQuarantined,
 	)
 }

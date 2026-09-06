@@ -50,16 +50,22 @@ root only after cleanup settles.
 
 `internal/adapter/devin` owns Devin discovery, Profile editing, and declarative
 launch configuration. `internal/executor` owns the allowlisted credential,
-Skill catalog verification, authentication preflight, and protected Devin
-lifecycle. Interactive launches pass `--respect-workspace-trust false`:
+Skill catalog verification, authentication preflight, and protected Devin,
+shell, and Codex authentication lifecycles. Interactive Devin launches pass `--respect-workspace-trust false`:
 the ephemeral Session cannot retain a workspace-trust decision, while the ACS
 Process Sandbox remains the mandatory boundary. Credential copying happens
 after generic Session creation; it is not part of Profile materialization.
 
-`internal/sandboxshell` owns the fixed `/bin/zsh -f` target. It creates a generic
-Session and never invokes the Devin executable, accesses a Devin credential, or
-runs category verification. It uses the same Process Sandbox and Session
-lifecycle as Devin.
+`internal/sandboxshell` owns the fixed `/bin/zsh -f` request facade. The
+executor creates its generic Session and never invokes the Devin executable,
+accesses a Devin credential, or runs category verification.
+
+`internal/codexauth` owns the public named-authentication configuration and
+typed API facade. The executor acquires `internal/codexauthresource` authority
+before executable verification, then owns Codex Session creation, fixed probes,
+cleanup proof, finalization, and recovery ordering. The resource package owns
+credentials, Keychain operations, locks, marker generations, and secure
+projection/readback without importing executor or process lifecycle packages.
 
 `internal/launch` owns platform detection, path and environment validation,
 Seatbelt policy generation, process preparation, signal forwarding, process-tree

@@ -51,6 +51,50 @@ type DevinRequest struct {
 // process settlement. Its backend is selected by ACS, never by an adapter.
 type Executor struct{ sandbox launch.ProcessSandbox }
 
+type retainedSignalMode uint8
+
+const (
+	retainedProbe retainedSignalMode = iota
+	retainedAttached
+	retainedDevinReserved
+)
+
+var errRetainPreparedProcess = errors.New("retain prepared process")
+
+func (e *Executor) prepareRetainedProcess(ctx context.Context, created *session.Session, request launch.ProcessRequest) (launch.Process, error) {
+	process, err := e.sandbox.Prepare(ctx, request)
+	if err != nil {
+		return nil, err
+	}
+	retained, err := created.RetainUntilProcessDone(process)
+	if err != nil {
+		return nil, errors.Join(errRetainPreparedProcess, err)
+	}
+	return retained, nil
+}
+
+func settleRetainedProcess(process launch.Process, mode retainedSignalMode, devinSupervisor *devinSignalSupervisor) (error, error) {
+	var runErr error
+	switch mode {
+	case retainedProbe:
+		runErr = process.Start()
+		if runErr == nil {
+			runErr = process.Wait()
+		}
+	case retainedAttached:
+		runErr = launch.RunAttached(process)
+	case retainedDevinReserved:
+		if devinSupervisor == nil {
+			runErr = errors.New("contained Devin signal supervisor is unavailable")
+		} else {
+			runErr = runDevinAttachedReserved(process, devinSupervisor)
+		}
+	default:
+		runErr = errors.New("contained process signal mode is invalid")
+	}
+	return runErr, launch.AwaitRetainedSessionCleanup(process)
+}
+
 // New returns the production executor using ACS's required native sandbox.
 func New() *Executor { return newExecutor(launch.NewProcessSandbox()) }
 
@@ -89,7 +133,7 @@ func (e *Executor) RunShell(ctx context.Context, request ShellRequest) (resultEr
 			resultErr = cleanupPrecedence(resultErr, removeErr)
 		}
 	}()
-	process, err := e.sandbox.Prepare(ctx, launch.ProcessRequest{
+	process, err := e.prepareRetainedProcess(ctx, created, launch.ProcessRequest{
 		Workspace: created.WorkingDirectory(), SessionsDirectory: created.SessionsDirectory(),
 		SessionDirectory: created.RootDirectory(), SessionHome: created.HomeDirectory(),
 		TemporaryDirectory: created.TemporaryDirectory(), Executable: systemShell,
@@ -98,12 +142,8 @@ func (e *Executor) RunShell(ctx context.Context, request ShellRequest) (resultEr
 	if err != nil {
 		return err
 	}
-	process, err = created.RetainUntilProcessDone(process)
-	if err != nil {
-		return err
-	}
-	runErr := launch.RunAttached(process)
-	if cleanupErr := launch.AwaitRetainedSessionCleanup(process); cleanupErr != nil {
+	runErr, cleanupErr := settleRetainedProcess(process, retainedAttached, nil)
+	if cleanupErr != nil {
 		return cleanupPrecedence(runErr, cleanupErr)
 	}
 	return runErr
@@ -149,8 +189,8 @@ func (e *Executor) RunDevin(ctx context.Context, request DevinRequest) (exitCode
 	if err != nil {
 		return 1, err
 	}
-	runErr := runDevinAttachedReserved(process, supervisor)
-	if cleanupErr := launch.AwaitRetainedSessionCleanup(process); cleanupErr != nil {
+	runErr, cleanupErr := settleRetainedProcess(process, retainedDevinReserved, supervisor)
+	if cleanupErr != nil {
 		return 1, cleanupPrecedence(runErr, cleanupErr)
 	}
 	if runErr == nil {
@@ -262,11 +302,8 @@ func (e *Executor) runDevinProbe(ctx context.Context, created *session.Session, 
 	if err != nil {
 		return nil, err
 	}
-	runErr := process.Start()
-	if runErr == nil {
-		runErr = process.Wait()
-	}
-	if cleanupErr := launch.AwaitRetainedSessionCleanup(process); cleanupErr != nil {
+	runErr, cleanupErr := settleRetainedProcess(process, retainedProbe, nil)
+	if cleanupErr != nil {
 		// A probe cannot safely advance while its retained tree is uncertain;
 		// cleanup proof therefore outranks every probe outcome.
 		return nil, cleanupErr
@@ -275,11 +312,7 @@ func (e *Executor) runDevinProbe(ctx context.Context, created *session.Session, 
 }
 
 func (e *Executor) prepareDevin(ctx context.Context, created *session.Session, request DevinRequest, arguments []string, terminal launch.Terminal) (launch.Process, error) {
-	process, err := e.sandbox.Prepare(ctx, launch.ProcessRequest{Workspace: created.WorkingDirectory(), SessionsDirectory: created.SessionsDirectory(), SessionDirectory: created.RootDirectory(), SessionHome: created.HomeDirectory(), TemporaryDirectory: created.TemporaryDirectory(), Executable: request.Executable, RuntimeInputs: request.RuntimeInputs, Arguments: arguments, Terminal: terminal})
-	if err != nil {
-		return nil, err
-	}
-	return created.RetainUntilProcessDone(process)
+	return e.prepareRetainedProcess(ctx, created, launch.ProcessRequest{Workspace: created.WorkingDirectory(), SessionsDirectory: created.SessionsDirectory(), SessionDirectory: created.RootDirectory(), SessionHome: created.HomeDirectory(), TemporaryDirectory: created.TemporaryDirectory(), Executable: request.Executable, RuntimeInputs: request.RuntimeInputs, Arguments: arguments, Terminal: terminal})
 }
 
 // prepareDevinInteractive commits the handoff before a process reference can

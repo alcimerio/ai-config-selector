@@ -1,4 +1,4 @@
-package codexauth
+package executor
 
 import (
 	"context"
@@ -727,7 +727,7 @@ func newBindingTestRegistry(
 	t *testing.T,
 	name CredentialRef,
 	auth []byte,
-) (*Registry, *fakeProvider, *fakeStatusRunner, string) {
+) (*CodexAuthService, *fakeProvider, *fakeStatusRunner, string) {
 	t.Helper()
 	root := t.TempDir()
 	workingDirectory := filepath.Join(root, "workspace")
@@ -819,15 +819,13 @@ func (runner *pendingCleanupStatusRunner) Prepare(context.Context) (statusPrepar
 }
 
 func (runner *pendingCleanupStatusRunner) Run(
-	_ context.Context,
+	ctx context.Context,
 	created *session.Session,
 	_, _ string,
-	beginProcess func() error,
+	binding loginResourceBinding,
 ) statusRunResult {
-	if beginProcess != nil {
-		if err := beginProcess(); err != nil {
-			return statusRunResult{err: ErrStatusFailed, cleanupProven: true}
-		}
+	if binding == nil || binding.MarkCleanupPending(ctx) != nil {
+		return statusRunResult{err: ErrStatusFailed, cleanupProven: true}
 	}
 	if runner.mutate != nil {
 		if err := runner.mutate(created.HomeDirectory()); err != nil {
@@ -867,15 +865,13 @@ func (runner *fakeStatusRunner) Prepare(ctx context.Context) (statusPreparation,
 }
 
 func (runner *fakeStatusRunner) Run(
-	_ context.Context,
+	ctx context.Context,
 	created *session.Session,
 	_, _ string,
-	beginProcess func() error,
+	binding loginResourceBinding,
 ) statusRunResult {
-	if beginProcess != nil {
-		if err := beginProcess(); err != nil {
-			return statusRunResult{err: ErrStatusFailed, cleanupProven: true}
-		}
+	if binding == nil || binding.MarkCleanupPending(ctx) != nil {
+		return statusRunResult{err: ErrStatusFailed, cleanupProven: true}
 	}
 	configuration, err := os.ReadFile(filepath.Join(created.HomeDirectory(), ".codex", "config.toml"))
 	if err != nil {

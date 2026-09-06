@@ -1,4 +1,4 @@
-package codexauth
+package executor
 
 import (
 	"context"
@@ -77,7 +77,7 @@ func runContainedCodex(
 	created *session.Session,
 	workspace string,
 	proofChallenge string,
-	beginProcess func() error,
+	binding loginResourceBinding,
 	arguments []string,
 	terminal launch.Terminal,
 	targetFailure error,
@@ -90,12 +90,14 @@ func runContainedCodex(
 	if err := launch.PrepareSessionCleanupProof(created.RootDirectory(), challenge); err != nil {
 		return containedRunResult{err: targetFailure, cleanupProven: true}
 	}
-	if beginProcess != nil {
-		if err := beginProcess(); err != nil {
-			return containedRunResult{err: targetFailure, cleanupProven: true}
-		}
+	if binding == nil {
+		return containedRunResult{err: targetFailure, cleanupProven: true}
 	}
-	process, err := sandbox.Prepare(ctx, launch.ProcessRequest{
+	if err := binding.MarkCleanupPending(ctx); err != nil {
+		return containedRunResult{err: targetFailure, cleanupProven: true}
+	}
+	executor := &Executor{sandbox: sandbox}
+	process, err := executor.prepareRetainedProcess(ctx, created, launch.ProcessRequest{
 		Workspace: created.WorkingDirectory(), SessionsDirectory: created.SessionsDirectory(),
 		SessionDirectory: created.RootDirectory(), SessionHome: created.HomeDirectory(),
 		TemporaryDirectory: created.TemporaryDirectory(), Executable: config.BinaryPath,
@@ -104,14 +106,16 @@ func runContainedCodex(
 		Arguments:              codexAuthRuntimeArguments(workspace, arguments...), Terminal: terminal,
 	})
 	if err != nil {
+		if errors.Is(err, errRetainPreparedProcess) {
+			// Process preparation already succeeded after the durable marker was
+			// armed. Without a retained handle, process-tree cleanup cannot be
+			// proven, so preserve the protected Session for recovery.
+			return containedRunResult{err: cleanupFailure, cleanupProven: false}
+		}
 		return containedRunResult{err: err, cleanupProven: true}
 	}
-	process, err = created.RetainUntilProcessDone(process)
-	if err != nil {
-		return containedRunResult{err: cleanupFailure, cleanupProven: false}
-	}
-	runErr := launch.RunAttached(process)
-	if cleanupErr := launch.AwaitRetainedSessionCleanup(process); cleanupErr != nil {
+	runErr, cleanupErr := settleRetainedProcess(process, retainedAttached, nil)
+	if cleanupErr != nil {
 		return containedRunResult{
 			err: cleanupFailure, cleanupProven: false, cleanupProcess: process,
 		}

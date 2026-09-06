@@ -72,7 +72,8 @@ func TestNativeRealStoreInstalledTargetComposition(t *testing.T) {
 	if err := binding.MarkRecoverable(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := binding.CommitLogin(context.Background(), created.RootDirectory()); err != nil {
+	seeded, err := binding.CommitLogin(context.Background(), created.RootDirectory())
+	if err != nil {
 		t.Fatal(err)
 	}
 	if err := created.Remove(); err != nil {
@@ -93,12 +94,16 @@ func TestNativeRealStoreInstalledTargetComposition(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	identities, err := registry.List(context.Background())
+	if err != nil || len(identities) != 1 || identities[0].Name != "installed-target" || identities[0].Workspace != "synthetic-workspace" {
+		t.Fatal("real Store metadata listing did not return the isolated synthetic identity")
+	}
 	sessionsDirectory := filepath.Join(root, "sessions")
 	status, err := registry.Status(context.Background(), "installed-target")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if status.Metadata.Name != "installed-target" || status.Disposition != codexauth.DiscardedProjection {
+	if status.Metadata != seeded || status.Disposition != codexauth.DiscardedProjection {
 		t.Fatalf("status = %#v", status)
 	}
 	entries, err := os.ReadDir(sessionsDirectory)
@@ -109,6 +114,24 @@ func TestNativeRealStoreInstalledTargetComposition(t *testing.T) {
 		if strings.HasPrefix(entry.Name(), "session-") {
 			t.Fatalf("status retained Session projection %q", entry.Name())
 		}
+	}
+	acsHome := filepath.Join(root, "acs")
+	postStatusStore, err := codexauthresource.New(
+		filepath.Join(acsHome, "locks", "codex-auth"),
+		filepath.Join(acsHome, "quarantine", "codex-auth"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	postStatusBinding, metadata, err := postStatusStore.AcquireStatus(context.Background(), "installed-target")
+	if err != nil {
+		t.Fatalf("post-status lower acquisition: %v", err)
+	}
+	if metadata != seeded {
+		t.Fatalf("post-status metadata = %#v, want %#v", metadata, seeded)
+	}
+	if err := postStatusBinding.Release(); err != nil {
+		t.Fatal(err)
 	}
 	if disposition, err := registry.Recover(context.Background(), "installed-target"); err != nil || disposition != codexauth.DiscardedProjection {
 		t.Fatalf("post-status recovery = (%q, %v)", disposition, err)
