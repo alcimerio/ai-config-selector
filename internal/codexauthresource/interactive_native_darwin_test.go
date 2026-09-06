@@ -95,7 +95,7 @@ func TestNativeInstalledACSExecutesLockedCodexToolThroughNamedIdentity(t *testin
 	if err := os.WriteFile(outsideSecret, []byte("unrelated"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	isolationProbe := fmt.Sprintf(`; printf ' session-home-begin:%%s:session-home-end' "$HOME"; printf ' terminal-size:'; stty size </dev/tty 2>/dev/null; if cat %s >/dev/null 2>&1; then printf global-auth-read-bad; else printf global-auth-read-denied; fi; if cat %s >/dev/null 2>&1; then printf outside-read-bad; else printf outside-read-denied; fi; if printf bad > %s 2>/dev/null; then printf outside-write-bad; else printf outside-write-denied; fi; sleep 30 </dev/null >/dev/null 2>&1 & printf descendant-pid:%%s "$!"`, strconv.Quote(globalAuth), strconv.Quote(outsideSecret), strconv.Quote(outsideWrite))
+	isolationProbe := fmt.Sprintf(`; printf ' session-home-begin:%%s:session-home-end' "$HOME"; if cat %s >/dev/null 2>&1; then printf global-auth-read-bad; else printf global-auth-read-denied; fi; if cat %s >/dev/null 2>&1; then printf outside-read-bad; else printf outside-read-denied; fi; if printf bad > %s 2>/dev/null; then printf outside-write-bad; else printf outside-write-denied; fi; sleep 30 </dev/null >/dev/null 2>&1 & printf descendant-pid:%%s "$!"`, strconv.Quote(globalAuth), strconv.Quote(outsideSecret), strconv.Quote(outsideWrite))
 	for _, test := range []struct {
 		name, profile, command, marker string
 		wantWrite                      bool
@@ -326,14 +326,28 @@ func runInstalledCodexPTY(t *testing.T, candidate, home, tools, workspace, profi
 		t.Fatalf("installed ACS or locked target exited before interactive input: %v; terminal=%q", err, output.String())
 	case <-time.After(1500 * time.Millisecond):
 	}
+	if !waitNativeCaptureStable(&output, 2*time.Second) {
+		t.Fatalf("real Codex TUI did not reach a stable pre-resize frame; terminal=%q", output.String())
+	}
+	resizeOffset := output.Len()
 	if err := pty.Setsize(master, &pty.Winsize{Rows: 43, Cols: 117}); err != nil {
 		t.Fatal(err)
+	}
+	size, err := pty.GetsizeFull(master)
+	if err != nil || size.Rows != 43 || size.Cols != 117 {
+		t.Fatalf("resized outer PTY geometry=%v err=%v", size, err)
+	}
+	if !waitNativeCaptureContainsAfter(&output, resizeOffset, "\x1b[?2026h", 2*time.Second) {
+		t.Fatalf("real Codex TUI did not repaint after outer PTY resize; terminal=%q", output.String())
 	}
 	if _, err := master.Write([]byte("Use the shell tool exactly once as requested by the fixture.\r")); err != nil {
 		t.Fatalf("write interactive input: %v; terminal=%q", err, output.String())
 	}
 	select {
 	case <-completed:
+	case err := <-wait:
+		finished = true
+		t.Fatalf("installed ACS or locked target exited before completing tool work: %v; terminal=%q", err, output.String())
 	case <-time.After(30 * time.Second):
 		_ = command.Process.Kill()
 		t.Fatalf("real Codex did not complete two fixture requests; terminal=%q", output.String())
@@ -355,6 +369,35 @@ func runInstalledCodexPTY(t *testing.T, candidate, home, tools, workspace, profi
 	return output.String()
 }
 
+func waitNativeCaptureStable(capture *nativeSafeCapture, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	last := -1
+	stableSince := time.Now()
+	for time.Now().Before(deadline) {
+		length := capture.Len()
+		if length != last {
+			last = length
+			stableSince = time.Now()
+		} else if time.Since(stableSince) >= 150*time.Millisecond {
+			return true
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	return false
+}
+
+func waitNativeCaptureContainsAfter(capture *nativeSafeCapture, offset int, needle string, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		contents := capture.String()
+		if offset <= len(contents) && strings.Contains(contents[offset:], needle) {
+			return true
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	return false
+}
+
 type nativeSafeCapture struct {
 	mu     sync.Mutex
 	buffer bytes.Buffer
@@ -370,6 +413,12 @@ func (capture *nativeSafeCapture) String() string {
 	capture.mu.Lock()
 	defer capture.mu.Unlock()
 	return capture.buffer.String()
+}
+
+func (capture *nativeSafeCapture) Len() int {
+	capture.mu.Lock()
+	defer capture.mu.Unlock()
+	return capture.buffer.Len()
 }
 
 type nativeResponsesFixture struct {
@@ -452,7 +501,7 @@ func (fixture *nativeResponsesFixture) assert(t *testing.T) int {
 	if err != nil {
 		t.Fatalf("second request tool output: %v", err)
 	}
-	for _, sentinel := range []string{"Process exited with code 0", "codex-native-tool-output", "terminal-size:43 117", "global-auth-read-denied", "outside-read-denied", "outside-write-denied"} {
+	for _, sentinel := range []string{"Process exited with code 0", "codex-native-tool-output", "global-auth-read-denied", "outside-read-denied", "outside-write-denied"} {
 		if !strings.Contains(toolOutput, sentinel) {
 			t.Fatalf("second request omitted real shell result %q", sentinel)
 		}
