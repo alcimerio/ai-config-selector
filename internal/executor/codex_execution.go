@@ -81,15 +81,31 @@ func writeCodexExecutionConfig(home, chatGPTWorkspace, workingDirectory string, 
 	return os.WriteFile(filepath.Join(codexHome, "config.toml"), []byte(configuration), 0o600)
 }
 
-func (runner *codexExecutionRunner) run(ctx context.Context, config codexLoginConfig, created *session.Session, metadata IdentityMetadata, access launch.WorkspaceAccess, challenge string, binding loginResourceBinding, arguments []string, terminal launch.Terminal) containedRunResult {
+func (runner *codexExecutionRunner) run(ctx context.Context, config codexLoginConfig, created *session.Session, metadata IdentityMetadata, access launch.WorkspaceAccess, challenge string, binding loginResourceBinding, arguments []string, terminal launch.Terminal, supervisor *devinSignalSupervisor) containedRunResult {
+	mode := retainedProbe
+	reserved := false
+	if supervisor != nil {
+		if err := supervisor.reserveInteractive(); err != nil {
+			return containedRunResult{err: ErrCodexFailed, cleanupProven: true}
+		}
+		reserved = true
+	}
+	cancelReservation := func() {
+		if reserved {
+			supervisor.cancelInteractiveReservation()
+		}
+	}
 	proof, err := decodeRecoveryChallenge(challenge)
 	if err != nil {
+		cancelReservation()
 		return containedRunResult{err: ErrCodexFailed, cleanupProven: true}
 	}
 	if err := launch.PrepareSessionCleanupProof(created.RootDirectory(), proof); err != nil {
+		cancelReservation()
 		return containedRunResult{err: ErrCodexFailed, cleanupProven: true}
 	}
 	if err := binding.MarkCleanupPending(ctx); err != nil {
+		cancelReservation()
 		return containedRunResult{err: ErrCodexFailed, cleanupProven: true}
 	}
 	executor := &Executor{sandbox: runner.sandbox}
@@ -100,12 +116,16 @@ func (runner *codexExecutionRunner) run(ctx context.Context, config codexLoginCo
 		RecoveryProofChallenge: proof, Arguments: codexExecutionArguments(metadata.Workspace, created.WorkingDirectory(), access, arguments...), Terminal: terminal,
 	})
 	if err != nil {
+		cancelReservation()
 		if errors.Is(err, errRetainPreparedProcess) || errors.Is(err, errInvalidPreparedProcess) {
 			return containedRunResult{err: ErrCodexCleanupUncertain, cleanupProven: false}
 		}
 		return containedRunResult{err: err, cleanupProven: true}
 	}
-	runErr, cleanupErr := settleRetainedProcess(process, retainedAttached, nil)
+	if reserved {
+		mode = retainedDevinReserved
+	}
+	runErr, cleanupErr := settleRetainedProcess(process, mode, supervisor)
 	if cleanupErr != nil {
 		return containedRunResult{err: ErrCodexCleanupUncertain, cleanupProven: false, cleanupProcess: process}
 	}
@@ -126,13 +146,20 @@ func (service *CodexAuthService) ExecuteCodex(ctx context.Context, request Codex
 	if service == nil || service.execution == nil || request.ResolvedPlan == nil || request.ResolvedPlan.Requirements().Recipe != authority.RecipeCodex {
 		return 1, ErrCodexFailed
 	}
+	preflightContext, cancelPreflight := context.WithCancel(ctx)
+	defer cancelPreflight()
+	supervisor := newDevinSignalSupervisor(cancelPreflight)
+	defer supervisor.stop()
 	requirements := request.ResolvedPlan.Requirements()
 	authRef, err := ParseCredentialRef(request.ResolvedPlan.AuthRef())
 	if err != nil {
 		return 1, err
 	}
-	binding, metadata, err := service.resources.AcquireStatus(ctx, string(authRef))
+	binding, metadata, err := service.resources.AcquireStatus(preflightContext, string(authRef))
 	if err != nil {
+		if preflightContext.Err() != nil {
+			return 1, ErrCodexFailed
+		}
 		return 1, err
 	}
 	defer func() {
@@ -141,11 +168,17 @@ func (service *CodexAuthService) ExecuteCodex(ctx context.Context, request Codex
 		}
 	}()
 	access := request.ResolvedPlan.WorkspaceAccess()
-	preparation, err := service.execution.prepare(ctx, access, requirements)
+	preparation, err := service.execution.prepare(preflightContext, access, requirements)
 	if err != nil {
+		if preflightContext.Err() != nil {
+			return 1, ErrCodexFailed
+		}
 		return 1, sanitizeCodexExecutionError(err)
 	}
 	defer preparation.Close()
+	if preflightContext.Err() != nil {
+		return 1, ErrCodexFailed
+	}
 	created, challenge, err := service.createResourceBinding(ctx, binding, authRef, *request.ResolvedPlan, ErrCodexFailed)
 	if err != nil {
 		return 1, sanitizeCodexExecutionError(err)
@@ -159,6 +192,13 @@ func (service *CodexAuthService) ExecuteCodex(ctx context.Context, request Codex
 			return ErrBindingQuarantined
 		}
 		return nil
+	}
+	if preflightContext.Err() != nil {
+		_ = binding.MarkRecoverable(ctx)
+		if cleanupErr := remove(); cleanupErr != nil {
+			return 1, cleanupErr
+		}
+		return 1, ErrCodexFailed
 	}
 	if err := binding.Project(created.HomeDirectory()); err != nil {
 		_ = binding.MarkRecoverable(ctx)
@@ -174,10 +214,17 @@ func (service *CodexAuthService) ExecuteCodex(ctx context.Context, request Codex
 		}
 		return 1, ErrCodexFailed
 	}
+	if preflightContext.Err() != nil {
+		_ = binding.MarkRecoverable(ctx)
+		if cleanupErr := remove(); cleanupErr != nil {
+			return 1, cleanupErr
+		}
+		return 1, ErrCodexFailed
+	}
 	// Verification observes the completed common/target/auth projection. It has
 	// no process-retention capability: actual target discovery belongs to the
 	// fixed native acceptance path, not arbitrary contribution subprocesses.
-	if err := request.ResolvedPlan.Verify(ctx, launch.VerificationContext{
+	if err := request.ResolvedPlan.Verify(preflightContext, launch.VerificationContext{
 		SessionsDirectory: created.SessionsDirectory(), SessionDirectory: created.RootDirectory(),
 		SessionHome: created.HomeDirectory(), TemporaryDirectory: created.TemporaryDirectory(), WorkingDirectory: created.WorkingDirectory(),
 	}); err != nil {
@@ -188,13 +235,17 @@ func (service *CodexAuthService) ExecuteCodex(ctx context.Context, request Codex
 		return 1, ErrCodexFailed
 	}
 	versionOutput := boundedBuffer{limit: maximumVersionOutputSize}
-	version := service.execution.run(ctx, preparation.config, created, metadata, access, challenge, binding, []string{"--version"}, launch.Terminal{Output: &versionOutput, ErrorOutput: io.Discard})
-	if version.err == nil && (versionOutput.overflow || strings.TrimSpace(versionOutput.String()) != "codex-cli "+service.execution.config.SupportedVersion) {
+	version := service.execution.run(preflightContext, preparation.config, created, metadata, access, challenge, binding, []string{"--version"}, launch.Terminal{Output: &versionOutput, ErrorOutput: io.Discard}, nil)
+	if preflightContext.Err() != nil && version.cleanupProven {
+		version.err = ErrCodexFailed
+	} else if version.err == nil && (versionOutput.overflow || strings.TrimSpace(versionOutput.String()) != "codex-cli "+service.execution.config.SupportedVersion) {
 		version.err = ErrUnsupportedVersion
 	}
 	run := version
-	if version.err == nil && version.cleanupProven {
-		run = service.execution.run(ctx, preparation.config, created, metadata, access, challenge, binding, nil, request.Terminal)
+	if version.err == nil && version.cleanupProven && preflightContext.Err() == nil {
+		run = service.execution.run(preflightContext, preparation.config, created, metadata, access, challenge, binding, nil, request.Terminal, supervisor)
+	} else if version.err == nil && preflightContext.Err() != nil {
+		run.err = ErrCodexFailed
 	}
 	if !run.cleanupProven {
 		service.transferResourcePendingBinding(created, binding, challenge, run.cleanupProcess)

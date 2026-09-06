@@ -9,7 +9,9 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/alcimerio/ai-config-selector/internal/authority"
 	"github.com/alcimerio/ai-config-selector/internal/launch"
@@ -23,12 +25,15 @@ func (executionMaterializer) Materialize(home string) error {
 }
 
 type executionSandbox struct {
-	version string
-	mutate  func(string) error
-	starts  []error
-	waits   []error
-	counts  [][2]int
-	checks  int
+	version      string
+	mutate       func(string) error
+	starts       []error
+	waits        []error
+	waitHooks    []func()
+	prepareHooks []func()
+	counts       [][2]int
+	signals      [][]os.Signal
+	checks       int
 }
 
 func (*executionSandbox) Readiness(context.Context) (launch.SandboxReadiness, error) {
@@ -41,6 +46,10 @@ func (sandbox *executionSandbox) Check(context.Context, launch.SandboxCheck) err
 func (sandbox *executionSandbox) Prepare(_ context.Context, request launch.ProcessRequest) (launch.Process, error) {
 	index := len(sandbox.counts)
 	sandbox.counts = append(sandbox.counts, [2]int{})
+	sandbox.signals = append(sandbox.signals, nil)
+	if index < len(sandbox.prepareHooks) && sandbox.prepareHooks[index] != nil {
+		sandbox.prepareHooks[index]()
+	}
 	return &executionProcess{start: func() error {
 		sandbox.counts[index][0]++
 		if index == 0 {
@@ -56,21 +65,105 @@ func (sandbox *executionSandbox) Prepare(_ context.Context, request launch.Proce
 		return nil
 	}, wait: func() error {
 		sandbox.counts[index][1]++
+		if index < len(sandbox.waitHooks) && sandbox.waitHooks[index] != nil {
+			sandbox.waitHooks[index]()
+		}
 		if index < len(sandbox.waits) {
 			return sandbox.waits[index]
 		}
 		return nil
+	}, signal: func(received os.Signal) error {
+		sandbox.signals[index] = append(sandbox.signals[index], received)
+		return nil
 	}}, nil
 }
 
-type executionProcess struct {
-	start func() error
-	wait  func() error
+func TestInteractiveCodexTerminationAfterVersionCannotStartAttachedTarget(t *testing.T) {
+	auth := testChatGPTAuthJSON(t, "user", "workspace")
+	registry, provider, _, sessionsDirectory := newBindingTestRegistry(t, "work", auth)
+	root := filepath.Dir(sessionsDirectory)
+	binary := filepath.Join(root, "codex")
+	if err := os.WriteFile(binary, []byte("#!/bin/sh\nexit 0\n"), 0o500); err != nil {
+		t.Fatal(err)
+	}
+	sandbox := &executionSandbox{version: SupportedCodexVersion, waitHooks: []func(){func() {
+		if err := syscall.Kill(os.Getpid(), syscall.SIGTERM); err != nil {
+			t.Error(err)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}}}
+	registry.execution = newCodexExecutionRunner(codexLoginConfig{BinaryPath: binary, SupportedVersion: SupportedCodexVersion, SessionsDirectory: sessionsDirectory, WorkingDirectory: registry.workingDirectory}, sandbox)
+	plan := authority.New(nil, launch.WorkspaceAccessReadOnly, 3, "codex", authority.TargetRequirements{Recipe: authority.RecipeCodex, Executable: binary}).WithAuthRef("work")
+	if code, err := registry.ExecuteCodex(context.Background(), CodexRequest{ResolvedPlan: &plan}); code != 1 || !errors.Is(err, ErrCodexFailed) {
+		t.Fatalf("canceled execution = (%d, %v)", code, err)
+	}
+	if len(sandbox.counts) != 1 || sandbox.counts[0] != [2]int{1, 1} {
+		t.Fatalf("canceled version boundary process lifecycle = %#v", sandbox.counts)
+	}
+	if provider.replaceCalls != 0 || !reflect.DeepEqual(provider.records["work"].Auth, auth) {
+		t.Fatal("canceled version boundary replaced identity")
+	}
+	assertNoSessionDirectories(t, sessionsDirectory)
+	binding, _, err := registry.resources.AcquireStatus(context.Background(), "work")
+	if err != nil {
+		t.Fatalf("canceled version boundary left identity unavailable: %v", err)
+	}
+	if err := binding.Release(); err != nil {
+		t.Fatal(err)
+	}
 }
 
-func (process *executionProcess) Start() error   { return process.start() }
-func (process *executionProcess) Wait() error    { return process.wait() }
-func (*executionProcess) Signal(os.Signal) error { return nil }
+func TestInteractiveCodexReplaysTerminationAcceptedDuringAttachedPreparation(t *testing.T) {
+	auth := testChatGPTAuthJSON(t, "user", "workspace")
+	registry, provider, _, sessionsDirectory := newBindingTestRegistry(t, "work", auth)
+	root := filepath.Dir(sessionsDirectory)
+	binary := filepath.Join(root, "codex")
+	if err := os.WriteFile(binary, []byte("#!/bin/sh\nexit 0\n"), 0o500); err != nil {
+		t.Fatal(err)
+	}
+	sandbox := &executionSandbox{version: SupportedCodexVersion, prepareHooks: []func(){nil, func() {
+		if err := syscall.Kill(os.Getpid(), syscall.SIGTERM); err != nil {
+			t.Error(err)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}}}
+	registry.execution = newCodexExecutionRunner(codexLoginConfig{BinaryPath: binary, SupportedVersion: SupportedCodexVersion, SessionsDirectory: sessionsDirectory, WorkingDirectory: registry.workingDirectory}, sandbox)
+	plan := authority.New(nil, launch.WorkspaceAccessReadOnly, 3, "codex", authority.TargetRequirements{Recipe: authority.RecipeCodex, Executable: binary}).WithAuthRef("work")
+	if code, err := registry.ExecuteCodex(context.Background(), CodexRequest{ResolvedPlan: &plan}); code != 0 || err != nil {
+		t.Fatalf("signaled attached execution = (%d, %v)", code, err)
+	}
+	if len(sandbox.counts) != 2 || sandbox.counts[1] != [2]int{1, 1} {
+		t.Fatalf("attached Start/Wait lifecycle = %#v", sandbox.counts)
+	}
+	found := false
+	for _, received := range sandbox.signals[1] {
+		if received == syscall.SIGTERM {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("termination accepted during preparation was not replayed: %v", sandbox.signals[1])
+	}
+	if provider.replaceCalls != 0 || !reflect.DeepEqual(provider.records["work"].Auth, auth) {
+		t.Fatal("signaled attached execution replaced identity")
+	}
+	assertNoSessionDirectories(t, sessionsDirectory)
+}
+
+type executionProcess struct {
+	start  func() error
+	wait   func() error
+	signal func(os.Signal) error
+}
+
+func (process *executionProcess) Start() error { return process.start() }
+func (process *executionProcess) Wait() error  { return process.wait() }
+func (process *executionProcess) Signal(received os.Signal) error {
+	if process.signal == nil {
+		return nil
+	}
+	return process.signal(received)
+}
 func (materializer executionMaterializer) Verify(context.Context, launch.VerificationContext) error {
 	return materializer.verifyErr
 }
