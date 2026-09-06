@@ -74,12 +74,16 @@ func TestNativeInstalledACSExecutesLockedCodexToolThroughNamedIdentity(t *testin
 	if err := os.WriteFile(globalAuth, []byte("unrelated-global-auth"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	configureInstalledCandidateKeychainContext(t, home, tools)
+	keychain := configureInstalledCandidateKeychainContext(t, home, tools)
 	buildSyntheticLoginTarget(t, filepath.Join(tools, "codex"))
-	t.Run("installed ACS synthetic login transaction", func(t *testing.T) {
-		runInstalledSyntheticLogin(t, candidate, home, tools, workspace, "interactive")
-		assertInstalledIdentityVisible(t, candidate, home, tools, workspace, "interactive")
-	})
+	if !t.Run("installed ACS synthetic login transaction", func(t *testing.T) {
+		runInstalledSyntheticLogin(t, candidate, home, tools, workspace, "login-proof")
+		assertInstalledIdentityVisible(t, candidate, home, tools, workspace, "login-proof")
+	}) {
+		t.FailNow()
+	}
+	seedInstalledCandidateIdentity(t, candidate, keychain, "interactive")
+	assertInstalledIdentityVisible(t, candidate, home, tools, workspace, "interactive")
 	writeNativeCodexProfile(t, home, "coding", "interactive", "read-write")
 	writeNativeCodexProfile(t, home, "readonly", "interactive", "read-only")
 	grantedTarget := filepath.Join(workspace, "locked-codex-target")
@@ -163,18 +167,31 @@ func runInstalledSyntheticLogin(t *testing.T, candidate, home, tools, workspace,
 	go func() { wait <- command.Wait() }()
 	var runErr error
 	timedOut := false
+	settlementTimedOut := false
 	select {
 	case runErr = <-wait:
 	case <-time.After(20 * time.Second):
 		timedOut = true
 		_ = syscall.Kill(-command.Process.Pid, syscall.SIGKILL)
-		runErr = <-wait
+		select {
+		case runErr = <-wait:
+		case <-time.After(5 * time.Second):
+			_ = command.Process.Kill()
+			select {
+			case runErr = <-wait:
+			case <-time.After(5 * time.Second):
+				settlementTimedOut = true
+			}
+		}
 	}
 	_ = master.Close()
 	select {
 	case <-copyDone:
 	case <-time.After(time.Second):
 		t.Fatal("installed ACS synthetic login capture did not drain")
+	}
+	if settlementTimedOut {
+		t.Fatalf("installed ACS synthetic login process group did not settle after corrected Keychain selection; terminal=%q", output.String())
 	}
 	if timedOut {
 		t.Fatalf("installed ACS synthetic login timed out after corrected Keychain selection; terminal=%q; settlement=%v", output.String(), runErr)
@@ -189,7 +206,31 @@ func runInstalledSyntheticLogin(t *testing.T, candidate, home, tools, workspace,
 	}
 }
 
-func configureInstalledCandidateKeychainContext(t *testing.T, home, tools string) {
+func seedInstalledCandidateIdentity(t *testing.T, candidate, keychain, name string) {
+	t.Helper()
+	comment, payload, err := codexauthresource.PrepareIsolatedKeychainRecordForComposition(
+		codexauthresource.CredentialRef(name), compositionAuth(t),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer codexauthresource.ClearBytes(payload)
+	command := exec.Command(
+		"/usr/bin/security", "add-generic-password",
+		"-a", name,
+		"-s", codexauthresource.KeychainServiceForComposition(),
+		"-j", comment,
+		"-l", "ACS Codex authentication: "+name,
+		"-w", string(payload),
+		"-T", candidate,
+		keychain,
+	)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("seed candidate-scoped synthetic Keychain identity: %v; output=%q", err, output)
+	}
+}
+
+func configureInstalledCandidateKeychainContext(t *testing.T, home, tools string) string {
 	t.Helper()
 	parentDefault, parentDefaultOK := queryNativeKeychainSelection(nil, "default-keychain")
 	parentSearch, parentSearchOK := queryNativeKeychainSelection(nil, "list-keychains")
@@ -229,6 +270,7 @@ func configureInstalledCandidateKeychainContext(t *testing.T, home, tools string
 	if !defaultMatches || !searchMatches {
 		t.Fatal("synthetic HOME did not select the disposable Keychain")
 	}
+	return keychain
 }
 
 func queryNativeKeychainSelection(environment []string, operation string) (string, bool) {
@@ -535,11 +577,23 @@ int main(int argc, char **argv) {
 	if err := os.WriteFile(source, []byte(program), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Remove(destination); err != nil && !os.IsNotExist(err) {
-		t.Fatal("replace temporary target with fixed Codex trampoline")
+	replacement, err := os.CreateTemp(filepath.Dir(destination), ".codex-trampoline-*")
+	if err != nil {
+		t.Fatal("prepare fixed Codex trampoline replacement")
 	}
-	if output, err := exec.Command("/usr/bin/clang", "-Os", source, "-o", destination).CombinedOutput(); err != nil {
+	replacementPath := replacement.Name()
+	if err := replacement.Close(); err != nil {
+		t.Fatal("prepare fixed Codex trampoline replacement")
+	}
+	defer os.Remove(replacementPath)
+	if output, err := exec.Command("/usr/bin/clang", "-Os", source, "-o", replacementPath).CombinedOutput(); err != nil {
 		t.Fatalf("compile fixed Codex trampoline: %v: %s", err, output)
+	}
+	if err := os.Chmod(replacementPath, 0o500); err != nil {
+		t.Fatal("secure fixed Codex trampoline replacement")
+	}
+	if err := os.Rename(replacementPath, destination); err != nil {
+		t.Fatal("atomically install fixed Codex trampoline replacement")
 	}
 }
 
