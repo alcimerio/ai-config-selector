@@ -145,11 +145,11 @@ func (e *Executor) RunDevin(ctx context.Context, request DevinRequest) (exitCode
 	if preflightContext.Err() != nil {
 		return 1, errors.New("Devin launch interrupted before the interactive process started")
 	}
-	process, err := e.prepareDevin(preflightContext, created, request, []string{"--respect-workspace-trust", "false"}, request.Terminal)
+	process, err := e.prepareDevinInteractive(preflightContext, created, request, supervisor)
 	if err != nil {
 		return 1, err
 	}
-	runErr := runDevinAttached(process, supervisor)
+	runErr := runDevinAttachedReserved(process, supervisor)
 	if cleanupErr := launch.AwaitRetainedSessionCleanup(process); cleanupErr != nil {
 		return 1, cleanupPrecedence(runErr, cleanupErr)
 	}
@@ -282,6 +282,22 @@ func (e *Executor) prepareDevin(ctx context.Context, created *session.Session, r
 	return created.RetainUntilProcessDone(process)
 }
 
+// prepareDevinInteractive commits the handoff before a process reference can
+// retain its Session. Signals after that commitment are queued for replay once
+// the prepared target has started; a failed preparation ends the commitment
+// without starting a target.
+func (e *Executor) prepareDevinInteractive(ctx context.Context, created *session.Session, request DevinRequest, supervisor *devinSignalSupervisor) (launch.Process, error) {
+	if err := supervisor.reserveInteractive(); err != nil {
+		return nil, err
+	}
+	process, err := e.prepareDevin(ctx, created, request, []string{"--respect-workspace-trust", "false"}, request.Terminal)
+	if err != nil {
+		supervisor.cancelInteractiveReservation()
+		return nil, err
+	}
+	return process, nil
+}
+
 func copyDevinCredentialIfPresent(source, destination string) error {
 	info, err := os.Stat(source)
 	if os.IsNotExist(err) {
@@ -370,13 +386,32 @@ func (s *devinSignalSupervisor) run() {
 	}
 }
 func (s *devinSignalSupervisor) start(child launch.Process) (bool, error) {
+	if err := s.reserveInteractive(); err != nil {
+		return false, err
+	}
+	return s.startReserved(child)
+}
+
+// reserveInteractive makes a completed preflight's interactive start
+// inevitable if preparation succeeds. It is deliberately private: only the
+// executor may make this lifecycle commitment.
+func (s *devinSignalSupervisor) reserveInteractive() error {
 	s.mutex.Lock()
+	defer s.mutex.Unlock()
 	if s.pending != nil {
-		s.mutex.Unlock()
-		return false, errors.New("Devin launch interrupted before the interactive process started")
+		return errors.New("Devin launch interrupted before the interactive process started")
 	}
 	s.starting = true
+	return nil
+}
+
+func (s *devinSignalSupervisor) cancelInteractiveReservation() {
+	s.mutex.Lock()
+	s.starting = false
 	s.mutex.Unlock()
+}
+
+func (s *devinSignalSupervisor) startReserved(child launch.Process) (bool, error) {
 	err := child.Start()
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
@@ -402,6 +437,13 @@ func (s *devinSignalSupervisor) detach() { s.mutex.Lock(); defer s.mutex.Unlock(
 func (s *devinSignalSupervisor) stop()   { signal.Stop(s.forwarded); close(s.done) }
 func runDevinAttached(process launch.Process, supervisor *devinSignalSupervisor) error {
 	started, startErr := supervisor.start(process)
+	return runDevinStarted(process, supervisor, started, startErr)
+}
+func runDevinAttachedReserved(process launch.Process, supervisor *devinSignalSupervisor) error {
+	started, startErr := supervisor.startReserved(process)
+	return runDevinStarted(process, supervisor, started, startErr)
+}
+func runDevinStarted(process launch.Process, supervisor *devinSignalSupervisor, started bool, startErr error) error {
 	if !started {
 		return startErr
 	}

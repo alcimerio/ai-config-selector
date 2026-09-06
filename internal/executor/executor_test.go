@@ -14,12 +14,14 @@ import (
 	"time"
 
 	"github.com/alcimerio/ai-config-selector/internal/launch"
+	"github.com/alcimerio/ai-config-selector/internal/session"
 	"github.com/alcimerio/ai-config-selector/internal/skills"
 )
 
 type fakeSandbox struct {
 	process              *fakeProcess
 	checkErr, prepareErr error
+	prepares             int
 	request              launch.ProcessRequest
 	check                launch.SandboxCheck
 	inspect              func(launch.ProcessRequest) error
@@ -66,6 +68,7 @@ func (s *fakeSandbox) Check(_ context.Context, check launch.SandboxCheck) error 
 	return s.checkErr
 }
 func (s *fakeSandbox) Prepare(_ context.Context, request launch.ProcessRequest) (launch.Process, error) {
+	s.prepares++
 	s.request = request
 	if s.inspect != nil {
 		if err := s.inspect(request); err != nil {
@@ -90,6 +93,7 @@ type fakeProcess struct {
 	startReturned     chan<- struct{}
 	allowStart        <-chan struct{}
 	signalErr         error
+	signals           int
 }
 
 func (p *fakeProcess) Start() error {
@@ -118,7 +122,10 @@ func (p *fakeProcess) Wait() error {
 	}
 	return p.waitErr
 }
-func (p *fakeProcess) Signal(os.Signal) error       { return p.signalErr }
+func (p *fakeProcess) Signal(os.Signal) error {
+	p.signals++
+	return p.signalErr
+}
 func (p *fakeProcess) CleanupDone() <-chan struct{} { return p.cleanup }
 
 type sequenceSandbox struct {
@@ -270,6 +277,124 @@ func TestDevinSignalSupervisorCancelsEarlySignalBeforeStart(t *testing.T) {
 	p := &fakeProcess{}
 	if err := runDevinAttached(p, s); err == nil || p.starts != 0 || p.waits != 0 {
 		t.Fatalf("early signal result=%v Start/Wait=%d/%d", err, p.starts, p.waits)
+	}
+}
+
+func TestInteractiveReservationRejectsPendingTerminationBeforePrepare(t *testing.T) {
+	supervisor := newDevinSignalSupervisor(func() {})
+	defer supervisor.stop()
+	supervisor.forwarded <- syscall.SIGTERM
+	waitForPendingSignal(t, supervisor, syscall.SIGTERM)
+	sandbox := &fakeSandbox{process: &fakeProcess{}}
+	created, err := session.Create(filepath.Join(t.TempDir(), "sessions"), t.TempDir(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer created.Remove()
+	request := DevinRequest{SessionsDirectory: filepath.Join(t.TempDir(), "unused"), WorkingDirectory: t.TempDir(), Executable: "devin", Terminal: launch.Terminal{Output: io.Discard, ErrorOutput: io.Discard}}
+	if _, err := newExecutor(sandbox).prepareDevinInteractive(context.Background(), created, request, supervisor); err == nil {
+		t.Fatal("interactive preparation succeeded after a pending terminating signal")
+	}
+	if sandbox.prepares != 0 || sandbox.process.starts != 0 || sandbox.process.waits != 0 {
+		t.Fatalf("Prepare/Start/Wait = %d/%d/%d, want 0/0/0", sandbox.prepares, sandbox.process.starts, sandbox.process.waits)
+	}
+}
+
+func TestInteractivePreparationFailureEndsReservationWithoutStart(t *testing.T) {
+	canceled := make(chan struct{})
+	supervisor := newDevinSignalSupervisor(func() { close(canceled) })
+	defer supervisor.stop()
+	sandbox := &fakeSandbox{process: &fakeProcess{}, prepareErr: errors.New("prepare failed")}
+	created, err := session.Create(filepath.Join(t.TempDir(), "sessions"), t.TempDir(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer created.Remove()
+	request := DevinRequest{SessionsDirectory: filepath.Join(t.TempDir(), "unused"), WorkingDirectory: t.TempDir(), Executable: "devin", Terminal: launch.Terminal{Output: io.Discard, ErrorOutput: io.Discard}}
+	if _, err := newExecutor(sandbox).prepareDevinInteractive(context.Background(), created, request, supervisor); err == nil {
+		t.Fatal("interactive preparation unexpectedly succeeded")
+	}
+	if sandbox.prepares != 1 || sandbox.process.starts != 0 || sandbox.process.waits != 0 {
+		t.Fatalf("Prepare/Start/Wait = %d/%d/%d, want 1/0/0", sandbox.prepares, sandbox.process.starts, sandbox.process.waits)
+	}
+	supervisor.forwarded <- syscall.SIGTERM
+	select {
+	case <-canceled:
+	case <-time.After(time.Second):
+		t.Fatal("preparation failure left the interactive reservation active")
+	}
+}
+
+func TestInteractiveSignalAfterRetentionBeforeStartReplaysAndReleasesSession(t *testing.T) {
+	for _, cleanup := range []struct {
+		name       string
+		done       chan struct{}
+		retainLate bool
+	}{
+		{name: "nil cleanup channel"},
+		{name: "open cleanup channel", done: make(chan struct{}), retainLate: true},
+	} {
+		t.Run(cleanup.name, func(t *testing.T) {
+			sessions := filepath.Join(t.TempDir(), "sessions")
+			created, err := session.Create(sessions, t.TempDir(), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			credential := filepath.Join(created.HomeDirectory(), ".local", "share", "devin", "credentials.toml")
+			if err := os.MkdirAll(filepath.Dir(credential), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(credential, []byte("token = \"fixture\"\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			process := &fakeProcess{cleanup: cleanup.done}
+			supervisor := newDevinSignalSupervisor(func() {})
+			defer supervisor.stop()
+			request := DevinRequest{SessionsDirectory: sessions, WorkingDirectory: t.TempDir(), Executable: "devin", Terminal: launch.Terminal{Output: io.Discard, ErrorOutput: io.Discard}}
+
+			retained, err := newExecutor(&fakeSandbox{process: process}).prepareDevinInteractive(context.Background(), created, request, supervisor)
+			if err != nil {
+				t.Fatal(err)
+			}
+			supervisor.forwarded <- syscall.SIGTERM
+			waitForPendingSignal(t, supervisor, syscall.SIGTERM)
+			if err := runDevinAttachedReserved(retained, supervisor); err != nil {
+				t.Fatal(err)
+			}
+			if process.starts != 1 || process.waits != 1 || process.signals != 1 {
+				t.Fatalf("Start/Wait/Signal = %d/%d/%d, want 1/1/1", process.starts, process.waits, process.signals)
+			}
+			if err := created.Remove(); err != nil {
+				t.Fatal(err)
+			}
+			if cleanup.retainLate {
+				if _, err := os.Stat(created.RootDirectory()); err != nil {
+					t.Fatalf("Session was removed before late cleanup proof: %v", err)
+				}
+				close(cleanup.done)
+				eventuallyRemovedSession(t, created.RootDirectory())
+				return
+			}
+			if _, err := os.Stat(created.RootDirectory()); !os.IsNotExist(err) {
+				t.Fatalf("retained credential Session remains after settled target: %v", err)
+			}
+		})
+	}
+}
+
+func eventuallyRemovedSession(t *testing.T, root string) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for {
+		if _, err := os.Stat(root); os.IsNotExist(err) {
+			return
+		} else if err != nil {
+			t.Fatal(err)
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("Session remained after late cleanup proof")
+		}
+		time.Sleep(time.Millisecond)
 	}
 }
 

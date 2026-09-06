@@ -26,6 +26,10 @@ status`, and attaches the fixed interactive Devin invocation only after both
 observations are interpreted. Catalog parsing remains in `devinruntime`; it
 keeps project and built-in treatment, canonical managed identities, and safe
 redacted capability failures without exposing process output or credentials.
+Before that interactive process is prepared or retained, the executor reserves
+its signal-supervisor handoff under the supervisor lock. A termination already
+pending rejects preparation; one received after the reservation is replayed
+only after the required Start, so it cannot strand a retained Session.
 
 `VerifyDevin` is the fixed protected preflight entrypoint for the opt-in
 authenticated smoke. It performs Check, Session creation and materialization,
