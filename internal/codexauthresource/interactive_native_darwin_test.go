@@ -340,11 +340,16 @@ func runInstalledCodexPTY(t *testing.T, candidate, home, tools, workspace, profi
 	if !waitNativeCaptureContainsAfter(&output, resizeOffset, "\x1b[1;43r", 2*time.Second) {
 		t.Fatalf("real Codex TUI did not render the resized 43-row terminal geometry; terminal=%q", output.String())
 	}
-	// Locked Codex enables the Kitty keyboard protocol's disambiguation flag
-	// (CSI > 7 u), so Enter is encoded as Unicode codepoint 13 rather than a
-	// legacy carriage return once the TUI owns this PTY.
-	if _, err := master.Write([]byte("Use the shell tool exactly once as requested by the fixture.\x1b[13u")); err != nil {
+	// Emulate a real terminal paste and let Codex's 120ms paste-burst window
+	// settle before sending the separately encoded enhanced Enter key.
+	if _, err := master.Write([]byte("\x1b[200~Use the shell tool exactly once as requested by the fixture.\x1b[201~")); err != nil {
 		t.Fatalf("write interactive input: %v; terminal=%q", err, output.String())
+	}
+	if !waitNativeCaptureStable(&output, 2*time.Second) {
+		t.Fatalf("real Codex TUI did not settle the bracketed prompt paste; terminal=%q", output.String())
+	}
+	if _, err := master.Write([]byte("\x1b[13u")); err != nil {
+		t.Fatalf("submit interactive input: %v; terminal=%q", err, output.String())
 	}
 	select {
 	case <-fixture.completed:
