@@ -317,10 +317,10 @@ func TestDryRunReportsResolvedGlobalAndInheritedProjectSkillBundlesWithoutCreati
 
 	for _, detail := range []string{
 		`Dry run for Profile "reviews"`,
-		"Selected global Skill Bundles managed by ACS:",
-		"review [devin-config]",
-		"source: " + globalBundle,
-		"Session: <session>/home/.config/devin/skills/review",
+		"Selected common Skill Bundles:",
+		"identity: devin-config:review",
+		"common: <session>/home/.acs/common/v1/skills/devin-config/review",
+		"target projection: <session>/home/.config/devin/skills/review",
 		"Project-local Skill Bundles inherited by Devin (not managed by ACS):",
 		"project-review " + projectBundle,
 		"No Session was created and Devin was not started.",
@@ -673,7 +673,7 @@ func TestLaunchRejectsProfileForAnotherTargetBeforeCreatingSession(t *testing.T)
 	if exitCode := application.Run(context.Background(), []string{"devin", "--profile", "other-cli"}); exitCode == 0 {
 		t.Fatal("launch accepted a Profile for another CLI")
 	}
-	if !strings.Contains(stderr.String(), `Profile "other-cli" targets "codex", not devin`) {
+	if !strings.Contains(stderr.String(), `Stored Profile contains unknown or unsupported content`) {
 		t.Fatalf("wrong-target error is unclear: %s", stderr.String())
 	}
 	if _, err := os.Stat(sessionsDirectory); !os.IsNotExist(err) {
@@ -695,7 +695,7 @@ func TestLaunchRejectsUnsupportedProfileSchemaVersionBeforeCreatingSession(t *te
 	}
 	if err := os.WriteFile(
 		filepath.Join(profilesDirectory, "future.json"),
-		[]byte(`{"version":3,"name":"future","target":"devin","categories":{}}`),
+		[]byte(`{"version":4,"name":"future","common":{},"overlays":{}}`),
 		0o600,
 	); err != nil {
 		t.Fatal(err)
@@ -712,7 +712,7 @@ func TestLaunchRejectsUnsupportedProfileSchemaVersionBeforeCreatingSession(t *te
 	if exitCode := application.Run(context.Background(), []string{"devin", "--profile", "future"}); exitCode == 0 {
 		t.Fatal("launch accepted an unsupported Profile schema version")
 	}
-	if !strings.Contains(stderr.String(), `decode Profile "future": unsupported schema version 3`) {
+	if !strings.Contains(stderr.String(), `Stored Profile contains unknown or unsupported content`) {
 		t.Fatalf("unsupported-version error is unclear: %s", stderr.String())
 	}
 	if _, err := os.Stat(sessionsDirectory); !os.IsNotExist(err) {
@@ -809,7 +809,15 @@ func TestDryRunRejectsMissingMovedAndAmbiguousSkillReferences(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			fixture := newStaticCategoryFixture(t, staticCatalog{bundles: test.catalog})
 			profiles := profile.NewStore(t.TempDir(), fixture.registry)
-			if _, err := profiles.Create(devin.NewSkillsProfile(test.name, []skills.SkillReference{test.reference})); err != nil {
+			draft := fixture.registry.NewDraft()
+			if err := category.SetSelection(&draft, fixture.binding, []skills.SkillReference{test.reference}); err != nil {
+				t.Fatal(err)
+			}
+			candidate, err := fixture.registry.NewProfile(test.name, draft)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := profiles.Create(candidate); err != nil {
 				t.Fatal(err)
 			}
 			var stderr bytes.Buffer
@@ -878,8 +886,8 @@ func TestCreateProfileSelectsSameNamedSkillBundlesIndependently(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load created Profile: %v", err)
 	}
-	if saved.Version != profile.CurrentVersion {
-		t.Fatalf("saved Profile version = %d, want %d", saved.Version, profile.CurrentVersion)
+	if saved.Version != profile.LegacyCurrentVersion {
+		t.Fatalf("saved generic test Profile version = %d, want %d", saved.Version, profile.LegacyCurrentVersion)
 	}
 	references, err := devin.SkillReferences(saved)
 	if err != nil {

@@ -67,6 +67,12 @@ func (app App) inspectProfiles(inv invocation) int {
 				continue
 			}
 			fmt.Fprintf(app.Output, "    stored version: %d; target: %s\n", *entry.StoredVersion, *entry.Target)
+			if entry.Workspace != nil {
+				fmt.Fprintf(app.Output, "    common workspace access: %s\n", safeTerminalText(*entry.Workspace))
+			}
+			for _, overlay := range entry.Overlays {
+				fmt.Fprintf(app.Output, "    overlay %s: version %d; execution support: %s\n", safeTerminalText(overlay.ID), *overlay.Version, safeTerminalText(overlay.Support))
+			}
 			for _, category := range entry.Categories {
 				schema := "legacy (no category envelope)"
 				if category.SchemaVersion != nil {

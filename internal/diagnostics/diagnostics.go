@@ -29,7 +29,7 @@ type Result struct {
 
 func result(operation, target string) Result {
 	r := Result{FormatVersion: 1, Operation: operation, Target: target, Checks: []Check{}}
-	for _, id := range []string{"profile.structure", "profile.sources", "host.platform", "backend.file", "executable.availability", "executable.version", "authentication", "runtime.enforcement"} {
+	for _, id := range []string{"profile.structure", "profile.sources", "profile.overlays", "profile.authority", "host.platform", "backend.file", "executable.availability", "executable.version", "authentication", "runtime.enforcement"} {
 		r.Checks = append(r.Checks, Check{id, "unchecked", "not_requested", "This fact was not requested by this command."})
 	}
 	r.set("executable.version", "unchecked", "not_probed", "Executable presence does not establish version compatibility; check the documented workflow requirements.")
@@ -146,8 +146,25 @@ func Validate(name string, home func() (string, error)) Result {
 		return r
 	}
 	r.set("profile.structure", "pass", "valid_structure", "Supported stored Profile structure; no migration or persistence write occurred.")
+	entry := inspected.Entries[0]
+	if entry.Workspace == nil {
+		r.set("profile.authority", "pass", "legacy_workspace_write", "Legacy workspace write remains effective until an explicit previewed migration or later edit changes it.")
+	} else {
+		r.set("profile.authority", "pass", "explicit_common_authority", "Stored common workspace authority is structurally supported; native enforcement remains unchecked.")
+	}
+	if len(entry.Overlays) == 0 {
+		r.set("profile.overlays", "unchecked", "legacy_implicit_target", "Legacy target compatibility is structural only; migrate explicitly before using v3 overlays.")
+	} else {
+		status, code, next := "pass", "supported_inactive_overlays", "Known overlay structure is supported; this passive command selected and executed no overlay."
+		for _, overlay := range entry.Overlays {
+			if overlay.Support != "supported" {
+				status, code, next = "unchecked", "inactive_overlay_unknown", "Unknown inactive overlay data was inspected structurally but not selected, executed, or rewritten."
+			}
+		}
+		r.set("profile.overlays", status, code, next)
+	}
 	references := []skills.SkillReference{}
-	for _, category := range inspected.Entries[0].Categories {
+	for _, category := range entry.Categories {
 		references = append(references, category.Selection...)
 	}
 	catalog, err := devin.DiscoverSelectedSkillCatalog(context.Background(), directory, references)

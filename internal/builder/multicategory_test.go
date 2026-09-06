@@ -273,7 +273,7 @@ func TestUnrelatedCategoryCompletesBuilderStoreResolutionAndContributionLifecycl
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(plan.Sections) != 2 || plan.Sections[0].Items[0].Label != "review" || plan.Sections[1].Items[0].Label != "beta" {
+	if len(plan.Sections) != 3 || plan.Sections[0].Title != "Resolved execution authority:" || plan.Sections[1].Items[0].Label != "review" || plan.Sections[2].Items[0].Label != "beta" {
 		t.Fatalf("ordered contributions = %#v", plan.Sections)
 	}
 	if err := resolved.Materialize(t.TempDir()); err != nil {

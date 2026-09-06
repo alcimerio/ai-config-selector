@@ -230,11 +230,15 @@ state. If compatibility is unknown, stop after `version` and use the owning
 compatible binary for inspection and recovery. An old backup must not overwrite
 new-format live data as a routine fix.
 
-Current source still writes Profile envelope v2 with Skills category schema 1.
+Current source writes Profile envelope v3 with independently versioned common
+Skills/workspace payloads and explicit target overlays. New Profiles default to
+read-only workspace authority; legacy v1/v2 remains writable until explicit
+migration or a later supported edit changes that intent.
 Passive list/show/validate and load do not rewrite legacy files. Confirmed edit,
 clone and rename show the exact canonical result and explicitly preview any v1
 `skillReferences` to v2 `categories.skills` conversion; clone leaves its source
 unchanged. A v2 rewrite can also change ordering, defaults and formatting. The
+separate `acs profile migrate NAME` command adopts v3 and common material paths.
 transaction journal's format version is separate: recovery settles recorded bytes
 without decoding or migrating them. Installing or switching the binary changes
 none of these representations. See the [mutation guide](profile-mutations.md).

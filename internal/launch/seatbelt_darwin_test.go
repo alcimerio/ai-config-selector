@@ -31,6 +31,31 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+func TestSeatbeltWorkspaceWriteRuleFollowsResolvedAccess(t *testing.T) {
+	base := validatedProcessRequest{workspace: "/private/tmp/workspace", sessionDirectory: "/private/tmp/session", executable: "/bin/zsh"}
+	for _, test := range []struct {
+		access WorkspaceAccess
+		want   bool
+	}{{WorkspaceAccessReadOnly, false}, {WorkspaceAccessReadWrite, true}} {
+		request := base
+		request.workspaceAccess = test.access
+		policy, _, err := buildSeatbeltPolicy(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		start := strings.Index(policy, "; Writes are limited")
+		end := strings.Index(policy[start:], "; Normal outbound")
+		writeRules := policy[start : start+end]
+		present := strings.Contains(writeRules, `(param "WORKSPACE")`)
+		if present != test.want {
+			t.Fatalf("access %q workspace write rule present=%v\n%s", test.access, present, writeRules)
+		}
+		if !strings.Contains(writeRules, `(param "SESSION")`) {
+			t.Fatalf("access %q removed Session writes", test.access)
+		}
+	}
+}
+
 func TestSeatbeltPolicyIsDefaultDenyAndUsesParametersForValidatedPaths(t *testing.T) {
 	request := validatedProcessRequest{
 		workspace:                  `/private/tmp/workspace-\"quoted`,

@@ -10,6 +10,7 @@ import (
 
 	"github.com/alcimerio/ai-config-selector/internal/builder"
 	"github.com/alcimerio/ai-config-selector/internal/category"
+	"github.com/alcimerio/ai-config-selector/internal/commonprofile"
 	"github.com/alcimerio/ai-config-selector/internal/devinruntime"
 	"github.com/alcimerio/ai-config-selector/internal/executor"
 	"github.com/alcimerio/ai-config-selector/internal/launch"
@@ -55,13 +56,14 @@ type devinExecutor interface {
 }
 
 type Adapter struct {
-	binaryPath      string
-	existingHomeDir string
-	categories      *category.Registry
-	editors         *builder.EditorRegistry
-	skillsCategory  category.Binding[[]skills.SkillReference, []skills.SkillBundle, skillsContribution]
-	executor        devinExecutor
-	runtimeInputs   []string
+	binaryPath        string
+	existingHomeDir   string
+	categories        *category.Registry
+	editors           *builder.EditorRegistry
+	skillsCategory    commonprofile.SkillsBinding
+	workspaceCategory commonprofile.WorkspaceBinding
+	executor          devinExecutor
+	runtimeInputs     []string
 }
 
 type SkillBundle = skills.SkillBundle
@@ -103,12 +105,13 @@ func newAdapter(config Config) (*Adapter, error) {
 		runtimeInputs:   append([]string(nil), config.RuntimeInputs...),
 	}
 	adapter.executor = executor.New()
-	registry, binding, err := newCategoryRegistry(adapter)
+	registry, binding, workspaceBinding, err := newCategoryRegistry(adapter)
 	if err != nil {
 		return nil, fmt.Errorf("create Devin Adapter categories: %w", err)
 	}
 	adapter.categories = registry
 	adapter.skillsCategory = binding
+	adapter.workspaceCategory = workspaceBinding
 	editors, err := newEditorRegistry(adapter)
 	if err != nil {
 		return nil, fmt.Errorf("create Devin Adapter visual editors: %w", err)

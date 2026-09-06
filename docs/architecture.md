@@ -163,7 +163,8 @@ failure and keeps asynchronous quarantine ownership until settlement succeeds.
 Profiles live under `~/.acs/profiles` with mode 0600 in mode-0700 directories.
 Creation is atomic and refuses replacement. Version-1 Profiles are normalized
 in memory without rewriting their files. Category schemas evolve independently
-inside the version-2 envelope; unknown categories and unsupported schema
+inside legacy version-2 envelopes and independently versioned common payloads
+inside version 3; unknown capabilities and unsupported schema
 versions fail strict resolution.
 
 v0.4.0 preserves the existing Profile format and Devin command grammar. It adds

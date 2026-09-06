@@ -129,7 +129,7 @@ func TestProfileStoreUsesRegisteredLegacyDecoderWithoutRewritingSource(t *testin
 	if err != nil {
 		t.Fatalf("load legacy Profile: %v", err)
 	}
-	if loaded.Version != profile.CurrentVersion || string(loaded.Categories["texts"].Selection) != `{"values":["alpha"]}` {
+	if loaded.Version != profile.LegacyCurrentVersion || loaded.SourceVersion != 1 || string(loaded.Categories["texts"].Selection) != `{"values":["alpha"]}` {
 		t.Fatalf("normalized legacy Profile = %#v", loaded)
 	}
 	afterLoad, err := os.ReadFile(path)

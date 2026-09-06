@@ -10,6 +10,7 @@ require (
 	github.com/creack/pty v1.1.24
 	github.com/ebitengine/purego v0.10.0
 	golang.org/x/sys v0.46.0
+	golang.org/x/text v0.30.0
 )
 
 require (

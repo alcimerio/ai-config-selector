@@ -63,8 +63,12 @@ The preview explicitly discloses stored v1 → v2 conversion, including
 `skillReferences` becoming `categories.skills` with category schema 1, missing
 category defaults, selection sorting, field order, indentation and final newline.
 It also discloses canonicalization of supported v2 representations. Even an
-unchanged legacy selection requires this preview; there is no silent no-op
-migration and no new persisted Profile schema. The commit closure owns exactly
+unchanged legacy selection requires this preview. Ordinary legacy mutations
+remain canonical v2 with writable workspace authority and old placement. The
+separate `acs profile migrate NAME` preview adopts v3, reports retained or
+reduced authority plus common/Devin projection paths, and uses the same
+revision-bound Replace transaction. Unknown inactive v3 overlays refuse
+rewriting because re-encoding is not lossless preservation. The commit closure owns exactly
 the previewed bytes and captured expected revisions, rather than regenerating
 bytes from later mutable editor state.
 

@@ -18,9 +18,41 @@ import (
 	"testing"
 	"time"
 
+	"github.com/alcimerio/ai-config-selector/internal/authority"
 	"github.com/alcimerio/ai-config-selector/internal/launch"
 	"github.com/creack/pty"
 )
+
+func TestNativeShellEnforcesResolvedWorkspaceModes(t *testing.T) {
+	skipNativeShellTestBinaryUnderRace(t)
+	for _, test := range []struct {
+		name     string
+		access   launch.WorkspaceAccess
+		wantFile bool
+	}{
+		{"read-only denies workspace write", launch.WorkspaceAccessReadOnly, false},
+		{"explicit coding grant permits workspace write", launch.WorkspaceAccessReadWrite, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			workspace := filepath.Join(root, "workspace")
+			if err := os.Mkdir(workspace, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			commands := "set -u\nprintf session > \"$HOME/session-write\"\nif printf workspace > ./workspace-write 2>/dev/null; then print -r -- workspace-written; else print -r -- workspace-denied; fi\nprint -r -- session-written\nexit 0\n"
+			var output bytes.Buffer
+			plan := authority.New([]authority.Contribution{{ID: "fixture", Value: shellSelection{marker: "selected"}}}, test.access, 3, "")
+			code, err := New().Launch(context.Background(), filepath.Join(root, "sessions"), workspace, plan, launch.Terminal{Input: strings.NewReader(commands), Output: &output, ErrorOutput: &output})
+			if err != nil || code != 0 || !strings.Contains(output.String(), "session-written") {
+				t.Fatalf("native mode = (%d, %v), output=%q", code, err, output.String())
+			}
+			_, statErr := os.Stat(filepath.Join(workspace, "workspace-write"))
+			if (statErr == nil) != test.wantFile {
+				t.Fatalf("workspace file state = %v, wantFile=%v; output=%q", statErr, test.wantFile, output.String())
+			}
+		})
+	}
+}
 
 const nativeShellPTYHarnessEnvironment = "ACS_SANDBOX_SHELL_NATIVE_PTY_HARNESS"
 

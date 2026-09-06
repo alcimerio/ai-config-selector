@@ -747,6 +747,11 @@ func buildSeatbeltPolicy(request validatedProcessRequest) (string, []string, err
 		definitions = append(definitions, "-D"+name+"="+path)
 		fmt.Fprintf(&runtimeProbeRules, "\n  (literal (param %q))", name)
 	}
+	var workspaceWriteRule string
+	if workspaceWritable(request.workspaceAccess) {
+		workspaceWriteRule = `
+  (literal (param "WORKSPACE")) (subpath (param "WORKSPACE"))`
+	}
 	policy := `(version 1)
 (deny default)
 
@@ -786,9 +791,10 @@ func buildSeatbeltPolicy(request validatedProcessRequest) (string, []string, err
 ; it does not permit reading any directory's contents.
 (allow file-read-metadata` + executableAncestorRules.String() + `)
 
-; Writes are limited to the selected workspace and leased Session.
+; Writes are limited to the leased Session and, only when explicitly granted,
+; the selected workspace.
 (allow file-write*
-  (literal (param "WORKSPACE")) (subpath (param "WORKSPACE"))
+` + workspaceWriteRule + `
   (literal (param "SESSION")) (subpath (param "SESSION")))
 
 ; Normal outbound IP traffic and the macOS DNS resolver are available. Other
