@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/alcimerio/ai-config-selector/internal/codexauth"
 	"github.com/alcimerio/ai-config-selector/internal/codexauthresource"
@@ -151,7 +152,8 @@ func compositionAuth(t *testing.T) []byte {
 	}
 	claims := base64.RawURLEncoding.EncodeToString(claimsJSON)
 	auth, err := json.Marshal(map[string]any{
-		"auth_mode": "chatgpt",
+		"auth_mode":    "chatgpt",
+		"last_refresh": time.Now().UTC().Format(time.RFC3339Nano),
 		"tokens": map[string]any{
 			"id_token": "a." + claims + ".c", "access_token": "synthetic-access",
 			"refresh_token": "synthetic-refresh", "account_id": "synthetic-workspace",
