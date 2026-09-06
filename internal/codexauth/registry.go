@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sort"
 
+	"github.com/alcimerio/ai-config-selector/internal/codexauthresource"
 	"github.com/alcimerio/ai-config-selector/internal/launch"
 	"github.com/alcimerio/ai-config-selector/internal/session"
 )
@@ -86,6 +87,7 @@ type LoginRequest struct {
 // Registry is the deep named-auth module used by the CLI. Provider records,
 // login Sessions, credential bytes, and identity locks stay behind this seam.
 type Registry struct {
+	resources         *codexauthresource.Store
 	provider          credentialProvider
 	login             loginRunner
 	locks             identityLocker
@@ -134,14 +136,12 @@ func New(config Config) (*Registry, error) {
 	if err != nil {
 		return nil, errors.New("create Codex authentication registry: authentication quarantine directory must be private")
 	}
+	resources, err := codexauthresource.New(locksDirectory, quarantineDirectory)
+	if err != nil {
+		return nil, errors.New("create Codex authentication registry: authentication resource directories must be private")
+	}
 	locks := newFileIdentityLocker(locksDirectory)
-	if locks.initErr != nil {
-		return nil, errors.New("create Codex authentication registry: authentication locks directory must be private")
-	}
 	quarantine := newFileBindingQuarantine(quarantineDirectory)
-	if quarantine.initErr != nil {
-		return nil, errors.New("create Codex authentication registry: authentication quarantine directory must be private")
-	}
 	if filepath.Clean(config.SessionsDirectory) == filepath.Join(requestedACSHome, "sessions") {
 		config.SessionsDirectory = filepath.Join(acsHome, "sessions")
 	}
@@ -164,6 +164,7 @@ func New(config Config) (*Registry, error) {
 		WorkingDirectory: config.WorkingDirectory, PrivateRoot: acsHome,
 	}, sandbox)
 	registry.quarantine = quarantine
+	registry.resources = resources
 	registry.sessionsDirectory = config.SessionsDirectory
 	registry.workingDirectory = config.WorkingDirectory
 	return registry, nil
@@ -181,6 +182,9 @@ func newRegistry(provider credentialProvider, login loginRunner, locks identityL
 
 // Login creates one new identity. An existing name is never replaced.
 func (registry *Registry) Login(ctx context.Context, request LoginRequest) (IdentityMetadata, error) {
+	if registry.resources != nil {
+		return registry.loginWithResource(ctx, request)
+	}
 	name, err := ParseCredentialRef(request.Name)
 	if err != nil {
 		return IdentityMetadata{}, err
