@@ -85,7 +85,6 @@ func TestSeatbeltPolicyIsDefaultDenyAndUsesParametersForValidatedPaths(t *testin
 		`(literal "/dev/tty")`, `(target same-sandbox)`,
 		"(allow mach-lookup\n  (global-name \"com.apple.SecurityServer\"))",
 		"(allow mach-lookup\n  (global-name \"com.apple.trustd.agent\"))",
-		"(allow mach-lookup\n  (global-name \"com.apple.sandboxd\"))",
 		"(allow file-read-metadata\n  (literal (param \"EXECUTABLE_ANCESTOR_0\"))\n  (literal (param \"EXECUTABLE_ANCESTOR_1\"))\n  (literal (param \"EXECUTABLE_ANCESTOR_2\"))\n  (literal (param \"EXECUTABLE_ANCESTOR_3\")))",
 		"(allow file-read-metadata\n  (literal (param \"SESSION_ANCESTOR_0\"))\n  (literal (param \"SESSION_ANCESTOR_1\"))\n  (literal (param \"SESSION_ANCESTOR_2\")))",
 	} {
@@ -452,35 +451,6 @@ func TestSeatbeltProductionSessionPrefixRequiresOnlySessionMetadata(t *testing.T
 			}
 			if got := output.String(); !strings.Contains(got, test.want) {
 				t.Fatalf("Session prefix validation output = %q, want semantic outcome %q", got, test.want)
-			}
-		})
-	}
-}
-
-func TestSeatbeltProductionNestedSandboxRequiresOnlySandboxd(t *testing.T) {
-	skipSeatbeltNativeTestBinaryUnderRace(t)
-	request, output := seatbeltProductionTLSRequest(t)
-	request.Arguments = []string{"-test.run=TestSeatbeltHelperProcess", "--", "nested-sandbox"}
-
-	for _, test := range []struct {
-		name    string
-		omitted string
-		want    string
-	}{
-		{name: "restored sandboxd permits nested Seatbelt application", want: "nested-sandbox-ready"},
-		{name: "removing sandboxd blocks nested Seatbelt application", omitted: "sandboxd", want: "nested-sandbox-unavailable"},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			output.Reset()
-			err := seatbeltRunProductionTLS(seatbeltProductionTLSSandbox(t, test.omitted), request)
-			if test.omitted == "" && err != nil {
-				t.Fatalf("nested Seatbelt application failed: %v; output=%q", err, output.String())
-			}
-			if test.omitted != "" && err == nil {
-				t.Fatalf("nested Seatbelt application succeeded without %s; output=%q", test.omitted, output.String())
-			}
-			if got := output.String(); !strings.Contains(got, test.want) {
-				t.Fatalf("nested Seatbelt output = %q, want semantic outcome %q", got, test.want)
 			}
 		})
 	}
@@ -2394,14 +2364,6 @@ func TestSeatbeltHelperProcess(t *testing.T) {
 		}
 		fmt.Fprintln(os.Stdout, "session-prefix-metadata")
 		os.Exit(0)
-	case "nested-sandbox":
-		command := exec.Command("/usr/bin/sandbox-exec", "-p", "(version 1)\n(allow default)\n", "/usr/bin/true")
-		if output, err := command.CombinedOutput(); err != nil {
-			fmt.Fprintf(os.Stderr, "nested-sandbox-unavailable: %s", output)
-			os.Exit(125)
-		}
-		fmt.Fprintln(os.Stdout, "nested-sandbox-ready")
-		os.Exit(0)
 	case "grandchild":
 		if _, err := os.ReadFile(arguments[1]); !isSeatbeltPermission(err) {
 			os.Exit(72)
@@ -3009,9 +2971,6 @@ func seatbeltProductionTLSSandbox(t *testing.T, omitted string) ProcessSandbox {
 		case "trustd agent":
 			const rule = "(allow mach-lookup\n  (global-name \"com.apple.trustd.agent\"))\n"
 			policy, err = seatbeltRemovePolicyTextExactlyOnce(policy, rule, "trustd agent rule")
-		case "sandboxd":
-			const rule = "(allow mach-lookup\n  (global-name \"com.apple.sandboxd\"))\n"
-			policy, err = seatbeltRemovePolicyTextExactlyOnce(policy, rule, "sandboxd rule")
 		default:
 			return "", nil, fmt.Errorf("unknown omitted TLS rule %q", omitted)
 		}

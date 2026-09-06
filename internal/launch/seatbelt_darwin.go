@@ -816,15 +816,11 @@ func buildSeatbeltPolicy(request validatedProcessRequest) (string, []string, err
   (literal "/private/var/run/mDNSResponder"))
 
 ; Security.framework reads system trust settings and evaluates platform TLS
-; through these exact Mach services. The locked Codex target applies its own
-; narrower Seatbelt profile to tool processes through sandboxd. All other Mach
-; services remain denied.
+; through these exact Mach services. All other Mach services remain denied.
 (allow mach-lookup
   (global-name "com.apple.SecurityServer"))
 (allow mach-lookup
   (global-name "com.apple.trustd.agent"))
-(allow mach-lookup
-  (global-name "com.apple.sandboxd"))
 
 ; Preserve the invoking terminal, raw mode, and resize operations.
 (allow pseudo-tty)
