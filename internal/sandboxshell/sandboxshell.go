@@ -10,8 +10,8 @@ import (
 	"syscall"
 
 	"github.com/alcimerio/ai-config-selector/internal/category"
+	"github.com/alcimerio/ai-config-selector/internal/executor"
 	"github.com/alcimerio/ai-config-selector/internal/launch"
-	"github.com/alcimerio/ai-config-selector/internal/session"
 )
 
 const systemShell = "/bin/zsh"
@@ -19,7 +19,8 @@ const systemShell = "/bin/zsh"
 // Launcher owns the target-independent Profile materialization and launches
 // the fixed system shell through the native sandbox selected by ACS.
 type Launcher struct {
-	sandbox launch.ProcessSandbox
+	sandbox  launch.ProcessSandbox
+	executor *executor.Executor
 }
 
 // New returns the production sandbox-shell launcher. The executable and
@@ -29,7 +30,7 @@ func New() *Launcher {
 }
 
 func newLauncher(sandbox launch.ProcessSandbox) *Launcher {
-	return &Launcher{sandbox: sandbox}
+	return &Launcher{sandbox: sandbox, executor: executor.New(sandbox)}
 }
 
 // Launch creates a credential-free Session, materializes the selected Profile,
@@ -41,44 +42,8 @@ func (launcher *Launcher) Launch(
 	resolved category.ResolvedProfile,
 	terminal launch.Terminal,
 ) (exitCode int, resultErr error) {
-	if err := launcher.sandbox.Check(ctx, launch.SandboxCheck{
-		Workspace: workingDirectory, SessionsDirectory: sessionsDirectory, Executable: systemShell,
-	}); err != nil {
-		return 1, err
-	}
-
-	createdSession, err := session.Create(sessionsDirectory, workingDirectory, resolved)
+	_, err := launcher.executor.Run(ctx, executor.Request{SessionsDirectory: sessionsDirectory, WorkingDirectory: workingDirectory, Materializer: resolved, Recipe: executor.Recipe{Executable: systemShell, Arguments: []string{"-f"}}, Terminal: terminal})
 	if err != nil {
-		return 1, sanitizeError(err)
-	}
-	defer func() {
-		if err := createdSession.Remove(); err != nil {
-			resultErr = sanitizeError(errors.Join(resultErr, err))
-			exitCode = 1
-		}
-	}()
-
-	process, err := launcher.sandbox.Prepare(ctx, launch.ProcessRequest{
-		Workspace:          createdSession.WorkingDirectory(),
-		SessionsDirectory:  createdSession.SessionsDirectory(),
-		SessionDirectory:   createdSession.RootDirectory(),
-		SessionHome:        createdSession.HomeDirectory(),
-		TemporaryDirectory: createdSession.TemporaryDirectory(),
-		Executable:         systemShell,
-		Arguments:          []string{"-f"},
-		Terminal:           terminal,
-	})
-	if err != nil {
-		return 1, sanitizeError(err)
-	}
-	process, err = createdSession.RetainUntilProcessDone(process)
-	if err != nil {
-		return 1, sanitizeError(err)
-	}
-	if err := launch.RunAttached(process); err != nil {
-		if cleanupErr := launch.AwaitRetainedSessionCleanup(process); cleanupErr != nil {
-			return 1, sanitizeError(cleanupErr)
-		}
 		var targetExit *exec.ExitError
 		if errors.As(err, &targetExit) {
 			if status, ok := targetExit.Sys().(syscall.WaitStatus); ok && status.Signaled() {
