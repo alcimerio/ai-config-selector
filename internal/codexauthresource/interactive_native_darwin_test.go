@@ -74,7 +74,7 @@ func TestNativeInstalledACSExecutesLockedCodexToolThroughNamedIdentity(t *testin
 	if err := os.WriteFile(globalAuth, []byte("unrelated-global-auth"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	keychain := configureInstalledCandidateKeychainContext(t, home, tools)
+	configureInstalledCandidateKeychainContext(t, home, tools)
 	buildSyntheticLoginTarget(t, filepath.Join(tools, "codex"))
 	if !t.Run("installed ACS synthetic login transaction", func(t *testing.T) {
 		runInstalledSyntheticLogin(t, candidate, home, tools, workspace, "login-proof")
@@ -82,10 +82,8 @@ func TestNativeInstalledACSExecutesLockedCodexToolThroughNamedIdentity(t *testin
 	}) {
 		t.FailNow()
 	}
-	seedInstalledCandidateIdentity(t, candidate, keychain, "interactive")
-	assertInstalledIdentityVisible(t, candidate, home, tools, workspace, "interactive")
-	writeNativeCodexProfile(t, home, "coding", "interactive", "read-write")
-	writeNativeCodexProfile(t, home, "readonly", "interactive", "read-only")
+	writeNativeCodexProfile(t, home, "coding", "login-proof", "read-write")
+	writeNativeCodexProfile(t, home, "readonly", "login-proof", "read-only")
 	grantedTarget := filepath.Join(workspace, "locked-codex-target")
 	copyLockedTarget(t, target, grantedTarget)
 	outside, err := os.MkdirTemp("/tmp", "acs-codex-unrelated-")
@@ -206,31 +204,7 @@ func runInstalledSyntheticLogin(t *testing.T, candidate, home, tools, workspace,
 	}
 }
 
-func seedInstalledCandidateIdentity(t *testing.T, candidate, keychain, name string) {
-	t.Helper()
-	comment, payload, err := codexauthresource.PrepareIsolatedKeychainRecordForComposition(
-		codexauthresource.CredentialRef(name), compositionAuth(t),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer codexauthresource.ClearBytes(payload)
-	command := exec.Command(
-		"/usr/bin/security", "add-generic-password",
-		"-a", name,
-		"-s", codexauthresource.KeychainServiceForComposition(),
-		"-j", comment,
-		"-l", "ACS Codex authentication: "+name,
-		"-w", string(payload),
-		"-T", candidate,
-		keychain,
-	)
-	if output, err := command.CombinedOutput(); err != nil {
-		t.Fatalf("seed candidate-scoped synthetic Keychain identity: %v; output=%q", err, output)
-	}
-}
-
-func configureInstalledCandidateKeychainContext(t *testing.T, home, tools string) string {
+func configureInstalledCandidateKeychainContext(t *testing.T, home, tools string) {
 	t.Helper()
 	parentDefault, parentDefaultOK := queryNativeKeychainSelection(nil, "default-keychain")
 	parentSearch, parentSearchOK := queryNativeKeychainSelection(nil, "list-keychains")
@@ -270,7 +244,6 @@ func configureInstalledCandidateKeychainContext(t *testing.T, home, tools string
 	if !defaultMatches || !searchMatches {
 		t.Fatal("synthetic HOME did not select the disposable Keychain")
 	}
-	return keychain
 }
 
 func queryNativeKeychainSelection(environment []string, operation string) (string, bool) {
@@ -350,6 +323,7 @@ func runInstalledCodexPTY(t *testing.T, candidate, home, tools, workspace, profi
 	select {
 	case err := <-wait:
 		finished = true
+		logRecentNativeSandboxDenials(t)
 		t.Fatalf("installed ACS or locked target exited before interactive input: %v; terminal=%q", err, output.String())
 	case <-time.After(1500 * time.Millisecond):
 	}
@@ -363,6 +337,7 @@ func runInstalledCodexPTY(t *testing.T, candidate, home, tools, workspace, profi
 	case <-completed:
 	case <-time.After(30 * time.Second):
 		_ = command.Process.Kill()
+		logRecentNativeSandboxDenials(t)
 		t.Fatalf("real Codex did not complete two fixture requests; terminal=%q", output.String())
 	}
 	time.Sleep(500 * time.Millisecond)
@@ -380,6 +355,23 @@ func runInstalledCodexPTY(t *testing.T, candidate, home, tools, workspace, profi
 		t.Fatal("interactive Codex did not terminate after PTY cancellation")
 	}
 	return output.String()
+}
+
+func logRecentNativeSandboxDenials(t *testing.T) {
+	t.Helper()
+	command := exec.Command(
+		"/usr/bin/log", "show", "--last", "2m", "--style", "compact",
+		"--predicate", `process == "sandboxd" AND eventMessage CONTAINS[c] "deny"`,
+	)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Logf("sandbox denial diagnostic unavailable: %v", err)
+		return
+	}
+	if len(output) > 16<<10 {
+		output = output[len(output)-(16<<10):]
+	}
+	t.Logf("recent sandbox denial diagnostic:\n%s", output)
 }
 
 type nativeSafeCapture struct {
