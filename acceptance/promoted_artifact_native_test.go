@@ -195,7 +195,6 @@ func TestPromotedArtifactSharedTargetConformance(t *testing.T) {
 				"access: " + access,
 				filepath.Join("<session>", "home", ".acs", "common", "v1", "skills", "devin-config", "review"),
 				filepath.Join("<session>", "home", ".acs", "common", "v1", "skills", "shared-agents", "delivery"),
-				"No Session was created",
 			} {
 				if !strings.Contains(outputs[target], marker) {
 					t.Fatalf("%s shared dry-run omitted %q: %s", target, marker, output)
@@ -203,6 +202,13 @@ func TestPromotedArtifactSharedTargetConformance(t *testing.T) {
 			}
 			if strings.Contains(outputs[target], "unselected") {
 				t.Fatalf("%s shared dry-run included an unselected global Skill: %s", target, output)
+			}
+			passiveBoundary := "No Session was created"
+			if target == "codex" {
+				passiveBoundary = "No identity lock, executable probe, Session, or process was created."
+			}
+			if !strings.Contains(outputs[target], passiveBoundary) {
+				t.Fatalf("%s dry-run omitted passive boundary %q: %s", target, passiveBoundary, output)
 			}
 			assertNoSessions(t, home)
 		}
