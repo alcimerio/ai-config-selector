@@ -794,9 +794,13 @@ func buildSeatbeltPolicy(request validatedProcessRequest) (string, []string, err
 
 ; Security.framework creates TLS policies by inspecting the running executable.
 ; Metadata access is restricted to ancestors of the already validated
-; executable and Session. SQLite canonicalizes its database path with lstat on
-; every prefix. Literal metadata grants do not permit directory contents.
-(allow file-read-metadata` + executableAncestorRules.String() + sessionAncestorRules.String() + `)
+; executable.
+(allow file-read-metadata` + executableAncestorRules.String() + `)
+
+; SQLite canonicalizes its database path with lstat on every prefix. Literal
+; metadata grants for validated Session ancestors do not permit directory
+; contents.
+(allow file-read-metadata` + sessionAncestorRules.String() + `)
 
 ; Writes are limited to the leased Session and, only when explicitly granted,
 ; the selected workspace.

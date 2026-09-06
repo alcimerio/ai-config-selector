@@ -109,7 +109,7 @@ func TestNativeInstalledACSExecutesLockedCodexToolThroughNamedIdentity(t *testin
 			trampoline := filepath.Join(tools, "codex")
 			buildFixedCodexTrampoline(t, grantedTarget, fixture.server.URL+"/backend-api", trampoline)
 			t.Logf("harness executable sha256=%s; locked target member sha256=%s", fileSHA256(t, trampoline), fileSHA256(t, grantedTarget))
-			runInstalledCodexPTY(t, candidate, home, tools, workspace, test.profile, fixture.completed)
+			runInstalledCodexPTY(t, candidate, home, tools, workspace, test.profile, fixture)
 			descendantPID := fixture.assert(t)
 			deadline := time.Now().Add(3 * time.Second)
 			for time.Now().Before(deadline) && syscall.Kill(descendantPID, 0) == nil {
@@ -276,7 +276,7 @@ func assertInstalledIdentityVisible(t *testing.T, candidate, home, tools, worksp
 	}
 }
 
-func runInstalledCodexPTY(t *testing.T, candidate, home, tools, workspace, profile string, completed <-chan struct{}) string {
+func runInstalledCodexPTY(t *testing.T, candidate, home, tools, workspace, profile string, fixture *nativeResponsesFixture) string {
 	t.Helper()
 	master, terminal, err := pty.Open()
 	if err != nil {
@@ -337,20 +337,20 @@ func runInstalledCodexPTY(t *testing.T, candidate, home, tools, workspace, profi
 	if err != nil || size.Rows != 43 || size.Cols != 117 {
 		t.Fatalf("resized outer PTY geometry=%v err=%v", size, err)
 	}
-	if !waitNativeCaptureContainsAfter(&output, resizeOffset, "\x1b[?2026h", 2*time.Second) {
-		t.Fatalf("real Codex TUI did not repaint after outer PTY resize; terminal=%q", output.String())
+	if !waitNativeCaptureContainsAfter(&output, resizeOffset, "\x1b[1;43r", 2*time.Second) {
+		t.Fatalf("real Codex TUI did not render the resized 43-row terminal geometry; terminal=%q", output.String())
 	}
 	if _, err := master.Write([]byte("Use the shell tool exactly once as requested by the fixture.\r")); err != nil {
 		t.Fatalf("write interactive input: %v; terminal=%q", err, output.String())
 	}
 	select {
-	case <-completed:
+	case <-fixture.completed:
 	case err := <-wait:
 		finished = true
 		t.Fatalf("installed ACS or locked target exited before completing tool work: %v; terminal=%q", err, output.String())
 	case <-time.After(30 * time.Second):
 		_ = command.Process.Kill()
-		t.Fatalf("real Codex did not complete two fixture requests; terminal=%q", output.String())
+		t.Fatalf("real Codex did not complete two fixture requests; loopback=%s; terminal=%q", fixture.summary(), output.String())
 	}
 	time.Sleep(500 * time.Millisecond)
 	_, _ = master.Write([]byte{3})
@@ -429,12 +429,25 @@ type nativeResponsesFixture struct {
 	bodies                []string
 	headers               []http.Header
 	sessionObservationErr string
+	observations          []nativeRequestObservation
+}
+
+type nativeRequestObservation struct {
+	method, path                 string
+	hasAuthorization, hasAccount bool
 }
 
 func newNativeResponsesFixture(t *testing.T, shellCommand, launcherHome string) *nativeResponsesFixture {
 	t.Helper()
 	fixture := &nativeResponsesFixture{completed: make(chan struct{})}
 	fixture.server = httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		fixture.mu.Lock()
+		fixture.observations = append(fixture.observations, nativeRequestObservation{
+			method: request.Method, path: request.URL.Path,
+			hasAuthorization: request.Header.Get("Authorization") != "",
+			hasAccount:       request.Header.Get("ChatGPT-Account-ID") != "",
+		})
+		fixture.mu.Unlock()
 		if request.URL.Path != "/backend-api/codex/responses" {
 			response.Header().Set("Content-Type", "application/json")
 			_, _ = io.WriteString(response, `{}`)
@@ -482,7 +495,10 @@ func (fixture *nativeResponsesFixture) assert(t *testing.T) int {
 	fixture.mu.Lock()
 	defer fixture.mu.Unlock()
 	if fixture.requests != 2 || len(fixture.bodies) != 2 {
-		t.Fatalf("responses requests=%d", fixture.requests)
+		t.Fatalf("responses requests=%d; loopback=%s", fixture.requests, fixture.summaryLocked())
+	}
+	if len(fixture.observations) != 2 {
+		t.Fatalf("loopback request count=%d, want exactly two inference requests; loopback=%s", len(fixture.observations), fixture.summaryLocked())
 	}
 	if fixture.sessionObservationErr != "" {
 		t.Fatal(fixture.sessionObservationErr)
@@ -518,6 +534,20 @@ func (fixture *nativeResponsesFixture) assert(t *testing.T) int {
 		t.Fatal("second request contained invalid descendant process identity")
 	}
 	return pid
+}
+
+func (fixture *nativeResponsesFixture) summaryLocked() string {
+	parts := make([]string, 0, len(fixture.observations))
+	for _, observation := range fixture.observations {
+		parts = append(parts, fmt.Sprintf("%s %q auth=%t account=%t", observation.method, observation.path, observation.hasAuthorization, observation.hasAccount))
+	}
+	return strings.Join(parts, "; ")
+}
+
+func (fixture *nativeResponsesFixture) summary() string {
+	fixture.mu.Lock()
+	defer fixture.mu.Unlock()
+	return fixture.summaryLocked()
 }
 
 func observeNativeSessionProjection(body, launcherHome string) string {
@@ -576,11 +606,13 @@ func writeSSE(writer io.Writer, events ...map[string]any) {
 func buildFixedCodexTrampoline(t *testing.T, target, baseURL, destination string) {
 	t.Helper()
 	source := filepath.Join(filepath.Dir(destination), "codex-trampoline.c")
+	openAIOverride := fmt.Sprintf("openai_base_url=%q", baseURL+"/codex")
+	chatGPTOverride := fmt.Sprintf("chatgpt_base_url=%q", baseURL)
 	program := fmt.Sprintf(`#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 int main(int argc, char **argv) {
-  char **next = calloc((size_t)argc + 3, sizeof(char *));
+  char **next = calloc((size_t)argc + 5, sizeof(char *));
   if (!next) return 120;
   next[0] = %s;
   int version = 0;
@@ -591,11 +623,13 @@ int main(int argc, char **argv) {
 	if (!version) {
 		next[argc] = "-c";
     next[argc + 1] = %s;
-  }
+		next[argc + 2] = "-c";
+		next[argc + 3] = %s;
+	}
   execv(next[0], next);
   return 121;
 }
-`, strconv.Quote(target), strconv.Quote(`chatgpt_base_url="`+baseURL+`"`))
+`, strconv.Quote(target), strconv.Quote(openAIOverride), strconv.Quote(chatGPTOverride))
 	if err := os.WriteFile(source, []byte(program), 0o600); err != nil {
 		t.Fatal(err)
 	}

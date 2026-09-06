@@ -85,7 +85,8 @@ func TestSeatbeltPolicyIsDefaultDenyAndUsesParametersForValidatedPaths(t *testin
 		`(literal "/dev/tty")`, `(target same-sandbox)`,
 		"(allow mach-lookup\n  (global-name \"com.apple.SecurityServer\"))",
 		"(allow mach-lookup\n  (global-name \"com.apple.trustd.agent\"))",
-		"(allow file-read-metadata\n  (literal (param \"EXECUTABLE_ANCESTOR_0\"))\n  (literal (param \"EXECUTABLE_ANCESTOR_1\"))\n  (literal (param \"EXECUTABLE_ANCESTOR_2\"))\n  (literal (param \"EXECUTABLE_ANCESTOR_3\"))\n  (literal (param \"SESSION_ANCESTOR_0\"))\n  (literal (param \"SESSION_ANCESTOR_1\"))\n  (literal (param \"SESSION_ANCESTOR_2\")))",
+		"(allow file-read-metadata\n  (literal (param \"EXECUTABLE_ANCESTOR_0\"))\n  (literal (param \"EXECUTABLE_ANCESTOR_1\"))\n  (literal (param \"EXECUTABLE_ANCESTOR_2\"))\n  (literal (param \"EXECUTABLE_ANCESTOR_3\")))",
+		"(allow file-read-metadata\n  (literal (param \"SESSION_ANCESTOR_0\"))\n  (literal (param \"SESSION_ANCESTOR_1\"))\n  (literal (param \"SESSION_ANCESTOR_2\")))",
 	} {
 		if !strings.Contains(policy, want) {
 			t.Errorf("policy omits %q", want)
@@ -412,6 +413,44 @@ func TestSeatbeltProductionTLSRequiresOnlyExecutableMetadataAndTrustdAgent(t *te
 			}
 			if got := output.String(); !strings.Contains(got, test.want) {
 				t.Fatalf("platform trust evaluation output = %q, want semantic outcome %q", got, test.want)
+			}
+		})
+	}
+}
+
+func TestSeatbeltProductionSessionPrefixRequiresOnlySessionMetadata(t *testing.T) {
+	skipSeatbeltNativeTestBinaryUnderRace(t)
+	request, output := seatbeltProductionTLSRequest(t)
+	database := filepath.Join(request.SessionHome, ".codex", "state_5.sqlite")
+	sibling := filepath.Join(request.SessionsDirectory, "sibling-secret")
+	siblingWrite := filepath.Join(request.SessionsDirectory, "sibling-write")
+	if err := os.WriteFile(sibling, []byte("private"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	request.Arguments = []string{
+		"-test.run=TestSeatbeltHelperProcess", "--", "session-prefix-metadata",
+		database, request.SessionsDirectory, sibling, siblingWrite,
+	}
+
+	for _, test := range []struct {
+		name    string
+		omitted string
+		want    string
+	}{
+		{name: "restored Session metadata allows canonicalization without sibling access", want: "session-prefix-metadata"},
+		{name: "removing Session metadata blocks canonicalization", omitted: "session metadata", want: "prefix-metadata-denied"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			output.Reset()
+			err := seatbeltRunProductionTLS(seatbeltProductionTLSSandbox(t, test.omitted), request)
+			if test.omitted == "" && err != nil {
+				t.Fatalf("Session prefix validation failed: %v; output=%q", err, output.String())
+			}
+			if test.omitted != "" && err == nil {
+				t.Fatalf("Session prefix validation succeeded without %s; output=%q", test.omitted, output.String())
+			}
+			if got := output.String(); !strings.Contains(got, test.want) {
+				t.Fatalf("Session prefix validation output = %q, want semantic outcome %q", got, test.want)
 			}
 		})
 	}
@@ -2926,15 +2965,9 @@ func seatbeltProductionTLSSandbox(t *testing.T, omitted string) ProcessSandbox {
 		case "":
 			return policy, definitions, nil
 		case "executable metadata":
-			start := strings.Index(policy, "(allow file-read-metadata\n")
-			if start < 0 {
-				return "", nil, errors.New("executable metadata rule is missing")
-			}
-			end := strings.Index(policy[start:], "\n\n; Writes are limited")
-			if end < 0 {
-				return "", nil, errors.New("executable metadata rule is malformed")
-			}
-			policy, err = seatbeltRemovePolicyTextExactlyOnce(policy, policy[start:start+end+2], "executable metadata rule")
+			policy, err = seatbeltRemoveMetadataRule(policy, "EXECUTABLE_ANCESTOR_0", "executable metadata rule")
+		case "session metadata":
+			policy, err = seatbeltRemoveMetadataRule(policy, "SESSION_ANCESTOR_0", "Session metadata rule")
 		case "trustd agent":
 			const rule = "(allow mach-lookup\n  (global-name \"com.apple.trustd.agent\"))\n"
 			policy, err = seatbeltRemovePolicyTextExactlyOnce(policy, rule, "trustd agent rule")
@@ -2947,6 +2980,19 @@ func seatbeltProductionTLSSandbox(t *testing.T, omitted string) ProcessSandbox {
 		return policy, definitions, nil
 	}
 	return sandbox
+}
+
+func seatbeltRemoveMetadataRule(policy, firstParameter, description string) (string, error) {
+	needle := "(allow file-read-metadata\n  (literal (param \"" + firstParameter + "\"))"
+	start := strings.Index(policy, needle)
+	if start < 0 {
+		return "", fmt.Errorf("%s is missing", description)
+	}
+	end := strings.Index(policy[start:], ")\n\n")
+	if end < 0 {
+		return "", fmt.Errorf("%s is malformed", description)
+	}
+	return seatbeltRemovePolicyTextExactlyOnce(policy, policy[start:start+end+3], description)
 }
 
 func seatbeltRemovePolicyTextExactlyOnce(policy, text, description string) (string, error) {
