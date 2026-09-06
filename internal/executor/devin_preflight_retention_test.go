@@ -1,6 +1,4 @@
-//go:build legacydevin
-
-package devin
+package executor
 
 import (
 	"bytes"
@@ -17,7 +15,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/alcimerio/ai-config-selector/internal/devinruntime"
 	"github.com/alcimerio/ai-config-selector/internal/launch"
+	"github.com/alcimerio/ai-config-selector/internal/session"
 )
 
 func TestLaunchPreflightsRetainSessionUntilCleanupIsProven(t *testing.T) {
@@ -39,8 +39,7 @@ func TestLaunchPreflightsRetainSessionUntilCleanupIsProven(t *testing.T) {
 					}
 				})
 
-				exitCode, err := application.adapter.Launch(context.Background(), application.sessionsDirectory,
-					application.workingDirectory, application.resolved, application.terminal)
+				exitCode, err := application.run(context.Background())
 				if sandbox.root == "" {
 					t.Fatal("the selected preflight was not prepared")
 				}
@@ -71,7 +70,7 @@ func TestLaunchPreflightsRetainSessionUntilCleanupIsProven(t *testing.T) {
 					t.Fatalf("probe Start/Wait calls = %d/%d, want 1/%d", sandbox.process.starts, sandbox.process.waits, wantWaits)
 				}
 
-				concurrent, createErr := launch.CreateSession(fixture.sessionsDirectory)
+				concurrent, createErr := session.Create(fixture.sessionsDirectory, t.TempDir(), nil)
 				if createErr != nil {
 					t.Fatal(createErr)
 				}
@@ -107,8 +106,7 @@ func TestLaunchPreflightsPreserveFailureAfterProvenCleanup(t *testing.T) {
 				})
 				fixture.sandbox = sandbox
 				application := fixture.application(t, "/test/devin", t.TempDir(), strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
-				exitCode, err := application.adapter.Launch(context.Background(), application.sessionsDirectory,
-					application.workingDirectory, application.resolved, application.terminal)
+				exitCode, err := application.run(context.Background())
 				if exitCode != 1 || err == nil {
 					t.Fatalf("launch result = (%d, %v), want preflight failure", exitCode, err)
 				}
@@ -123,10 +121,10 @@ func TestLaunchPreflightsPreserveFailureAfterProvenCleanup(t *testing.T) {
 						t.Fatalf("settled Start error = %v, want process_start_failed", err)
 					}
 				} else {
-					var preflightErr *PreflightError
-					want := CapabilitySkillIsolation
+					var preflightErr *devinruntime.PreflightError
+					want := devinruntime.CapabilitySkillIsolation
 					if stage == "auth" {
-						want = CapabilityAuthentication
+						want = devinruntime.CapabilityAuthentication
 					}
 					if !errors.As(err, &preflightErr) || preflightErr.Capability != want {
 						t.Fatalf("settled Wait error = %v, want %s preflight failure", err, want)
@@ -140,18 +138,20 @@ func TestLaunchPreflightsPreserveFailureAfterProvenCleanup(t *testing.T) {
 	}
 }
 
-func TestPreflightRejectsMissingSessionRetentionBeforePreparingProcess(t *testing.T) {
+func TestVerifyDevinOwnsSessionRetentionBeforePreparingProcess(t *testing.T) {
 	fixture := newLaunchTestFixture(t)
-	sandbox := &preflightRetentionSandbox{}
+	cleanupDone := make(chan struct{})
+	close(cleanupDone)
+	sandbox := &preflightRetentionSandbox{stage: "skills", failure: "start", cleanupDone: cleanupDone}
 	fixture.sandbox = sandbox
 	application := fixture.application(t, "/test/devin", t.TempDir(), strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
-	err := application.adapter.verifyAuthentication(context.Background(), &Session{WorkingDirectory: application.workingDirectory})
+	err := application.executor.VerifyDevin(context.Background(), application.request)
 	var sandboxErr *launch.SandboxError
-	if !errors.As(err, &sandboxErr) || sandboxErr.Category != launch.SandboxSetupFailed {
-		t.Errorf("missing retention error = %v, want setup_failed", err)
+	if !errors.As(err, &sandboxErr) || sandboxErr.Category != launch.SandboxProcessStartFailed {
+		t.Fatalf("VerifyDevin result = %v, want retained probe start failure", err)
 	}
-	if len(sandbox.stages) != 0 {
-		t.Fatalf("prepared %v without Session retention", sandbox.stages)
+	if got := sandbox.stages; !reflect.DeepEqual(got, []string{"skills"}) || sandbox.process.starts != 1 {
+		t.Fatalf("VerifyDevin prepared stages = %v, starts = %d; want one retained skills probe", got, sandbox.process.starts)
 	}
 }
 

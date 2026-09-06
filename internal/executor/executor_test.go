@@ -188,11 +188,13 @@ func TestRunShellUsesFixedCommandAndCleansMaterializedSession(t *testing.T) {
 
 func TestRunShellOrdinaryExitAfterCleanupProof(t *testing.T) {
 	p := &fakeProcess{waitErr: exit23(t)}
-	err := newExecutor(&fakeSandbox{process: p}).RunShell(context.Background(), shellRequest(t, filepath.Join(t.TempDir(), "sessions")))
+	sessions := filepath.Join(t.TempDir(), "sessions")
+	err := newExecutor(&fakeSandbox{process: p}).RunShell(context.Background(), shellRequest(t, sessions))
 	var targetExit *exec.ExitError
 	if !errors.As(err, &targetExit) || targetExit.ExitCode() != 23 || p.waits != 1 {
 		t.Fatalf("result=%v waits=%d", err, p.waits)
 	}
+	eventuallyEmptyDirectory(t, sessions)
 }
 
 func TestCleanupPrecedenceDoesNotExposeExitCodeBearingOutcome(t *testing.T) {
@@ -228,28 +230,30 @@ func TestRunShellCleanupUncertaintyOutranksOrdinaryExitAndRetainsSession(t *test
 
 func TestRunShellFailedStartDoesNotWaitRetainsThenRemovesSession(t *testing.T) {
 	done := make(chan struct{})
-	startReturned := make(chan struct{})
-	p := &fakeProcess{startErr: errors.New("start failed"), cleanup: done, startReturned: startReturned}
-	sessions := filepath.Join(t.TempDir(), "sessions")
-	result := make(chan error, 1)
-	go func() {
-		result <- newExecutor(&fakeSandbox{process: p}).RunShell(context.Background(), shellRequest(t, sessions))
+	defer func() {
+		select {
+		case <-done:
+		default:
+			close(done)
+		}
 	}()
-	select {
-	case <-startReturned:
-	case <-time.After(time.Second):
-		t.Fatal("Start did not fail")
+	process := &fakeProcess{startErr: errors.New("start failed"), cleanup: done}
+	sessions := filepath.Join(t.TempDir(), "sessions")
+	// Returning from the actual bounded settlement proves Start already failed.
+	// Keep cleanup withheld through that return, not merely directory creation.
+	err := newExecutor(&fakeSandbox{process: process}).RunShell(context.Background(), shellRequest(t, sessions))
+	var failure *launch.SandboxError
+	if !errors.As(err, &failure) || failure.Category != launch.SandboxProcessWaitFailed {
+		t.Fatalf("result = %v, want uncertain cleanup to take precedence", err)
 	}
-	eventuallyNonEmptyDirectory(t, sessions)
-	select {
-	case err := <-result:
-		t.Fatalf("failed Start returned before cleanup proof: %v", err)
-	default:
+	if process.starts != 1 || process.waits != 0 {
+		t.Fatalf("Start/Wait = %d/%d, want 1/0", process.starts, process.waits)
+	}
+	entries, readErr := os.ReadDir(sessions)
+	if readErr != nil || len(entries) != 1 {
+		t.Fatalf("uncertain Session was removed: %v %v", entries, readErr)
 	}
 	close(done)
-	if err := <-result; err == nil || p.waits != 0 {
-		t.Fatalf("result=%v waits=%d", err, p.waits)
-	}
 	eventuallyEmptyDirectory(t, sessions)
 }
 
@@ -373,3 +377,107 @@ type shellExit struct{ code int }
 
 func (e *shellExit) Error() string { return "shell exit" }
 func (e *shellExit) ExitCode() int { return e.code }
+
+func TestRunDevinProjectsOnlyAllowlistedCredentialAndSelectedFiles(t *testing.T) {
+	source := t.TempDir()
+	for _, relative := range []string{
+		".local/share/devin/credentials.toml", ".config/devin/config.json", ".config/devin/mcp_config.json", ".config/devin/hooks/hook", ".config/devin/AGENTS.md",
+	} {
+		path := filepath.Join(source, filepath.FromSlash(relative))
+		if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("fixture-only"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var inspected bool
+	process := &fakeProcess{}
+	sandbox := &fakeSandbox{process: process}
+	sandbox.inspect = func(request launch.ProcessRequest) error {
+		credential := filepath.Join(request.SessionHome, ".local", "share", "devin", "credentials.toml")
+		contents, err := os.ReadFile(credential)
+		if err != nil || string(contents) != "fixture-only" {
+			t.Fatalf("allowlisted fixture was not projected: %v", err)
+		}
+		info, err := os.Stat(credential)
+		if err != nil || info.Mode().Perm() != 0600 {
+			t.Fatalf("credential mode was not private: %v", err)
+		}
+		for _, relative := range []string{"config.json", "mcp_config.json", "hooks", "AGENTS.md"} {
+			if _, err := os.Lstat(filepath.Join(request.SessionHome, ".config", "devin", relative)); !os.IsNotExist(err) {
+				t.Fatalf("unrestricted state %s was projected: %v", relative, err)
+			}
+		}
+		for _, source := range []string{".config/devin/skills/selected", ".agents/skills/selected"} {
+			for _, relative := range []string{"SKILL.md", "references/proof.txt"} {
+				if _, err := os.Stat(filepath.Join(request.SessionHome, filepath.FromSlash(source), filepath.FromSlash(relative))); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+		inspected = true
+		// The inspection occurs at the first real Prepare, after materialization
+		// and credential copy. Stop there without introducing a fake probe result.
+		return &launch.SandboxError{Category: launch.SandboxProcessStartFailed}
+	}
+	request := DevinRequest{SessionsDirectory: t.TempDir(), WorkingDirectory: t.TempDir(), ExistingHomeDirectory: source, Executable: "fixture-devin"}
+	request.Materializer = materializerFunc(func(home string) error {
+		for _, directory := range []string{".config/devin/skills/selected", ".agents/skills/selected"} {
+			if err := os.CopyFS(filepath.Join(home, filepath.FromSlash(directory)), os.DirFS(filepath.Join("..", "adapter", "devin", "testdata", "selected-skill"))); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	code, err := newExecutor(sandbox).RunDevin(context.Background(), request)
+	if !inspected || code != 1 || err == nil || process.starts != 0 {
+		t.Fatalf("inspection result = %t, %d, %v", inspected, code, err)
+	}
+	eventuallyEmptyDirectory(t, request.SessionsDirectory)
+}
+
+func TestRunShellCheckFailurePrecedesSessionMaterialization(t *testing.T) {
+	failure := &launch.SandboxError{Category: launch.SandboxBackendUnavailable}
+	sandbox := &fakeSandbox{checkErr: failure}
+	sessions := filepath.Join(t.TempDir(), "sessions")
+	request := shellRequest(t, sessions)
+	materialized := false
+	request.Materializer = materializerFunc(func(string) error { materialized = true; return nil })
+	err := newExecutor(sandbox).RunShell(context.Background(), request)
+	if err != failure || materialized || sandbox.request.SessionDirectory != "" {
+		t.Fatalf("failed check advanced lifecycle: %v, materialized=%t", err, materialized)
+	}
+	if _, err := os.Stat(sessions); !os.IsNotExist(err) {
+		t.Fatalf("failed check created Sessions directory: %v", err)
+	}
+}
+
+func TestRunShellPreparationFailureRemovesMaterializedSession(t *testing.T) {
+	failure := &launch.SandboxError{Category: launch.SandboxSetupFailed}
+	sandbox := &fakeSandbox{prepareErr: failure}
+	sessions := filepath.Join(t.TempDir(), "sessions")
+	request := shellRequest(t, sessions)
+	materialized := false
+	request.Materializer = materializerFunc(func(home string) error {
+		materialized = true
+		return os.WriteFile(filepath.Join(home, "SKILL.md"), []byte("selected fixture"), 0600)
+	})
+	sandbox.inspect = func(request launch.ProcessRequest) error {
+		if !materialized {
+			t.Fatal("Prepare preceded materialization")
+		}
+		contents, err := os.ReadFile(filepath.Join(request.SessionHome, "SKILL.md"))
+		if err != nil || string(contents) != "selected fixture" {
+			t.Fatalf("Prepare did not receive selected materialization: %v", err)
+		}
+		return nil
+	}
+	if err := newExecutor(sandbox).RunShell(context.Background(), request); err != failure {
+		t.Fatalf("preparation error changed: %v", err)
+	}
+	if !materialized || sandbox.request.SessionDirectory == "" {
+		t.Fatal("preparation boundary was not reached")
+	}
+	eventuallyEmptyDirectory(t, sessions)
+}

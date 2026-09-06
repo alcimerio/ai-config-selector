@@ -6,6 +6,7 @@ import (
 	"context"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -26,9 +27,21 @@ func TestRealDevinPreflightPreservesExactGlobalCatalogAndExistingLogin(t *testin
 		t.Fatal("real-Devin contract could not resolve the existing home")
 	}
 
+	// Resolve only repository fixtures; never require fixture-named Skills in
+	// the maintainer's real home. The executor separately projects the existing
+	// allowlisted credential for the explicitly authorized native probe.
+	fixtureHome := t.TempDir()
+	for _, relative := range []string{
+		filepath.Join(".config", "devin", "skills", "acs-selected-devin"),
+		filepath.Join(".agents", "skills", "acs-selected-agents"),
+	} {
+		if err := os.CopyFS(filepath.Join(fixtureHome, relative), os.DirFS(filepath.Join("testdata", "selected-skill"))); err != nil {
+			t.Fatal("real-Devin contract could not prepare fixture Skills")
+		}
+	}
 	adapter, err := devin.New(devin.Config{
 		BinaryPath:      binary,
-		ExistingHomeDir: existingHome,
+		ExistingHomeDir: fixtureHome,
 	})
 	if err != nil {
 		t.Fatal("real-Devin contract could not create the Adapter")

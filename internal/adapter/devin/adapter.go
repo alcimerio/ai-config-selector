@@ -2,6 +2,7 @@
 package devin
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"github.com/alcimerio/ai-config-selector/internal/category"
 	"github.com/alcimerio/ai-config-selector/internal/devinruntime"
 	"github.com/alcimerio/ai-config-selector/internal/executor"
+	"github.com/alcimerio/ai-config-selector/internal/launch"
 	"github.com/alcimerio/ai-config-selector/internal/skills"
 )
 
@@ -45,13 +47,20 @@ type Config struct {
 	RuntimeInputs   []string
 }
 
+// devinExecutor is a private facade seam. Production always uses executor.New;
+// callers cannot select a backend or supply process capabilities.
+type devinExecutor interface {
+	Readiness(context.Context) (launch.SandboxReadiness, error)
+	RunDevin(context.Context, executor.DevinRequest) (int, error)
+}
+
 type Adapter struct {
 	binaryPath      string
 	existingHomeDir string
 	categories      *category.Registry
 	editors         *builder.EditorRegistry
 	skillsCategory  category.Binding[[]skills.SkillReference, []skills.SkillBundle, skillsContribution]
-	executor        *executor.Executor
+	executor        devinExecutor
 	runtimeInputs   []string
 }
 

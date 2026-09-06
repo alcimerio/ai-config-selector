@@ -1,6 +1,4 @@
-//go:build legacydevin
-
-package devin
+package executor
 
 import (
 	"bytes"
@@ -18,8 +16,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/alcimerio/ai-config-selector/internal/category"
+	"github.com/alcimerio/ai-config-selector/internal/devinruntime"
 	"github.com/alcimerio/ai-config-selector/internal/launch"
+	"github.com/alcimerio/ai-config-selector/internal/session"
 	"github.com/alcimerio/ai-config-selector/internal/skills"
 )
 
@@ -118,10 +117,12 @@ exit 23
 	if exitCode != 1 {
 		t.Fatalf("exit code = %d, want cleanup failure 1; stderr: %s", exitCode, stderr.String())
 	}
-	if !strings.Contains(stderr.String(), string(launch.SandboxSetupFailed)) {
-		t.Fatalf("cleanup failure did not report a stable safe category: %s", stderr.String())
+	// The facade maps this private cleanup failure to SandboxSetupFailed.
+	// Here the actual lifecycle must report failure and suppress target exit.
+	if stderr.Len() == 0 {
+		t.Fatal("cleanup failure was suppressed")
 	}
-	for _, private := range []string{"SUPER_SECRET_SESSION_CONTENT", sessionRoot, filepath.Join(sessionRoot, "home"), DevinExitCategory, "status 23"} {
+	for _, private := range []string{"SUPER_SECRET_SESSION_CONTENT", sessionRoot, filepath.Join(sessionRoot, "home"), "status 23"} {
 		if strings.Contains(stderr.String(), private) {
 			t.Fatalf("cleanup diagnostic leaked %q: %s", private, stderr.String())
 		}
@@ -152,10 +153,7 @@ exit 23
 	}
 	finished := make(chan launchResult, 1)
 	go func() {
-		exitCode, err := application.adapter.Launch(
-			context.Background(), application.sessionsDirectory, application.workingDirectory,
-			application.resolved, application.terminal,
-		)
+		exitCode, err := application.run(context.Background())
 		finished <- launchResult{exitCode: exitCode, err: err}
 	}()
 
@@ -185,13 +183,12 @@ exit 23
 	if result.exitCode != 1 {
 		t.Fatalf("launch exit code = %d, want safe non-target exit 1", result.exitCode)
 	}
-	var targetExit *DevinExitError
+	var targetExit DevinExit
 	if errors.As(result.err, &targetExit) {
 		t.Fatalf("cleanup failure retained DevinExitError in returned graph: %v", result.err)
 	}
-	var sandboxErr *launch.SandboxError
-	if !errors.As(result.err, &sandboxErr) || sandboxErr.Category != launch.SandboxSetupFailed {
-		t.Fatalf("cleanup failure = %v, want safe setup failure", result.err)
+	if result.err == nil {
+		t.Fatal("physical cleanup failure was suppressed")
 	}
 	if deferred.sessionRoot == "" {
 		t.Fatal("deferred cleanup did not observe the Session")
@@ -203,7 +200,6 @@ exit 23
 		"ASYNC_SESSION_CONTENT",
 		"ASYNC_BACKEND_OUTPUT",
 		"ASYNC_ENVIRONMENT_VALUE",
-		DevinExitCategory,
 		"23",
 	} {
 		if strings.Contains(result.err.Error(), private) {
@@ -233,10 +229,7 @@ func TestLaunchPreservesTargetExitAfterRetainedCleanupSucceeds(t *testing.T) {
 	}
 	finished := make(chan launchResult, 1)
 	go func() {
-		exitCode, err := application.adapter.Launch(
-			context.Background(), application.sessionsDirectory, application.workingDirectory,
-			application.resolved, application.terminal,
-		)
+		exitCode, err := application.run(context.Background())
 		finished <- launchResult{exitCode: exitCode, err: err}
 	}()
 
@@ -257,7 +250,7 @@ func TestLaunchPreservesTargetExitAfterRetainedCleanupSucceeds(t *testing.T) {
 		if result.exitCode != 23 {
 			t.Fatalf("launch exit code = %d, want target exit 23", result.exitCode)
 		}
-		var targetExit *DevinExitError
+		var targetExit DevinExit
 		if !errors.As(result.err, &targetExit) || targetExit.ExitCode() != 23 {
 			t.Fatalf("launch error = %v, want target exit 23", result.err)
 		}
@@ -330,10 +323,7 @@ func TestLaunchRetainsSessionWhileStartupCleanupIsQuarantined(t *testing.T) {
 		&bytes.Buffer{},
 	)
 
-	exitCode, err := application.adapter.Launch(
-		context.Background(), application.sessionsDirectory, application.workingDirectory,
-		application.resolved, application.terminal,
-	)
+	exitCode, err := application.run(context.Background())
 	if exitCode != 1 || err == nil {
 		t.Fatalf("launch result = (%d, %v), want bounded startup failure", exitCode, err)
 	}
@@ -344,7 +334,7 @@ func TestLaunchRetainsSessionWhileStartupCleanupIsQuarantined(t *testing.T) {
 		t.Fatalf("Adapter removed Session before startup quarantine completed: %v", err)
 	}
 
-	concurrent, err := launch.CreateSession(fixture.sessionsDirectory)
+	concurrent, err := session.Create(fixture.sessionsDirectory, t.TempDir(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -545,11 +535,11 @@ exit 0
 func TestRunAttachedDoesNotCancelAndReforwardOneSignalDuringStart(t *testing.T) {
 	preflightContext, cancelPreflight := context.WithCancel(context.Background())
 	defer cancelPreflight()
-	supervisor := newSignalSupervisor(cancelPreflight)
+	supervisor := newDevinSignalSupervisor(cancelPreflight)
 	defer supervisor.stop()
 	process := &startAttachRaceProcess{preflightContext: preflightContext}
 
-	if err := runAttached(process, supervisor); err != nil {
+	if err := runDevinAttached(process, supervisor); err != nil {
 		t.Fatal(err)
 	}
 	if got, want := process.receivedSignals(), []syscall.Signal{syscall.SIGTERM}; !reflect.DeepEqual(got, want) {
@@ -559,7 +549,7 @@ func TestRunAttachedDoesNotCancelAndReforwardOneSignalDuringStart(t *testing.T) 
 
 func TestRunAttachedWaitsAndReleasesSessionAfterReplaySignalFailure(t *testing.T) {
 	sessionsDirectory := filepath.Join(t.TempDir(), "sessions")
-	session, err := launch.CreateSession(sessionsDirectory)
+	session, err := session.Create(sessionsDirectory, t.TempDir(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -568,17 +558,17 @@ func TestRunAttachedWaitsAndReleasesSessionAfterReplaySignalFailure(t *testing.T
 		allowStart:   make(chan struct{}),
 		cleanupDone:  make(chan struct{}),
 	}
-	retained, err := launch.RetainSessionUntilProcessDone(process, session)
+	retained, err := session.RetainUntilProcessDone(process)
 	if err != nil {
 		t.Fatal(err)
 	}
 	_, cancelPreflight := context.WithCancel(context.Background())
 	defer cancelPreflight()
-	supervisor := newSignalSupervisor(cancelPreflight)
+	supervisor := newDevinSignalSupervisor(cancelPreflight)
 	defer supervisor.stop()
 
 	finished := make(chan error, 1)
-	go func() { finished <- runAttached(retained, supervisor) }()
+	go func() { finished <- runDevinAttached(retained, supervisor) }()
 	<-process.startEntered
 	supervisor.forwarded <- syscall.SIGTERM
 	waitForPendingSignal(t, supervisor, syscall.SIGTERM)
@@ -603,7 +593,7 @@ func TestRunAttachedWaitsAndReleasesSessionAfterReplaySignalFailure(t *testing.T
 	if err := session.Remove(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(session.RootDir); !os.IsNotExist(err) {
+	if _, err := os.Stat(session.RootDirectory()); !os.IsNotExist(err) {
 		t.Fatalf("Session remained leased after replay cleanup: %v", err)
 	}
 }
@@ -723,9 +713,9 @@ func newLaunchTestFixture(t *testing.T) launchTestFixture {
 	}
 }
 
-type adapterLaunchApplication struct {
-	adapter           *Adapter
-	resolved          category.ResolvedProfile
+type executorLaunchApplication struct {
+	executor          *Executor
+	request           DevinRequest
 	sessionsDirectory string
 	workingDirectory  string
 	terminal          launch.Terminal
@@ -738,34 +728,27 @@ func (fixture launchTestFixture) application(
 	input io.Reader,
 	output io.Writer,
 	errorOutput io.Writer,
-) adapterLaunchApplication {
+) executorLaunchApplication {
 	t.Helper()
-	adapter, err := newAdapter(Config{BinaryPath: binaryPath, ExistingHomeDir: fixture.existingHome}, fixture.sandbox)
-	if err != nil {
-		t.Fatal(err)
+	terminal := launch.Terminal{Input: input, Output: output, ErrorOutput: errorOutput}
+	request := DevinRequest{
+		SessionsDirectory: fixture.sessionsDirectory, WorkingDirectory: workingDirectory, Executable: binaryPath,
+		ExistingHomeDirectory: fixture.existingHome, Terminal: terminal,
+		ExpectedCatalog: []skills.SkillReference{{Source: devinruntime.GlobalSourceDevinConfig, RelativePath: "review"}},
+		Materializer:    devinTestMaterializer(t),
 	}
-	resolved, err := adapter.Categories().Resolve(context.Background(), NewSkillsProfile("reviews", []skills.SkillReference{{
-		Source: GlobalSourceDevinConfig, RelativePath: "review",
-	}}))
-	if err != nil {
-		t.Fatal(err)
-	}
-	return adapterLaunchApplication{
-		adapter: adapter, resolved: resolved, sessionsDirectory: fixture.sessionsDirectory,
-		workingDirectory: workingDirectory,
-		terminal:         launch.Terminal{Input: input, Output: output, ErrorOutput: errorOutput},
-	}
+	return executorLaunchApplication{executor: newExecutor(fixture.sandbox), request: request, sessionsDirectory: fixture.sessionsDirectory, workingDirectory: workingDirectory, terminal: terminal}
 }
 
-func (application adapterLaunchApplication) Run(ctx context.Context, _ []string) int {
-	exitCode, err := application.adapter.Launch(
-		ctx, application.sessionsDirectory, application.workingDirectory,
-		application.resolved, application.terminal,
-	)
+func (application executorLaunchApplication) run(ctx context.Context) (int, error) {
+	return application.executor.RunDevin(ctx, application.request)
+}
+
+func (application executorLaunchApplication) Run(ctx context.Context, _ []string) int {
+	exitCode, err := application.run(ctx)
 	if err != nil {
-		var targetExit *DevinExitError
-		if errors.As(err, &targetExit) {
-			return targetExit.ExitCode()
+		if _, ok := err.(DevinExit); ok {
+			return exitCode
 		}
 		fmt.Fprintln(application.terminal.ErrorOutput, err)
 		return 1
@@ -927,7 +910,7 @@ func (*replaySignalFailureProcess) Signal(os.Signal) error {
 
 func (process *replaySignalFailureProcess) CleanupDone() <-chan struct{} { return process.cleanupDone }
 
-func waitForPendingSignal(t *testing.T, supervisor *signalSupervisor, want os.Signal) {
+func waitForPendingSignal(t *testing.T, supervisor *devinSignalSupervisor, want os.Signal) {
 	t.Helper()
 	deadline := time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {
@@ -1009,4 +992,19 @@ func waitForFile(t *testing.T, path string) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("timed out waiting for %q", path)
+}
+
+type devinTestMaterializerFunc func(string) error
+
+func (f devinTestMaterializerFunc) Materialize(home string) error { return f(home) }
+
+func devinTestMaterializer(t *testing.T) session.Materializer {
+	t.Helper()
+	return devinTestMaterializerFunc(func(home string) error {
+		bundle := filepath.Join(home, ".config", "devin", "skills", "review")
+		if err := os.MkdirAll(bundle, 0o700); err != nil {
+			return err
+		}
+		return os.WriteFile(filepath.Join(bundle, "SKILL.md"), []byte("# review\n"), 0o600)
+	})
 }

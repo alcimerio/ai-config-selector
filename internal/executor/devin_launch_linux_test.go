@@ -1,6 +1,4 @@
-//go:build legacydevin && linux
-
-package devin
+package executor
 
 import (
 	"context"
