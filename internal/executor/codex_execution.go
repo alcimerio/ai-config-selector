@@ -60,6 +60,7 @@ func codexExecutionArguments(chatGPTWorkspace, workingDirectory string, access l
 		"-c", `projects.`+strconv.Quote(filepath.Clean(workingDirectory))+`.trust_level="untrusted"`,
 		"-c", `features.plugins=false`,
 		"-c", `features.apps=false`,
+		"-c", `mcp_servers={}`,
 	)
 	return append(overrides, arguments...)
 }
@@ -73,7 +74,7 @@ func writeCodexExecutionConfig(home, chatGPTWorkspace, workingDirectory string, 
 	if access == launch.WorkspaceAccessReadWrite || access == launch.WorkspaceAccessLegacy {
 		mode = "workspace-write"
 	}
-	configuration := "cli_auth_credentials_store = \"file\"\nforced_login_method = \"chatgpt\"\nmodel_provider = \"openai\"\nchatgpt_base_url = " + strconv.Quote(supportedChatGPTBaseURL) + "\nsandbox_mode = " + strconv.Quote(mode) + "\napproval_policy = \"on-request\"\n[features]\nplugins = false\napps = false\n[projects." + strconv.Quote(filepath.Clean(workingDirectory)) + "]\ntrust_level = \"untrusted\"\n"
+	configuration := "cli_auth_credentials_store = \"file\"\nforced_login_method = \"chatgpt\"\nmodel_provider = \"openai\"\nchatgpt_base_url = " + strconv.Quote(supportedChatGPTBaseURL) + "\nsandbox_mode = " + strconv.Quote(mode) + "\napproval_policy = \"on-request\"\nmcp_servers = {}\n[features]\nplugins = false\napps = false\n[projects." + strconv.Quote(filepath.Clean(workingDirectory)) + "]\ntrust_level = \"untrusted\"\n"
 	if chatGPTWorkspace != "" {
 		configuration = "forced_chatgpt_workspace_id = " + strconv.Quote(chatGPTWorkspace) + "\n" + configuration
 	}

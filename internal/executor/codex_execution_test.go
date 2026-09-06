@@ -134,13 +134,13 @@ func TestInteractiveCodexBindsOneIdentityBeforeSessionAndUsesFixedRecipe(t *test
 			t.Fatalf("workspace access = %q", request.WorkspaceAccess)
 		}
 		joined := strings.Join(request.Arguments, " ")
-		for _, required := range []string{`cli_auth_credentials_store="file"`, `forced_login_method="chatgpt"`, `forced_chatgpt_workspace_id="workspace"`, `model_provider="openai"`, `chatgpt_base_url="https://chatgpt.com/backend-api/"`, `sandbox_mode="read-only"`, `approval_policy="on-request"`, `trust_level="untrusted"`, `features.plugins=false`, `features.apps=false`} {
+		for _, required := range []string{`cli_auth_credentials_store="file"`, `forced_login_method="chatgpt"`, `forced_chatgpt_workspace_id="workspace"`, `model_provider="openai"`, `chatgpt_base_url="https://chatgpt.com/backend-api/"`, `sandbox_mode="read-only"`, `approval_policy="on-request"`, `trust_level="untrusted"`, `features.plugins=false`, `features.apps=false`, `mcp_servers={}`} {
 			if !strings.Contains(joined, required) {
 				t.Fatalf("arguments omit %q: %#v", required, request.Arguments)
 			}
 		}
 	}
-	for _, required := range []string{`chatgpt_base_url = "https://chatgpt.com/backend-api/"`, `[features]`, `plugins = false`, `apps = false`, `[projects."` + filepath.Clean(registry.workingDirectory) + `"]`, `trust_level = "untrusted"`} {
+	for _, required := range []string{`chatgpt_base_url = "https://chatgpt.com/backend-api/"`, `mcp_servers = {}`, `[features]`, `plugins = false`, `apps = false`, `[projects."` + filepath.Clean(registry.workingDirectory) + `"]`, `trust_level = "untrusted"`} {
 		if !strings.Contains(projectedConfig, required) {
 			t.Fatalf("Session config omits %q: %s", required, projectedConfig)
 		}

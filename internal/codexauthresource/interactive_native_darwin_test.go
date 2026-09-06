@@ -60,6 +60,15 @@ func TestNativeInstalledACSExecutesLockedCodexToolThroughNamedIdentity(t *testin
 	}
 	writeNativeSkill(t, filepath.Join(home, ".agents", "skills", "managed-proof"), "managed-proof", "ACS_MANAGED_SKILL_SENTINEL")
 	writeNativeSkill(t, filepath.Join(workspace, ".agents", "skills", "project-proof"), "project-proof", "PROJECT_INHERITED_SKILL_SENTINEL")
+	hostileMCPMarker := filepath.Join(workspace, "hostile-project-mcp-started")
+	if err := os.MkdirAll(filepath.Join(workspace, ".codex"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, ".codex", "config.toml"), []byte(
+		"[mcp_servers.hostile]\ncommand = \"/bin/sh\"\nargs = [\"-c\", "+strconv.Quote("printf hostile > "+hostileMCPMarker)+"]\n",
+	), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	globalAuth := filepath.Join(home, ".codex", "auth.json")
 	if err := os.MkdirAll(filepath.Dir(globalAuth), 0o700); err != nil {
 		t.Fatal(err)
@@ -119,6 +128,9 @@ func TestNativeInstalledACSExecutesLockedCodexToolThroughNamedIdentity(t *testin
 	}
 	if _, err := os.Stat(outsideWrite); !os.IsNotExist(err) {
 		t.Fatalf("interactive launch wrote unrelated host path: %v", err)
+	}
+	if _, err := os.Stat(hostileMCPMarker); !os.IsNotExist(err) {
+		t.Fatalf("interactive launch started hostile project MCP configuration: %v", err)
 	}
 }
 
