@@ -90,7 +90,7 @@ func TestNativeInstalledACSExecutesLockedCodexToolThroughNamedIdentity(t *testin
 	if err := os.WriteFile(outsideSecret, []byte("unrelated"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	isolationProbe := fmt.Sprintf(`; printf private > "$HOME/codex-private-proof" && printf private-ok; if cat %s >/dev/null 2>&1; then printf outside-read-bad; else printf outside-read-denied; fi; if printf bad > %s 2>/dev/null; then printf outside-write-bad; else printf outside-write-denied; fi; sleep 30 </dev/null >/dev/null 2>&1 & printf descendant-pid:%%s "$!"`, strconv.Quote(outsideSecret), strconv.Quote(outsideWrite))
+	isolationProbe := fmt.Sprintf(`; printf private > "$HOME/codex-private-proof" && printf private-ok; printf ' session-home-begin:%%s:session-home-end' "$HOME"; if cat %s >/dev/null 2>&1; then printf global-auth-read-bad; else printf global-auth-read-denied; fi; if cat %s >/dev/null 2>&1; then printf outside-read-bad; else printf outside-read-denied; fi; if printf bad > %s 2>/dev/null; then printf outside-write-bad; else printf outside-write-denied; fi; sleep 30 </dev/null >/dev/null 2>&1 & printf descendant-pid:%%s "$!"`, strconv.Quote(globalAuth), strconv.Quote(outsideSecret), strconv.Quote(outsideWrite))
 	for _, test := range []struct {
 		name, profile, command, marker string
 		wantWrite                      bool
@@ -99,7 +99,7 @@ func TestNativeInstalledACSExecutesLockedCodexToolThroughNamedIdentity(t *testin
 		{name: "read-only denial", profile: "readonly", command: "printf forbidden > ./codex-native-readonly-write; printf codex-native-tool-output" + isolationProbe, marker: "codex-native-readonly-write", wantWrite: false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			fixture := newNativeResponsesFixture(t, test.command)
+			fixture := newNativeResponsesFixture(t, test.command, home)
 			defer fixture.server.Close()
 			trampoline := filepath.Join(tools, "codex")
 			buildFixedCodexTrampoline(t, grantedTarget, fixture.server.URL+"/backend-api", trampoline)
@@ -156,6 +156,9 @@ func runInstalledCodexPTY(t *testing.T, candidate, home, tools, workspace, profi
 	if err := command.Start(); err != nil {
 		t.Fatal(err)
 	}
+	if err := terminal.Close(); err != nil {
+		t.Fatal(err)
+	}
 	wait := make(chan error, 1)
 	go func() { wait <- command.Wait() }()
 	finished := false
@@ -175,9 +178,14 @@ func runInstalledCodexPTY(t *testing.T, candidate, home, tools, workspace, profi
 			t.Error("PTY fixture did not drain terminal capture")
 		}
 	}()
-	time.Sleep(1500 * time.Millisecond)
+	select {
+	case err := <-wait:
+		finished = true
+		t.Fatalf("installed ACS or locked target exited before interactive input: %v; terminal=%q", err, output.String())
+	case <-time.After(1500 * time.Millisecond):
+	}
 	if _, err := master.Write([]byte("Use the shell tool exactly once as requested by the fixture.\r")); err != nil {
-		t.Fatal(err)
+		t.Fatalf("write interactive input: %v; terminal=%q", err, output.String())
 	}
 	select {
 	case <-completed:
@@ -220,15 +228,16 @@ func (capture *nativeSafeCapture) String() string {
 }
 
 type nativeResponsesFixture struct {
-	server    *httptest.Server
-	completed chan struct{}
-	mu        sync.Mutex
-	requests  int
-	bodies    []string
-	headers   []http.Header
+	server                *httptest.Server
+	completed             chan struct{}
+	mu                    sync.Mutex
+	requests              int
+	bodies                []string
+	headers               []http.Header
+	sessionObservationErr string
 }
 
-func newNativeResponsesFixture(t *testing.T, shellCommand string) *nativeResponsesFixture {
+func newNativeResponsesFixture(t *testing.T, shellCommand, launcherHome string) *nativeResponsesFixture {
 	t.Helper()
 	fixture := &nativeResponsesFixture{completed: make(chan struct{})}
 	fixture.server = httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
@@ -243,6 +252,9 @@ func newNativeResponsesFixture(t *testing.T, shellCommand string) *nativeRespons
 		index := fixture.requests
 		fixture.bodies = append(fixture.bodies, string(body))
 		fixture.headers = append(fixture.headers, request.Header.Clone())
+		if index == 2 {
+			fixture.sessionObservationErr = observeNativeSessionProjection(string(body), launcherHome)
+		}
 		fixture.mu.Unlock()
 		response.Header().Set("Content-Type", "text/event-stream")
 		if index == 1 {
@@ -278,6 +290,9 @@ func (fixture *nativeResponsesFixture) assert(t *testing.T) int {
 	if fixture.requests != 2 || len(fixture.bodies) != 2 {
 		t.Fatalf("responses requests=%d", fixture.requests)
 	}
+	if fixture.sessionObservationErr != "" {
+		t.Fatal(fixture.sessionObservationErr)
+	}
 	for _, headers := range fixture.headers {
 		if headers.Get("Authorization") != "Bearer synthetic-access" || headers.Get("ChatGPT-Account-ID") != "synthetic-workspace" {
 			t.Fatalf("named identity headers were not preserved: authorization=%q account=%q", headers.Get("Authorization"), headers.Get("ChatGPT-Account-ID"))
@@ -292,12 +307,12 @@ func (fixture *nativeResponsesFixture) assert(t *testing.T) int {
 	if err != nil {
 		t.Fatalf("second request tool output: %v", err)
 	}
-	for _, sentinel := range []string{"Process exited with code 0", "codex-native-tool-output", "private-ok", "outside-read-denied", "outside-write-denied"} {
+	for _, sentinel := range []string{"Process exited with code 0", "codex-native-tool-output", "private-ok", "global-auth-read-denied", "outside-read-denied", "outside-write-denied"} {
 		if !strings.Contains(toolOutput, sentinel) {
 			t.Fatalf("second request omitted real shell result %q", sentinel)
 		}
 	}
-	if strings.Contains(toolOutput, "outside-read-bad") || strings.Contains(toolOutput, "outside-write-bad") {
+	if strings.Contains(toolOutput, "global-auth-read-bad") || strings.Contains(toolOutput, "outside-read-bad") || strings.Contains(toolOutput, "outside-write-bad") {
 		t.Fatal("matching function output reports an isolation escape")
 	}
 	match := regexp.MustCompile(`descendant-pid:(\d+)`).FindStringSubmatch(toolOutput)
@@ -309,6 +324,31 @@ func (fixture *nativeResponsesFixture) assert(t *testing.T) int {
 		t.Fatal("second request contained invalid descendant process identity")
 	}
 	return pid
+}
+
+func observeNativeSessionProjection(body, launcherHome string) string {
+	output, err := nativeFunctionCallOutput(body, "acs-call-1")
+	if err != nil {
+		return "cannot locate Session projection witness in matching function output"
+	}
+	match := regexp.MustCompile(`session-home-begin:([^\r\n]+?):session-home-end`).FindStringSubmatch(output)
+	if len(match) != 2 {
+		return "matching function output omitted Session HOME identity"
+	}
+	sessionHome := filepath.Clean(match[1])
+	relative, err := filepath.Rel(filepath.Join(launcherHome, ".acs", "sessions"), sessionHome)
+	parts := strings.Split(relative, string(filepath.Separator))
+	if err != nil || len(parts) != 2 || !strings.HasPrefix(parts[0], "session-") || parts[1] != "home" {
+		return "target private write was not located in the allocated Session HOME"
+	}
+	contents, err := os.ReadFile(filepath.Join(sessionHome, "codex-private-proof"))
+	if err != nil || string(contents) != "private" {
+		return "target private Session write was not observable while the Session was retained"
+	}
+	if _, err := os.Stat(filepath.Join(launcherHome, "codex-private-proof")); !os.IsNotExist(err) {
+		return "target private write reached the launcher HOME"
+	}
+	return ""
 }
 
 func completedEvent(id string) map[string]any {

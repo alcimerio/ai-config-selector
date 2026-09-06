@@ -31,6 +31,7 @@ type executionSandbox struct {
 	waits        []error
 	waitHooks    []func()
 	prepareHooks []func()
+	startHooks   []func()
 	counts       [][2]int
 	signals      [][]os.Signal
 	checks       int
@@ -52,6 +53,9 @@ func (sandbox *executionSandbox) Prepare(_ context.Context, request launch.Proce
 	}
 	return &executionProcess{start: func() error {
 		sandbox.counts[index][0]++
+		if index < len(sandbox.startHooks) && sandbox.startHooks[index] != nil {
+			sandbox.startHooks[index]()
+		}
 		if index == 0 {
 			_, _ = io.WriteString(request.Terminal.Output, "codex-cli "+sandbox.version+"\n")
 		} else if sandbox.mutate != nil {
@@ -146,6 +150,42 @@ func TestInteractiveCodexReplaysTerminationAcceptedDuringAttachedPreparation(t *
 	}
 	if provider.replaceCalls != 0 || !reflect.DeepEqual(provider.records["work"].Auth, auth) {
 		t.Fatal("signaled attached execution replaced identity")
+	}
+	assertNoSessionDirectories(t, sessionsDirectory)
+}
+
+func TestInteractiveCodexResizeDuringStartCannotDisplaceTermination(t *testing.T) {
+	auth := testChatGPTAuthJSON(t, "user", "workspace")
+	registry, _, _, sessionsDirectory := newBindingTestRegistry(t, "work", auth)
+	root := filepath.Dir(sessionsDirectory)
+	binary := filepath.Join(root, "codex")
+	if err := os.WriteFile(binary, []byte("#!/bin/sh\nexit 0\n"), 0o500); err != nil {
+		t.Fatal(err)
+	}
+	sandbox := &executionSandbox{version: SupportedCodexVersion, startHooks: []func(){nil, func() {
+		for _, received := range []syscall.Signal{syscall.SIGWINCH, syscall.SIGTERM} {
+			if err := syscall.Kill(os.Getpid(), received); err != nil {
+				t.Error(err)
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+	}}}
+	registry.execution = newCodexExecutionRunner(codexLoginConfig{BinaryPath: binary, SupportedVersion: SupportedCodexVersion, SessionsDirectory: sessionsDirectory, WorkingDirectory: registry.workingDirectory}, sandbox)
+	plan := authority.New(nil, launch.WorkspaceAccessReadOnly, 3, "codex", authority.TargetRequirements{Recipe: authority.RecipeCodex, Executable: binary}).WithAuthRef("work")
+	if code, err := registry.ExecuteCodex(context.Background(), CodexRequest{ResolvedPlan: &plan}); code != 0 || err != nil {
+		t.Fatalf("signaled Start execution = (%d, %v)", code, err)
+	}
+	foundTermination := false
+	for _, received := range sandbox.signals[1] {
+		if received == syscall.SIGTERM {
+			foundTermination = true
+		}
+	}
+	if !foundTermination {
+		t.Fatalf("resize displaced termination during Start: %v", sandbox.signals[1])
+	}
+	if sandbox.counts[1] != [2]int{1, 1} {
+		t.Fatalf("signaled Start/Wait = %v", sandbox.counts[1])
 	}
 	assertNoSessionDirectories(t, sessionsDirectory)
 }
