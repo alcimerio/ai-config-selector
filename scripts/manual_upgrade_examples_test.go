@@ -111,6 +111,76 @@ func TestManualUpgradeExamplesStopBeforeUnsafeSelection(t *testing.T) {
 	}
 }
 
+func TestManualRecoveryExamplesRetainShellForInspection(t *testing.T) {
+	blocks := manualExamples(t)
+	for _, scenario := range []struct {
+		name           string
+		showStatus     string
+		recoveryStatus string
+	}{
+		{name: "missing Profile", showStatus: "1"},
+		{name: "recovered duplicate", showStatus: "0", recoveryStatus: "1"},
+		{name: "cancelled builder", showStatus: "1", recoveryStatus: "130"},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			root := realTemporaryDirectory(t)
+			binary := filepath.Join(root, "source acs")
+			logPath := filepath.Join(root, "commands.log")
+			fake := `#!/bin/sh
+printf '%s\n' "$*" >> "$TEST_COMMAND_LOG"
+case "$*" in
+  version) printf 'acs devel\n' ;;
+  'profile list') exit 0 ;;
+  'profile show backend-review') exit "$TEST_SHOW_STATUS" ;;
+  'devin create-profile --name backend-review') exit "$TEST_RECOVERY_STATUS" ;;
+  *) exit 99 ;;
+esac
+`
+			if err := os.WriteFile(binary, []byte(fake), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			script := strings.ReplaceAll(blocks["recovery-inspection"], `source_bin="/absolute/path/to/compatible-source/acs"`, `source_bin="$TEST_SOURCE_BINARY"`)
+			script += "test \"$?\" = \"$TEST_SHOW_STATUS\" || exit 90\n"
+			if scenario.recoveryStatus != "" {
+				script += blocks["profile-recovery"] + "test \"$?\" = \"$TEST_RECOVERY_STATUS\" || exit 91\n"
+			}
+			script += blocks["recovery-follow-up"]
+			script += "test \"$?\" = \"$TEST_SHOW_STATUS\" || exit 92\n"
+			script += "test \"$source_bin\" = \"$TEST_SOURCE_BINARY\" || exit 93\n"
+			scriptPath := filepath.Join(root, "recovery commands.sh")
+			if err := os.WriteFile(scriptPath, []byte(script), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			// Export the strict parent's options to prove the documented child
+			// explicitly disables errexit even when SHELLOPTS is inherited.
+			parent := "set -eu\nexport SHELLOPTS\n" + strings.TrimSpace(blocks["recovery-shell"]) + " \"$TEST_RECOVERY_SCRIPT\"\n"
+			command := exec.Command("/bin/bash", "--noprofile", "--norc", "-c", parent)
+			command.Dir = root
+			command.Env = []string{
+				"HOME=" + root, "PATH=/usr/bin:/bin", "LC_ALL=C",
+				"TEST_SOURCE_BINARY=" + binary, "TEST_COMMAND_LOG=" + logPath,
+				"TEST_RECOVERY_SCRIPT=" + scriptPath, "TEST_SHOW_STATUS=" + scenario.showStatus,
+				"TEST_RECOVERY_STATUS=" + scenario.recoveryStatus,
+			}
+			if output, err := command.CombinedOutput(); err != nil {
+				t.Fatalf("recovery flow lost its shell or source executable: %v\n%s", err, output)
+			}
+			commands, err := os.ReadFile(logPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := "version\nprofile list\nprofile show backend-review\n"
+			if scenario.recoveryStatus != "" {
+				want += "devin create-profile --name backend-review\n"
+			}
+			want += "profile list\nprofile show backend-review\n"
+			if string(commands) != want {
+				t.Fatalf("follow-up inspection did not use the intended executable: %q", commands)
+			}
+		})
+	}
+}
+
 type manualUpgradeFixture struct {
 	t         *testing.T
 	installer *installerFixture
@@ -149,15 +219,7 @@ func newManualUpgradeFixture(t *testing.T, arch string) *manualUpgradeFixture {
 	}
 	// An automated fixture cannot perform the reader's manual installer inspection.
 	installer.writeTool("less", "#!/bin/sh\ntest \"$1\" = install.sh\n")
-	blocks := make(map[string]string)
-	document := readRepositoryFile(t, "..", "docs/manual-upgrade-recovery.md")
-	pattern := regexp.MustCompile("(?s)<!-- example: ([a-z-]+) -->\n```sh\n(.*?)\n```")
-	for _, match := range pattern.FindAllStringSubmatch(document, -1) {
-		if _, duplicate := blocks[match[1]]; duplicate {
-			t.Fatalf("duplicate shell example %q", match[1])
-		}
-		blocks[match[1]] = match[2] + "\n"
-	}
+	blocks := manualExamples(t)
 	fixture := &manualUpgradeFixture{t: t, installer: installer, blocks: blocks, oldBinary: filepath.Join(installer.home, "old bin", "acs")}
 	oldBytes := "#!/bin/sh\ntest \"$#\" -eq 1 && test \"$1\" = version || exit 1\nprintf 'acs v0.3.3\\n'\n"
 	fixture.newBytes = strings.ReplaceAll(oldBytes, "v0.3.3", "v0.4.0")
@@ -172,6 +234,20 @@ func newManualUpgradeFixture(t *testing.T, arch string) *manualUpgradeFixture {
 	blocks["prepare"] = regexp.MustCompile(`'[0-9a-f]{64}'`).ReplaceAllString(blocks["prepare"], fmt.Sprintf("'%x'", sha256.Sum256([]byte(rendered))))
 	blocks["stage"] = regexp.MustCompile(`binary_sha256=[0-9a-f]{64}`).ReplaceAllString(blocks["stage"], fmt.Sprintf("binary_sha256=%x", sha256.Sum256([]byte(fixture.newBytes))))
 	return fixture
+}
+
+func manualExamples(t *testing.T) map[string]string {
+	t.Helper()
+	blocks := make(map[string]string)
+	document := readRepositoryFile(t, "..", "docs/manual-upgrade-recovery.md")
+	pattern := regexp.MustCompile("(?s)<!-- example: ([a-z-]+) -->\n```sh\n(.*?)\n```")
+	for _, match := range pattern.FindAllStringSubmatch(document, -1) {
+		if _, duplicate := blocks[match[1]]; duplicate {
+			t.Fatalf("duplicate shell example %q", match[1])
+		}
+		blocks[match[1]] = match[2] + "\n"
+	}
+	return blocks
 }
 
 func (fixture *manualUpgradeFixture) run(fault string) (string, error) {

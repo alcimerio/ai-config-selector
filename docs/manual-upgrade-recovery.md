@@ -70,9 +70,10 @@ stop instead of mixing old and new evidence.
 
 ## Retain the old binary and inspect the selected installer
 
-Edit `old_bin` to the resolved executable you inspected. The remaining blocks run
-in order in the same maintenance shell; stop on any unexpected result. `set -e`
-ends that shell on a failed check, returning to the parent shell's original PATH.
+Edit `old_bin` to the resolved executable you inspected. The binary staging,
+switch, rollback and optional backup blocks run in order in the same maintenance
+shell; stop on any unexpected result. `set -e` ends that shell on a failed check,
+returning to the parent shell's original PATH.
 No shell startup file changes automatically.
 
 <!-- example: prepare -->
@@ -278,10 +279,32 @@ maintainer help instead of an automatic repair.
 
 ## Recover a Profile transaction with compatible development source
 
-Set `source_bin` to the inspected, compatible source executable, not the staged
-v0.4.0 binary. These commands inspect stored structure without changing it:
+The inspection and recovery procedures below use a separate interactive shell.
+Start it with this command, including when you are still in the maintenance Bash:
 
+<!-- example: recovery-shell -->
 ```sh
+/bin/bash --noprofile --norc
+```
+
+The setup below disables exit-on-error inside this new recovery shell, including
+when its parent exports shell options. A missing Profile, recovered duplicate name
+or cancelled builder must leave you able to inspect the result. The earlier
+maintenance shell retains its fail-fast settings; installer, hash, version and
+selection failures must still stop that workflow.
+Read each recovery command's output and status before choosing the next step;
+a nonzero status is not automatically success. Type `exit` when finished with
+the recovery shell to return to its parent.
+
+Initialize `source_bin` **in this recovery shell** to the inspected, compatible
+source executable, not the staged v0.4.0 binary. Keep this shell for the Profile
+and named-authentication recovery steps. These commands inspect stored structure
+without changing it:
+
+<!-- example: recovery-inspection -->
+```sh
+# Keep the recovery shell open for inspection after nonzero ACS statuses.
+set +e
 source_bin="/absolute/path/to/compatible-source/acs"
 "$source_bin" version
 "$source_bin" profile list
@@ -304,6 +327,7 @@ Follow the actual outcome, not just the exit code:
 For the last row, use the valid Profile name printed in the error, in a real
 interactive terminal, for example:
 
+<!-- example: profile-recovery -->
 ```sh
 "$source_bin" devin create-profile --name backend-review
 ```
@@ -312,8 +336,17 @@ This entry point recovers the previous repository transaction **before** checkin
 whether that name exists. An already-published name then produces a duplicate
 error. If the builder opens, cancel it without saving; exit 130 from that
 cancellation does not undo recovery that already finished. Then run list/show
-again, including both names from a rename. Do not create an unrelated Profile to
-reach recovery, and do not blindly retry the original edit/delete/rename.
+again in the recovery shell, including both names from a rename, for example:
+
+<!-- example: recovery-follow-up -->
+```sh
+"$source_bin" profile list
+"$source_bin" profile show backend-review
+```
+
+A still-absent name can again return exit 1 without closing this shell or losing
+`source_bin`. Do not create an unrelated Profile to reach recovery, and do not
+blindly retry the original edit/delete/rename.
 
 Recovery aborts recognized preparation before a decision; after a decision it
 rolls forward or preserves evidence and fails. It is not an undo or a historical
@@ -341,7 +374,9 @@ Locked, unavailable, ambiguous or corrupt Keychain state fails closed without a
 plaintext fallback. Restore normal Keychain access through supported macOS
 interfaces and retry; preserve evidence if schema or record integrity is rejected.
 
-With the compatible source binary, metadata-only listing is safe inspection:
+Use the [recovery-shell setup above](#recover-a-profile-transaction-with-compatible-development-source)
+and initialize `source_bin` there even if you only need identity recovery.
+With that compatible source binary, metadata-only listing is safe inspection:
 
 ```sh
 "$source_bin" codex auth list
