@@ -93,6 +93,11 @@ func TestNativeRealStoreInstalledTargetComposition(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	identities, err := registry.List(context.Background())
+	if err != nil || len(identities) != 1 || identities[0].Name != "installed-target" || identities[0].Workspace != "synthetic-workspace" {
+		t.Fatal("real Store metadata listing did not return the isolated synthetic identity")
+	}
+
 	sessionsDirectory := filepath.Join(root, "sessions")
 	status, err := registry.Status(context.Background(), "installed-target")
 	if err != nil {

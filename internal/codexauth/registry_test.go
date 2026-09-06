@@ -81,6 +81,7 @@ func TestProductionRegistryLoginUsesResourceAcquireBeforePreparation(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
+	invalidateProductionRegistryLockDirectory(t, filepath.Join(root, "acs"))
 	runner := &fakeLoginRunner{}
 	registry.login = runner
 	if _, err := registry.Login(context.Background(), LoginRequest{Name: "work"}); !errors.Is(err, ErrProviderUnavailable) {
@@ -91,7 +92,7 @@ func TestProductionRegistryLoginUsesResourceAcquireBeforePreparation(t *testing.
 	}
 }
 
-func TestProductionRegistryRoutesStatusListAndLogoutThroughResourceStore(t *testing.T) {
+func TestProductionRegistryRoutesStatusAndLogoutThroughResourceStore(t *testing.T) {
 	root := t.TempDir()
 	registry, err := New(Config{
 		BinaryPath:        "/usr/bin/true",
@@ -102,6 +103,7 @@ func TestProductionRegistryRoutesStatusListAndLogoutThroughResourceStore(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
+	invalidateProductionRegistryLockDirectory(t, filepath.Join(root, "acs"))
 	runner := &fakeStatusRunner{}
 	registry.status = runner
 	if _, err := registry.Status(context.Background(), "work"); !errors.Is(err, ErrProviderUnavailable) {
@@ -110,11 +112,21 @@ func TestProductionRegistryRoutesStatusListAndLogoutThroughResourceStore(t *test
 	if runner.checkCalls != 0 {
 		t.Fatalf("resource failure prepared status target: calls = %d", runner.checkCalls)
 	}
-	if _, err := registry.List(context.Background()); !errors.Is(err, ErrProviderUnavailable) {
-		t.Fatalf("production List resource error = %v", err)
-	}
 	if err := registry.Logout(context.Background(), "work"); !errors.Is(err, ErrProviderUnavailable) {
 		t.Fatalf("production Logout resource error = %v", err)
+	}
+}
+
+// Replacing a pinned directory makes acquisition fail on every platform before
+// provider access. These tests must never rely on the host Keychain being absent.
+func invalidateProductionRegistryLockDirectory(t *testing.T, acsHome string) {
+	t.Helper()
+	directory := filepath.Join(acsHome, "locks", "codex-auth")
+	if err := os.Rename(directory, directory+"-detached"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(directory, 0o700); err != nil {
+		t.Fatal(err)
 	}
 }
 
