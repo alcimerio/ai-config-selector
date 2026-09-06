@@ -404,7 +404,11 @@ func runInstalledCodexPTY(t *testing.T, candidate, home, tools, workspace, profi
 		_ = command.Process.Kill()
 		t.Fatalf("real Codex did not complete two fixture requests; loopback=%s; terminal=%q", fixture.summary(), output.String())
 	}
-	if !waitNativeCaptureContainsAfter(&output, 0, "fixture-complete", 5*time.Second) || !waitNativeCaptureStable(&output, 5*time.Second) {
+	// A normal exit proves the target rendered the completed assistant turn.
+	// The abrupt-settlement case instead stops ACS immediately after the real
+	// tool exchange and live-descendant proof; waiting for an otherwise
+	// irrelevant repaint makes the kill timing depend on Rosetta throughput.
+	if !crashAfterTool && (!waitNativeCaptureContainsAfter(&output, 0, "fixture-complete", 5*time.Second) || !waitNativeCaptureStable(&output, 5*time.Second)) {
 		t.Fatalf("real Codex did not finish rendering the completed turn; terminal=%q", output.String())
 	}
 	fixture.assertLiveDescendant(t)
