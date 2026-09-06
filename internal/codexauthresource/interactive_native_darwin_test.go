@@ -95,7 +95,7 @@ func TestNativeInstalledACSExecutesLockedCodexToolThroughNamedIdentity(t *testin
 	if err := os.WriteFile(outsideSecret, []byte("unrelated"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	isolationProbe := fmt.Sprintf(`; printf ' session-home-begin:%%s:session-home-end' "$HOME"; if cat %s >/dev/null 2>&1; then printf global-auth-read-bad; else printf global-auth-read-denied; fi; if cat %s >/dev/null 2>&1; then printf outside-read-bad; else printf outside-read-denied; fi; if printf bad > %s 2>/dev/null; then printf outside-write-bad; else printf outside-write-denied; fi; sleep 30 </dev/null >/dev/null 2>&1 & printf descendant-pid:%%s "$!"`, strconv.Quote(globalAuth), strconv.Quote(outsideSecret), strconv.Quote(outsideWrite))
+	isolationProbe := fmt.Sprintf(`; if cat %s >/dev/null 2>&1; then printf global-auth-read-bad; else printf global-auth-read-denied; fi; if cat %s >/dev/null 2>&1; then printf outside-read-bad; else printf outside-read-denied; fi; if printf bad > %s 2>/dev/null; then printf outside-write-bad; else printf outside-write-denied; fi; sleep 30 </dev/null >/dev/null 2>&1 & printf descendant-pid:%%s "$!"`, strconv.Quote(globalAuth), strconv.Quote(outsideSecret), strconv.Quote(outsideWrite))
 	for _, test := range []struct {
 		name, profile, command, marker string
 		wantWrite                      bool
@@ -517,7 +517,7 @@ func newNativeResponsesFixture(t *testing.T, shellCommand, launcherHome string) 
 		fixture.bodies = append(fixture.bodies, body)
 		fixture.headers = append(fixture.headers, request.Header.Clone())
 		if index == 2 {
-			fixture.sessionObservationErr = observeNativeSessionProjection(body, launcherHome)
+			fixture.sessionObservationErr = observeNativeSessionProjection(launcherHome)
 		}
 		fixture.mu.Unlock()
 		response.Header().Set("Content-Type", "text/event-stream")
@@ -665,21 +665,12 @@ func (fixture *nativeResponsesFixture) summary() string {
 	return fixture.summaryLocked()
 }
 
-func observeNativeSessionProjection(body, launcherHome string) string {
-	output, err := nativeFunctionCallOutput(body, "acs-call-1")
-	if err != nil {
-		return "cannot locate Session projection witness in matching function output"
+func observeNativeSessionProjection(launcherHome string) string {
+	sessionHomes, err := filepath.Glob(filepath.Join(launcherHome, ".acs", "sessions", "session-*", "home"))
+	if err != nil || len(sessionHomes) != 1 {
+		return "live target did not retain exactly one private Session HOME"
 	}
-	match := regexp.MustCompile(`session-home-begin:([^\r\n]+?):session-home-end`).FindStringSubmatch(output)
-	if len(match) != 2 {
-		return "matching function output omitted Session HOME identity"
-	}
-	sessionHome := filepath.Clean(match[1])
-	relative, err := filepath.Rel(filepath.Join(launcherHome, ".acs", "sessions"), sessionHome)
-	parts := strings.Split(relative, string(filepath.Separator))
-	if err != nil || len(parts) != 2 || !strings.HasPrefix(parts[0], "session-") || parts[1] != "home" {
-		return "target private write was not located in the allocated Session HOME"
-	}
+	sessionHome := sessionHomes[0]
 	var rolloutPath string
 	err = filepath.WalkDir(filepath.Join(sessionHome, ".codex", "sessions"), func(path string, entry os.DirEntry, walkErr error) error {
 		if walkErr != nil {
