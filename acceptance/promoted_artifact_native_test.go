@@ -157,9 +157,9 @@ func runPromotedArtifactGenericHelper(arguments []string) bool {
 		case "--exit-23":
 			os.Exit(23)
 		case "--wait-signal":
-			_ = os.WriteFile("generic-signal-ready", []byte("ready\n"), 0o600)
 			signals := make(chan os.Signal, 1)
 			signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
+			_ = os.WriteFile("generic-signal-ready", []byte("ready\n"), 0o600)
 			<-signals
 			os.Exit(42)
 		case "--descendant-parent":
@@ -181,9 +181,9 @@ func runPromotedArtifactGenericHelper(arguments []string) bool {
 			if !term.IsTerminal(os.Stdin.Fd()) || !term.IsTerminal(os.Stdout.Fd()) || !term.IsTerminal(os.Stderr.Fd()) {
 				os.Exit(93)
 			}
-			_, _ = fmt.Fprintln(os.Stdout, "generic-pty-ready")
 			signals := make(chan os.Signal, 1)
 			signal.Notify(signals, syscall.SIGWINCH)
+			_, _ = fmt.Fprintln(os.Stdout, "generic-pty-ready")
 			<-signals
 			width, height, err := term.GetSize(os.Stdin.Fd())
 			if err != nil {
