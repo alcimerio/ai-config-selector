@@ -487,7 +487,7 @@ func newNativeResponsesFixture(t *testing.T, shellCommand, launcherHome string) 
 				fixture.rejectProtocol(response, "Responses endpoint used neither WebSocket upgrade nor POST")
 				return
 			}
-		case "/backend-api/wham/rate-limit-reset-credits", "/backend-api/wham/usage":
+		case "/backend-api/wham/rate-limit-reset-credits", "/backend-api/wham/usage", "/backend-api/wham/settings/user":
 			if request.Method != http.MethodGet {
 				fixture.rejectProtocol(response, "usage endpoint used a non-GET method")
 				return
