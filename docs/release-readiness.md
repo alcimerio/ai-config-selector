@@ -2,9 +2,10 @@
 
 This is the source-level handoff for a future stable ACS release. It does not
 assign a version, designate an artifact, report completed daily use, or announce
-a release. The proposed cut remains unpublished until the exact package has
-completed the remaining checks below and the authorized maintainer has approved
-publication.
+a release. The proposed cut remains unpublished while the pre-tag checks below
+are completed and until the authorized maintainer approves the tag push. That
+push authorizes the existing workflow to build, natively validate, attest, and
+publish the final package without another human pause.
 
 ## Comparison boundary
 
@@ -122,6 +123,37 @@ custody of the authorized accounts cannot be established without using protected
 configuration or credentials. Those checks belong to the final controlled cut;
 their values must not be copied into logs or release documents.
 
+## Unpublished daily-use candidate
+
+Daily-use evaluation must finish before the stable tag is pushed. Use the
+existing `Promoted artifact validation` workflow on the exact reviewed commit:
+its candidate job runs `scripts/release-candidate.sh`, uploads the build-once
+`acs-candidate-<source commit>` artifact set for one day, and its native job
+installs those supplied bytes with `scripts/validate-promoted-artifact.sh`. The
+operator receives that exact artifact directory through the approved handoff and
+uses the [candidate migration and rollback guide](release-migration-guide.md),
+recording the source commit/tree, artifact name, embedded version, manifest and
+archive digests, and installed binary digest. A local clean-worktree candidate
+created with `scripts/release-candidate.sh vMAJOR.MINOR.PATCH` is also an existing
+inspection interface, but it is not the promoted workflow artifact and must be
+identified separately.
+
+The promoted pre-tag candidate is unpublished and can carry a development
+placeholder version. It supplies exact bytes for the one-week observation, but
+it is not final-tag evidence and must not be described as the published v0.4.0
+or as a future release. After the observation, any blocker is fixed and reviewed
+before the release source is frozen. The eventual tag workflow builds a new
+candidate from the chosen stable tag; its versioned archive, installer and binary
+can therefore differ from the evaluated pre-tag bytes. Only that tag workflow's
+native results, digests, attestations and publication result are final-release
+artifact evidence.
+
+The current `release` environment has no public reviewer or wait-timer gate. Do
+not push the tag as a request to inspect a draft: after the native and attestation
+jobs pass, the workflow stages and publishes the immutable Release automatically.
+If the pre-tag observation, custody checks, version decision, release notes, or
+explicit publication approval are incomplete, do not push the tag.
+
 ## Readiness assessment
 
 | Area | Status at this source boundary | Evidence and remaining action |
@@ -133,8 +165,8 @@ their values must not be copied into logs or release documents.
 | Documentation, migration, and rollback | **Complete for an unnumbered candidate; needs final substitution** | The candidate guide covers compatibility, exact-byte installation, explicit migration, nonzero recovery, binary rollback, and the two-project observation template. Re-run its tested shell examples and replace placeholders only after the final version and artifacts exist; preserve every historical release document. |
 | Artifact trust | **Controls prepared; needs final evidence** | Retain the final build-once artifact name, checksums, native job, attestation verification, draft asset comparison, publication job, and immutable Release result. Do not infer final evidence from a PR artifact or from synthetic authentication. |
 | Apple signing and notarization | **Custody decision required** | Decide before publication whether the cut remains explicitly unsigned/unnotarized or is blocked for a separately reviewed signing flow. There is no signing/notarization machinery in this source, and checksums or attestations cannot fill that gap. Do not weaken Gatekeeper or claim unsigned distribution was validated. |
-| Two-project daily use | **Operator observation required** | Use the exact selected candidate with both Devin and Codex in two real projects for one full week on macOS 26 Apple Silicon. Complete the sanitized template in the migration guide, including quickstart usefulness, Skills/workspace behavior, named-auth isolation, terminal behavior, cleanup/recovery, elapsed dates, and blockers. CI and synthetic authentication cannot complete this item. |
-| Final version and publication | **Approval required** | Review the completed exact-head package and evidence, choose the stable version, confirm release identity/configuration custody, and obtain explicit approval before pushing the annotated tag. Keep the Release unpublished if any required evidence or approval is absent. |
+| Two-project daily use | **Operator observation required before tag push** | Use the exact promoted pre-tag candidate with both Devin and Codex in two real projects for one full week on macOS 26 Apple Silicon. Complete the sanitized template in the migration guide, including its source and byte identities, quickstart usefulness, Skills/workspace behavior, named-auth isolation, terminal behavior, cleanup/recovery, elapsed dates, and blockers. CI and synthetic authentication cannot complete this item, and the result is not final-tag byte evidence. |
+| Final version and publication | **Approval required** | After daily use and blocker resolution, review and freeze the exact source package, choose the stable version, confirm release identity/configuration custody, and obtain explicit approval before pushing the annotated tag. The push authorizes the full automatic final build, native validation, attestation and publication pipeline; there is no later approval pause. |
 
 Issues [#102](https://github.com/alcimerio/ai-config-selector/issues/102),
 [#103](https://github.com/alcimerio/ai-config-selector/issues/103),
@@ -145,19 +177,29 @@ requirements by itself.
 
 ## Final operator handoff
 
-1. Land and independently review all intended source changes, then freeze the
-   exact protected-main commit and tree. Confirm issue scope and decide the
-   numeric stable version; do not reuse an existing tag.
-2. Create the matching version-specific release notes and checklist without
-   modifying historical release documents. Record the signing/notarization
-   decision and the source boundary.
-3. From a clean, up-to-date `main`, run `scripts/release-candidate.sh
-   vMAJOR.MINOR.PATCH` for a local review, then `scripts/prepare-release-tag.sh
-   vMAJOR.MINOR.PATCH`. Review the emitted source and annotated-tag identities.
-4. After explicit approval for that exact local tag, push only
-   `refs/tags/vMAJOR.MINOR.PATCH`. Monitor the tag workflow through candidate,
-   native validation, attestation, and protected publication. Never move or
-   delete the tag; fix a failed cut in source and choose a new version.
-5. Retain the exact public and private evidence named in the table. Verify the
-   published asset set and attestation only if the workflow was authorized to
-   publish. Keep all issues open until their own acceptance evidence is present.
+1. Land and independently review the intended capability source. From its
+   `Promoted artifact validation` run, hand the exact unpublished candidate to
+   the operator and record its source, artifact, archive and installed-binary
+   identities. Do not treat its embedded placeholder version as a release.
+2. Evaluate that exact pre-tag candidate for one full week with Devin and Codex
+   in two real projects. Complete the sanitized observation template and resolve
+   every release blocker through reviewed source changes; repeat affected
+   candidate checks or observation as required.
+3. Freeze and independently review the resulting protected-main commit and
+   tree. Confirm issue scope, decide the numeric stable version, and create its
+   release notes and checklist without modifying historical release documents.
+   Record the signing/notarization decision and custody checks.
+4. From clean, up-to-date `main`, run `scripts/release-candidate.sh
+   vMAJOR.MINOR.PATCH` for a local inspection, then
+   `scripts/prepare-release-tag.sh vMAJOR.MINOR.PATCH`. Review the emitted source
+   and annotated-tag identities. These local bytes are not final workflow
+   evidence.
+5. Obtain explicit approval to publish from that exact tag and evidence package.
+   Then push only `refs/tags/vMAJOR.MINOR.PATCH`. The push authorizes the full
+   automatic pipeline; monitor candidate build, native validation, attestation,
+   and publication, but do not assume an approval pause between those stages.
+   Never move or delete the tag; fix a failed cut in source and choose a new
+   version.
+6. Retain the exact public and private evidence named in the table. Verify the
+   final published asset set and attestation against the tag workflow outputs.
+   Keep all issues open until their own acceptance evidence is present.
