@@ -138,8 +138,106 @@ func TestPromotedArtifactNativeContainmentContract(t *testing.T) {
 	t.Run("v3 common material and workspace modes are enforced", assertPromotedArtifactV3WorkspaceModes)
 	t.Run("generic literal command uses candidate containment", assertPromotedArtifactGenericRun)
 	t.Run("filesystem environment descriptors sockets IP preflight and descendants", assertPromotedArtifactNativeContainment)
+	t.Run("Devin preflight and target generations are fresh while retained", assertPromotedArtifactDevinGenerations)
 	t.Run("preflight failure is categorized without target details", assertPromotedArtifactNativePreflightFailureIsSafe)
 	t.Run("missing backend OR invalid policy cannot start a marker", assertPromotedArtifactMissingBackendFailsClosed)
+}
+
+func assertPromotedArtifactDevinGenerations(t *testing.T) {
+	binary := promotedBinary(t)
+	home, path := prepareRuntimeHome(t)
+	root := realTemporaryDirectory(t)
+	workspace, tools := filepath.Join(root, "workspace"), filepath.Join(root, "tools")
+	if err := os.MkdirAll(workspace, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(tools, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeVersionThreeProfile(t, home, "generation", "read-write")
+	installPromotedArtifactFakeDevin(t, tools)
+	writeFakeDevinConfiguration(t, workspace, fakeDevinConfiguration{Mode: "session-generations"})
+	before := promotedSessionSnapshot(t, binary, home, path)
+	command := exec.Command(binary, "devin", "--profile", "generation")
+	command.Dir = workspace
+	command.Env = nativeCandidateEnvironment(home, tools+string(os.PathListSeparator)+path, nil)
+	var output synchronizedNativeCapture
+	command.Stdout, command.Stderr = &output, &output
+	if err := command.Start(); err != nil {
+		t.Fatal(err)
+	}
+	done := startNativeCommand(command)
+	t.Cleanup(func() {
+		for _, phase := range []string{"skills", "authentication", "interactive"} {
+			_ = writeFakeDevinMarker(filepath.Join(workspace, ".acs-phase-"+phase+"-release"))
+		}
+		settleNativeCommand(command, done)
+	})
+	var previous struct {
+		ID, RootName, Challenge string
+		Generation              uint64
+	}
+	for index, phase := range []string{"skills", "authentication", "interactive"} {
+		ready := filepath.Join(workspace, ".acs-phase-"+phase+"-ready")
+		if !waitForFakeDevinMarker(ready, 10*time.Second) {
+			t.Fatalf("%s phase did not become ready", phase)
+		}
+		cap := readLiveGenerationCapability(t, home)
+		phaseHome, err := os.ReadFile(ready)
+		if err != nil || filepath.Clean(string(phaseHome)) != filepath.Join(home, ".acs", "sessions", cap.RootName, "home") {
+			t.Fatalf("%s phase HOME is not bound to its private capability root", phase)
+		}
+		if index > 0 && (cap.ID != previous.ID || cap.RootName != previous.RootName || cap.Generation <= previous.Generation || cap.Challenge == previous.Challenge) {
+			t.Fatalf("%s capability identity or generation freshness check failed", phase)
+		}
+		sessionRoot := filepath.Join(home, ".acs", "sessions", cap.RootName)
+		if _, err := os.Lstat(filepath.Join(sessionRoot, ".acs-cleanup-proof-v1")); !os.IsNotExist(err) {
+			t.Fatalf("%s live process retained cleanup proof: %v", phase, err)
+		}
+		recoveryContext, cancelRecovery := context.WithTimeout(context.Background(), 5*time.Second)
+		recover := exec.CommandContext(recoveryContext, binary, "session", "recover", cap.ID, "--json")
+		recover.Env = nativeCandidateEnvironment(home, path, nil)
+		recoveryOutput, recoveryErr := recover.Output()
+		cancelRecovery()
+		var recovery struct {
+			Outcome string `json:"outcome"`
+		}
+		if recoveryErr == nil || json.Unmarshal(recoveryOutput, &recovery) != nil || recovery.Outcome != "busy" {
+			t.Fatalf("live %s recovery did not report busy: %v", phase, recoveryErr)
+		}
+		if info, err := os.Stat(sessionRoot); err != nil || !info.IsDir() {
+			t.Fatalf("live %s Session was removed during recovery refusal", phase)
+		}
+		previous = cap
+		if !writeFakeDevinMarker(filepath.Join(workspace, ".acs-phase-"+phase+"-release")) {
+			t.Fatal("release phase")
+		}
+	}
+	if err := waitNativeCommand(done, 15*time.Second); err != nil {
+		t.Fatalf("generation candidate: %v output=%s", err, output.String())
+	}
+	assertNoSessions(t, home)
+	assertNewRemovedPromotedSessions(t, binary, home, path, before, "devin")
+}
+
+func readLiveGenerationCapability(t *testing.T, home string) struct {
+	ID, RootName, Challenge string
+	Generation              uint64
+} {
+	t.Helper()
+	entries, err := filepath.Glob(filepath.Join(home, ".acs", "session-operations-v1", "capabilities", "*.json"))
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("live capability entries=%v err=%v", entries, err)
+	}
+	var cap struct {
+		ID, RootName, Challenge string
+		Generation              uint64
+	}
+	contents, err := os.ReadFile(entries[0])
+	if err != nil || json.Unmarshal(contents, &cap) != nil || cap.ID == "" || cap.Generation == 0 || cap.Challenge == "" {
+		t.Fatalf("read live capability: %v", err)
+	}
+	return cap
 }
 
 func assertPromotedArtifactEffectiveExplanation(t *testing.T) {
@@ -2150,6 +2248,7 @@ func runPromotedArtifactFakeDevin(arguments []string) bool {
 func runFakeDevinSkills() {
 	workspace := mustGetwd()
 	configuration, _ := readFakeDevinConfiguration()
+	holdFakeDevinGenerationPhase(configuration, "skills", workspace)
 	if configuration.Mode == "shared-target-conformance" {
 		writeFakeDevinMarker(filepath.Join(os.Getenv("HOME"), fakeDevinSkillsProbeMarker))
 	} else {
@@ -2173,6 +2272,7 @@ func runFakeDevinAuthentication() {
 		_, _ = io.WriteString(os.Stderr, configuration.PrivateOutput)
 		os.Exit(66)
 	}
+	holdFakeDevinGenerationPhase(configuration, "authentication", mustGetwd())
 	credential := filepath.Join(os.Getenv("XDG_DATA_HOME"), "devin", "credentials.toml")
 	if _, err := os.Stat(credential); err != nil {
 		os.Exit(65)
@@ -2191,6 +2291,10 @@ func runFakeDevinInteractive() {
 		os.Exit(71)
 	}
 	workspace := mustGetwd()
+	holdFakeDevinGenerationPhase(configuration, "interactive", workspace)
+	if configuration.Mode == "session-generations" {
+		return
+	}
 	if configuration.Mode == "signal" || configuration.Mode == "resize" {
 		runFakeDevinTerminalFixture(configuration.Mode, workspace)
 		return
@@ -2228,6 +2332,24 @@ func runFakeDevinInteractive() {
 	}
 	if err := os.WriteFile(filepath.Join(workspace, fakeDevinResultName), contents, 0o600); err != nil {
 		os.Exit(73)
+	}
+}
+
+func holdFakeDevinGenerationPhase(configuration fakeDevinConfiguration, phase, workspace string) {
+	if configuration.Mode != "session-generations" {
+		return
+	}
+	ready := filepath.Join(workspace, ".acs-phase-"+phase+"-ready")
+	release := filepath.Join(workspace, ".acs-phase-"+phase+"-release")
+	if os.WriteFile(ready+".pending", []byte(os.Getenv("HOME")), 0o600) != nil || os.Rename(ready+".pending", ready) != nil {
+		os.Exit(70)
+	}
+	deadline := time.Now().Add(20 * time.Second)
+	for !fakeDevinMarkerExists(release) {
+		if time.Now().After(deadline) {
+			os.Exit(69)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 
