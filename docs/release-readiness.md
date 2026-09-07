@@ -91,12 +91,14 @@ The following public repository and workflow metadata was inspected read-only on
 
 - Protected `main` is implemented by an active repository ruleset. It requires
   pull requests, linear history, resolved review threads, and the `Verify
-  (macOS)` and `Native darwin/arm64` status checks. The ruleset exposes an
-  administrator bypass; the release decision must not rely on using it.
-- Active tag rulesets restrict creation of `refs/tags/v*` to the configured
-  maintainer bypass identity and prohibit tag update or deletion without a
-  bypass. `scripts/publish-release.sh` independently re-reads the exact ruleset
-  structure and verifies that the event actor matches the configured creator.
+  (macOS)` and `Native darwin/arm64` status checks. Its bypass list contains one
+  specific User actor; it is not an administrator-role bypass, and the release
+  decision must not rely on using it.
+- One active tag ruleset prohibits `refs/tags/v*` update and deletion and has no
+  bypass actors. A separate active creation ruleset prohibits creation except
+  through one configured User bypass actor. `scripts/publish-release.sh`
+  independently re-reads both exact ruleset structures and verifies that the
+  event actor matches the configured creator.
 - The `release` environment accepts only its custom `v*` tag policy. Its public
   metadata shows no required reviewer or wait timer and permits administrator
   bypass, so the required final human publication approval remains an explicit
