@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,6 +17,13 @@ import (
 	"github.com/alcimerio/ai-config-selector/internal/profile"
 	"github.com/alcimerio/ai-config-selector/internal/skills"
 )
+
+type rejectedExplanationWriter struct{ calls int }
+
+func (writer *rejectedExplanationWriter) Write([]byte) (int, error) {
+	writer.calls++
+	return 0, errors.New("rejected output")
+}
 
 type explanationReadiness struct {
 	calls     int
@@ -202,6 +210,27 @@ func TestExplainJSONFailureIsVersionedAndDoesNotExposeWrappedError(t *testing.T)
 	}
 	if !strings.Contains(stdout.String(), `"diagnostic":{"code":"invalid_invocation"`) || strings.Contains(stdout.String(), "duplicate flag") {
 		t.Fatalf("unsafe or unversioned syntax diagnostic: %s", stdout.String())
+	}
+}
+
+func TestExplainReportsFailureWhenTheBufferedResultCannotBeWritten(t *testing.T) {
+	home := t.TempDir()
+	target, err := devin.New(devin.Config{BinaryPath: "devin", ExistingHomeDir: home})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := profile.NewStore(filepath.Join(home, ".acs"), target.Categories())
+	candidate, err := target.Categories().NewProfile("example", target.Categories().NewDraft())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Create(candidate); err != nil {
+		t.Fatal(err)
+	}
+	output := &rejectedExplanationWriter{}
+	app := cli.App{Categories: target.Categories(), Profiles: store, WorkingDirectory: home, Output: output, ErrorOutput: &bytes.Buffer{}}
+	if code := app.Run(context.Background(), []string{"explain", "sandbox", "--profile", "example", "--json"}); code != 1 || output.calls != 1 {
+		t.Fatalf("write failure code=%d calls=%d", code, output.calls)
 	}
 }
 

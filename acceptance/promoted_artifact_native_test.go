@@ -142,6 +142,13 @@ func TestPromotedArtifactNativeContainmentContract(t *testing.T) {
 func assertPromotedArtifactEffectiveExplanation(t *testing.T) {
 	binary := promotedBinary(t)
 	home, path := prepareRuntimeHome(t)
+	sharedSkill := filepath.Join(home, ".agents", "skills", "delivery")
+	if err := os.MkdirAll(sharedSkill, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sharedSkill, "SKILL.md"), []byte("# delivery\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	writeSharedTargetProfile(t, home, "explanation", "read-write")
 	workspace := realTemporaryDirectory(t)
 	for _, directory := range []string{
@@ -209,6 +216,32 @@ func assertPromotedArtifactEffectiveExplanation(t *testing.T) {
 			for _, id := range []string{"execution.recipe", "common.workspace"} {
 				if !nativeExplanationHasFact(result.Plan.Requested, id) {
 					t.Fatalf("requested facts omitted %s: %s", id, output)
+				}
+			}
+			for _, id := range []string{"skills.selected.devin-config:review", "skills.selected.shared-agents:delivery"} {
+				if !nativeExplanationHasFact(result.Plan.Requested, id) {
+					t.Fatalf("requested facts omitted exact selected identity %s: %s", id, output)
+				}
+			}
+			if bytes.Contains(output, []byte("unselected")) {
+				t.Fatalf("explanation rendered an unselected bundle: %s", output)
+			}
+			selectedOverlay, hasSelectedOverlay := nativeExplanationFactByID(result.Plan.Requested, "target.overlay")
+			switch test.name {
+			case "devin", "codex":
+				if !hasSelectedOverlay || selectedOverlay.Value.Mode != test.name {
+					t.Fatalf("selected overlay fact for %s is incomplete: %#v", test.name, selectedOverlay)
+				}
+			default:
+				if hasSelectedOverlay {
+					t.Fatalf("common intent %s selected a target overlay: %#v", test.name, selectedOverlay)
+				}
+			}
+			for _, inactive := range []string{"devin", "codex"} {
+				factID := "overlay.inactive." + inactive
+				shouldBeInactive := test.name != inactive
+				if nativeExplanationHasFact(result.Plan.Unsupported, factID) != shouldBeInactive {
+					t.Fatalf("inactive overlay presentation %s for %s is incorrect: %s", factID, test.name, output)
 				}
 			}
 			for _, id := range []string{"unsupported.arbitrary-executables", "unsupported.arbitrary-host-paths", "unsupported.host-environment", "unsupported.network-destinations", "unsupported.raw-policy", "unsupported.sandbox-bypass", "unsupported.target-pass-through"} {
@@ -304,6 +337,53 @@ func assertPromotedArtifactEffectiveExplanation(t *testing.T) {
 	assertPromotedArtifactExplanationFailuresArePlanless(t, binary, home, path, workspace)
 	assertPromotedArtifactRunDigestMeaning(t, binary, home, path, workspace, helper)
 	assertPromotedArtifactCodexAuthDigestMeaning(t, binary, home, path, workspace)
+	assertPromotedArtifactV3ExplanationWorkspaceModes(t, binary, home, path, workspace, helper)
+}
+
+func assertPromotedArtifactV3ExplanationWorkspaceModes(t *testing.T, binary, home, path, workspace, helper string) {
+	t.Helper()
+	writeSharedTargetProfile(t, home, "explanation-readonly", "read-only")
+	type modeResult struct {
+		access, digest string
+	}
+	byIntent := map[string][]modeResult{}
+	for _, profileName := range []string{"explanation-readonly", "explanation"} {
+		for _, test := range []struct {
+			name      string
+			arguments []string
+		}{
+			{name: "sandbox", arguments: []string{"explain", "sandbox", "--profile", profileName, "--json"}},
+			{name: "devin", arguments: []string{"explain", "devin", "--profile", profileName, "--json"}},
+			{name: "codex", arguments: []string{"explain", "codex", "--profile", profileName, "--json"}},
+			{name: "run", arguments: []string{"explain", "run", "--profile", profileName, "--json", "--", helper}},
+		} {
+			command := exec.Command(binary, test.arguments...)
+			command.Dir, command.Env = workspace, nativeCandidateEnvironment(home, path, nil)
+			output, err := command.CombinedOutput()
+			if err != nil {
+				t.Fatalf("v3 %s %s explanation: %v; output=%s", profileName, test.name, err, output)
+			}
+			var result struct {
+				Plan struct {
+					Digest    string                  `json:"authorityDigest"`
+					Requested []nativeExplanationFact `json:"requested"`
+				} `json:"plan"`
+			}
+			if err := json.Unmarshal(output, &result); err != nil {
+				t.Fatalf("decode v3 mode explanation: %v; output=%s", err, output)
+			}
+			workspaceFact, found := nativeExplanationFactByID(result.Plan.Requested, "common.workspace")
+			if !found || workspaceFact.Value.Access == "" || workspaceFact.Reason != "stored_v3_intent" {
+				t.Fatalf("v3 workspace authority is incomplete: %#v output=%s", workspaceFact, output)
+			}
+			byIntent[test.name] = append(byIntent[test.name], modeResult{access: workspaceFact.Value.Access, digest: result.Plan.Digest})
+		}
+	}
+	for intent, results := range byIntent {
+		if len(results) != 2 || results[0].access != "read-only" || results[1].access != "read-write" || results[0].digest == results[1].digest {
+			t.Fatalf("v3 %s workspace declaration/digest matrix = %#v", intent, results)
+		}
+	}
 }
 
 func assertPromotedArtifactRunDigestMeaning(t *testing.T, binary, home, path, workspace, helper string) {
@@ -354,8 +434,8 @@ func assertPromotedArtifactRunDigestMeaning(t *testing.T, binary, home, path, wo
 
 func assertPromotedArtifactCodexAuthDigestMeaning(t *testing.T, binary, home, path, workspace string) {
 	t.Helper()
-	writeNativeExplanationProfile(t, home, "auth-first", `"codex":{"version":1,"authRef":"PRIVATE-AUTH-FIRST"}`)
-	writeNativeExplanationProfile(t, home, "auth-second", `"codex":{"version":1,"authRef":"PRIVATE-AUTH-SECOND"}`)
+	writeNativeExplanationProfile(t, home, "auth-first", `"codex":{"version":1,"authRef":"private-auth-first"}`)
+	writeNativeExplanationProfile(t, home, "auth-second", `"codex":{"version":1,"authRef":"private-auth-second"}`)
 	explain := func(profileName string, override ...string) (string, []nativeExplanationFact) {
 		arguments := []string{"explain", "codex", "--profile", profileName, "--json"}
 		if len(override) != 0 {
@@ -367,7 +447,7 @@ func assertPromotedArtifactCodexAuthDigestMeaning(t *testing.T, binary, home, pa
 		if err != nil {
 			t.Fatalf("Codex auth explanation: %v; output=%s", err, output)
 		}
-		for _, private := range []string{"PRIVATE-AUTH-FIRST", "PRIVATE-AUTH-SECOND", "PRIVATE-AUTH-OVERRIDE"} {
+		for _, private := range []string{"private-auth-first", "private-auth-second", "private-auth-override"} {
 			if bytes.Contains(output, []byte(private)) {
 				t.Fatalf("Codex explanation exposed auth reference %q: %s", private, output)
 			}
@@ -385,7 +465,7 @@ func assertPromotedArtifactCodexAuthDigestMeaning(t *testing.T, binary, home, pa
 	}
 	first, firstFacts := explain("auth-first")
 	second, _ := explain("auth-second")
-	override, overrideFacts := explain("auth-first", "PRIVATE-AUTH-OVERRIDE")
+	override, overrideFacts := explain("auth-first", "private-auth-override")
 	if first != second {
 		t.Fatal("opaque Codex auth reference value changed semantic authority digest")
 	}

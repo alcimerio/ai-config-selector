@@ -2188,6 +2188,23 @@ func TestSeatbeltPTYOutputDrainCancelsWhileSlaveRemainsOpen(t *testing.T) {
 	cancel := make(chan struct{})
 	done := make(chan error, 1)
 	go func() { done <- drainSeatbeltPTYOutput(master, output, cancel) }()
+	if _, err := terminal.Write([]byte("drain-reader-active\n")); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for {
+		contents, err := os.ReadFile(output.Name())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if bytes.Contains(contents, []byte("drain-reader-active")) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("PTY drain did not demonstrate reader activity before cancellation")
+		}
+		time.Sleep(time.Millisecond)
+	}
 	close(cancel)
 	select {
 	case err := <-done:

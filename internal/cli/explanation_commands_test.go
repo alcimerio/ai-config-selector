@@ -87,3 +87,45 @@ func TestExplainRunHelpDocumentsLiteralBoundaryWithoutDependencies(t *testing.T)
 		}
 	}
 }
+
+func TestExplanationBoundsAreByteBasedAndInclusiveOnlyAtDeclaredMaximum(t *testing.T) {
+	maximumString := strings.Repeat("x", maximumExplanationStringBytes)
+	maximumFacts := make([]authority.Fact, maximumExplanationFacts)
+	for index := range maximumFacts {
+		maximumFacts[index] = authority.Fact{ID: "fact", Kind: "kind", Reason: "reason", Source: authority.FactSource{Kind: "source", ID: "id"}, Value: authority.FactValue{Mode: "mode"}}
+	}
+	maximumChecks := make([]explanationCheck, maximumExplanationChecks)
+	for index := range maximumChecks {
+		maximumChecks[index] = explanationCheck{ID: "check", Status: "unchecked", Code: "code", Detail: "detail"}
+	}
+	if !explanationWithinBounds(authority.Explanation{Requested: maximumFacts}, maximumChecks) {
+		t.Fatal("declared exact fact/check maxima were rejected")
+	}
+	if !explanationWithinBounds(authority.Explanation{Requested: []authority.Fact{{ID: maximumString}}}, nil) {
+		t.Fatal("declared exact string byte maximum was rejected")
+	}
+	if explanationWithinBounds(authority.Explanation{Requested: append(maximumFacts, authority.Fact{})}, nil) {
+		t.Fatal("fact count above declared maximum was accepted")
+	}
+	if explanationWithinBounds(authority.Explanation{}, append(maximumChecks, explanationCheck{})) {
+		t.Fatal("check count above declared maximum was accepted")
+	}
+	if explanationWithinBounds(authority.Explanation{Requested: []authority.Fact{{ID: maximumString + "x"}}}, nil) {
+		t.Fatal("string above declared byte maximum was accepted")
+	}
+	if explanationWithinBounds(authority.Explanation{Requested: []authority.Fact{{ID: strings.Repeat("é", maximumExplanationStringBytes/2) + "x"}}}, nil) {
+		t.Fatal("multibyte string above declared byte maximum was accepted")
+	}
+}
+
+func TestExplanationTooLargeDiagnosticContainsNoPartialPlanOrDigest(t *testing.T) {
+	var output bytes.Buffer
+	app := App{Output: &output}
+	invocation := invocation{enabled: true, value: "example", command: commandSpec{path: "explain devin"}}
+	if code := app.writeExplanationDiagnostic(invocation, "explanation_too_large", "The semantic explanation exceeds a declared format bound."); code != 1 {
+		t.Fatalf("diagnostic exit = %d", code)
+	}
+	if !strings.Contains(output.String(), `"plan":null`) || !strings.Contains(output.String(), `"code":"explanation_too_large"`) || strings.Contains(output.String(), "authorityDigest") {
+		t.Fatalf("oversized diagnostic exposed a partial plan: %s", output.String())
+	}
+}
