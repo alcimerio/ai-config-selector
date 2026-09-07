@@ -39,7 +39,7 @@ jobs:
           ACS_RUN_NATIVE_TRANSPORT_PROBE: "1"
           ACS_NATIVE_TRANSPORT_EVIDENCE: ${{ runner.temp }}/native-transport-evidence.json
           ACS_NATIVE_TRANSPORT_JOB: Native transport research / Transport probes (darwin/arm64)
-        run: go test -count=1 -v -timeout=8m ./internal/launch -run '^TestNativeSeatbeltTransportResearchMatrix$'
+        run: go test -count=1 -v -timeout=8m ./internal/launch -run '^(TestNativeSeatbeltTransportResearchMatrix|TestSeatbeltTransport.*)$'
 
       - name: Upload sanitized operation evidence
         if: ${{ always() }}

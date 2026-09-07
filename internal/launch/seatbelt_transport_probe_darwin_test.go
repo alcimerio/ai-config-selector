@@ -63,8 +63,11 @@ type seatbeltTransportEvidence struct {
 
 type seatbeltTransportCaseEvidence struct {
 	Name                 string                     `json:"name"`
+	PolicyControl        string                     `json:"policy_control_validation,omitempty"`
+	PolicyControlOutput  string                     `json:"policy_control_diagnostics,omitempty"`
 	PolicyValidation     string                     `json:"policy_validation"`
 	PolicyExample        string                     `json:"policy_example,omitempty"`
+	PolicyDiagnostics    string                     `json:"policy_diagnostics,omitempty"`
 	DescendantExecution  bool                       `json:"descendant_execution"`
 	ClientOperations     []seatbeltTransportResult  `json:"client_operations,omitempty"`
 	ListenerReceipts     []seatbeltTransportReceipt `json:"listener_receipts,omitempty"`
@@ -571,34 +574,40 @@ func (fixture *seatbeltTransportFixture) runExactIPCase(t *testing.T) seatbeltTr
 	minimalRule := seatbeltExactIPRule("127.0.0.1", seatbeltPort(fixture.tcp4Allowed.address()))
 	minimal := "(allow network-outbound " + minimalRule + ")"
 	minimalRequest := seatbeltTestRequest(t)
-	minimalPolicy, minimalDefinitions, err := seatbeltTransportBaseWithoutOutbound(minimalRequest)
+	basePolicy, minimalDefinitions, err := seatbeltTransportBaseWithoutOutbound(minimalRequest)
 	if err != nil {
 		t.Fatal(err)
 	}
-	minimalPolicy += "\n" + minimal + "\n"
+	supervisor, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	supervisor, err = filepath.EvalSymlinks(supervisor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	minimalDefinitions = append(minimalDefinitions, "-DSUPERVISOR="+supervisor)
+	minimalPolicy := basePolicy + "\n" + minimal + "\n"
 	backend := newSeatbeltBackend(seatbeltExecutable)
 	validationContext, cancelValidation := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancelValidation()
-	if err := backend.validateGeneratedPolicy(validationContext, minimalRequest, minimalPolicy, minimalDefinitions); err != nil {
-		validation := string(SandboxPolicyRejected)
-		conclusion := "policy_rejected"
-		var exitError *exec.ExitError
-		if validationContext.Err() != nil {
-			validation = "validation_deadline_exceeded"
-			conclusion = "inconclusive_minimal_policy_validation"
-		} else if !errors.As(err, &exitError) {
-			validation = "validation_execution_error"
-			conclusion = "inconclusive_minimal_policy_validation"
-		}
+	controlValidation, controlDiagnostics := seatbeltValidateTransportPolicy(validationContext, backend, minimalRequest, basePolicy, minimalDefinitions)
+	if controlValidation != "accepted" {
 		evidence := seatbeltTransportCaseEvidence{
-			Name: "exact_numeric_ip_endpoint", PolicyValidation: validation,
-			PolicyExample: minimal, Conclusion: conclusion,
+			Name: "exact_numeric_ip_endpoint", PolicyControl: controlValidation, PolicyControlOutput: controlDiagnostics,
+			PolicyValidation: "not_attempted_after_control_failure",
+			PolicyExample:    minimal, Conclusion: seatbeltExactIPValidationConclusion(controlValidation, "not_attempted_after_control_failure"),
 		}
-		if removeErr := os.RemoveAll(minimalRequest.sessionDirectory); removeErr != nil {
-			t.Fatal(removeErr)
+		fixture.removeRejectedPolicySession(t, minimalRequest, &evidence)
+		return evidence
+	}
+	validation, diagnostics := seatbeltValidateTransportPolicy(validationContext, backend, minimalRequest, minimalPolicy, minimalDefinitions)
+	if validation != "accepted" {
+		evidence := seatbeltTransportCaseEvidence{
+			Name: "exact_numeric_ip_endpoint", PolicyControl: controlValidation, PolicyControlOutput: controlDiagnostics, PolicyValidation: validation,
+			PolicyExample: minimal, PolicyDiagnostics: diagnostics, Conclusion: seatbeltExactIPValidationConclusion(controlValidation, validation),
 		}
-		_, statErr := os.Stat(minimalRequest.sessionDirectory)
-		evidence.PhysicalRemoval = errors.Is(statErr, os.ErrNotExist)
+		fixture.removeRejectedPolicySession(t, minimalRequest, &evidence)
 		return evidence
 	}
 	if err := os.RemoveAll(minimalRequest.sessionDirectory); err != nil {
@@ -617,7 +626,104 @@ func (fixture *seatbeltTransportFixture) runExactIPCase(t *testing.T) seatbeltTr
 		}
 		return generated + "\n(allow network-outbound\n  " + strings.Join(rules, "\n  ") + ")\n", definitions, nil
 	}
-	return fixture.executeCase(t, "exact_numeric_ip_endpoint", fixture.operations("exact-ip"), policy, minimal)
+	evidence := fixture.executeCase(t, "exact_numeric_ip_endpoint", fixture.operations("exact-ip"), policy, minimal)
+	evidence.PolicyControl = controlValidation
+	evidence.PolicyControlOutput = controlDiagnostics
+	evidence.PolicyDiagnostics = diagnostics
+	if evidence.PolicyValidation != "accepted_and_applied_before_target_start" {
+		evidence.Conclusion = "inconclusive_execution_policy_revalidation"
+	}
+	return evidence
+}
+
+func (fixture *seatbeltTransportFixture) removeRejectedPolicySession(t *testing.T, request validatedProcessRequest, evidence *seatbeltTransportCaseEvidence) {
+	t.Helper()
+	if err := os.RemoveAll(request.sessionDirectory); err != nil {
+		t.Fatal(err)
+	}
+	_, statErr := os.Stat(request.sessionDirectory)
+	evidence.PhysicalRemoval = errors.Is(statErr, os.ErrNotExist)
+	if !evidence.PhysicalRemoval {
+		t.Fatalf("minimal-policy Session physical removal was not observed: %v", statErr)
+	}
+}
+
+func seatbeltValidateTransportPolicy(
+	ctx context.Context,
+	backend *seatbeltBackend,
+	request validatedProcessRequest,
+	policy string,
+	definitions []string,
+) (string, string) {
+	arguments := make([]string, 0, 4+len(definitions))
+	arguments = append(arguments, "-p", policy)
+	arguments = append(arguments, definitions...)
+	arguments = append(arguments, "--", "/usr/bin/true")
+	command := exec.CommandContext(ctx, backend.executable, arguments...)
+	command.Dir = request.workspace
+	command.Env = append([]string(nil), request.environment...)
+	output := &seatbeltBoundedCapture{limit: 4096}
+	command.Stdout = output
+	command.Stderr = output
+	err := command.Run()
+	diagnostics := seatbeltSanitizeTransportDiagnostics(output.String(), output.Exceeded(), request)
+	return seatbeltClassifyTransportValidation(ctx.Err(), err, diagnostics), diagnostics
+}
+
+func seatbeltClassifyTransportValidation(contextErr, commandErr error, diagnostics string) string {
+	if commandErr == nil {
+		return "accepted"
+	}
+	if contextErr != nil {
+		return "validation_deadline_exceeded"
+	}
+	var exitError *exec.ExitError
+	if !errors.As(commandErr, &exitError) {
+		return "validation_execution_error"
+	}
+	normalized := strings.ToLower(diagnostics)
+	for _, marker := range []string{"profile compilation failed", "policy compilation failed"} {
+		if strings.Contains(normalized, marker) {
+			return string(SandboxPolicyRejected)
+		}
+	}
+	return "validation_nonzero_exit"
+}
+
+func seatbeltExactIPValidationConclusion(controlValidation, candidateValidation string) string {
+	if controlValidation != "accepted" {
+		return "inconclusive_known_valid_policy_control"
+	}
+	if candidateValidation == string(SandboxPolicyRejected) {
+		return "policy_rejected"
+	}
+	if candidateValidation != "accepted" {
+		return "inconclusive_minimal_policy_validation"
+	}
+	return "accepted"
+}
+
+func seatbeltSanitizeTransportDiagnostics(diagnostics string, truncated bool, request validatedProcessRequest) string {
+	diagnostics = strings.TrimSpace(diagnostics)
+	replacements := []struct{ value, replacement string }{
+		{request.sessionDirectory, "<SESSION>"},
+		{request.workspace, "<WORKSPACE>"},
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		replacements = append(replacements, struct{ value, replacement string }{home, "<HOME>"})
+	}
+	for _, replacement := range replacements {
+		if replacement.value != "" {
+			diagnostics = strings.ReplaceAll(diagnostics, replacement.value, replacement.replacement)
+		}
+	}
+	if diagnostics == "" {
+		diagnostics = "empty"
+	}
+	if truncated {
+		diagnostics += " [truncated at 4096 bytes]"
+	}
+	return diagnostics
 }
 
 func seatbeltTransportBaseWithoutOutbound(request validatedProcessRequest) (string, []string, error) {
@@ -1364,7 +1470,7 @@ func seatbeltTransportDemonstrated(evidence *seatbeltTransportEvidence) []string
 		}
 	}
 	if evidence.InheritedDescriptors.Conclusion == "connected_descriptors_sealed_before_target_exec" {
-		demonstrated = append(demonstrated, "connected TCP and UDP descriptors survived to the contained supervisor and were sealed before target exec")
+		demonstrated = append(demonstrated, "connected TCP and UDP descriptors survived to the separate descriptor-sealer helper and were sealed before target exec")
 	}
 	return demonstrated
 }
@@ -1444,5 +1550,55 @@ func TestSeatbeltTransportErrorCategoriesRemainDistinct(t *testing.T) {
 		if got := seatbeltTransportErrorCategory(test.err); got != test.want {
 			t.Errorf("category(%v) = %q, want %q", test.err, got, test.want)
 		}
+	}
+}
+
+func TestSeatbeltTransportValidationRequiresControlAndCompilerMarker(t *testing.T) {
+	exitError := &exec.ExitError{}
+	for _, test := range []struct {
+		name        string
+		contextErr  error
+		commandErr  error
+		diagnostics string
+		want        string
+	}{
+		{name: "accepted", want: "accepted"},
+		{name: "deadline", contextErr: context.DeadlineExceeded, commandErr: exitError, diagnostics: "profile compilation failed", want: "validation_deadline_exceeded"},
+		{name: "execution", commandErr: errors.New("start"), want: "validation_execution_error"},
+		{name: "unclassified nonzero", commandErr: exitError, diagnostics: "target exited", want: "validation_nonzero_exit"},
+		{name: "profile compiler", commandErr: exitError, diagnostics: "sandbox-exec: profile compilation failed: invalid filter", want: string(SandboxPolicyRejected)},
+		{name: "policy compiler", commandErr: exitError, diagnostics: "Policy Compilation Failed", want: string(SandboxPolicyRejected)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := seatbeltClassifyTransportValidation(test.contextErr, test.commandErr, test.diagnostics); got != test.want {
+				t.Fatalf("classification = %q, want %q", got, test.want)
+			}
+		})
+	}
+
+	for _, test := range []struct {
+		name, control, candidate, want string
+	}{
+		{name: "invalid control", control: "validation_nonzero_exit", candidate: "not_attempted_after_control_failure", want: "inconclusive_known_valid_policy_control"},
+		{name: "compiler rejection", control: "accepted", candidate: string(SandboxPolicyRejected), want: "policy_rejected"},
+		{name: "unclassified candidate", control: "accepted", candidate: "validation_nonzero_exit", want: "inconclusive_minimal_policy_validation"},
+		{name: "accepted candidate", control: "accepted", candidate: "accepted", want: "accepted"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := seatbeltExactIPValidationConclusion(test.control, test.candidate); got != test.want {
+				t.Fatalf("conclusion = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
+func TestSeatbeltTransportDiagnosticsAreBoundedAndSanitized(t *testing.T) {
+	request := validatedProcessRequest{workspace: "/private/workspace", sessionDirectory: "/private/session"}
+	diagnostics := seatbeltSanitizeTransportDiagnostics("/private/workspace /private/session", true, request)
+	if strings.Contains(diagnostics, request.workspace) || strings.Contains(diagnostics, request.sessionDirectory) {
+		t.Fatalf("diagnostics retained a private path: %q", diagnostics)
+	}
+	if !strings.Contains(diagnostics, "<WORKSPACE>") || !strings.Contains(diagnostics, "<SESSION>") || !strings.Contains(diagnostics, "truncated at 4096 bytes") {
+		t.Fatalf("diagnostics lost sanitized bounded categories: %q", diagnostics)
 	}
 }
