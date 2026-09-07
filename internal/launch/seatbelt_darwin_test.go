@@ -2074,10 +2074,24 @@ func TestSeatbeltNativeRoutesTerminalSignalsOnlyToContainedTarget(t *testing.T) 
 			}
 			defer ptyOutput.Close()
 			drainDone := make(chan error, 1)
-			go func() {
-				_, copyErr := io.Copy(ptyOutput, master)
-				drainDone <- copyErr
-			}()
+			go func() { drainDone <- drainSeatbeltPTYOutput(master, ptyOutput) }()
+			drainStopped := false
+			stopDrain := func() {
+				if drainStopped {
+					return
+				}
+				drainStopped = true
+				_ = master.Close()
+				select {
+				case err := <-drainDone:
+					if err != nil && !errors.Is(err, os.ErrClosed) && !errors.Is(err, syscall.EBADF) {
+						t.Errorf("drain native PTY output: %v", err)
+					}
+				case <-time.After(time.Second):
+					t.Error("native PTY output drain did not stop after master close")
+				}
+			}
+			defer stopDrain()
 			if err := command.Start(); err != nil {
 				t.Fatal(err)
 			}
@@ -2087,7 +2101,8 @@ func TestSeatbeltNativeRoutesTerminalSignalsOnlyToContainedTarget(t *testing.T) 
 			if err := terminal.Close(); err != nil {
 				t.Fatal(err)
 			}
-			waitForSeatbeltPTYMarkerWithDiagnostics(t, paths.ready, commandDone, master, paths)
+			_ = waitForSeatbeltPTYReadyWithDiagnostics(t, paths.ready, commandDone, master, paths)
+			waitForSeatbeltPTYMarkerWithDiagnostics(t, paths.scannerStarted, commandDone, master, paths)
 			switch test.signal {
 			case syscall.SIGINT:
 				if _, err := master.Write([]byte{3}); err != nil {
@@ -2107,12 +2122,7 @@ func TestSeatbeltNativeRoutesTerminalSignalsOnlyToContainedTarget(t *testing.T) 
 				t.Fatal(err)
 			}
 			waitSeatbeltNativePTYHarness(t, command, commandDone, master, paths)
-			if err := master.Close(); err != nil {
-				t.Fatal(err)
-			}
-			if err := <-drainDone; err != nil && !errors.Is(err, os.ErrClosed) {
-				t.Fatalf("drain native PTY output: %v", err)
-			}
+			stopDrain()
 			if count, err := os.ReadFile(paths.observed); err != nil || string(count) != "1\n" {
 				t.Fatalf("terminal %s deliveries after release = %q, %v; want exactly one", test.signal, count, err)
 			}
@@ -2120,6 +2130,34 @@ func TestSeatbeltNativeRoutesTerminalSignalsOnlyToContainedTarget(t *testing.T) 
 				t.Fatalf("harness %s deliveries = %q, %v; want none", test.signal, count, err)
 			}
 		})
+	}
+}
+
+func TestSeatbeltPTYReadyPublicationIsAtomicAndContentValid(t *testing.T) {
+	root := t.TempDir()
+	ready := filepath.Join(root, "ready")
+	beforeRename := make(chan struct{})
+	release := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		done <- publishSeatbeltPTYReady(ready, 1234, func(string) {
+			close(beforeRename)
+			<-release
+		})
+	}()
+	<-beforeRename
+	if contents, err := os.ReadFile(ready); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("ready path became visible before committed publication: contents=%q err=%v", contents, err)
+	}
+	if group, published, err := readSeatbeltPTYReady(ready); err != nil || published || group != 0 {
+		t.Fatalf("reader accepted prepublication state: group=%d published=%v err=%v", group, published, err)
+	}
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if group, published, err := readSeatbeltPTYReady(ready); err != nil || !published || group != 1234 {
+		t.Fatalf("reader rejected committed ready state: group=%d published=%v err=%v", group, published, err)
 	}
 }
 
@@ -2139,7 +2177,7 @@ func TestSeatbeltNativePTYHarness(t *testing.T) {
 	}
 	request.arguments = []string{
 		"-test.run=^TestSeatbeltNativePTYTarget$", "--", strconv.Itoa(signalNumber),
-		paths.ready, paths.received, paths.snapshot, paths.observed, paths.diagnostic, paths.observation,
+		paths.ready, paths.received, paths.snapshot, paths.observed, paths.diagnostic, paths.observation, paths.scannerStarted,
 	}
 	request.terminal = Terminal{Input: os.Stdin, Output: os.Stdout, ErrorOutput: os.Stderr}
 	harnessSignals := make(chan os.Signal, 8)
@@ -2152,8 +2190,8 @@ func TestSeatbeltNativePTYHarness(t *testing.T) {
 	if err := process.Start(); err != nil {
 		t.Fatal(err)
 	}
-	waitForSeatbeltPTYMarker(t, paths.ready)
-	assertSeatbeltPTYForegroundTarget(t, os.Stdin, paths.ready)
+	targetGroup := waitForSeatbeltPTYReady(t, paths.ready)
+	assertSeatbeltPTYForegroundTarget(t, os.Stdin, targetGroup)
 	if err := process.Wait(); err != nil {
 		t.Fatal(err)
 	}
@@ -2181,7 +2219,12 @@ func TestSeatbeltNativePTYTarget(t *testing.T) {
 	commands := make(chan string, 2)
 	recordSeatbeltPTYObservation(arguments[6], "target-start "+seatbeltPTYTerminalObservation(os.Stdin))
 	go func() {
+		defer close(commands)
 		scanner := bufio.NewScanner(os.Stdin)
+		if err := os.WriteFile(arguments[7], []byte("scanner-started\n"), 0o600); err != nil {
+			recordSeatbeltPTYObservation(arguments[6], "scanner-start-marker-failed "+err.Error())
+			return
+		}
 		for scanner.Scan() {
 			line := scanner.Text()
 			recordSeatbeltPTYObservation(arguments[6], "scanner-line "+strconv.Quote(line))
@@ -2193,7 +2236,7 @@ func TestSeatbeltNativePTYTarget(t *testing.T) {
 		}
 		_ = os.WriteFile(arguments[5], []byte(diagnostic+"\n"), 0o600)
 	}()
-	if err := os.WriteFile(arguments[1], []byte(strconv.Itoa(syscall.Getpgrp())+"\n"), 0o600); err != nil {
+	if err := publishSeatbeltPTYReady(arguments[1], syscall.Getpgrp(), nil); err != nil {
 		t.Fatal(err)
 	}
 	deliveries := 0
@@ -2209,7 +2252,10 @@ func TestSeatbeltNativePTYTarget(t *testing.T) {
 			if err := os.WriteFile(arguments[2], []byte(strconv.Itoa(deliveries)+"\n"), 0o600); err != nil {
 				t.Fatal(err)
 			}
-		case command := <-commands:
+		case command, open := <-commands:
+			if !open {
+				t.Fatal("terminal scanner ended before release")
+			}
 			switch command {
 			case "snapshot":
 				if err := os.WriteFile(arguments[3], []byte("snapshot\n"), 0o600); err != nil {
@@ -2250,7 +2296,7 @@ func drainSeatbeltPTYSignals(t *testing.T, signals <-chan os.Signal, want syscal
 }
 
 type seatbeltPTYPaths struct {
-	ready, received, snapshot, observed, harnessObserved, diagnostic, observation, ptyOutput string
+	ready, received, snapshot, observed, harnessObserved, diagnostic, observation, scannerStarted, ptyOutput string
 }
 
 func seatbeltNativePTYPaths(root string) seatbeltPTYPaths {
@@ -2259,7 +2305,8 @@ func seatbeltNativePTYPaths(root string) seatbeltPTYPaths {
 		ready: filepath.Join(base, "terminal-signal-ready"), received: filepath.Join(base, "terminal-signal-received"),
 		snapshot: filepath.Join(base, "terminal-signal-snapshot"), observed: filepath.Join(base, "terminal-signal-observed"),
 		harnessObserved: filepath.Join(base, "harness-terminal-signal-observed"), diagnostic: filepath.Join(base, "terminal-input-diagnostic"),
-		observation: filepath.Join(base, "terminal-input-observation"), ptyOutput: filepath.Join(root, "harness-pty-output.log"),
+		observation: filepath.Join(base, "terminal-input-observation"), scannerStarted: filepath.Join(base, "terminal-scanner-started"),
+		ptyOutput: filepath.Join(root, "harness-pty-output.log"),
 	}
 }
 
@@ -2295,7 +2342,7 @@ func seatbeltPTYTargetArguments() []string {
 	for index, argument := range os.Args {
 		if argument == "--" {
 			arguments := os.Args[index+1:]
-			if len(arguments) == 7 {
+			if len(arguments) == 8 {
 				return arguments
 			}
 			break
@@ -2304,22 +2351,133 @@ func seatbeltPTYTargetArguments() []string {
 	return nil
 }
 
-func assertSeatbeltPTYForegroundTarget(t *testing.T, terminal *os.File, ready string) {
+func assertSeatbeltPTYForegroundTarget(t *testing.T, terminal *os.File, targetGroup int) {
 	t.Helper()
-	contents, err := os.ReadFile(ready)
-	if err != nil {
-		t.Fatal(err)
-	}
-	targetGroup, err := strconv.Atoi(strings.TrimSpace(string(contents)))
-	if err != nil {
-		t.Fatal(err)
-	}
 	foregroundGroup, err := unix.IoctlGetInt(int(terminal.Fd()), unix.TIOCGPGRP)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if foregroundGroup != targetGroup || foregroundGroup == syscall.Getpgrp() {
 		t.Fatalf("terminal foreground group = %d, target = %d, harness = %d; want only the contained target", foregroundGroup, targetGroup, syscall.Getpgrp())
+	}
+}
+
+func publishSeatbeltPTYReady(path string, processGroup int, beforeRename func(string)) (result error) {
+	if processGroup <= 0 {
+		return errors.New("invalid ready process group")
+	}
+	temporary, err := os.CreateTemp(filepath.Dir(path), ".terminal-ready-*")
+	if err != nil {
+		return err
+	}
+	temporaryPath := temporary.Name()
+	defer func() {
+		_ = temporary.Close()
+		_ = os.Remove(temporaryPath)
+	}()
+	if err := temporary.Chmod(0o600); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(temporary, "%d\n", processGroup); err != nil {
+		return err
+	}
+	if err := temporary.Close(); err != nil {
+		return err
+	}
+	if beforeRename != nil {
+		beforeRename(temporaryPath)
+	}
+	return os.Rename(temporaryPath, path)
+}
+
+func readSeatbeltPTYReady(path string) (int, bool, error) {
+	contents, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, err
+	}
+	group, err := strconv.Atoi(strings.TrimSpace(string(contents)))
+	if err != nil || group <= 0 {
+		return 0, false, nil
+	}
+	return group, true, nil
+}
+
+func waitForSeatbeltPTYReady(t *testing.T, path string) int {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		group, published, err := readSeatbeltPTYReady(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if published {
+			return group
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for valid Seatbelt terminal ready publication; raw=%q", readSeatbeltPTYFile(path))
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+func waitForSeatbeltPTYReadyWithDiagnostics(t *testing.T, path string, commandDone <-chan error, master *os.File, paths seatbeltPTYPaths) int {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		group, published, err := readSeatbeltPTYReady(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if published {
+			return group
+		}
+		select {
+		case err := <-commandDone:
+			t.Fatalf("native PTY harness exited before valid ready publication: %v; raw-ready=%q; %s", err, readSeatbeltPTYFile(path), seatbeltPTYFailureDiagnostics(master, paths))
+		default:
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for valid Seatbelt terminal ready publication; raw-ready=%q; %s", readSeatbeltPTYFile(path), seatbeltPTYFailureDiagnostics(master, paths))
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+func readSeatbeltPTYFile(path string) []byte {
+	contents, _ := os.ReadFile(path)
+	return contents
+}
+
+func drainSeatbeltPTYOutput(master, output *os.File) error {
+	descriptor := int(master.Fd())
+	buffer := make([]byte, 4096)
+	for {
+		poll := []unix.PollFd{{Fd: int32(descriptor), Events: unix.POLLIN | unix.POLLHUP}}
+		ready, err := unix.Poll(poll, 100)
+		if err != nil {
+			if errors.Is(err, syscall.EINTR) {
+				continue
+			}
+			return err
+		}
+		if ready == 0 {
+			continue
+		}
+		count, err := unix.Read(descriptor, buffer)
+		if count > 0 {
+			if _, writeErr := output.Write(buffer[:count]); writeErr != nil {
+				return writeErr
+			}
+		}
+		if err != nil {
+			return err
+		}
+		if count == 0 || poll[0].Revents&(unix.POLLHUP|unix.POLLNVAL) != 0 {
+			return nil
+		}
 	}
 }
 
