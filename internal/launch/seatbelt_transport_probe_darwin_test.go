@@ -682,7 +682,11 @@ func seatbeltClassifyTransportValidation(contextErr, commandErr error, diagnosti
 		return "validation_execution_error"
 	}
 	normalized := strings.ToLower(diagnostics)
-	for _, marker := range []string{"profile compilation failed", "policy compilation failed"} {
+	for _, marker := range []string{
+		"profile compilation failed",
+		"policy compilation failed",
+		"host must be * or localhost in network address",
+	} {
 		if strings.Contains(normalized, marker) {
 			return string(SandboxPolicyRejected)
 		}
@@ -1568,6 +1572,7 @@ func TestSeatbeltTransportValidationRequiresControlAndCompilerMarker(t *testing.
 		{name: "unclassified nonzero", commandErr: exitError, diagnostics: "target exited", want: "validation_nonzero_exit"},
 		{name: "profile compiler", commandErr: exitError, diagnostics: "sandbox-exec: profile compilation failed: invalid filter", want: string(SandboxPolicyRejected)},
 		{name: "policy compiler", commandErr: exitError, diagnostics: "Policy Compilation Failed", want: string(SandboxPolicyRejected)},
+		{name: "network address compiler", commandErr: exitError, diagnostics: "sandbox-exec: host must be * or localhost in network address", want: string(SandboxPolicyRejected)},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			if got := seatbeltClassifyTransportValidation(test.contextErr, test.commandErr, test.diagnostics); got != test.want {
