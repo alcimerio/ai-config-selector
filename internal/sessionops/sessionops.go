@@ -443,7 +443,19 @@ func (store Store) Recover(id string) (RecoverResult, error) {
 		bounded, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
 		authBinding, snapshotExists, err = authStore.AcquireBySession(bounded, snapshotCap.RootName)
 		cancel()
-		if err != nil || (snapshotExists && (authBinding == nil || authBinding.CleanupChallenge() != snapshotCap.Challenge)) {
+		if err != nil {
+			// Typed stores cannot import sessionops for a shared sentinel; preserve
+			// the public contention outcome for their wrapped busy errors while
+			// treating all other acquisition failures as ambiguous authority.
+			msg := strings.ToLower(err.Error())
+			if strings.Contains(msg, "busy") || strings.Contains(msg, "in use") || strings.Contains(msg, "timeout") {
+				result.Outcome = "busy"
+				return result, errors.New("busy")
+			}
+			result.Outcome = "not_recoverable"
+			return result, errors.New("not_recoverable")
+		}
+		if snapshotExists && (authBinding == nil || authBinding.CleanupChallenge() != snapshotCap.Challenge) {
 			if authBinding != nil {
 				_ = authBinding.Release()
 			}
