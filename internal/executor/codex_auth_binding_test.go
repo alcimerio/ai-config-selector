@@ -404,6 +404,64 @@ func TestMarkerDeleteFailureRetainsTypedAndGeneralRetryEvidence(t *testing.T) {
 	}
 }
 
+func TestDirectAndGeneralRecoveryRaceUsesOneAcyclicLockOrder(t *testing.T) {
+	auth := testChatGPTAuthJSON(t, "user", "workspace")
+	registry, _, _, sessionsDirectory := newBindingTestRegistry(t, "work", auth)
+	created, err := session.CreateTracked(sessionsDirectory, registry.workingDirectory, nil, "codex-auth")
+	if err != nil {
+		t.Fatal(err)
+	}
+	challenge := bytes.Repeat([]byte{0x6e}, launch.RecoveryProofChallengeSize)
+	if _, err := created.ArmOperation(challenge); err != nil {
+		t.Fatal(err)
+	}
+	if err := registryTestResources(registry).quarantine.Create(context.Background(), quarantineMarker{
+		Version: recordVersion, Name: "work", SessionID: filepath.Base(created.RootDirectory()),
+		Phase: quarantinePrepared, ProofChallenge: hex.EncodeToString(challenge),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := created.PreserveForRecovery(); err != nil {
+		t.Fatal(err)
+	}
+	store := sessionops.Store{
+		SessionsDirectory: sessionsDirectory,
+		AuthRecovery: func() (sessionops.AuthRecovery, error) {
+			return testSessionOpsAuthRecovery{registry: registry, name: "work"}, nil
+		},
+	}
+	start := make(chan struct{})
+	directDone := make(chan error, 1)
+	generalDone := make(chan error, 1)
+	go func() {
+		<-start
+		_, err := registry.Recover(context.Background(), "work")
+		directDone <- err
+	}()
+	go func() {
+		<-start
+		_, err := store.Recover(created.PublicID())
+		generalDone <- err
+	}()
+	close(start)
+	for name, result := range map[string]<-chan error{"direct": directDone, "general": generalDone} {
+		select {
+		case err := <-result:
+			if err != nil && !errors.Is(err, ErrIdentityBusy) && sessionops.Diagnostic(err) != "not_recoverable" && sessionops.Diagnostic(err) != "busy" {
+				t.Fatalf("%s concurrent recovery error = %v", name, err)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("%s recovery deadlocked", name)
+		}
+	}
+	if result, err := store.Recover(created.PublicID()); err != nil || result.Outcome != "removed" {
+		t.Fatalf("general convergence = (%+v, %v)", result, err)
+	}
+	if disposition, err := registry.Recover(context.Background(), "work"); err != nil || disposition != DiscardedProjection {
+		t.Fatalf("direct convergence = (%q, %v)", disposition, err)
+	}
+}
+
 type testSessionOpsAuthRecovery struct {
 	registry *CodexAuthService
 	name     string

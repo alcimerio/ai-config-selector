@@ -408,3 +408,38 @@ func TestCorruptRecordIsInspectableWithoutMalformedBytes(t *testing.T) {
 		t.Fatalf("corrupt inspection = %s", encoded)
 	}
 }
+
+func TestRecoveryRejectsDuplicateCapabilityWithoutRemovingRoot(t *testing.T) {
+	root := t.TempDir()
+	sessions := filepath.Join(root, ".acs", "sessions")
+	created, err := session.CreateTracked(sessions, root, nil, "shell")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := created.ArmOperation(nil); err != nil {
+		t.Fatal(err)
+	}
+	capabilityPath := filepath.Join(launch.SessionOperationsDirectory(sessions), "capabilities", created.PublicID()+".json")
+	valid, err := os.ReadFile(capabilityPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	duplicate := bytes.Replace(valid, []byte(`"version":1`), []byte(`"version":1,"version":1`), 1)
+	if err := os.WriteFile(capabilityPath, duplicate, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := created.PreserveForRecovery(); err != nil {
+		t.Fatal(err)
+	}
+	result, err := (sessionops.Store{SessionsDirectory: sessions}).Recover(created.PublicID())
+	if err == nil || result.Outcome != "unproven" || result.State != sessionops.StateUnproven {
+		t.Fatalf("duplicate capability recovery = (%+v, %v)", result, err)
+	}
+	if _, err := os.Stat(created.RootDirectory()); err != nil {
+		t.Fatalf("duplicate capability removed root: %v", err)
+	}
+	after, err := os.ReadFile(capabilityPath)
+	if err != nil || !bytes.Equal(after, duplicate) {
+		t.Fatalf("duplicate capability evidence changed: (%q, %v)", after, err)
+	}
+}

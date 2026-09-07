@@ -1,6 +1,6 @@
 Effective capability explanation for Profile "format-profile" (stored version 3)
 Intent: devin
-Semantic authority digest: sha256:36f318c42104d2bba1ebee41eae61c39a9d4ed210dcf03e13640c7a9d462ecd8
+Semantic authority digest: sha256:09a93f532ef9e0008e963977492b8abfaeb6f35ba1a1212826e93386e304cf7d
 Digest scope: semantic ACS authority and recipe requirements only; excluded local bindings are rechecked separately where execution requires it.
 
 Requested:
@@ -37,7 +37,6 @@ Effective:
 Unsupported or inert:
   unsupported.arbitrary-executables [executable]: mode=arbitrary-grants (reason=not_supported; source=acs:native-sandbox)
   unsupported.arbitrary-host-paths [filesystem]: mode=arbitrary-grants (reason=not_supported; source=acs:native-sandbox)
-  unsupported.durable-session-operations [session]: mode=public-management-ui (reason=not_supported; source=acs:session)
   unsupported.host-environment [environment]: mode=arbitrary-values (reason=not_supported; source=acs:native-sandbox)
   unsupported.network-destinations [network]: mode=destination-filtering (reason=not_supported; source=acs:native-sandbox)
   unsupported.raw-policy [isolation]: mode=caller-supplied (reason=not_supported; source=acs:native-sandbox)

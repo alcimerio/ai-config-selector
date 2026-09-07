@@ -724,6 +724,13 @@ type genericHelperObservation struct {
 	ExternalWrite   bool     `json:"externalWrite"`
 }
 
+type privateCapabilityObservation struct {
+	CurrentReadable bool `json:"currentReadable"`
+	OtherReadable   bool `json:"otherReadable"`
+	EnvironmentLeak bool `json:"environmentLeak"`
+	DescriptorLeak  bool `json:"descriptorLeak"`
+}
+
 func runPromotedArtifactGenericHelper(arguments []string) bool {
 	if len(arguments) == 0 || arguments[0] != "--acs-generic-command-helper" {
 		return false
@@ -771,6 +778,20 @@ func runPromotedArtifactGenericHelper(arguments []string) bool {
 			if len(arguments) != 3 || !writeFakeDevinMarker(arguments[2]) {
 				os.Exit(91)
 			}
+			return true
+		case "--private-capability-canary":
+			if len(arguments) != 4 {
+				os.Exit(90)
+			}
+			current, currentErr := os.ReadFile(arguments[2])
+			other, otherErr := os.ReadFile(arguments[3])
+			observation := privateCapabilityObservation{
+				CurrentReadable: currentErr == nil && len(current) != 0,
+				OtherReadable:   otherErr == nil && len(other) != 0,
+				EnvironmentLeak: os.Getenv("ACS_SESSION_PRIVATE_CHALLENGE") != "",
+				DescriptorLeak:  fakeDevinDescriptorContains(privateDescriptorValue),
+			}
+			_ = json.NewEncoder(os.Stdout).Encode(observation)
 			return true
 		}
 	}
@@ -896,6 +917,58 @@ func assertPromotedArtifactGenericRun(t *testing.T) {
 		t.Fatalf("stderr = %q", stderr.String())
 	}
 	assertMarkerExists(t, filepath.Join(workspace, "generic-workspace-write"))
+	assertNoSessions(t, home)
+
+	privateRoot := filepath.Join(home, ".acs", "session-operations-v1")
+	capabilities := filepath.Join(privateRoot, "capabilities")
+	if err := os.MkdirAll(capabilities, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	currentCapability := filepath.Join(capabilities, "current-private-canary.json")
+	otherCapability := filepath.Join(capabilities, "other-session-canary.json")
+	for path, value := range map[string]string{
+		currentCapability: privateDescriptorValue,
+		otherCapability:   "other-session-private-challenge",
+	} {
+		if err := os.WriteFile(path, []byte(value), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	descriptor, err := os.Open(currentCapability)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer descriptor.Close()
+	privateCanary := exec.Command(binary, "run", "--profile", "generic-readwrite", "--", helper,
+		"--acs-generic-command-helper", "--private-capability-canary", currentCapability, otherCapability)
+	privateCanary.Dir = workspace
+	privateCanary.Env = nativeCandidateEnvironment(home, path, map[string]string{"ACS_SESSION_PRIVATE_CHALLENGE": "must-not-reach-target"})
+	privateCanary.ExtraFiles = []*os.File{descriptor}
+	privateOutput, err := privateCanary.Output()
+	if err != nil {
+		t.Fatalf("private capability canary: %v; output=%s", err, privateOutput)
+	}
+	var privateObservation privateCapabilityObservation
+	if err := json.Unmarshal(bytes.TrimSpace(privateOutput), &privateObservation); err != nil {
+		t.Fatalf("decode private capability observation: %v; output=%s", err, privateOutput)
+	}
+	if privateObservation.CurrentReadable || privateObservation.OtherReadable || privateObservation.EnvironmentLeak || privateObservation.DescriptorLeak {
+		t.Fatalf("contained target received private Session authority: %+v", privateObservation)
+	}
+	alias := filepath.Join(realTemporaryDirectory(t), "private-workspace-alias")
+	if err := os.Symlink(privateRoot, alias); err != nil {
+		t.Fatal(err)
+	}
+	aliasTripwire := filepath.Join(workspace, "private-alias-target-started")
+	aliasCommand := exec.Command(binary, "run", "--profile", "generic-readwrite", "--", helper,
+		"--acs-generic-command-helper", "--tripwire", aliasTripwire)
+	aliasCommand.Dir, aliasCommand.Env = alias, nativeCandidateEnvironment(home, path, nil)
+	aliasOutput, err := aliasCommand.CombinedOutput()
+	if err == nil {
+		t.Fatal("candidate accepted a workspace alias to private Session capabilities")
+	}
+	assertSafeCandidateFailure(t, aliasOutput, "unsafe_path", privateDescriptorValue, "other-session-private-challenge")
+	assertMarkerAbsent(t, aliasTripwire, "target started from a private capability workspace alias")
 	assertNoSessions(t, home)
 
 	readOnlyWorkspace := realTemporaryDirectory(t)
@@ -2208,7 +2281,7 @@ func nativeCandidateEnvironment(home, path string, overrides map[string]string) 
 		}
 		environment = append(environment, entry)
 	}
-	for _, key := range []string{"HOME", "PATH", "TERM", "NO_COLOR", "ACS_NATIVE_CANDIDATE_SECRET", "ACS_GENERIC_HOST_SECRET"} {
+	for _, key := range []string{"HOME", "PATH", "TERM", "NO_COLOR", "ACS_NATIVE_CANDIDATE_SECRET", "ACS_GENERIC_HOST_SECRET", "ACS_SESSION_PRIVATE_CHALLENGE"} {
 		if value, ok := values[key]; ok {
 			environment = append(environment, key+"="+value)
 		}

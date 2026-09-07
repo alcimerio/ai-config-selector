@@ -48,6 +48,26 @@ func TestPrivateDirectoryScansUseAtomicCLOEXECIndependentDescriptions(t *testing
 	}
 }
 
+func TestPrivateDirectoryAppliesLimitBeforeReturningEntries(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "private")
+	if err := os.Mkdir(path, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"one", "two", "three", "four"} {
+		if err := os.WriteFile(filepath.Join(path, name), []byte(name), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	directory, err := pinPrivateDirectory(path, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer directory.close()
+	if entries, err := directory.entries(3); err == nil || entries != nil {
+		t.Fatalf("over-limit scan = (%v, %v)", entries, err)
+	}
+}
+
 func TestPrivateDirectoryLockRejectsHardLinkBeforeModeMutation(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "private")

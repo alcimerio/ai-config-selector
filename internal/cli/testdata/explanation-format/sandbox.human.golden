@@ -1,6 +1,6 @@
 Effective capability explanation for Profile "format-profile" (stored version 3)
 Intent: shell
-Semantic authority digest: sha256:b3eba4835e960bac046fddb3ccdcc3714386a2c19571f847338b0a6a36df3800
+Semantic authority digest: sha256:74fbb7ce19123e912e778c80aa104979f9f94ed3fe6c471326496653ea185ccb
 Digest scope: semantic ACS authority and recipe requirements only; excluded local bindings are rechecked separately where execution requires it.
 
 Requested:
@@ -31,7 +31,6 @@ Unsupported or inert:
   overlay.inactive.devin [overlay]: mode=inactive (reason=supported_inactive_overlay_presentation_only_excluded_from_digest; source=profile:devin@v1)
   unsupported.arbitrary-executables [executable]: mode=arbitrary-grants (reason=not_supported; source=acs:native-sandbox)
   unsupported.arbitrary-host-paths [filesystem]: mode=arbitrary-grants (reason=not_supported; source=acs:native-sandbox)
-  unsupported.durable-session-operations [session]: mode=public-management-ui (reason=not_supported; source=acs:session)
   unsupported.host-environment [environment]: mode=arbitrary-values (reason=not_supported; source=acs:native-sandbox)
   unsupported.network-destinations [network]: mode=destination-filtering (reason=not_supported; source=acs:native-sandbox)
   unsupported.raw-policy [isolation]: mode=caller-supplied (reason=not_supported; source=acs:native-sandbox)

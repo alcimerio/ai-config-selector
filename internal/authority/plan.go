@@ -409,7 +409,6 @@ func runtimeFacts(runtime launch.RuntimeAuthority) Facts {
 		{ID: "unsupported.sandbox-bypass", Kind: "isolation", Value: FactValue{Mode: "bypass"}, Reason: "not_supported", Source: FactSource{Kind: "acs", ID: "native-sandbox"}},
 		{ID: "unsupported.target-pass-through", Kind: "target-control", Value: FactValue{Mode: "arbitrary-options"}, Reason: "not_supported", Source: FactSource{Kind: "acs", ID: "recipes"}},
 		{ID: "unsupported.raw-policy", Kind: "isolation", Value: FactValue{Mode: "caller-supplied"}, Reason: "not_supported", Source: FactSource{Kind: "acs", ID: "native-sandbox"}},
-		{ID: "unsupported.durable-session-operations", Kind: "session", Value: FactValue{Mode: "public-management-ui"}, Reason: "not_supported", Source: FactSource{Kind: "acs", ID: "session"}},
 	}
 	targetAdded := []Fact{{ID: "runtime.session-destinations", Kind: "session-destination", Value: FactValue{Names: []string{"session-home", "session-temporary", "session-home/.config", "session-home/.local/share", "session-home/.cache", "session-home/.local/state"}}, Reason: "intrinsic_session", Source: FactSource{Kind: "acs", ID: "session", Version: runtime.Version}}}
 	return Facts{TargetAdded: targetAdded, Effective: effective, Unsupported: unsupported}

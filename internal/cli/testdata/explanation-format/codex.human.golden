@@ -1,6 +1,6 @@
 Effective capability explanation for Profile "format-profile" (stored version 3)
 Intent: codex
-Semantic authority digest: sha256:a6a9df31ab072128d7a89fc3ca024d1a8b6a669dc110802a6dae55ea9ff442d2
+Semantic authority digest: sha256:b3cf31ee8c7a80817ecf6660b8402db94db89cc32e17ee05fd26a52c9f345c9d
 Digest scope: semantic ACS authority and recipe requirements only; excluded local bindings are rechecked separately where execution requires it.
 
 Requested:
@@ -51,7 +51,6 @@ Unsupported or inert:
   unsupported.codex.global-auth-fallback [target-control]: mode=disabled (reason=not_supported; source=target:codex@v1)
   unsupported.codex.target-approval-prompts [target-control]: mode=disabled (reason=not_supported; source=target:codex@v1)
   unsupported.codex.target-sandbox-enforcement [target-control]: mode=disabled-under-acs (reason=not_supported; source=target:codex@v1)
-  unsupported.durable-session-operations [session]: mode=public-management-ui (reason=not_supported; source=acs:session)
   unsupported.host-environment [environment]: mode=arbitrary-values (reason=not_supported; source=acs:native-sandbox)
   unsupported.network-destinations [network]: mode=destination-filtering (reason=not_supported; source=acs:native-sandbox)
   unsupported.raw-policy [isolation]: mode=caller-supplied (reason=not_supported; source=acs:native-sandbox)
