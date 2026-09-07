@@ -281,7 +281,15 @@ func renderExplanation(output *bytes.Buffer, result explanationResult) {
 			fmt.Fprintln(output, "  (none)")
 		}
 		for _, fact := range section.facts {
-			fmt.Fprintf(output, "  %s [%s]: %s\n", safeTerminalText(fact.ID), safeTerminalText(fact.Kind), safeTerminalText(renderFactValue(fact.Value)))
+			value := renderFactValue(fact.Value)
+			if fact.Kind == "opaque-binding" {
+				value += "; value omitted"
+			}
+			source := fact.Source.Kind + ":" + fact.Source.ID
+			if fact.Source.Version != 0 {
+				source += fmt.Sprintf("@v%d", fact.Source.Version)
+			}
+			fmt.Fprintf(output, "  %s [%s]: %s (reason=%s; source=%s)\n", safeTerminalText(fact.ID), safeTerminalText(fact.Kind), safeTerminalText(value), safeTerminalText(fact.Reason), safeTerminalText(source))
 		}
 	}
 	fmt.Fprintln(output, "\nEvidence:")
@@ -296,7 +304,26 @@ func renderExplanation(output *bytes.Buffer, result explanationResult) {
 	if result.Intent.Recipe == "codex" {
 		fmt.Fprintln(output, "Codex danger-full-access and no-approval mode do not widen the outer ACS grants.")
 	}
+	platform, backend := explanationCheckByID(result.Checks, "native.platform"), explanationCheckByID(result.Checks, "native.backend")
+	switch {
+	case platform.Status == "unchecked" && backend.Status == "unchecked":
+		fmt.Fprintln(output, "Native readiness: unchecked (not probed); this is not launch readiness.")
+	case platform.Status == "pass" && backend.Status == "pass":
+		fmt.Fprintln(output, "Native readiness: narrowly observed; supported platform and backend readiness passed. This is not launch readiness.")
+	default:
+		fmt.Fprintln(output, "Native readiness: narrowly observed; the requested platform/backend observation did not pass. This is not launch readiness.")
+	}
 }
+
+func explanationCheckByID(checks []explanationCheck, id string) explanationCheck {
+	for _, check := range checks {
+		if check.ID == id {
+			return check
+		}
+	}
+	return explanationCheck{}
+}
+
 func renderFactValue(value authority.FactValue) string {
 	parts := []string{}
 	if value.Access != "" {

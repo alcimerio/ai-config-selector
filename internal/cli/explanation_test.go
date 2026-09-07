@@ -14,12 +14,19 @@ import (
 	"github.com/alcimerio/ai-config-selector/internal/cli"
 	"github.com/alcimerio/ai-config-selector/internal/launch"
 	"github.com/alcimerio/ai-config-selector/internal/profile"
+	"github.com/alcimerio/ai-config-selector/internal/skills"
 )
 
-type explanationReadiness struct{ calls int }
+type explanationReadiness struct {
+	calls     int
+	readiness launch.SandboxReadiness
+}
 
 func (probe *explanationReadiness) Readiness(context.Context) (launch.SandboxReadiness, error) {
 	probe.calls++
+	if probe.readiness.RequiredMode != "" {
+		return probe.readiness, nil
+	}
 	return launch.SandboxReadiness{RequiredMode: "native", Backend: "Seatbelt", Platform: "macOS 26 on darwin/arm64", Supported: true, Ready: true}, nil
 }
 
@@ -134,8 +141,38 @@ func TestExplainLegacyProfilesPreservesCompatibilityAuthority(t *testing.T) {
 						t.Fatalf("%q lacks %q: %s", invocation, want, stdout.String())
 					}
 				}
+				if !strings.Contains(stdout.String(), `"id":"skills.target-projection"`) || !strings.Contains(stdout.String(), `"reason":"registered_projection"`) {
+					t.Fatalf("%q omitted legacy target placement: %s", invocation, stdout.String())
+				}
 			}
 		})
+	}
+}
+
+func TestExplainMissingSelectedReferenceFailsWithoutPlanProbeOrPrivatePath(t *testing.T) {
+	home := t.TempDir()
+	target, err := devin.New(devin.Config{BinaryPath: "devin", ExistingHomeDir: home})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := profile.NewStore(filepath.Join(home, ".acs"), target.Categories())
+	candidate := devin.NewSkillsProfile("example", []skills.SkillReference{{Source: "shared-agents", RelativePath: "PRIVATE-MISSING-REFERENCE"}})
+	if _, err := store.Create(candidate); err != nil {
+		t.Fatal(err)
+	}
+	probe := &explanationReadiness{}
+	var stdout, stderr bytes.Buffer
+	app := cli.App{Categories: target.Categories(), Profiles: store, NativeReadiness: probe, WorkingDirectory: home, Output: &stdout, ErrorOutput: &stderr}
+	if code := app.Run(context.Background(), []string{"explain", "devin", "--profile", "example", "--json", "--check-native-readiness"}); code != 1 {
+		t.Fatalf("code=%d stderr=%q", code, stderr.String())
+	}
+	if probe.calls != 0 || !strings.Contains(stdout.String(), `"plan":null`) || !strings.Contains(stdout.String(), `"code":"profile_resolution_failed"`) {
+		t.Fatalf("failure emitted a plan or reached readiness: calls=%d output=%s", probe.calls, stdout.String())
+	}
+	for _, private := range []string{home, "PRIVATE-MISSING-REFERENCE"} {
+		if strings.Contains(stdout.String(), private) || strings.Contains(stderr.String(), private) {
+			t.Fatalf("failure exposed private source detail %q: stdout=%s stderr=%s", private, stdout.String(), stderr.String())
+		}
 	}
 }
 
@@ -222,6 +259,58 @@ func TestExplainAllIntentsUseTypedRecipeFactsAndHideArgumentValues(t *testing.T)
 			if test.name == "codex" && (!strings.Contains(stdout.String(), `"id":"codex.sandbox"`) || !strings.Contains(stdout.String(), `"id":"codex.approval"`)) {
 				t.Fatalf("Codex generated configuration facts missing: %s", stdout.String())
 			}
+
+			humanArguments := withoutArgument(test.args, "--json")
+			stdout.Reset()
+			stderr.Reset()
+			if code := app.Run(context.Background(), humanArguments); code != 0 || !strings.Contains(stdout.String(), "Native readiness: unchecked (not probed); this is not launch readiness.") {
+				t.Fatalf("default human %s code=%d output=%s stderr=%s", test.name, code, stdout.String(), stderr.String())
+			}
+			if !strings.Contains(stdout.String(), "reason=") || !strings.Contains(stdout.String(), "source=") {
+				t.Fatalf("human %s omitted typed provenance: %s", test.name, stdout.String())
+			}
+			if test.name == "codex" && !strings.Contains(stdout.String(), "value omitted") {
+				t.Fatalf("Codex human output omitted explicit auth-value boundary: %s", stdout.String())
+			}
+
+			passProbe := &explanationReadiness{}
+			app.NativeReadiness = passProbe
+			stdout.Reset()
+			stderr.Reset()
+			if code := app.Run(context.Background(), insertBeforeLiteralBoundary(humanArguments, "--check-native-readiness")); code != 0 || passProbe.calls != 1 || !strings.Contains(stdout.String(), "Native readiness: narrowly observed; supported platform and backend readiness passed. This is not launch readiness.") {
+				t.Fatalf("observed human %s code=%d calls=%d output=%s stderr=%s", test.name, code, passProbe.calls, stdout.String(), stderr.String())
+			}
+
+			failProbe := &explanationReadiness{readiness: launch.SandboxReadiness{RequiredMode: "native", Backend: "Seatbelt", Platform: "unsupported", Supported: false, Ready: false}}
+			app.NativeReadiness = failProbe
+			stdout.Reset()
+			stderr.Reset()
+			if code := app.Run(context.Background(), insertBeforeLiteralBoundary(humanArguments, "--check-native-readiness")); code != 1 || failProbe.calls != 1 || !strings.Contains(stdout.String(), "Native readiness: narrowly observed; the requested platform/backend observation did not pass. This is not launch readiness.") {
+				t.Fatalf("failed human observation %s code=%d calls=%d output=%s stderr=%s", test.name, code, failProbe.calls, stdout.String(), stderr.String())
+			}
 		})
 	}
+}
+
+func withoutArgument(arguments []string, remove string) []string {
+	result := make([]string, 0, len(arguments))
+	for _, argument := range arguments {
+		if argument != remove {
+			result = append(result, argument)
+		}
+	}
+	return result
+}
+
+func insertBeforeLiteralBoundary(arguments []string, value string) []string {
+	result := append([]string(nil), arguments...)
+	for index, argument := range result {
+		if argument == "--" {
+			result = append(result, "")
+			copy(result[index+1:], result[index:])
+			result[index] = value
+			return result
+		}
+	}
+	return append(result, value)
 }

@@ -83,6 +83,38 @@ func TestDiscoverExactSkillReferencesDoesNotInspectUnselectedBundles(t *testing.
 	}
 }
 
+func TestDiscoverExactSkillReferencesPreservesAdmittedNestedIdentityWithoutCatalogReads(t *testing.T) {
+	home := t.TempDir()
+	selected := filepath.Join(home, ".config", "devin", "skills", "team", "review")
+	unselected := filepath.Join(home, ".config", "devin", "skills", "team", "other")
+	for _, path := range []string{selected, unselected} {
+		if err := os.MkdirAll(path, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(path, "SKILL.md"), []byte("# fixture\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	inspected := []string{}
+	got, err := discoverExactSkillReferences(context.Background(), home, []skills.SkillReference{{Source: "devin-config", RelativePath: "team/review"}}, func(path string) (os.FileInfo, error) {
+		inspected = append(inspected, path)
+		if strings.HasPrefix(path, unselected) {
+			t.Fatalf("inspected unselected nested sibling %q", path)
+		}
+		return os.Stat(path)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantInspected := []string{selected, filepath.Join(selected, "SKILL.md")}
+	if !reflect.DeepEqual(inspected, wantInspected) {
+		t.Fatalf("nested resolution inspected %q, want only %q", inspected, wantInspected)
+	}
+	if len(got) != 1 || got[0].Reference.Source != "devin-config" || got[0].Reference.RelativePath != "team/review" {
+		t.Fatalf("nested exact identity changed: %#v", got)
+	}
+}
+
 func TestConfigDoesNotExposeProcessSandboxOverride(t *testing.T) {
 	sandboxType := reflect.TypeOf((*launch.ProcessSandbox)(nil)).Elem()
 	configType := reflect.TypeOf(Config{})

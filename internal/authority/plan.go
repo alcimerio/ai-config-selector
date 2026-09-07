@@ -224,7 +224,7 @@ func (plan Plan) WithAuthRef(value string) Plan {
 // WithAuthOverride selects an opaque one-run binding without placing its value
 // in the semantic manifest. The binding source is a semantic recipe decision.
 func (plan Plan) WithAuthOverride(value string) Plan {
-	plan.authRef, plan.authSource = value, "command-line-override"
+	plan.authRef, plan.authSource = value, "one_run_override"
 	plan.explanation = buildExplanation(plan)
 	return plan
 }
@@ -343,7 +343,11 @@ func recipeFacts(plan Plan) Facts {
 		result.Requested = append(result.Requested, Fact{ID: recipe + ".authentication", Kind: "opaque-binding", Value: FactValue{Mode: semantics.AuthenticationMode}, Reason: source, Source: FactSource{Kind: "target", ID: recipe, Version: semantics.Version}})
 	}
 	for _, decision := range semantics.Configuration {
-		result.TargetAdded = append(result.TargetAdded, Fact{ID: decision.ID, Kind: "generated-configuration", Value: FactValue{Mode: decision.Mode}, Reason: "fixed_target_recipe", Source: FactSource{Kind: "target", ID: recipe, Version: semantics.Version}})
+		fact := Fact{ID: decision.ID, Kind: "generated-configuration", Value: FactValue{Mode: decision.Mode}, Reason: "fixed_target_recipe", Source: FactSource{Kind: "target", ID: recipe, Version: semantics.Version}}
+		result.TargetAdded = append(result.TargetAdded, fact)
+		if decision.ID == "codex.apps" || decision.ID == "codex.mcp" || decision.ID == "codex.plugins" {
+			result.Unsupported = append(result.Unsupported, fact)
+		}
 	}
 	for _, preflight := range semantics.Preflights {
 		result.TargetAdded = append(result.TargetAdded, Fact{ID: preflight.ID, Kind: "target-preflight", Value: FactValue{Mode: preflight.Mode}, Reason: "fixed_target_recipe", Source: FactSource{Kind: "target", ID: recipe, Version: semantics.Version}})

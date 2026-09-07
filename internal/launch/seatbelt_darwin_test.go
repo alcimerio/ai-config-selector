@@ -2121,7 +2121,7 @@ func TestSeatbeltNativePTYHarness(t *testing.T) {
 	}
 	request.arguments = []string{
 		"-test.run=^TestSeatbeltNativePTYTarget$", "--", strconv.Itoa(signalNumber),
-		paths.ready, paths.received, paths.snapshot, paths.observed,
+		paths.ready, paths.received, paths.snapshot, paths.observed, paths.diagnostic,
 	}
 	request.terminal = Terminal{Input: os.Stdin, Output: os.Stdout, ErrorOutput: os.Stderr}
 	harnessSignals := make(chan os.Signal, 8)
@@ -2166,6 +2166,11 @@ func TestSeatbeltNativePTYTarget(t *testing.T) {
 		for scanner.Scan() {
 			commands <- scanner.Text()
 		}
+		diagnostic := "terminal scanner reached EOF"
+		if err := scanner.Err(); err != nil {
+			diagnostic = "terminal scanner failed: " + err.Error()
+		}
+		_ = os.WriteFile(arguments[5], []byte(diagnostic+"\n"), 0o600)
 	}()
 	if err := os.WriteFile(arguments[1], []byte(strconv.Itoa(syscall.Getpgrp())+"\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -2223,7 +2228,7 @@ func drainSeatbeltPTYSignals(t *testing.T, signals <-chan os.Signal, want syscal
 }
 
 type seatbeltPTYPaths struct {
-	ready, received, snapshot, observed, harnessObserved string
+	ready, received, snapshot, observed, harnessObserved, diagnostic string
 }
 
 func seatbeltNativePTYPaths(root string) seatbeltPTYPaths {
@@ -2231,7 +2236,7 @@ func seatbeltNativePTYPaths(root string) seatbeltPTYPaths {
 	return seatbeltPTYPaths{
 		ready: filepath.Join(base, "terminal-signal-ready"), received: filepath.Join(base, "terminal-signal-received"),
 		snapshot: filepath.Join(base, "terminal-signal-snapshot"), observed: filepath.Join(base, "terminal-signal-observed"),
-		harnessObserved: filepath.Join(base, "harness-terminal-signal-observed"),
+		harnessObserved: filepath.Join(base, "harness-terminal-signal-observed"), diagnostic: filepath.Join(base, "terminal-input-diagnostic"),
 	}
 }
 
@@ -2267,7 +2272,7 @@ func seatbeltPTYTargetArguments() []string {
 	for index, argument := range os.Args {
 		if argument == "--" {
 			arguments := os.Args[index+1:]
-			if len(arguments) == 5 {
+			if len(arguments) == 6 {
 				return arguments
 			}
 			break
@@ -2316,7 +2321,11 @@ func waitForSeatbeltPTYMarker(t *testing.T, path string) {
 			t.Fatal(err)
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("timed out waiting for Seatbelt terminal marker %q", filepath.Base(path))
+			diagnostic, err := os.ReadFile(filepath.Join(filepath.Dir(path), "terminal-input-diagnostic"))
+			if err != nil && !os.IsNotExist(err) {
+				t.Fatal(err)
+			}
+			t.Fatalf("timed out waiting for Seatbelt terminal marker %q; input diagnostic=%q", filepath.Base(path), diagnostic)
 		}
 		time.Sleep(time.Millisecond)
 	}

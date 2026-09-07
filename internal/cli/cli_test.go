@@ -158,6 +158,35 @@ func TestExpectedAuthorityDigestFailsBeforeLauncherOrCodexProvider(t *testing.T)
 	}
 }
 
+func TestPublicGenericCommandResolutionFailureIsSanitizedAndPrecedesTarget(t *testing.T) {
+	home := t.TempDir()
+	target, err := devin.New(devin.Config{BinaryPath: "devin", ExistingHomeDir: home})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := profile.NewStore(filepath.Join(home, ".acs"), target.Categories())
+	candidate, err := target.Categories().NewProfile("example", target.Categories().NewDraft())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Create(candidate); err != nil {
+		t.Fatal(err)
+	}
+	generic := &recordingGenericTarget{}
+	privateExecutable := filepath.Join(home, "PRIVATE-COMMAND-CANARY")
+	var stdout, stderr bytes.Buffer
+	app := cli.App{Categories: target.Categories(), Profiles: store, GenericTarget: generic, SessionsDirectory: filepath.Join(home, ".acs", "sessions"), WorkingDirectory: home, Output: &stdout, ErrorOutput: &stderr}
+	if code := app.Run(context.Background(), []string{"run", "--profile", "example", "--", privateExecutable}); code != 1 {
+		t.Fatalf("resolution failure code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	if generic.calls != 0 || strings.Contains(stderr.String(), privateExecutable) || !strings.Contains(stderr.String(), "executable is unavailable") {
+		t.Fatalf("unsanitized or late resolver failure: target calls=%d stderr=%q", generic.calls, stderr.String())
+	}
+	if entries, err := os.ReadDir(filepath.Join(home, ".acs", "sessions")); !os.IsNotExist(err) && (err != nil || len(entries) != 0) {
+		t.Fatalf("resolution failure created Session state: entries=%v err=%v", entries, err)
+	}
+}
+
 func TestCodexProfileCreationWithoutDefaultPersistsOverlayAndDryRunsWithOverride(t *testing.T) {
 	home := t.TempDir()
 	adapter, err := codexadapter.New(codexadapter.Config{BinaryPath: "/missing/codex", ExistingHomeDir: home})

@@ -190,7 +190,11 @@ func (contribution SkillsContribution) DevinExpectedCatalog() []skills.SkillRefe
 	return append([]skills.SkillReference(nil), contribution.expected...)
 }
 func (contribution SkillsContribution) SemanticFacts(sourceVersion int, overlay string) authority.Facts {
-	facts := authority.Facts{}
+	profileSource := authority.FactSource{Kind: "profile", ID: SkillsCapabilityID, Version: SkillsCapabilityVersion}
+	facts := authority.Facts{Requested: []authority.Fact{{ID: "common.skills", Kind: "capability", Value: authority.FactValue{Mode: "selected-exact-identities"}, Reason: "stored_selection", Source: profileSource}}}
+	if sourceVersion < profile.CurrentVersion || overlay == contribution.projection.ID() {
+		facts.TargetAdded = append(facts.TargetAdded, authority.Fact{ID: "skills.target-projection", Kind: "target-projection", Value: authority.FactValue{Mode: "selected-material"}, Reason: "registered_projection", Source: authority.FactSource{Kind: "target", ID: contribution.projection.ID(), Version: contribution.projection.Version()}})
+	}
 	selected := append([]skills.SkillBundle(nil), contribution.selected...)
 	sort.Slice(selected, func(i, j int) bool {
 		if selected[i].Reference.Source != selected[j].Reference.Source {
@@ -201,7 +205,7 @@ func (contribution SkillsContribution) SemanticFacts(sourceVersion int, overlay 
 	for _, bundle := range selected {
 		identityText := string(bundle.Reference.Source) + ":" + filepath.ToSlash(bundle.Reference.RelativePath)
 		identity := &authority.SkillIdentity{Source: string(bundle.Reference.Source), RelativePath: filepath.ToSlash(bundle.Reference.RelativePath)}
-		source := authority.FactSource{Kind: "profile", ID: SkillsCapabilityID, Version: SkillsCapabilityVersion}
+		source := profileSource
 		facts.Requested = append(facts.Requested, authority.Fact{ID: "skills.selected." + identityText, Kind: "skill", Value: authority.FactValue{Identity: identity}, Reason: "stored_selection", Source: source})
 		facts.Effective = append(facts.Effective, authority.Fact{ID: "skills.common." + identityText, Kind: "material", Value: authority.FactValue{Identity: identity, LogicalLocation: "session-home/common-skills"}, Reason: "selected_common_material", Source: source})
 		if sourceVersion < profile.CurrentVersion || overlay == contribution.projection.ID() {
