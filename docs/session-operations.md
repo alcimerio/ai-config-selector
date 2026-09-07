@@ -43,6 +43,17 @@ pass may delete it during a later mutating Session operation. `unproven`,
 delete Session roots, lease files, protection, capabilities, proofs, or Codex
 markers by hand.
 
+Completion is restart-safe across partial writes and deletions. If an atomic
+rename or unlink became visible before its directory sync failed, a later
+recovery re-establishes the durable completion binding before discarding any
+remaining private evidence. A visible `removed` record by itself is not a
+cleanup override: it must carry the exact private root and challenge binding
+published by the successful cleanup sequence.
+
+Each record and private capability is limited to 16 KiB. A single operation
+scans at most 4096 entries and emits at most 1 MiB of public JSON; exceeding a
+limit fails the whole operation without a partial list or partial count.
+
 Each passive row is individually consistent, but a list is not a globally
 locked snapshot. `active` and `settling` observations are explicitly
 unverified because the passive reader does not take the live lease. Revision

@@ -89,8 +89,11 @@ func runNativeInstalledACSLockedCodexFixture(t *testing.T) {
 	loginNames := []string{identities["coding"], identities["readonly"], identities["recovery"]}
 	for _, identityName := range loginNames {
 		if !t.Run("installed ACS synthetic login transaction "+identityName, func(t *testing.T) {
+			before := installedSessionSnapshot(t, candidate, home, tools, workspace)
 			runInstalledSyntheticLogin(t, candidate, home, tools, workspace, identityName)
 			assertInstalledIdentityVisible(t, candidate, home, tools, workspace, identityName)
+			assertInstalledIdentityStatus(t, candidate, home, tools, workspace, identityName)
+			assertNewRemovedInstalledSessions(t, candidate, home, tools, workspace, before, "codex-auth")
 		}) {
 			t.FailNow()
 		}
@@ -122,6 +125,7 @@ func runNativeInstalledACSLockedCodexFixture(t *testing.T) {
 		{name: "read-only denial", profile: "readonly", command: "printf forbidden > ./codex-native-readonly-write; printf codex-native-tool-output" + isolationProbe, marker: "codex-native-readonly-write", wantWrite: false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
+			before := installedSessionSnapshot(t, candidate, home, tools, workspace)
 			fixture := newNativeResponsesFixture(t, test.command, home)
 			fixture.descendantReady = test.descendantReady
 			defer fixture.server.Close()
@@ -141,6 +145,7 @@ func runNativeInstalledACSLockedCodexFixture(t *testing.T) {
 				t.Fatalf("read-only Codex wrote workspace marker: bytes=%q err=%v", contents, err)
 			}
 			assertNoNativeSessions(t, filepath.Join(home, ".acs", "sessions"))
+			assertNewRemovedInstalledSessions(t, candidate, home, tools, workspace, before, "codex")
 		})
 	}
 	t.Run("abrupt ACS termination and public recovery", func(t *testing.T) {
@@ -155,9 +160,9 @@ func runNativeInstalledACSLockedCodexFixture(t *testing.T) {
 		if err != nil || len(sessions) != 1 {
 			t.Fatalf("abrupt ACS termination retained %d recoverable Sessions", len(sessions))
 		}
-		publicID := inspectInstalledRecoverableSession(t, candidate, home, tools, workspace)
-		runConcurrentInstalledRecoveries(t, candidate, home, tools, workspace, identities["recovery"], publicID)
-		assertInstalledSessionRemoved(t, candidate, home, tools, workspace, publicID)
+		recoverable := inspectInstalledRecoverableSession(t, candidate, home, tools, workspace)
+		runConcurrentInstalledRecoveries(t, candidate, home, tools, workspace, identities["recovery"], recoverable.id)
+		assertInstalledSessionRemoved(t, candidate, home, tools, workspace, recoverable)
 		assertNoNativeSessions(t, filepath.Join(home, ".acs", "sessions"))
 		reuseFixture := newNativeResponsesFixture(t, "printf codex-native-tool-output"+isolationProbe, home)
 		defer reuseFixture.server.Close()
@@ -319,6 +324,16 @@ func assertInstalledIdentityVisible(t *testing.T, candidate, home, tools, worksp
 	}
 }
 
+func assertInstalledIdentityStatus(t *testing.T, candidate, home, tools, workspace, name string) {
+	t.Helper()
+	command := exec.Command(candidate, "codex", "auth", "status", "--name", name)
+	command.Dir, command.Env = workspace, nativeCandidateEnvironment(home, tools)
+	output, err := command.CombinedOutput()
+	if err != nil || !bytes.Contains(output, []byte(name)) || !bytes.Contains(output, []byte("authenticated")) {
+		t.Fatalf("installed ACS named identity status: %v; output=%q", err, output)
+	}
+}
+
 func runInstalledCodexPTY(t *testing.T, candidate, home, tools, workspace, profile string, fixture *nativeResponsesFixture, crashAfterTool bool) string {
 	t.Helper()
 	master, terminal, err := pty.Open()
@@ -465,7 +480,22 @@ func runInstalledCodexRecovery(t *testing.T, candidate, home, tools, workspace, 
 	}
 }
 
-func inspectInstalledRecoverableSession(t *testing.T, candidate, home, tools, workspace string) string {
+type installedPublicSession struct {
+	ID       string `json:"id"`
+	State    string `json:"state"`
+	Target   string `json:"target"`
+	Revision uint64 `json:"revision"`
+	Recovery struct {
+		Allowed bool `json:"allowed"`
+	} `json:"recovery"`
+}
+
+type installedRecoverableSession struct {
+	id     string
+	before map[string]installedPublicSession
+}
+
+func installedSessionSnapshot(t *testing.T, candidate, home, tools, workspace string) map[string]installedPublicSession {
 	t.Helper()
 	command := exec.Command(candidate, "session", "list", "--json")
 	command.Dir, command.Env = workspace, nativeCandidateEnvironment(home, tools)
@@ -474,37 +504,51 @@ func inspectInstalledRecoverableSession(t *testing.T, candidate, home, tools, wo
 		t.Fatalf("public Session list failed: %v; output=%q", err, output)
 	}
 	var listed struct {
-		Sessions []struct {
-			ID       string `json:"id"`
-			State    string `json:"state"`
-			Target   string `json:"target"`
-			Recovery struct {
-				Allowed bool `json:"allowed"`
-			} `json:"recovery"`
-		} `json:"sessions"`
+		Sessions []installedPublicSession `json:"sessions"`
 	}
 	if err := json.Unmarshal(output, &listed); err != nil {
 		t.Fatalf("decode public Session list: %v; output=%q", err, output)
 	}
-	var live []struct {
-		ID       string `json:"id"`
-		State    string `json:"state"`
-		Target   string `json:"target"`
-		Recovery struct {
-			Allowed bool `json:"allowed"`
-		} `json:"recovery"`
-	}
+	result := make(map[string]installedPublicSession, len(listed.Sessions))
 	for _, item := range listed.Sessions {
+		result[item.ID] = item
+	}
+	return result
+}
+
+func assertNewRemovedInstalledSessions(t *testing.T, candidate, home, tools, workspace string, before map[string]installedPublicSession, target string) {
+	t.Helper()
+	after := installedSessionSnapshot(t, candidate, home, tools, workspace)
+	found := 0
+	for id, item := range after {
+		if _, existed := before[id]; existed {
+			continue
+		}
+		found++
+		if item.State != "removed" || item.Target != target || item.Revision == 0 {
+			t.Fatalf("candidate lifecycle row = %+v", item)
+		}
+	}
+	if found == 0 {
+		t.Fatalf("candidate %s operation published no durable Session lifecycle row", target)
+	}
+}
+
+func inspectInstalledRecoverableSession(t *testing.T, candidate, home, tools, workspace string) installedRecoverableSession {
+	t.Helper()
+	before := installedSessionSnapshot(t, candidate, home, tools, workspace)
+	var live []installedPublicSession
+	for _, item := range before {
 		if item.Target == "codex" && item.State != "removed" && item.Recovery.Allowed {
 			live = append(live, item)
 		}
 	}
 	if len(live) != 1 {
-		t.Fatalf("live recoverable Codex Sessions = %+v; all Sessions = %+v", live, listed.Sessions)
+		t.Fatalf("live recoverable Codex Sessions = %+v; all Sessions = %+v", live, before)
 	}
 	item := live[0]
 	if item.State != "active" && item.State != "settling" && item.State != "retryable" {
-		t.Fatalf("recoverable public Session state = %q; all Sessions = %+v", item.State, listed.Sessions)
+		t.Fatalf("recoverable public Session state = %q; all Sessions = %+v", item.State, before)
 	}
 	inspect := exec.Command(candidate, "session", "inspect", item.ID, "--json")
 	inspect.Dir, inspect.Env = workspace, nativeCandidateEnvironment(home, tools)
@@ -512,7 +556,7 @@ func inspectInstalledRecoverableSession(t *testing.T, candidate, home, tools, wo
 	if err != nil || !bytes.Contains(inspected, []byte(`"id":"`+item.ID+`"`)) || bytes.Contains(inspected, []byte("rootToken")) || bytes.Contains(inspected, []byte("challenge")) {
 		t.Fatalf("public Session inspect = %q, %v", inspected, err)
 	}
-	return item.ID
+	return installedRecoverableSession{id: item.ID, before: before}
 }
 
 func runConcurrentInstalledRecoveries(t *testing.T, candidate, home, tools, workspace, name, publicID string) {
@@ -560,13 +604,25 @@ func runConcurrentInstalledRecoveries(t *testing.T, candidate, home, tools, work
 	}
 }
 
-func assertInstalledSessionRemoved(t *testing.T, candidate, home, tools, workspace, publicID string) {
+func assertInstalledSessionRemoved(t *testing.T, candidate, home, tools, workspace string, recoverable installedRecoverableSession) {
 	t.Helper()
-	command := exec.Command(candidate, "session", "inspect", publicID, "--json")
+	command := exec.Command(candidate, "session", "inspect", recoverable.id, "--json")
 	command.Dir, command.Env = workspace, nativeCandidateEnvironment(home, tools)
 	output, err := command.Output()
 	if err != nil || !bytes.Contains(output, []byte(`"state":"removed"`)) || bytes.Contains(output, []byte("rootToken")) || bytes.Contains(output, []byte("challenge")) {
 		t.Fatalf("removed public Session = %q, %v", output, err)
+	}
+	after := installedSessionSnapshot(t, candidate, home, tools, workspace)
+	if item, exists := after[recoverable.id]; !exists || item.State != "removed" {
+		t.Fatalf("recovered Session did not remain as a removed public row: %+v", item)
+	}
+	for id, item := range recoverable.before {
+		if id == recoverable.id || item.State != "removed" {
+			continue
+		}
+		if preserved, exists := after[id]; !exists || preserved.State != "removed" {
+			t.Fatalf("old removed Session row %s was not preserved: %+v", id, preserved)
+		}
 	}
 }
 

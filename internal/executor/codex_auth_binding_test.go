@@ -421,6 +421,17 @@ func TestDirectAndGeneralRecoveryRaceUsesOneAcyclicLockOrder(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	// Prime the permanent identity lock inode before testing recovery
+	// contention. Lock-file creation safety has separate coverage; this race is
+	// specifically about two public commands contending on one established
+	// typed authority and the general Session fence.
+	primed, err := registryTestResources(registry).locks.TryLock("work")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := primed.Release(); err != nil {
+		t.Fatal(err)
+	}
 	if err := created.PreserveForRecovery(); err != nil {
 		t.Fatal(err)
 	}
@@ -447,7 +458,7 @@ func TestDirectAndGeneralRecoveryRaceUsesOneAcyclicLockOrder(t *testing.T) {
 	for name, result := range map[string]<-chan error{"direct": directDone, "general": generalDone} {
 		select {
 		case err := <-result:
-			if err != nil && !errors.Is(err, ErrIdentityBusy) && sessionops.Diagnostic(err) != "not_recoverable" && sessionops.Diagnostic(err) != "busy" {
+			if err != nil && !errors.Is(err, ErrIdentityBusy) && sessionops.Diagnostic(err) != "busy" {
 				t.Fatalf("%s concurrent recovery error = %v", name, err)
 			}
 		case <-time.After(time.Second):
@@ -456,6 +467,9 @@ func TestDirectAndGeneralRecoveryRaceUsesOneAcyclicLockOrder(t *testing.T) {
 	}
 	if result, err := store.Recover(created.PublicID()); err != nil || result.Outcome != "removed" {
 		t.Fatalf("general convergence = (%+v, %v)", result, err)
+	}
+	if inspected, err := store.Inspect(created.PublicID()); err != nil || inspected.Session.State != sessionops.StateRemoved || inspected.Session.Observation != "durable" {
+		t.Fatalf("durable convergence = (%+v, %v)", inspected, err)
 	}
 	if disposition, err := registry.Recover(context.Background(), "work"); err != nil || disposition != DiscardedProjection {
 		t.Fatalf("direct convergence = (%q, %v)", disposition, err)
@@ -508,6 +522,9 @@ type testSessionOpsAuthRecovery struct {
 
 func (recovery testSessionOpsAuthRecovery) AcquireBySession(ctx context.Context, rootName string) (sessionops.AuthRecoveryBinding, bool, error) {
 	binding, err := recovery.registry.resources.AcquireRecovery(ctx, recovery.name)
+	if errors.Is(err, ErrIdentityBusy) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		err = sessionops.ErrAuthBusy
+	}
 	if err != nil || binding == nil {
 		return nil, false, err
 	}

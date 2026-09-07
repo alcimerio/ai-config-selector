@@ -87,16 +87,18 @@ type RecoverResult struct {
 }
 
 type record struct {
-	Version    int    `json:"version"`
-	ID         string `json:"id"`
-	Revision   uint64 `json:"revision"`
-	State      State  `json:"state"`
-	Target     string `json:"target"`
-	CreatedAt  string `json:"createdAt"`
-	UpdatedAt  string `json:"updatedAt"`
-	RemovedAt  string `json:"removedAt,omitempty"`
-	RootToken  string `json:"rootToken"`
-	Generation uint64 `json:"generation"`
+	Version                 int    `json:"version"`
+	ID                      string `json:"id"`
+	Revision                uint64 `json:"revision"`
+	State                   State  `json:"state"`
+	Target                  string `json:"target"`
+	CreatedAt               string `json:"createdAt"`
+	UpdatedAt               string `json:"updatedAt"`
+	RemovedAt               string `json:"removedAt,omitempty"`
+	RootToken               string `json:"rootToken"`
+	Generation              uint64 `json:"generation"`
+	CompletionRoot          string `json:"completionRoot,omitempty"`
+	CompletionChallengeHash string `json:"completionChallengeHash,omitempty"`
 }
 
 type capability struct {
@@ -287,6 +289,7 @@ func (tracker *Tracker) Removed() error {
 	if err = tracker.store.writeCapability(cap); err == nil {
 		rec.Revision++
 		rec.State, rec.UpdatedAt, rec.RemovedAt = StateRemoved, formatTime(tracker.store.now()), formatTime(tracker.store.now())
+		setCompletionBinding(&rec, cap)
 		err = tracker.store.writeRecord(rec)
 	}
 	if err == nil {
@@ -459,10 +462,10 @@ func (store Store) Recover(id string) (RecoverResult, error) {
 			result.Outcome = "not_recoverable"
 			return result, errors.New("not_recoverable")
 		}
-		if snapshotExists && authBinding == nil {
-			// The marker was observed before the typed lock, then disappeared
-			// while a competing direct recovery completed. Reconcile under the
-			// general fence below instead of treating this as invalid authority.
+		if authBinding == nil {
+			// The marker may disappear either after reverse lookup or before it
+			// when a competing direct recovery completes. Reconcile under the
+			// general fence below instead of deciding from this stale snapshot.
 			authLookupGone = true
 		} else if snapshotExists && authBinding.CleanupChallenge() != snapshotCap.Challenge {
 			if authBinding != nil {
@@ -472,10 +475,6 @@ func (store Store) Recover(id string) (RecoverResult, error) {
 			return result, errors.New("not_recoverable")
 		}
 		if !snapshotExists {
-			if (snapshot.State != StateRemoved && snapshot.State != StateRemovable) || !snapshotCap.Removed {
-				result.Outcome = "not_recoverable"
-				return result, errors.New("not_recoverable")
-			}
 			authMarkerMissing = true
 		} else {
 			defer authBinding.Release()
@@ -505,6 +504,17 @@ func (store Store) Recover(id string) (RecoverResult, error) {
 	}
 	result.State, result.Revision = rec.State, rec.Revision
 	if rec.State == StateRemoved && capErr == nil && !capExists {
+		if !validCompletionBinding(rec) {
+			result.Outcome, result.State = "unproven", StateUnknown
+			return result, errors.New("unproven")
+		}
+		// A preceding unlink or removed-record rename may have become visible
+		// before its parent-directory sync failed. Re-sync every completion
+		// directory before treating the absence as durable and authoritative.
+		if store.storage.records.sync() != nil || store.storage.locks.sync() != nil || store.storage.capabilities.sync() != nil {
+			result.Outcome = "removal_failed"
+			return result, errors.New("removal_failed")
+		}
 		result.Outcome = "removed"
 		return result, nil
 	}
@@ -525,14 +535,30 @@ func (store Store) Recover(id string) (RecoverResult, error) {
 		}
 		return result, errors.New("unproven")
 	}
+	if authLookupGone && rec.State != StateRemoved {
+		// Marker absence alone is never cleanup authority. Only a competing
+		// path's exact durably completed record may converge without it.
+		result.Outcome = "not_recoverable"
+		return result, errors.New("not_recoverable")
+	}
 	if capErr == nil && capExists && cap.Removed {
+		// Re-publish the completion capability even when its renamed bytes are
+		// already visible: the preceding attempt may have failed only while
+		// syncing the capabilities directory.
+		if err := store.writeCapability(cap); err != nil {
+			result.Outcome = "removal_failed"
+			return result, errors.New("removal_failed")
+		}
 		if rec.State != StateRemoved {
 			rec.Revision++
 			rec.State, rec.UpdatedAt, rec.RemovedAt = StateRemoved, formatTime(store.now()), formatTime(store.now())
-			if err := store.writeRecord(rec); err != nil {
-				result.Outcome = "removal_failed"
-				return result, errors.New("removal_failed")
-			}
+		}
+		setCompletionBinding(&rec, cap)
+		// Likewise, rewrite and sync an already-visible removed record before
+		// deleting the private completion evidence.
+		if err := store.writeRecord(rec); err != nil {
+			result.Outcome = "removal_failed"
+			return result, errors.New("removal_failed")
 		}
 		if authBinding != nil && !authMarkerMissing {
 			if err := authBinding.DeleteMarkerAfterProjectionRemoval(context.Background()); err != nil {
@@ -616,6 +642,7 @@ func (store Store) Recover(id string) (RecoverResult, error) {
 	}
 	fresh.Revision++
 	fresh.State, fresh.UpdatedAt, fresh.RemovedAt = StateRemoved, formatTime(store.now()), formatTime(store.now())
+	setCompletionBinding(&fresh, freshCap)
 	if err := store.writeRecord(fresh); err != nil {
 		result.Outcome, result.State = "removal_failed", StateUnknown
 		return result, errors.New("removal_failed")
@@ -686,6 +713,35 @@ func (store Store) FinalizeRemoval(rootName, challenge string, remove func() (bo
 		matched = capability
 	}
 	if matched.ID == "" {
+		completed, completionErr := store.completedRecordFor(rootName, challenge)
+		if completionErr != nil {
+			return errors.New("session_registry_unavailable")
+		}
+		if completed.ID != "" {
+			fence, fenceErr := store.openFence(completed.ID)
+			if fenceErr != nil {
+				return errors.New("session_registry_unavailable")
+			}
+			defer closeLocked(fence)
+			fresh, exists, readErr := store.readRecord(completed.ID)
+			if readErr != nil || !exists || fresh != completed || !validCompletionBinding(fresh) {
+				return errors.New("session_registry_unavailable")
+			}
+			if store.storage.records.sync() != nil || store.storage.capabilities.sync() != nil {
+				return errors.New("session_registry_unavailable")
+			}
+			binding, bindingExists, bindingErr := store.readRootBinding(rootName)
+			if bindingErr != nil || (bindingExists && (binding.ID != fresh.ID || binding.RootToken != fresh.RootToken)) {
+				return errors.New("session_registry_unavailable")
+			}
+			if err := finalize(); err != nil {
+				return err
+			}
+			if bindingExists {
+				return store.removeRootBinding(rootName)
+			}
+			return store.storage.locks.sync()
+		}
 		_, tracked, bindingErr := store.readRootBinding(rootName)
 		if bindingErr != nil || tracked {
 			return errors.New("session_registry_unavailable")
@@ -720,13 +776,19 @@ func (store Store) FinalizeRemoval(rootName, challenge string, remove func() (bo
 		if err := store.writeCapability(fresh); err != nil {
 			return err
 		}
+	} else if err := store.writeCapability(fresh); err != nil {
+		// The prior completion rename may have succeeded while its directory
+		// sync failed. A successful rewrite makes that witness durable before
+		// any later evidence is discarded.
+		return err
 	}
 	if rec.State != StateRemoved {
 		rec.Revision++
 		rec.State, rec.UpdatedAt, rec.RemovedAt = StateRemoved, formatTime(store.now()), formatTime(store.now())
-		if err := store.writeRecord(rec); err != nil {
-			return err
-		}
+	}
+	setCompletionBinding(&rec, fresh)
+	if err := store.writeRecord(rec); err != nil {
+		return err
 	}
 	if err := finalize(); err != nil {
 		return err
@@ -735,6 +797,33 @@ func (store Store) FinalizeRemoval(rootName, challenge string, remove func() (bo
 		return err
 	}
 	return store.removeCapability(matched.ID)
+}
+
+func (store Store) completedRecordFor(rootName, challenge string) (record, error) {
+	entries, err := store.storage.records.entries(MaxScannedEntries)
+	if err != nil {
+		return record{}, err
+	}
+	want := completionChallengeHash(challenge)
+	var matched record
+	for _, entry := range entries {
+		id := strings.TrimSuffix(entry.Name(), ".json")
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") || !ValidID(id) {
+			continue
+		}
+		rec, exists, readErr := store.readRecord(id)
+		if readErr != nil {
+			return record{}, readErr
+		}
+		if !exists || rec.State != StateRemoved || rec.CompletionRoot != rootName || rec.CompletionChallengeHash != want {
+			continue
+		}
+		if matched.ID != "" {
+			return record{}, errors.New("ambiguous completed Session")
+		}
+		matched = rec
+	}
+	return matched, nil
 }
 
 func (store Store) restrict(rec record, state State) error {
@@ -807,7 +896,8 @@ func (store Store) readRecord(id string) (record, bool, error) {
 	if err != nil || !exists {
 		return value, exists, err
 	}
-	if value.Version != SchemaVersion || value.ID != id || value.Revision == 0 || !validState(value.State) || !validTarget(value.Target) || !validTimestamp(value.CreatedAt) || !validTimestamp(value.UpdatedAt) || len(value.RootToken) != 64 || value.Generation == 0 {
+	completionEmpty := value.CompletionRoot == "" && value.CompletionChallengeHash == ""
+	if value.Version != SchemaVersion || value.ID != id || value.Revision == 0 || !validState(value.State) || !validTarget(value.Target) || !validTimestamp(value.CreatedAt) || !validTimestamp(value.UpdatedAt) || len(value.RootToken) != 64 || value.Generation == 0 || (!completionEmpty && !validCompletionBinding(value)) {
 		return value, true, errors.New("invalid record")
 	}
 	return value, true, nil
@@ -1049,6 +1139,31 @@ func validTimestamp(value string) bool {
 }
 func validBinding(rec record, cap capability) bool {
 	return rec.ID == cap.ID && rec.RootToken == cap.RootToken && rec.Generation == cap.Generation
+}
+
+func setCompletionBinding(rec *record, cap capability) {
+	if rec == nil {
+		return
+	}
+	rec.CompletionRoot = cap.RootName
+	rec.CompletionChallengeHash = completionChallengeHash(cap.Challenge)
+}
+
+func validCompletionBinding(rec record) bool {
+	if rec.State != StateRemoved || !strings.HasPrefix(rec.CompletionRoot, "session-") || filepath.Base(rec.CompletionRoot) != rec.CompletionRoot || len(rec.CompletionChallengeHash) != 64 {
+		return false
+	}
+	_, err := hex.DecodeString(rec.CompletionChallengeHash)
+	return err == nil
+}
+
+func completionChallengeHash(challenge string) string {
+	decoded, err := hex.DecodeString(challenge)
+	if err != nil || len(decoded) != launch.RecoveryProofChallengeSize {
+		return ""
+	}
+	digest := sha256.Sum256(decoded)
+	return hex.EncodeToString(digest[:])
 }
 
 func ValidID(id string) bool {

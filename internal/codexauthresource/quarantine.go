@@ -77,11 +77,13 @@ func (store *fileBindingQuarantine) findBySession(ctx context.Context, sessionID
 	if err := store.directory.validateCanonicalIdentity(); err != nil {
 		return "", false, ErrProviderUnavailable
 	}
-	descriptor, err := unix.Dup(int(store.directory.file.Fd()))
+	// Open a new file description so repeated bounded scans do not share the
+	// pinned directory descriptor's stream offset. Openat applies CLOEXEC
+	// atomically; Dup plus CloseOnExec would leave a fork/exec inheritance race.
+	descriptor, err := unix.Openat(int(store.directory.file.Fd()), ".", unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
 	if err != nil {
 		return "", false, ErrProviderUnavailable
 	}
-	unix.CloseOnExec(descriptor)
 	directory := os.NewFile(uintptr(descriptor), "codex-auth-quarantine-scan")
 	if directory == nil {
 		_ = unix.Close(descriptor)
@@ -89,7 +91,7 @@ func (store *fileBindingQuarantine) findBySession(ctx context.Context, sessionID
 	}
 	defer directory.Close()
 	entries, err := directory.ReadDir(limit + 1)
-	if err != nil {
+	if err != nil && !errors.Is(err, io.EOF) {
 		return "", false, ErrProviderUnavailable
 	}
 	if len(entries) > limit {

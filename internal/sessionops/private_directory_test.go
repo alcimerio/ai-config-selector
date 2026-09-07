@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -152,30 +153,213 @@ func TestRecoverRetriesDurableCompletionAfterPostRemovalRecordFault(t *testing.T
 	}
 }
 
+func TestVisibleCompletionAfterDirectorySyncFailureIsRepublishedBeforeEvidenceDeletion(t *testing.T) {
+	for _, publication := range []string{"capability", "record"} {
+		for _, retryPath := range []string{"direct", "general"} {
+			t.Run(publication+"/"+retryPath, func(t *testing.T) {
+				sessions := filepath.Join(t.TempDir(), ".acs", "sessions")
+				store, id, rootName, _, challenge := newFinalizationFaultFixture(t, sessions)
+				fault := errors.New("injected directory sync failure after rename")
+				if publication == "capability" {
+					store.storage.capabilities.afterRename = func(name string) error {
+						if name == id+".json" {
+							return fault
+						}
+						return nil
+					}
+				} else {
+					store.storage.records.afterRename = func(name string) error {
+						if name == id+".json" {
+							return fault
+						}
+						return nil
+					}
+				}
+				removeCalls, markerCalls := 0, 0
+				err := store.FinalizeRemoval(rootName, challenge, func() (bool, error) {
+					removeCalls++
+					return true, nil
+				}, func() error {
+					markerCalls++
+					return nil
+				})
+				if err == nil || removeCalls != 1 || markerCalls != 0 {
+					t.Fatalf("faulted publication = (%v, remove=%d, marker=%d)", err, removeCalls, markerCalls)
+				}
+				if publication == "record" {
+					inspected, inspectErr := (Store{SessionsDirectory: sessions}).Inspect(id)
+					if inspectErr != nil || inspected.Session.State != StateRemoved {
+						t.Fatalf("renamed removed record was not visible = (%+v, %v)", inspected, inspectErr)
+					}
+				}
+				if retryPath == "direct" {
+					err = (Store{SessionsDirectory: sessions}).FinalizeRemoval(rootName, challenge, func() (bool, error) {
+						t.Fatal("retry repeated physical removal")
+						return false, nil
+					}, func() error {
+						markerCalls++
+						return nil
+					})
+					if err != nil {
+						t.Fatal(err)
+					}
+				} else {
+					retry := Store{SessionsDirectory: sessions, AuthRecovery: func() (AuthRecovery, error) {
+						return faultRetryAuth{rootName: rootName, challenge: challenge, finalized: &markerCalls}, nil
+					}}
+					result, recoverErr := retry.Recover(id)
+					if recoverErr != nil || result.Outcome != "removed" {
+						t.Fatalf("general retry = (%+v, %v)", result, recoverErr)
+					}
+				}
+				if markerCalls != 1 {
+					t.Fatalf("marker finalization calls = %d", markerCalls)
+				}
+			})
+		}
+	}
+}
+
+func TestPhysicalRemovalFailureRetainsAuthorityForBothRecoveryPaths(t *testing.T) {
+	for _, retryPath := range []string{"direct", "general"} {
+		t.Run(retryPath, func(t *testing.T) {
+			sessions := filepath.Join(t.TempDir(), ".acs", "sessions")
+			lease, err := launch.CreateProtectedSession(sessions)
+			if err != nil {
+				t.Fatal(err)
+			}
+			tracker, err := NewTracker(sessions, lease.RootDir, "codex-auth")
+			if err != nil {
+				t.Fatal(err)
+			}
+			challengeBytes := bytes.Repeat([]byte{0x6b}, launch.RecoveryProofChallengeSize)
+			if _, err := tracker.Arm(challengeBytes); err != nil {
+				t.Fatal(err)
+			}
+			if err := lease.PreserveForRecovery(); err != nil {
+				t.Fatal(err)
+			}
+			challenge := hex.EncodeToString(challengeBytes)
+			fault := errors.New("injected physical removal failure")
+			markerCalls := 0
+			err = (Store{SessionsDirectory: sessions}).FinalizeRemoval(filepath.Base(lease.RootDir), challenge, func() (bool, error) {
+				return false, fault
+			}, func() error {
+				markerCalls++
+				return nil
+			})
+			if !errors.Is(err, fault) || markerCalls != 0 {
+				t.Fatalf("physical failure = (%v, marker=%d)", err, markerCalls)
+			}
+			if _, err := os.Stat(lease.RootDir); err != nil {
+				t.Fatalf("physical failure discarded root: %v", err)
+			}
+			if retryPath == "direct" {
+				err = (Store{SessionsDirectory: sessions}).FinalizeRemoval(filepath.Base(lease.RootDir), challenge, func() (bool, error) {
+					recovered, exists, recoverErr := launch.RecoverSession(sessions, filepath.Base(lease.RootDir))
+					if recoverErr != nil || !exists {
+						return false, recoverErr
+					}
+					return true, recovered.Remove()
+				}, func() error {
+					markerCalls++
+					return nil
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				store := Store{SessionsDirectory: sessions, AuthRecovery: func() (AuthRecovery, error) {
+					return faultRetryAuth{rootName: filepath.Base(lease.RootDir), challenge: challenge, finalized: &markerCalls}, nil
+				}}
+				if result, recoverErr := store.Recover(tracker.ID()); recoverErr != nil || result.Outcome != "removed" {
+					t.Fatalf("general retry = (%+v, %v)", result, recoverErr)
+				}
+			}
+			if markerCalls != 1 {
+				t.Fatalf("marker calls after retry = %d", markerCalls)
+			}
+		})
+	}
+}
+
+func TestMarkerFinalizationFailureRetriesThroughBothRecoveryPaths(t *testing.T) {
+	for _, retryPath := range []string{"direct", "general"} {
+		t.Run(retryPath, func(t *testing.T) {
+			sessions := filepath.Join(t.TempDir(), ".acs", "sessions")
+			store, id, rootName, _, challenge := newFinalizationFaultFixture(t, sessions)
+			fault := errors.New("injected typed marker deletion failure")
+			removeCalls, markerCalls := 0, 0
+			err := store.FinalizeRemoval(rootName, challenge, func() (bool, error) {
+				removeCalls++
+				return true, nil
+			}, func() error {
+				markerCalls++
+				return fault
+			})
+			if !errors.Is(err, fault) || removeCalls != 1 || markerCalls != 1 {
+				t.Fatalf("marker failure = (%v, remove=%d, marker=%d)", err, removeCalls, markerCalls)
+			}
+			if retryPath == "direct" {
+				err = (Store{SessionsDirectory: sessions}).FinalizeRemoval(rootName, challenge, func() (bool, error) {
+					t.Fatal("marker retry repeated physical removal")
+					return false, nil
+				}, func() error {
+					markerCalls++
+					return nil
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				retry := Store{SessionsDirectory: sessions, AuthRecovery: func() (AuthRecovery, error) {
+					return faultRetryAuth{rootName: rootName, challenge: challenge, finalized: &markerCalls}, nil
+				}}
+				if result, recoverErr := retry.Recover(id); recoverErr != nil || result.Outcome != "removed" {
+					t.Fatalf("general marker retry = (%+v, %v)", result, recoverErr)
+				}
+			}
+			if markerCalls != 2 {
+				t.Fatalf("marker calls after retry = %d", markerCalls)
+			}
+		})
+	}
+}
+
 func TestCompletedRemovalRetriesAfterPrivateUnlinkFaults(t *testing.T) {
 	// Each row is a partial-success boundary in the durable finalization order:
 	// capability completion, public record, typed marker, root binding, capability.
 	// At these two unlink boundaries the durable completion and public removal
 	// are already published, so either public recovery command must converge.
-	for _, fault := range []string{"root binding", "capability"} {
+	for _, fault := range []string{"root binding before unlink", "root binding after unlink", "capability before unlink", "capability after unlink"} {
 		for _, retryCommand := range []string{"direct", "general"} {
 			t.Run(fault+"/"+retryCommand, func(t *testing.T) {
 				sessions := filepath.Join(t.TempDir(), ".acs", "sessions")
 				store, id, rootName, token, challenge := newFinalizationFaultFixture(t, sessions)
 				injected := errors.New("injected unlink failure")
-				if fault == "root binding" {
-					store.storage.locks.beforeUnlink = func(name string) error {
+				if strings.HasPrefix(fault, "root binding") {
+					hook := func(name string) error {
 						if name == rootBindingName(rootName) {
 							return injected
 						}
 						return nil
 					}
+					if strings.HasSuffix(fault, "after unlink") {
+						store.storage.locks.afterUnlink = hook
+					} else {
+						store.storage.locks.beforeUnlink = hook
+					}
 				} else {
-					store.storage.capabilities.beforeUnlink = func(name string) error {
+					hook := func(name string) error {
 						if name == id+".json" {
 							return injected
 						}
 						return nil
+					}
+					if strings.HasSuffix(fault, "after unlink") {
+						store.storage.capabilities.afterUnlink = hook
+					} else {
+						store.storage.capabilities.beforeUnlink = hook
 					}
 				}
 				removeCalls, markerCalls := 0, 0

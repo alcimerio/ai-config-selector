@@ -1,0 +1,6 @@
+Session ses_abcd234567abcdef234567abcd
+  state: retryable
+  observation: durable
+  target: codex
+  revision: 3
+  recovery: verify-proof

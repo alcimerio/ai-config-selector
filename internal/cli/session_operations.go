@@ -32,13 +32,18 @@ type codexSessionRecoveryBinding struct {
 
 func (recovery codexSessionRecovery) AcquireBySession(ctx context.Context, id string) (sessionops.AuthRecoveryBinding, bool, error) {
 	binding, exists, err := recovery.store.AcquireRecoveryBySession(ctx, id)
-	if errors.Is(err, codexauthresource.ErrIdentityBusy) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
-		err = sessionops.ErrAuthBusy
-	}
+	err = mapCodexSessionRecoveryError(err)
 	if binding == nil {
 		return nil, exists, err
 	}
 	return codexSessionRecoveryBinding{binding: binding}, exists, err
+}
+
+func mapCodexSessionRecoveryError(err error) error {
+	if errors.Is(err, codexauthresource.ErrIdentityBusy) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return sessionops.ErrAuthBusy
+	}
+	return err
 }
 func (binding codexSessionRecoveryBinding) CleanupChallenge() string {
 	return binding.binding.CleanupChallenge()

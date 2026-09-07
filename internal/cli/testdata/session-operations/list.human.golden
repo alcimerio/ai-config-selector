@@ -1,0 +1,3 @@
+Durable Sessions:
+  ses_abcd234567abcdef234567abcd  retryable  codex  recovery=verify-proof
+Untracked roots: 2

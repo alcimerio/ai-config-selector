@@ -1,0 +1,1 @@
+{"schemaVersion":1,"sessions":[{"id":"ses_abcd234567abcdef234567abcd","state":"retryable","observation":"durable","target":"codex","createdAt":"2026-09-07T12:00:00Z","updatedAt":"2026-09-07T12:00:04Z","revision":3,"recovery":{"allowed":true,"action":"verify-proof"}}],"untrackedCount":2}

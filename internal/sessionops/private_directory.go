@@ -21,7 +21,9 @@ type privateDirectory struct {
 	leaf   string
 
 	beforeRename func(string) error
+	afterRename  func(string) error
 	beforeUnlink func(string) error
+	afterUnlink  func(string) error
 }
 
 func pinPrivateChild(parent *privateDirectory, name string, create bool) (*privateDirectory, error) {
@@ -232,6 +234,11 @@ func (directory *privateDirectory) write(name string, data []byte) error {
 		return err
 	}
 	temporaryName = ""
+	if directory.afterRename != nil {
+		if err := directory.afterRename(name); err != nil {
+			return err
+		}
+	}
 	return directory.file.Sync()
 }
 
@@ -246,6 +253,18 @@ func (directory *privateDirectory) unlink(name string) error {
 	}
 	if err := unix.Unlinkat(int(directory.file.Fd()), name, 0); err != nil && !errors.Is(err, unix.ENOENT) {
 		return err
+	}
+	if directory.afterUnlink != nil {
+		if err := directory.afterUnlink(name); err != nil {
+			return err
+		}
+	}
+	return directory.file.Sync()
+}
+
+func (directory *privateDirectory) sync() error {
+	if directory == nil || directory.validate() != nil {
+		return errors.New("private directory changed")
 	}
 	return directory.file.Sync()
 }

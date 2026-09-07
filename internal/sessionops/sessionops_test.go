@@ -2,8 +2,11 @@ package sessionops_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -15,6 +18,47 @@ import (
 	"github.com/alcimerio/ai-config-selector/internal/session"
 	"github.com/alcimerio/ai-config-selector/internal/sessionops"
 )
+
+type recoveryErrorAuth struct{ err error }
+
+func (auth recoveryErrorAuth) AcquireBySession(context.Context, string) (sessionops.AuthRecoveryBinding, bool, error) {
+	return nil, true, auth.err
+}
+
+func TestTypedRecoveryErrorsUseSemanticContentionClassification(t *testing.T) {
+	tests := []struct {
+		name, message, outcome string
+		err                    error
+	}{
+		{name: "wrapped busy", err: fmt.Errorf("typed wrapper: %w", sessionops.ErrAuthBusy), outcome: "busy"},
+		{name: "deadline", err: context.DeadlineExceeded, outcome: "busy"},
+		{name: "cancelled", err: context.Canceled, outcome: "busy"},
+		{name: "busy words are not semantics", err: errors.New("provider busy during timeout while identity is in use"), outcome: "not_recoverable"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			home := t.TempDir()
+			sessions := filepath.Join(home, ".acs", "sessions")
+			created, err := session.CreateTracked(sessions, home, nil, "codex")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer created.Remove()
+			if _, err := created.ArmOperation(nil); err != nil {
+				t.Fatal(err)
+			}
+			result, err := (sessionops.Store{
+				SessionsDirectory: sessions,
+				AuthRecovery: func() (sessionops.AuthRecovery, error) {
+					return recoveryErrorAuth{err: test.err}, nil
+				},
+			}).Recover(created.PublicID())
+			if err == nil || result.Outcome != test.outcome || sessionops.Diagnostic(err) != test.outcome {
+				t.Fatalf("recovery = (%+v, %v), want %s", result, err, test.outcome)
+			}
+		})
+	}
+}
 
 type deferredProcess struct{ done chan struct{} }
 
@@ -329,6 +373,22 @@ func TestPassiveMissingStoreDoesNotCreateState(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(root, ".acs")); !os.IsNotExist(err) {
 		t.Fatalf("passive list created storage: %v", err)
+	}
+}
+
+func TestListRejectsBoundedUntrackedEnumerationWithoutPartialCounts(t *testing.T) {
+	sessions := filepath.Join(t.TempDir(), ".acs", "sessions")
+	if err := os.MkdirAll(sessions, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for index := 0; index <= sessionops.MaxScannedEntries; index++ {
+		if err := os.Mkdir(filepath.Join(sessions, fmt.Sprintf("session-untracked-%04d", index)), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	result, err := (sessionops.Store{SessionsDirectory: sessions}).List("")
+	if sessionops.Diagnostic(err) != "session_registry_limit" || len(result.Sessions) != 0 || result.UntrackedCount != 0 {
+		t.Fatalf("bounded list = (%+v, %v)", result, err)
 	}
 }
 

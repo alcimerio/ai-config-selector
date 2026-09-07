@@ -255,6 +255,7 @@ func waitForPreflightSessionRemoval(t *testing.T, sandbox *preflightRetentionSan
 					t.Fatalf("preflight lease released before removing %q: %v", path, err)
 				}
 			}
+			waitForDurableSessionCompletion(t, filepath.Dir(sandbox.root))
 			return
 		} else if !errors.Is(err, syscall.EWOULDBLOCK) {
 			t.Fatal(err)
