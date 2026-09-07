@@ -1,0 +1,82 @@
+Effective capability explanation for Profile "format-profile" (stored version 3)
+Intent: devin
+Semantic authority digest: sha256:36f318c42104d2bba1ebee41eae61c39a9d4ed210dcf03e13640c7a9d462ecd8
+Digest scope: semantic ACS authority and recipe requirements only; excluded local bindings are rechecked separately where execution requires it.
+
+Requested:
+  common.skills [capability]: mode=selected-exact-identities (reason=stored_selection; source=profile:skills@v1)
+  common.workspace [workspace]: access=read-only (reason=stored_v3_intent; source=profile:workspace@v1)
+  execution.recipe [recipe]: mode=devin (reason=selected_intent; source=command:devin)
+  target.overlay [overlay]: mode=devin (reason=selected_target; source=profile:devin@v1)
+
+Target-added:
+  devin.credentials [credential-projection]: mode=optional-allowlisted-value-omitted (reason=fixed_target_recipe; source=target:devin@v1)
+  devin.preflight.authentication [target-preflight]: mode=contained-status (reason=fixed_target_recipe; source=target:devin@v1)
+  devin.preflight.skills [target-preflight]: mode=contained-exact-catalog (reason=fixed_target_recipe; source=target:devin@v1)
+  devin.project-skills [project-inheritance]: names=.devin/skills,.agents/skills (reason=target_inheritance; source=target:devin@v1)
+  runtime.session-destinations [session-destination]: names=session-home,session-temporary,session-home/.config,session-home/.local/share,session-home/.cache,session-home/.local/state (reason=intrinsic_session; source=acs:session@v1)
+  skills.target-projection [target-projection]: mode=selected-material (reason=registered_projection; source=target:devin@v1)
+  target.executable [executable]: requirement=devin-cli (reason=registered_requirement; source=target:devin@v1)
+
+Effective:
+  runtime.devices [device]: mode=bounded-tty-random-null-fd (reason=acs_runtime; source=acs:native-sandbox@v1)
+  runtime.environment [environment]: mode=conditional-inheritance-values-omitted; names=COLORTERM,LANG,LC_ALL,LC_CTYPE,TERM (reason=acs_runtime; source=acs:native-sandbox@v1)
+  runtime.environment.fixed-path [environment]: mode=/usr/local/bin:/usr/bin:/bin; names=PATH (reason=acs_runtime; source=acs:native-sandbox@v1)
+  runtime.environment.synthetic [environment]: mode=session-relative-values-omitted; names=HOME,TMPDIR,XDG_CACHE_HOME,XDG_CONFIG_HOME,XDG_DATA_HOME,XDG_STATE_HOME (reason=acs_runtime; source=acs:native-sandbox@v1)
+  runtime.mach-services [mach-service]: names=com.apple.SecurityServer,com.apple.trustd.agent (reason=acs_runtime; source=acs:native-sandbox@v1)
+  runtime.metadata [filesystem-metadata]: mode=executable-and-session-ancestors (reason=acs_runtime; source=acs:native-sandbox@v1)
+  runtime.network [network]: mode=local-ip-socket-bind-no-listen-coarse-outbound-ip-macos-dns (reason=acs_runtime; source=acs:native-sandbox@v1)
+  runtime.process [process]: mode=same-sandbox-descendants (reason=acs_runtime; source=acs:native-sandbox@v1)
+  runtime.session [filesystem]: access=private-read-write (reason=intrinsic_session; source=acs:session@v1)
+  runtime.sysctls [sysctl]: names=hw.ncpu,hw.pagesize,hw.pagesize_compat (reason=acs_runtime; source=acs:native-sandbox@v1)
+  runtime.system-read [filesystem]: access=read; mode=bounded-macos-runtime (reason=acs_runtime; source=acs:native-sandbox@v1)
+  runtime.terminal [terminal]: mode=attached-pty-signals-resize (reason=acs_runtime; source=acs:native-sandbox@v1)
+  target.executable-access [filesystem]: access=read-execute; requirement=devin-cli (reason=registered_requirement; source=target:devin@v1)
+  workspace.read [filesystem]: access=read; location=workspace (reason=common_workspace; source=profile:workspace@v1)
+
+Unsupported or inert:
+  unsupported.arbitrary-executables [executable]: mode=arbitrary-grants (reason=not_supported; source=acs:native-sandbox)
+  unsupported.arbitrary-host-paths [filesystem]: mode=arbitrary-grants (reason=not_supported; source=acs:native-sandbox)
+  unsupported.durable-session-operations [session]: mode=public-management-ui (reason=not_supported; source=acs:session)
+  unsupported.host-environment [environment]: mode=arbitrary-values (reason=not_supported; source=acs:native-sandbox)
+  unsupported.network-destinations [network]: mode=destination-filtering (reason=not_supported; source=acs:native-sandbox)
+  unsupported.raw-policy [isolation]: mode=caller-supplied (reason=not_supported; source=acs:native-sandbox)
+  unsupported.sandbox-bypass [isolation]: mode=bypass (reason=not_supported; source=acs:native-sandbox)
+  unsupported.target-pass-through [target-control]: mode=arbitrary-options (reason=not_supported; source=acs:recipes)
+
+Evidence:
+  profile.structure: pass (supported_structure)
+    The exact stored Profile bytes were admitted.
+  profile.sources: pass (selected_sources_resolved)
+    Selected Skill identities resolved; contents may change before execution.
+  profile.overlay: pass (selected_overlay_supported)
+    The selected target overlay is supported.
+  authentication.syntax: unchecked (not_applicable)
+    This intent has no named authentication binding.
+  authentication.existence_status: unchecked (not_queried)
+    No credential provider or secret value was accessed.
+  executable.availability: unchecked (not_probed)
+    The fixed target executable was not inspected.
+  executable.version: unchecked (not_probed)
+    No target or user command was started.
+  runtime.inputs: unchecked (not_resolved)
+    Registered runtime-input paths were not resolved.
+  generated.configuration: unchecked (not_materialized)
+    Generated configuration is declared but was not written or observed.
+  project.inheritance: unchecked (not_enumerated)
+    Inheritance rules are effective intent; project-local files were not enumerated.
+  runtime.enforcement: unchecked (not_probed)
+    A semantic plan is not proof of native enforcement.
+  network.enforcement: unchecked (not_probed)
+    Coarse network intent is not destination-enforcement proof.
+  native.platform: unchecked (not_probed)
+    Use --check-native-readiness for the bounded native observation.
+  native.backend: unchecked (not_probed)
+    Use --check-native-readiness for the bounded native observation.
+
+Limitations:
+  semantic_digest_only: The digest excludes local paths, file contents, argument values, credentials, concrete project files, and host readiness; equal digests do not mean file-level execution-plan equality.
+  native_readiness_not_launch_readiness: Native readiness, when requested, does not check target version, authentication, materialization, generated policy, preflights, or cleanup.
+
+Current network authority is local-IP socket bind (not listen/inbound) plus coarse outbound IP and macOS DNS resolver access; no destination allowlist is enforced.
+Native readiness: unchecked (not probed); this is not launch readiness.

@@ -2,14 +2,35 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/alcimerio/ai-config-selector/internal/authority"
+	"github.com/alcimerio/ai-config-selector/internal/category"
+	"github.com/alcimerio/ai-config-selector/internal/launch"
 	"github.com/alcimerio/ai-config-selector/internal/profile"
 )
+
+type explanationBoundContribution struct {
+	Facts       int `json:"facts"`
+	StringBytes int `json:"stringBytes"`
+}
+
+func (explanationBoundContribution) Plan(context.Context, string, *launch.Plan) error { return nil }
+func (explanationBoundContribution) Materialize(string) error                         { return nil }
+func (explanationBoundContribution) Verify(context.Context, launch.VerificationContext) error {
+	return nil
+}
+func (contribution explanationBoundContribution) SemanticFacts(int, string) authority.Facts {
+	facts := make([]authority.Fact, contribution.Facts)
+	for index := range facts {
+		facts[index] = authority.Fact{ID: "synthetic-bound", Kind: "test", Value: authority.FactValue{Mode: strings.Repeat("x", contribution.StringBytes)}, Reason: "public_bound", Source: authority.FactSource{Kind: "test", ID: "registered"}}
+	}
+	return authority.Facts{Requested: facts}
+}
 
 func TestExplanationGrammarAcceptsReorderedIntentSpecificFlags(t *testing.T) {
 	for _, arguments := range [][]string{
@@ -127,5 +148,58 @@ func TestExplanationTooLargeDiagnosticContainsNoPartialPlanOrDigest(t *testing.T
 	}
 	if !strings.Contains(output.String(), `"plan":null`) || !strings.Contains(output.String(), `"code":"explanation_too_large"`) || strings.Contains(output.String(), "authorityDigest") {
 		t.Fatalf("oversized diagnostic exposed a partial plan: %s", output.String())
+	}
+}
+
+func TestExplanationPublicCommandRejectsSemanticAndEncodedOutputBoundsWithoutPartialPlan(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		selection   explanationBoundContribution
+		wantMessage string
+	}{
+		{name: "fact count", selection: explanationBoundContribution{Facts: maximumExplanationFacts + 1, StringBytes: 1}, wantMessage: "declared format bound"},
+		{name: "string bytes", selection: explanationBoundContribution{Facts: 1, StringBytes: maximumExplanationStringBytes + 1}, wantMessage: "declared format bound"},
+		{name: "encoded bytes", selection: explanationBoundContribution{Facts: 300, StringBytes: maximumExplanationStringBytes}, wantMessage: "output-size bound"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			binding, err := category.Bind(category.Definition[explanationBoundContribution, explanationBoundContribution, explanationBoundContribution]{
+				ID: "test-bound", SchemaVersion: 1,
+				Empty: func() explanationBoundContribution { return explanationBoundContribution{} },
+				Resolve: func(_ context.Context, selection explanationBoundContribution) (explanationBoundContribution, error) {
+					return selection, nil
+				},
+				Contribute: func(selection explanationBoundContribution) (explanationBoundContribution, error) {
+					return selection, nil
+				},
+				Count: func(selection explanationBoundContribution) int { return selection.Facts },
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			registry, err := category.NewRegistry("devin", binding.Registration())
+			if err != nil {
+				t.Fatal(err)
+			}
+			draft := registry.NewDraft()
+			if err := category.SetSelection(&draft, binding, test.selection); err != nil {
+				t.Fatal(err)
+			}
+			candidate, err := registry.NewProfile("bounded", draft)
+			if err != nil {
+				t.Fatal(err)
+			}
+			store := profile.NewStore(t.TempDir(), registry)
+			if _, err := store.Create(candidate); err != nil {
+				t.Fatal(err)
+			}
+			var output bytes.Buffer
+			app := App{Categories: registry, Profiles: store, WorkingDirectory: t.TempDir(), Output: &output, ErrorOutput: &output}
+			if code := app.Run(context.Background(), []string{"explain", "sandbox", "--profile", "bounded", "--json"}); code != 1 {
+				t.Fatalf("exit = %d, output=%s", code, output.String())
+			}
+			if !strings.Contains(output.String(), `"plan":null`) || !strings.Contains(output.String(), `"code":"explanation_too_large"`) || !strings.Contains(output.String(), test.wantMessage) || strings.Contains(output.String(), "authorityDigest") || strings.Contains(output.String(), strings.Repeat("x", 64)) {
+				t.Fatalf("public bound failure exposed a partial result: %s", output.String())
+			}
+		})
 	}
 }

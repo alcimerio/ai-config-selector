@@ -20,9 +20,11 @@ import (
 	"syscall"
 	"testing"
 	"time"
+	"unsafe"
 
 	"github.com/charmbracelet/x/term"
 	"github.com/creack/pty"
+	"github.com/ebitengine/purego"
 	"golang.org/x/sys/unix"
 )
 
@@ -1549,13 +1551,19 @@ func assertPromotedArtifactNativeContainment(t *testing.T) {
 	for _, fact := range explanation.Plan.Effective {
 		declared[fact.ID] = fact
 	}
-	for _, id := range []string{"runtime.environment", "runtime.environment.fixed-path", "runtime.environment.synthetic", "runtime.devices", "runtime.network", "runtime.process", "runtime.session", "runtime.terminal", "workspace.read", "workspace.write"} {
+	for _, id := range []string{"runtime.environment", "runtime.environment.fixed-path", "runtime.environment.synthetic", "runtime.devices", "runtime.mach-services", "runtime.network", "runtime.process", "runtime.session", "runtime.sysctls", "runtime.terminal", "workspace.read", "workspace.write"} {
 		if _, found := declared[id]; !found {
 			t.Fatalf("native containment behavior lacks matching effective declaration %s", id)
 		}
 	}
 	if declared["runtime.network"].Value.Mode != "local-ip-socket-bind-no-listen-coarse-outbound-ip-macos-dns" {
 		t.Fatalf("native containment network declaration = %#v", declared["runtime.network"])
+	}
+	if got := declared["runtime.sysctls"].Value.Names; !reflect.DeepEqual(got, []string{"hw.ncpu", "hw.pagesize", "hw.pagesize_compat"}) {
+		t.Fatalf("native containment sysctl declaration = %q", got)
+	}
+	if got := declared["runtime.mach-services"].Value.Names; !reflect.DeepEqual(got, []string{"com.apple.SecurityServer", "com.apple.trustd.agent"}) {
+		t.Fatalf("native containment Mach-service declaration = %q", got)
 	}
 
 	descriptor, err := os.Open(hostSecret)
@@ -1583,13 +1591,16 @@ func assertPromotedArtifactNativeContainment(t *testing.T) {
 		t.Fatal("candidate did not run both preflight probes in the contained Session")
 	}
 	for name, actual := range map[string]bool{
-		"workspace write":     result.WorkspaceWritable,
-		"Session write":       result.SessionWritable,
-		"Session temporary":   result.TemporaryWritable,
-		"allowed environment": result.AllowedEnvironment,
-		"outbound IP":         result.OutboundIP,
-		"local IP bind":       result.LocalIPBind,
-		"descendant start":    result.DescendantStarted,
+		"workspace write":      result.WorkspaceWritable,
+		"Session write":        result.SessionWritable,
+		"Session temporary":    result.TemporaryWritable,
+		"allowed environment":  result.AllowedEnvironment,
+		"outbound IP":          result.OutboundIP,
+		"local IP bind":        result.LocalIPBind,
+		"descendant start":     result.DescendantStarted,
+		"registered sysctls":   result.RegisteredSysctls,
+		"system trust read":    result.SystemTrustSettings,
+		"local trust evaluate": result.LocalSystemTrust,
 	} {
 		if !actual {
 			t.Fatalf("native containment did not preserve %s", name)
@@ -1603,6 +1614,7 @@ func assertPromotedArtifactNativeContainment(t *testing.T) {
 		"host Unix socket":     result.HostSocketReachable,
 		"local Unix bind":      result.LocalUnixBind,
 		"unrelated host write": result.ExternalWriteSucceeded,
+		"unregistered sysctl":  !result.UnregisteredSysctlDenied,
 	} {
 		if actual {
 			t.Fatalf("native containment exposed %s", name)
@@ -1718,6 +1730,10 @@ type fakeDevinResult struct {
 	LocalUnixBind             bool `json:"localUnixBind"`
 	ExternalWriteSucceeded    bool `json:"externalWriteSucceeded"`
 	DescendantStarted         bool `json:"descendantStarted"`
+	RegisteredSysctls         bool `json:"registeredSysctls"`
+	UnregisteredSysctlDenied  bool `json:"unregisteredSysctlDenied"`
+	SystemTrustSettings       bool `json:"systemTrustSettings"`
+	LocalSystemTrust          bool `json:"localSystemTrust"`
 	SelectedCommonSkills      bool `json:"selectedCommonSkills"`
 	SelectedProjectedSkills   bool `json:"selectedProjectedSkills"`
 	UnselectedGlobalAbsent    bool `json:"unselectedGlobalAbsent"`
@@ -1860,6 +1876,10 @@ func runFakeDevinInteractive() {
 		LocalIPBind:               fakeDevinCanBind("tcp4", "127.0.0.1:0"),
 		LocalUnixBind:             fakeDevinCanBind("unix", filepath.Join(os.Getenv("HOME"), "denied-bind.sock")),
 		ExternalWriteSucceeded:    writeFakeDevinMarker(configuration.ExternalWritePath),
+		RegisteredSysctls:         fakeDevinRegisteredSysctls(),
+		UnregisteredSysctlDenied:  fakeDevinUnregisteredSysctlDenied(),
+		SystemTrustSettings:       fakeDevinCopySystemTrustSettings() == nil,
+		LocalSystemTrust:          fakeDevinEvaluateLocalSystemTrust() == nil,
 	}
 	result.DescendantStarted = startFakeDevinDescendant()
 	writeFakeDevinMarker(filepath.Join(workspace, "interactive-started"))
@@ -1978,6 +1998,108 @@ func fakeDevinAllowedEnvironment() bool {
 		os.Getenv("XDG_STATE_HOME") == filepath.Join(home, ".local", "state") &&
 		strings.HasPrefix(os.Getenv("TMPDIR"), filepath.Dir(home)+string(filepath.Separator)) &&
 		os.Getenv("TERM") == "xterm-256color"
+}
+
+func fakeDevinRegisteredSysctls() bool {
+	for _, name := range []string{"hw.ncpu", "hw.pagesize", "hw.pagesize_compat"} {
+		if _, err := unix.SysctlUint32(name); err != nil {
+			return false
+		}
+	}
+	return true
+}
+
+func fakeDevinUnregisteredSysctlDenied() bool {
+	_, err := unix.Sysctl("kern.hostname")
+	return errors.Is(err, os.ErrPermission) || errors.Is(err, syscall.EPERM) || errors.Is(err, syscall.EACCES)
+}
+
+func fakeDevinCopySystemTrustSettings() error {
+	security, err := purego.Dlopen("/System/Library/Frameworks/Security.framework/Security", purego.RTLD_NOW|purego.RTLD_LOCAL)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = purego.Dlclose(security) }()
+	coreFoundation, err := purego.Dlopen("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation", purego.RTLD_NOW|purego.RTLD_LOCAL)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = purego.Dlclose(coreFoundation) }()
+	var copyCertificates func(uint32, *unsafe.Pointer) int32
+	var arrayCount func(unsafe.Pointer) int
+	var release func(unsafe.Pointer)
+	purego.RegisterLibFunc(&copyCertificates, security, "SecTrustSettingsCopyCertificates")
+	purego.RegisterLibFunc(&arrayCount, coreFoundation, "CFArrayGetCount")
+	purego.RegisterLibFunc(&release, coreFoundation, "CFRelease")
+	var certificates unsafe.Pointer
+	status := copyCertificates(2, &certificates)
+	if certificates != nil {
+		defer release(certificates)
+	}
+	if status != 0 || certificates == nil || arrayCount(certificates) <= 0 {
+		return errors.New("system trust settings unavailable")
+	}
+	return nil
+}
+
+func fakeDevinEvaluateLocalSystemTrust() error {
+	security, err := purego.Dlopen("/System/Library/Frameworks/Security.framework/Security", purego.RTLD_NOW|purego.RTLD_LOCAL)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = purego.Dlclose(security) }()
+	coreFoundation, err := purego.Dlopen("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation", purego.RTLD_NOW|purego.RTLD_LOCAL)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = purego.Dlclose(coreFoundation) }()
+	var copyCertificates func(uint32, *unsafe.Pointer) int32
+	var arrayCount func(unsafe.Pointer) int
+	var arrayValueAtIndex func(unsafe.Pointer, int) unsafe.Pointer
+	var createBasicX509 func() unsafe.Pointer
+	var createTrust func(unsafe.Pointer, unsafe.Pointer, *unsafe.Pointer) int32
+	var setNetworkFetchAllowed func(unsafe.Pointer, uint8) int32
+	var evaluateTrust func(unsafe.Pointer, *unsafe.Pointer) bool
+	var release func(unsafe.Pointer)
+	purego.RegisterLibFunc(&copyCertificates, security, "SecTrustSettingsCopyCertificates")
+	purego.RegisterLibFunc(&arrayCount, coreFoundation, "CFArrayGetCount")
+	purego.RegisterLibFunc(&arrayValueAtIndex, coreFoundation, "CFArrayGetValueAtIndex")
+	purego.RegisterLibFunc(&createBasicX509, security, "SecPolicyCreateBasicX509")
+	purego.RegisterLibFunc(&createTrust, security, "SecTrustCreateWithCertificates")
+	purego.RegisterLibFunc(&setNetworkFetchAllowed, security, "SecTrustSetNetworkFetchAllowed")
+	purego.RegisterLibFunc(&evaluateTrust, security, "SecTrustEvaluateWithError")
+	purego.RegisterLibFunc(&release, coreFoundation, "CFRelease")
+	var certificates unsafe.Pointer
+	if status := copyCertificates(2, &certificates); status != 0 || certificates == nil {
+		return errors.New("system trust certificates unavailable")
+	}
+	defer release(certificates)
+	if arrayCount(certificates) <= 0 {
+		return errors.New("system trust certificates empty")
+	}
+	certificate := arrayValueAtIndex(certificates, 0)
+	policy := createBasicX509()
+	if certificate == nil || policy == nil {
+		return errors.New("local trust inputs unavailable")
+	}
+	defer release(policy)
+	var trust unsafe.Pointer
+	if status := createTrust(certificate, policy, &trust); status != 0 || trust == nil {
+		return errors.New("local trust creation unavailable")
+	}
+	defer release(trust)
+	if setNetworkFetchAllowed(trust, 0) != 0 {
+		return errors.New("local trust network control unavailable")
+	}
+	var evaluationError unsafe.Pointer
+	trusted := evaluateTrust(trust, &evaluationError)
+	if evaluationError != nil {
+		defer release(evaluationError)
+	}
+	if !trusted {
+		return errors.New("local system trust unavailable")
+	}
+	return nil
 }
 
 func fakeDevinCanRead(path string) bool {
