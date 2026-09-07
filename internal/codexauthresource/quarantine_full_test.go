@@ -53,6 +53,17 @@ func TestFileBindingQuarantineCreatesPrivateSecretFreeMarkerWithoutReplacement(t
 	if err != nil || !exists || got.Phase != quarantineCleanupPending {
 		t.Fatalf("pending marker = (%#v, %v, %v)", got, exists, err)
 	}
+	nextChallenge := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	if err := store.AdvanceCleanupChallenge(context.Background(), "work", nextChallenge); err != nil {
+		t.Fatal(err)
+	}
+	got, exists, err = store.Inspect(context.Background(), "work")
+	if err != nil || !exists || got.Phase != quarantinePrepared || got.ProofChallenge != nextChallenge {
+		t.Fatalf("advanced marker = (%#v, %v, %v)", got, exists, err)
+	}
+	if err := store.MarkCleanupPending(context.Background(), "work"); err != nil {
+		t.Fatal(err)
+	}
 	if err := store.MarkRecoverable(context.Background(), "work"); err != nil {
 		t.Fatal(err)
 	}

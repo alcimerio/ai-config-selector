@@ -39,6 +39,17 @@ type loginResourceBinding interface {
 	FinalizeStatus(context.Context, string) (codexauthresource.BindingDisposition, error)
 }
 
+type processChallengeBinding interface {
+	AdvanceCleanupChallenge(context.Context, string) error
+}
+
+func cleanupChallenge(result containedRunResult, fallback string) string {
+	if result.cleanupChallenge != "" {
+		return result.cleanupChallenge
+	}
+	return fallback
+}
+
 type recoveryResourceBinding interface {
 	Release() error
 	SessionID() string
@@ -146,7 +157,7 @@ func (registry *CodexAuthService) loginWithResource(ctx context.Context, request
 		return IdentityMetadata{}, ErrLoginFailed
 	}
 	encoded := hex.EncodeToString(challenge)
-	created, err := session.Create(registry.sessionsDirectory, registry.workingDirectory, nil)
+	created, err := session.CreateTracked(registry.sessionsDirectory, registry.workingDirectory, nil, "codex-auth")
 	if err != nil {
 		return IdentityMetadata{}, ErrLoginFailed
 	}
@@ -203,7 +214,7 @@ func (registry *CodexAuthService) loginWithResource(ctx context.Context, request
 	}
 	run := preparation.Run(ctx, created, encoded, binding, request.DeviceAuth, request.Terminal)
 	if !run.cleanupProven {
-		registry.transferResourcePendingBinding(created, binding, encoded, run.cleanupProcess)
+		registry.transferResourcePendingBinding(created, binding, cleanupChallenge(run.containedRunResult, encoded), run.cleanupProcess)
 		return IdentityMetadata{}, ErrLoginCleanupUncertain
 	}
 	if err := binding.MarkRecoverable(ctx); err != nil {

@@ -62,7 +62,7 @@ func (registry *CodexAuthService) Status(ctx context.Context, value string) (Ide
 	if run.err == nil {
 		if err := binding.MarkRefreshAllowed(ctx); err != nil {
 			if !run.cleanupProven {
-				registry.transferResourcePendingBinding(created, binding, challenge, run.cleanupProcess)
+				registry.transferResourcePendingBinding(created, binding, cleanupChallenge(run, challenge), run.cleanupProcess)
 			} else {
 				_ = created.PreserveForRecovery()
 			}
@@ -71,7 +71,7 @@ func (registry *CodexAuthService) Status(ctx context.Context, value string) (Ide
 		}
 	}
 	if !run.cleanupProven {
-		registry.transferResourcePendingBinding(created, binding, challenge, run.cleanupProcess)
+		registry.transferResourcePendingBinding(created, binding, cleanupChallenge(run, challenge), run.cleanupProcess)
 		result.Disposition = QuarantinedUncertain
 		return result, ErrBindingQuarantined
 	}
@@ -115,12 +115,16 @@ func (registry *CodexAuthService) createStatusBinding(ctx context.Context, bindi
 }
 
 func (registry *CodexAuthService) createResourceBinding(ctx context.Context, binding loginResourceBinding, name CredentialRef, materializer session.Materializer, operationFailure error) (*session.Session, string, error) {
+	return registry.createResourceBindingForTarget(ctx, binding, name, materializer, operationFailure, "codex-auth")
+}
+
+func (registry *CodexAuthService) createResourceBindingForTarget(ctx context.Context, binding loginResourceBinding, name CredentialRef, materializer session.Materializer, operationFailure error, target string) (*session.Session, string, error) {
 	challenge := make([]byte, launch.RecoveryProofChallengeSize)
 	if _, err := rand.Read(challenge); err != nil {
 		return nil, "", ErrStatusFailed
 	}
 	encoded := hex.EncodeToString(challenge)
-	created, err := session.Create(registry.sessionsDirectory, registry.workingDirectory, materializer)
+	created, err := session.CreateTracked(registry.sessionsDirectory, registry.workingDirectory, materializer, target)
 	if err != nil {
 		return nil, "", operationFailure
 	}

@@ -3,12 +3,15 @@
 package session
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 
 	"github.com/alcimerio/ai-config-selector/internal/launch"
+	"github.com/alcimerio/ai-config-selector/internal/sessionops"
 )
 
 // Materializer writes the resolved Profile contents into a synthetic Session
@@ -25,12 +28,31 @@ type Session struct {
 	homeDirectory      string
 	temporaryDirectory string
 	workingDirectory   string
+	tracker            *sessionops.Tracker
+	operationMutex     sync.Mutex
+	armedChallenge     []byte
 }
 
 // Create leases a new Session, creates its synthetic home and temporary
 // directory, and materializes the resolved Profile into that home.
 func Create(sessionsDirectory, workingDirectory string, materializer Materializer) (*Session, error) {
-	lease, err := launch.CreateSession(sessionsDirectory)
+	return create(sessionsDirectory, workingDirectory, materializer, "")
+}
+
+// CreateTracked atomically recovery-protects a Session during allocation and
+// associates it with the durable public/private Session operations stores.
+func CreateTracked(sessionsDirectory, workingDirectory string, materializer Materializer, target string) (*Session, error) {
+	return create(sessionsDirectory, workingDirectory, materializer, target)
+}
+
+func create(sessionsDirectory, workingDirectory string, materializer Materializer, target string) (*Session, error) {
+	var lease *launch.SessionLease
+	var err error
+	if target == "" {
+		lease, err = launch.CreateSession(sessionsDirectory)
+	} else {
+		lease, err = launch.CreateProtectedSession(sessionsDirectory)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -40,6 +62,20 @@ func Create(sessionsDirectory, workingDirectory string, materializer Materialize
 		homeDirectory:      filepath.Join(lease.RootDir, "home"),
 		temporaryDirectory: filepath.Join(lease.RootDir, "tmp"),
 		workingDirectory:   filepath.Clean(workingDirectory),
+	}
+	if target != "" {
+		created.tracker, err = sessionops.NewTracker(sessionsDirectory, lease.RootDir, target)
+		if err != nil {
+			return nil, errors.Join(err, created.Remove())
+		}
+		if err := lease.ObserveRemoval(func(removalErr error) error {
+			if removalErr != nil {
+				return created.tracker.Retryable()
+			}
+			return created.tracker.Removed()
+		}); err != nil {
+			return nil, errors.Join(err, created.Remove())
+		}
 	}
 	cleanupFailure := func(cause error) (*Session, error) {
 		return nil, errors.Join(cause, created.Remove())
@@ -93,9 +129,68 @@ func (session *Session) RetainUntilProcessDone(process launch.Process) (launch.P
 	return launch.RetainSessionUntilProcessDone(process, session.lease)
 }
 
+// ArmOperation durably advances this Session's process generation and prepares
+// its exact cleanup proof. supplied may be nil, or a typed Codex challenge.
+func (session *Session) ArmOperation(supplied []byte) ([]byte, error) {
+	if session == nil {
+		return nil, errors.New("arm ACS Session: Session unavailable")
+	}
+	var challenge []byte
+	var err error
+	if session.tracker == nil {
+		challenge = append([]byte(nil), supplied...)
+		if len(challenge) == launch.RecoveryProofChallengeSize {
+			err = launch.PrepareSessionCleanupProof(session.RootDirectory(), challenge)
+		}
+	} else {
+		challenge, err = session.tracker.Arm(supplied)
+	}
+	if err != nil {
+		return nil, err
+	}
+	session.operationMutex.Lock()
+	session.armedChallenge = append(session.armedChallenge[:0], challenge...)
+	session.operationMutex.Unlock()
+	return challenge, nil
+}
+
+// ConsumeOrArmOperation lets typed workflows publish their marker between Arm
+// and Prepare without accidentally advancing the process generation twice.
+func (session *Session) ConsumeOrArmOperation(supplied []byte) ([]byte, error) {
+	if session == nil {
+		return nil, errors.New("arm ACS Session: Session unavailable")
+	}
+	session.operationMutex.Lock()
+	if len(session.armedChallenge) != 0 && bytes.Equal(session.armedChallenge, supplied) {
+		challenge := append([]byte(nil), session.armedChallenge...)
+		session.armedChallenge = nil
+		session.operationMutex.Unlock()
+		return challenge, nil
+	}
+	session.operationMutex.Unlock()
+	challenge, err := session.ArmOperation(supplied)
+	if err != nil {
+		return nil, err
+	}
+	session.operationMutex.Lock()
+	session.armedChallenge = nil
+	session.operationMutex.Unlock()
+	return challenge, nil
+}
+
+func (session *Session) PublicID() string {
+	if session == nil || session.tracker == nil {
+		return ""
+	}
+	return session.tracker.ID()
+}
+
 // Remove releases ownership of the leased Session and deletes it once every
 // retained contained process has completed cleanup.
 func (session *Session) Remove() error {
+	if session.tracker != nil {
+		_ = session.tracker.Settling()
+	}
 	return session.lease.Remove()
 }
 

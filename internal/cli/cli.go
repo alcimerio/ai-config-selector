@@ -111,6 +111,7 @@ type App struct {
 	// bounded regular-file reader when this is nil.
 	ReadProfileDocument func(string) ([]byte, error)
 	ExchangePublisher   ExchangePublisher
+	SessionOperations   sessionOperations
 }
 
 // StandardStreamsInteractive reports whether both endpoints are actual
@@ -129,6 +130,9 @@ func (app App) Run(ctx context.Context, args []string) int {
 		return code
 	}
 	if handled, code := app.RunProfileExchange(ctx, args, os.UserHomeDir); handled {
+		return code
+	}
+	if handled, code := app.RunSessionOperations(args, os.UserHomeDir); handled {
 		return code
 	}
 	if handled, code := app.RunProfileMutations(ctx, args, os.UserHomeDir); handled {

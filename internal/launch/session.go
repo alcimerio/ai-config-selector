@@ -31,10 +31,24 @@ type SessionLease struct {
 	guardPath         string
 	recoveryPath      string
 	recoveryProtected bool
+	removalObserver   func(error) error
 	mutex             sync.Mutex
 	references        int
 	removeRequested   bool
 	cleanupErr        error
+}
+
+// ObserveRemoval registers the sole higher-level durable finalizer. The
+// observer runs from the lease owner that actually attempts physical removal,
+// including a later retained-process CleanupDone release.
+func (session *SessionLease) ObserveRemoval(observer func(error) error) error {
+	session.mutex.Lock()
+	defer session.mutex.Unlock()
+	if session.guard == nil || session.removeRequested || session.removalObserver != nil {
+		return errors.New("observe ACS Session removal: Session is not active")
+	}
+	session.removalObserver = observer
+	return nil
 }
 
 // RecoveredSessionLease owns an abandoned Session while a higher-level module
@@ -191,6 +205,18 @@ func (session *RecoveredSessionLease) Remove() error {
 // CreateSession removes abandoned Sessions and creates a leased Session while
 // preserving Sessions held by concurrent ACS processes.
 func CreateSession(sessionsDirectory string) (*SessionLease, error) {
+	return createSession(sessionsDirectory, false)
+}
+
+// CreateProtectedSession creates a Session whose recovery protection is
+// durable before the startup coordinator is released. This closes the only
+// window in which another startup could mistake a newly tracked root for an
+// abandoned untracked Session.
+func CreateProtectedSession(sessionsDirectory string) (*SessionLease, error) {
+	return createSession(sessionsDirectory, true)
+}
+
+func createSession(sessionsDirectory string, protect bool) (*SessionLease, error) {
 	if err := securePrivateSessionDirectory(sessionsDirectory); err != nil {
 		return nil, fmt.Errorf("create ACS Sessions directory: %w", err)
 	}
@@ -217,10 +243,20 @@ func CreateSession(sessionsDirectory string) (*SessionLease, error) {
 		_ = os.RemoveAll(rootDir)
 		return nil, fmt.Errorf("lease ACS Session: %w", err)
 	}
-	return &SessionLease{
+	lease := &SessionLease{
 		RootDir: rootDir, guard: guard, guardPath: guardPath,
 		recoveryPath: sessionRecoveryPath(sessionsDirectory, rootDir), references: 1,
-	}, nil
+	}
+	if protect {
+		if err := createRecoveryProtection(lease.recoveryPath); err != nil {
+			closeLockedFile(guard)
+			_ = os.Remove(guardPath)
+			_ = os.RemoveAll(rootDir)
+			return nil, fmt.Errorf("protect tracked ACS Session: %w", err)
+		}
+		lease.recoveryProtected = true
+	}
+	return lease, nil
 }
 
 // Remove releases the caller's ownership and deletes the leased Session after
@@ -305,18 +341,22 @@ func (session *SessionLease) removeLocked() error {
 	// remove a Session whose contained process cleanup is still in progress.
 	if err := os.RemoveAll(session.RootDir); err != nil {
 		session.cleanupErr = errors.New("delete ACS Session: cleanup failed")
+		session.observeRemovalLocked(session.cleanupErr)
 		return session.cleanupErr
 	}
 	if err := os.Remove(session.guardPath); err != nil && !os.IsNotExist(err) {
 		session.cleanupErr = errors.New("delete ACS Session: cleanup failed")
+		session.observeRemovalLocked(session.cleanupErr)
 		return session.cleanupErr
 	}
 	if err := os.Remove(session.recoveryPath); err != nil && !os.IsNotExist(err) {
 		session.cleanupErr = errors.New("delete ACS Session: cleanup failed")
+		session.observeRemovalLocked(session.cleanupErr)
 		return session.cleanupErr
 	}
 	if err := syncDirectoryPath(filepath.Dir(session.guardPath)); err != nil {
 		session.cleanupErr = errors.New("delete ACS Session: cleanup failed")
+		session.observeRemovalLocked(session.cleanupErr)
 		return session.cleanupErr
 	}
 	if session.guard != nil {
@@ -324,7 +364,19 @@ func (session *SessionLease) removeLocked() error {
 		session.guard = nil
 	}
 	session.cleanupErr = nil
+	if session.removalObserver != nil {
+		if err := session.removalObserver(nil); err != nil {
+			session.cleanupErr = errors.New("delete ACS Session: durable finalization failed")
+			return session.cleanupErr
+		}
+	}
 	return nil
+}
+
+func (session *SessionLease) observeRemovalLocked(removalErr error) {
+	if session.removalObserver != nil {
+		_ = session.removalObserver(removalErr)
+	}
 }
 
 // RetainSessionUntilProcessDone holds a Session lease for a prepared process.

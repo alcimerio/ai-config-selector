@@ -212,6 +212,31 @@ func (store *Store) AcquireRecovery(ctx context.Context, value string) (*Recover
 	}
 }
 
+// AcquireRecoveryBySession performs a bounded private reverse lookup and then
+// acquires the exact identity generation. Zero or multiple matches fail closed
+// without exposing an identity name to the caller.
+func (store *Store) AcquireRecoveryBySession(ctx context.Context, sessionID string) (*RecoveryBinding, bool, error) {
+	markers, ok := store.markers.(*fileBindingQuarantine)
+	if !ok {
+		return nil, false, ErrProviderUnavailable
+	}
+	name, exists, err := markers.findBySession(ctx, sessionID, 4096)
+	if err != nil || !exists {
+		return nil, exists, err
+	}
+	binding, err := store.AcquireRecovery(ctx, string(name))
+	if err != nil {
+		return nil, true, err
+	}
+	if binding == nil || binding.SessionID() != sessionID {
+		if binding != nil {
+			_ = binding.Release()
+		}
+		return nil, true, ErrBindingQuarantined
+	}
+	return binding, true, nil
+}
+
 func (store *Store) List(ctx context.Context) ([]IdentityMetadata, error) {
 	if store == nil || store.provider == nil {
 		return nil, ErrProviderUnavailable
@@ -308,6 +333,23 @@ func (binding *Binding) MarkCleanupPending(ctx context.Context) error {
 		return err
 	}
 	return binding.store.markers.MarkCleanupPending(ctx, binding.name)
+}
+
+// AdvanceCleanupChallenge replaces the typed marker's process generation only
+// after the prior contained process has settled. The caller must persist this
+// generation before preparing its matching native no-target proof.
+func (binding *Binding) AdvanceCleanupChallenge(ctx context.Context, challenge string) error {
+	if binding == nil || binding.store == nil || binding.lock == nil || !proofChallengePattern.MatchString(challenge) || challenge == binding.challenge {
+		return ErrBindingQuarantined
+	}
+	if _, err := binding.currentGeneration(ctx, quarantinePrepared, quarantineCleanupPending); err != nil {
+		return err
+	}
+	if err := binding.store.markers.AdvanceCleanupChallenge(ctx, binding.name, challenge); err != nil {
+		return err
+	}
+	binding.challenge = challenge
+	return nil
 }
 
 func (binding *Binding) MarkRefreshAllowed(ctx context.Context) error {

@@ -209,6 +209,44 @@ func TestValidateSandboxCheckRejectsBroadRuntimeMounts(t *testing.T) {
 	}
 }
 
+func TestValidateSandboxCheckRejectsPrivateSessionOperationsOverlap(t *testing.T) {
+	root := t.TempDir()
+	sessions := filepath.Join(root, ".acs", "sessions")
+	private := SessionOperationsDirectory(sessions)
+	workspace := filepath.Join(root, "workspace")
+	for _, directory := range []string{private, workspace} {
+		if err := os.MkdirAll(directory, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	alias := filepath.Join(root, "private-alias")
+	if err := os.Symlink(private, alias); err != nil {
+		t.Fatal(err)
+	}
+	secret := filepath.Join(private, "capabilities", "current.json")
+	if err := os.MkdirAll(filepath.Dir(secret), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(secret, []byte("private challenge"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []SandboxCheck{
+		{Workspace: private, SessionsDirectory: sessions, Executable: os.Args[0]},
+		{Workspace: alias, SessionsDirectory: sessions, Executable: os.Args[0]},
+		{Workspace: workspace, SessionsDirectory: sessions, Executable: os.Args[0], RuntimeInputs: []string{private}},
+		{Workspace: workspace, SessionsDirectory: sessions, Executable: os.Args[0], RuntimeInputs: []string{secret}},
+		{Workspace: workspace, SessionsDirectory: sessions, Executable: os.Args[0], RuntimeProbePaths: []string{secret}},
+	}
+	for _, request := range tests {
+		if _, err := validateSandboxCheck(request); err == nil {
+			t.Fatalf("accepted private Session operations overlap: %+v", request)
+		} else {
+			assertSandboxCategory(t, err, SandboxUnsafePath)
+		}
+	}
+}
+
 func TestValidateSandboxCheckAllowsOnlyExactOptionalRuntimeProbeFiles(t *testing.T) {
 	root := t.TempDir()
 	workspace := filepath.Join(root, "workspace")

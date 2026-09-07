@@ -153,12 +153,17 @@ func (runner *codexExecutionRunner) run(ctx context.Context, config codexLoginCo
 			supervisor.cancelInteractiveReservation()
 		}
 	}
+	challenge, err := advanceProcessChallenge(ctx, binding, challenge)
+	if err != nil {
+		cancelReservation()
+		return containedRunResult{err: ErrCodexFailed, cleanupProven: true}
+	}
 	proof, err := decodeRecoveryChallenge(challenge)
 	if err != nil {
 		cancelReservation()
 		return containedRunResult{err: ErrCodexFailed, cleanupProven: true}
 	}
-	if err := launch.PrepareSessionCleanupProof(created.RootDirectory(), proof); err != nil {
+	if _, err := created.ArmOperation(proof); err != nil {
 		cancelReservation()
 		return containedRunResult{err: ErrCodexFailed, cleanupProven: true}
 	}
@@ -176,7 +181,7 @@ func (runner *codexExecutionRunner) run(ctx context.Context, config codexLoginCo
 	if err != nil {
 		cancelReservation()
 		if errors.Is(err, errRetainPreparedProcess) || errors.Is(err, errInvalidPreparedProcess) {
-			return containedRunResult{err: ErrCodexCleanupUncertain, cleanupProven: false}
+			return containedRunResult{err: ErrCodexCleanupUncertain, cleanupProven: false, cleanupChallenge: challenge}
 		}
 		return containedRunResult{err: err, cleanupProven: true}
 	}
@@ -185,7 +190,7 @@ func (runner *codexExecutionRunner) run(ctx context.Context, config codexLoginCo
 	}
 	runErr, cleanupErr := settleRetainedProcess(process, mode, supervisor)
 	if cleanupErr != nil {
-		return containedRunResult{err: ErrCodexCleanupUncertain, cleanupProven: false, cleanupProcess: process}
+		return containedRunResult{err: ErrCodexCleanupUncertain, cleanupProven: false, cleanupProcess: process, cleanupChallenge: challenge}
 	}
 	return containedRunResult{err: runErr, cleanupProven: true}
 }
@@ -241,7 +246,7 @@ func (service *CodexAuthService) ExecuteCodex(ctx context.Context, request Codex
 	// The lower authentication resource owns exclusive creation of .codex.
 	// Create and protect an otherwise empty Session first; common/target
 	// materialization follows the exact identity projection below.
-	created, challenge, err := service.createResourceBinding(ctx, binding, authRef, nil, ErrCodexFailed)
+	created, challenge, err := service.createResourceBindingForTarget(ctx, binding, authRef, nil, ErrCodexFailed, "codex")
 	if err != nil {
 		return 1, sanitizeCodexExecutionError(err)
 	}
@@ -317,7 +322,7 @@ func (service *CodexAuthService) ExecuteCodex(ctx context.Context, request Codex
 		run.err = ErrCodexFailed
 	}
 	if !run.cleanupProven {
-		service.transferResourcePendingBinding(created, binding, challenge, run.cleanupProcess)
+		service.transferResourcePendingBinding(created, binding, cleanupChallenge(run, challenge), run.cleanupProcess)
 		return 1, ErrCodexCleanupUncertain
 	}
 	if run.err == nil {

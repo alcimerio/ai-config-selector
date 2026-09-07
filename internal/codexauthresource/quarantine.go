@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"regexp"
+	"strings"
 
 	"golang.org/x/sys/unix"
 )
@@ -39,6 +40,7 @@ type bindingQuarantine interface {
 	Inspect(context.Context, CredentialRef) (quarantineMarker, bool, error)
 	Create(context.Context, quarantineMarker) error
 	MarkCleanupPending(context.Context, CredentialRef) error
+	AdvanceCleanupChallenge(context.Context, CredentialRef, string) error
 	MarkRefreshAllowed(context.Context, CredentialRef) error
 	MarkRecoverable(context.Context, CredentialRef) error
 	Delete(context.Context, CredentialRef) error
@@ -54,6 +56,9 @@ func (noBindingQuarantine) Create(context.Context, quarantineMarker) error { ret
 func (noBindingQuarantine) MarkCleanupPending(context.Context, CredentialRef) error {
 	return nil
 }
+func (noBindingQuarantine) AdvanceCleanupChallenge(context.Context, CredentialRef, string) error {
+	return nil
+}
 func (noBindingQuarantine) MarkRefreshAllowed(context.Context, CredentialRef) error {
 	return nil
 }
@@ -63,6 +68,55 @@ func (noBindingQuarantine) Delete(context.Context, CredentialRef) error         
 type fileBindingQuarantine struct {
 	directory *privateDirectory
 	initErr   error
+}
+
+func (store *fileBindingQuarantine) findBySession(ctx context.Context, sessionID string, limit int) (CredentialRef, bool, error) {
+	if store == nil || store.initErr != nil || !sessionIDPattern.MatchString(sessionID) || limit <= 0 {
+		return "", false, ErrProviderUnavailable
+	}
+	if err := store.directory.validateCanonicalIdentity(); err != nil {
+		return "", false, ErrProviderUnavailable
+	}
+	descriptor, err := unix.Dup(int(store.directory.file.Fd()))
+	if err != nil {
+		return "", false, ErrProviderUnavailable
+	}
+	unix.CloseOnExec(descriptor)
+	directory := os.NewFile(uintptr(descriptor), "codex-auth-quarantine-scan")
+	if directory == nil {
+		_ = unix.Close(descriptor)
+		return "", false, ErrProviderUnavailable
+	}
+	defer directory.Close()
+	entries, err := directory.ReadDir(limit + 1)
+	if err != nil {
+		return "", false, ErrProviderUnavailable
+	}
+	if len(entries) > limit {
+		return "", false, ErrProviderUnavailable
+	}
+	var matched CredentialRef
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+			continue
+		}
+		name, err := ParseCredentialRef(strings.TrimSuffix(entry.Name(), ".json"))
+		if err != nil {
+			return "", false, ErrProviderUnavailable
+		}
+		marker, exists, err := store.Inspect(ctx, name)
+		if err != nil {
+			return "", false, err
+		}
+		if !exists || marker.SessionID != sessionID {
+			continue
+		}
+		if matched != "" {
+			return "", false, ErrBindingQuarantined
+		}
+		matched = name
+	}
+	return matched, matched != "", nil
 }
 
 func newFileBindingQuarantine(directory string) *fileBindingQuarantine {
@@ -157,6 +211,22 @@ func (store *fileBindingQuarantine) MarkRecoverable(ctx context.Context, name Cr
 
 func (store *fileBindingQuarantine) MarkCleanupPending(ctx context.Context, name CredentialRef) error {
 	return store.transition(ctx, name, quarantineCleanupPending)
+}
+
+func (store *fileBindingQuarantine) AdvanceCleanupChallenge(ctx context.Context, name CredentialRef, challenge string) error {
+	if !proofChallengePattern.MatchString(challenge) {
+		return ErrBindingQuarantined
+	}
+	return store.update(ctx, name, func(marker *quarantineMarker) (bool, error) {
+		if marker.Phase != quarantinePrepared && marker.Phase != quarantineCleanupPending {
+			return false, ErrBindingQuarantined
+		}
+		if marker.ProofChallenge == challenge {
+			return false, ErrBindingQuarantined
+		}
+		marker.ProofChallenge, marker.Phase = challenge, quarantinePrepared
+		return true, nil
+	})
 }
 
 func (store *fileBindingQuarantine) MarkRefreshAllowed(ctx context.Context, name CredentialRef) error {
