@@ -219,6 +219,8 @@ func (app App) mutateProfile(ctx context.Context, inv invocation) int {
 		case "profile delete":
 			request = profilerepo.DeleteRequest{Name: inv.operand, Expected: snapshot.source.Revision}
 		}
+		historyOperation := map[string]string{"profile edit": "edit", "profile clone": "clone", "profile rename": "rename", "profile delete": "delete", "profile migrate": "migration"}[inv.command.path]
+		request = profilerepo.HistoryRequest{Request: request, Operation: historyOperation}
 		return builder.PreparedMutation{Text: text.String(), Save: func(commitContext context.Context, _ category.Draft) (string, error) {
 			outcome, err := app.Repository.Apply(commitContext, request)
 			if err != nil || outcome.State != profilerepo.Committed || outcome.RecoveryRequired {

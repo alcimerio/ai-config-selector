@@ -102,6 +102,7 @@ func runNativeInstalledACSLockedCodexFixture(t *testing.T) {
 	writeNativeCodexProfile(t, home, "coding", identities["coding"], "read-write")
 	writeNativeCodexProfile(t, home, "readonly", identities["readonly"], "read-only")
 	writeNativeCodexProfile(t, home, "recovery", identities["recovery"], "read-write")
+	restoredCoding := restoreDeletedNativeCodexProfile(t, candidate, home, tools, workspace, identities["coding"])
 	grantedTarget := filepath.Join(workspace, "locked-codex-target")
 	copyLockedTarget(t, target, grantedTarget)
 	outside, err := os.MkdirTemp("/tmp", "acs-codex-unrelated-")
@@ -136,10 +137,11 @@ func runNativeInstalledACSLockedCodexFixture(t *testing.T) {
 	codingCommand := "printf codex-native-tool-ok > ./codex-native-write; printf codex-native-tool-output" + isolationProbe
 	codingCommand += nativeControlledDescendantCommand(normalDescendantReady)
 	for _, test := range []struct {
-		name, profile, command, marker, descendantReady string
-		wantWrite, wantDescendant                       bool
+		name, profile, command, marker, expectedWrite, descendantReady string
+		wantWrite, wantDescendant                                      bool
 	}{
-		{name: "coding write", profile: "coding", command: codingCommand, marker: "codex-native-write", descendantReady: normalDescendantReady, wantWrite: true, wantDescendant: true},
+		{name: "coding write", profile: "coding", command: codingCommand, marker: "codex-native-write", expectedWrite: "codex-native-tool-ok", descendantReady: normalDescendantReady, wantWrite: true, wantDescendant: true},
+		{name: "restored coding write", profile: restoredCoding, command: "printf restored-codex-native-tool-ok > ./restored-codex-native-write; printf codex-native-tool-output" + isolationProbe, marker: "restored-codex-native-write", expectedWrite: "restored-codex-native-tool-ok", wantWrite: true},
 		{name: "read-only denial", profile: "readonly", command: "printf forbidden > ./codex-native-readonly-write; printf codex-native-tool-output" + isolationProbe, marker: "codex-native-readonly-write", wantWrite: false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -156,7 +158,7 @@ func runNativeInstalledACSLockedCodexFixture(t *testing.T) {
 				assertNativeProcessRemoved(t, descendantPID, "Codex tool descendant survived settlement")
 			}
 			contents, err := os.ReadFile(filepath.Join(workspace, test.marker))
-			if test.wantWrite && (err != nil || string(contents) != "codex-native-tool-ok") {
+			if test.wantWrite && (err != nil || string(contents) != test.expectedWrite) {
 				t.Fatalf("real Codex shell tool result=%q err=%v", contents, err)
 			}
 			if !test.wantWrite && !os.IsNotExist(err) {
@@ -1283,6 +1285,77 @@ func writeNativeCodexProfile(t *testing.T, home, profileName, authRef, access st
 	if err := os.WriteFile(filepath.Join(profiles, profileName+".json"), []byte(document), 0o600); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// restoreDeletedNativeCodexProfile keeps the real locked-Codex witness on the
+// production public path: create, delete, opaque-lineage selection, passive
+// preview, and exact-digest restore all go through the supplied ACS artifact.
+// The explicit exchange binding is deliberate: the deleted intent contains an
+// auth reference and must not recover a machine-local credential implicitly.
+func restoreDeletedNativeCodexProfile(t *testing.T, candidate, home, tools, workspace, authRef string) string {
+	t.Helper()
+	const profileName = "restored-coding"
+	documentPath := filepath.Join(home, "restored-coding.json")
+	document := `{"version":3,"name":"` + profileName + `","common":{"skills":{"version":1,"selection":[{"source":"shared-agents","relativePath":"managed-proof"}]},"workspace":{"version":1,"selection":{"access":"read-write"}}},"overlays":{"codex":{"version":1,"authRef":` + strconv.Quote(authRef) + `}}}`
+	if err := os.WriteFile(documentPath, []byte(document), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	run := func(args ...string) []byte {
+		command := exec.Command(candidate, args...)
+		command.Dir, command.Env = workspace, nativeCandidateEnvironment(home, tools)
+		output, err := command.CombinedOutput()
+		if err != nil {
+			t.Fatalf("restored Codex Profile command %v: %v; output=%q", args, err, output)
+		}
+		return output
+	}
+	run("profile", "create", "--file", documentPath)
+	var created struct {
+		LineageID string `json:"lineageId"`
+		Events    []struct {
+			EventID string `json:"eventId"`
+		} `json:"events"`
+	}
+	if output := run("profile", "history", profileName, "--json"); json.Unmarshal(output, &created) != nil || created.LineageID == "" || len(created.Events) != 1 {
+		t.Fatalf("created Codex history=%q", output)
+	}
+	run("profile", "delete", profileName, "--confirm", profileName)
+	var deleted struct {
+		Events []struct {
+			EventID string `json:"eventId"`
+			Profile struct {
+				State string `json:"state"`
+			} `json:"profile"`
+		} `json:"events"`
+	}
+	if output := run("profile", "history", "--lineage", created.LineageID, "--json"); json.Unmarshal(output, &deleted) != nil || len(deleted.Events) < 2 || deleted.Events[0].EventID == "" || deleted.Events[0].Profile.State != "deleted" {
+		t.Fatalf("deleted Codex history=%q", output)
+	}
+	assertNoNativeSessions(t, filepath.Join(home, ".acs", "sessions"))
+	bindings := filepath.Join(home, "restored-coding-bindings.json")
+	if err := os.WriteFile(bindings, []byte(`{"bindingVersion":1,"sources":{"source-1":"shared-agents"},"authentications":{"authentication-1":`+strconv.Quote(authRef)+`}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var preview struct {
+		Digest      string `json:"digest"`
+		Destination string `json:"destination"`
+		Bindings    string `json:"bindings"`
+	}
+	if output := run("profile", "restore", "--lineage", created.LineageID, "--revision", deleted.Events[0].EventID, "--bindings", bindings, "--dry-run", "--json"); json.Unmarshal(output, &preview) != nil || preview.Digest == "" || preview.Destination != profileName || preview.Bindings != "explicit_declarative" {
+		t.Fatalf("restored Codex preview=%q", output)
+	}
+	assertNoNativeSessions(t, filepath.Join(home, ".acs", "sessions"))
+	run("profile", "restore", "--lineage", created.LineageID, "--revision", deleted.Events[0].EventID, "--bindings", bindings, "--expect", preview.Digest, "--confirm", profileName, "--json")
+	var restored struct {
+		LineageID string `json:"lineageId"`
+		Events    []struct {
+			Operation string `json:"operation"`
+		} `json:"events"`
+	}
+	if output := run("profile", "history", profileName, "--json"); json.Unmarshal(output, &restored) != nil || restored.LineageID != created.LineageID || len(restored.Events) < 3 || restored.Events[0].Operation != "restore" {
+		t.Fatalf("restored Codex history is not readable and append-only: %q", output)
+	}
+	return profileName
 }
 
 func assertLockedCodexIdentity(t *testing.T, archivePath, installedPath string) {

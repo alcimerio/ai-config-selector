@@ -179,6 +179,13 @@ func assertSettled(t *testing.T, r *Repository, op string) {
 		t.Fatal(err)
 	}
 	for _, entry := range entries {
+		if entry.Name() == "history" {
+			info, err := entry.Info()
+			if err != nil || !info.IsDir() || info.Mode().Perm() != 0700 {
+				t.Fatal("history directory privacy", err)
+			}
+			continue
+		}
 		if strings.HasPrefix(entry.Name(), artifactPrefix) && entry.Name() != leaf("lock") {
 			t.Fatal("leftover transaction artifact", entry.Name())
 		}

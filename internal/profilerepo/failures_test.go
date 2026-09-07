@@ -519,6 +519,10 @@ func observeRepository(t *testing.T, r *Repository) map[string]repositoryObserva
 		if err != nil {
 			t.Fatal(err)
 		}
+		if info.IsDir() {
+			result[entry.Name()] = repositoryObservation{Mode: info.Mode(), Modified: info.ModTime().UnixNano()}
+			continue
+		}
 		data, err := os.ReadFile(path)
 		if err != nil {
 			t.Fatal(err)

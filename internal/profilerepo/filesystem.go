@@ -274,6 +274,20 @@ func (d *directory) link(from, to, point string) error {
 		return unix.Linkat(int(d.file.Fd()), leaf(from), int(d.file.Fd()), leaf(to), 0)
 	})
 }
+
+func (d *directory) linkValidated(from, to, point string, validate func() error) error {
+	return d.r.step(point, func() error {
+		if err := d.validate(); err != nil {
+			return err
+		}
+		if validate != nil {
+			if err := validate(); err != nil {
+				return err
+			}
+		}
+		return unix.Linkat(int(d.file.Fd()), leaf(from), int(d.file.Fd()), leaf(to), 0)
+	})
+}
 func (d *directory) rename(from, to, point string) error {
 	return d.r.step(point, func() error {
 		if err := d.validate(); err != nil {

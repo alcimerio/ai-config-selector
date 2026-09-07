@@ -81,9 +81,10 @@ func TestPromotedArtifactReportsItsVersionAndCreatesAnEmptyProfileThroughAPTY(t 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 2 || entries[0].Name() != ".profile-transaction-lock" || entries[1].Name() != "promoted-empty.json" {
+	if len(entries) != 3 || entries[0].Name() != ".profile-transaction-lock" || entries[1].Name() != "history" || entries[2].Name() != "promoted-empty.json" {
 		t.Fatalf("Profile persistence left unexpected entries: %v", entries)
 	}
+	assertPermissions(t, filepath.Join(filepath.Dir(profilePath), "history"), 0o700)
 	lockInfo, err := os.Lstat(filepath.Join(filepath.Dir(profilePath), ".profile-transaction-lock"))
 	if err != nil {
 		t.Fatal(err)

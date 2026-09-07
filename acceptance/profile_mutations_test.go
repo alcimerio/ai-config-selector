@@ -5,6 +5,7 @@ package acceptance_test
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"os/exec"
@@ -19,6 +20,76 @@ import (
 	"github.com/charmbracelet/x/term"
 	"github.com/creack/pty"
 )
+
+func TestPromotedProfileHistoryDiffDeleteAndRestoreArePublicAndPassive(t *testing.T) {
+	binary := promotedBinary(t)
+	home := realTemporaryDirectory(t)
+	input := filepath.Join(home, "profile.json")
+	document := []byte(`{"version":3,"name":"history-demo","common":{"skills":{"version":1,"selection":[]},"workspace":{"version":1,"selection":{"access":"read-only"}}},"overlays":{"codex":{"version":1,"authRef":"private-history-auth-canary"},"devin":{"version":1}}}`)
+	if err := os.WriteFile(input, document, 0600); err != nil {
+		t.Fatal(err)
+	}
+	run := func(args ...string) []byte {
+		command := exec.Command(binary, args...)
+		command.Env = promotedEnvironment(home, "/nonexistent")
+		output, err := command.CombinedOutput()
+		if err != nil {
+			t.Fatalf("acs %v: %v %s", args, err, output)
+		}
+		return output
+	}
+	run("profile", "create", "--file", input)
+	var history struct {
+		LineageID string `json:"lineageId"`
+		Events    []struct {
+			EventID string `json:"eventId"`
+		} `json:"events"`
+	}
+	if err := json.Unmarshal(run("profile", "history", "history-demo", "--json"), &history); err != nil || len(history.Events) != 1 {
+		t.Fatalf("history=%+v err=%v", history, err)
+	}
+	before := snapshotInspectionHome(t, home)
+	diff := run("profile", "diff", "history-demo", "--revision", history.Events[0].EventID, "--json")
+	if bytes.Contains(diff, []byte("private-history-auth-canary")) {
+		t.Fatalf("diff leaked auth reference: %s", diff)
+	}
+	preview := run("profile", "restore", "history-demo", "--revision", history.Events[0].EventID, "--dry-run", "--json")
+	if bytes.Contains(preview, []byte("private-history-auth-canary")) {
+		t.Fatalf("restore preview leaked auth reference: %s", preview)
+	}
+	if !reflect.DeepEqual(before, snapshotInspectionHome(t, home)) {
+		t.Fatal("passive history command changed home")
+	}
+	run("profile", "delete", "history-demo", "--confirm", "history-demo")
+	var deleted struct {
+		Events []struct {
+			EventID string `json:"eventId"`
+			Profile struct {
+				State string `json:"state"`
+			} `json:"profile"`
+		} `json:"events"`
+	}
+	if err := json.Unmarshal(run("profile", "history", "--lineage", history.LineageID, "--json"), &deleted); err != nil || len(deleted.Events) < 2 || deleted.Events[0].Profile.State != "deleted" {
+		t.Fatalf("deleted=%+v err=%v", deleted, err)
+	}
+	bindings := filepath.Join(home, "restore-bindings.json")
+	if err := os.WriteFile(bindings, []byte(`{"bindingVersion":1,"sources":{},"authentications":{"authentication-1":"restored-history-auth"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	preview = run("profile", "restore", "--lineage", history.LineageID, "--revision", deleted.Events[0].EventID, "--bindings", bindings, "--dry-run", "--json")
+	var restore struct {
+		Digest      string `json:"digest"`
+		Destination string `json:"destination"`
+	}
+	if err := json.Unmarshal(preview, &restore); err != nil || restore.Digest == "" || restore.Destination != "history-demo" {
+		t.Fatalf("restore=%+v err=%v", restore, err)
+	}
+	run("profile", "restore", "--lineage", history.LineageID, "--revision", deleted.Events[0].EventID, "--bindings", bindings, "--expect", restore.Digest, "--confirm", "history-demo", "--json")
+	if _, err := os.Stat(filepath.Join(home, ".acs", "profiles", "history-demo.json")); err != nil {
+		t.Fatal(err)
+	}
+	assertNoSessions(t, home)
+}
 
 const newerMutationProfile = `{"version":2,"name":"old","target":"devin","categories":{"skills":{"schemaVersion":1,"selection":[{"source":"shared-agents","relativePath":"newer"}]}}}`
 

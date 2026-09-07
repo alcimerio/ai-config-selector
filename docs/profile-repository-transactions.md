@@ -6,7 +6,8 @@ it has no Profile decoder, category registry, Session dependency, or authenticat
 provider. Store creation still normalizes and encodes the existing Profile schema
 above this boundary. The [Profile mutation commands](profile-mutations.md) now use
 this same boundary for conditional editing, cloning, renaming and deletion. The
-repository itself introduces no Profile schema, category codec or history format.
+repository introduces no Profile schema or category codec; its separately
+versioned private history journal stores opaque canonical document snapshots.
 
 ## Calls and conditions
 
@@ -19,7 +20,9 @@ normalization, modification time, inode or generation contributes to the revisio
 Empty present bytes differ from absence; nil desired bytes mean an empty present
 document, never deletion. Formatting changes change a revision. Same-byte
 replacement and A-to-B-to-A return to the same current-content condition, as does
-absence-to-created-to-deleted. There is no historical ABA detection or tombstone.
+absence-to-created-to-deleted. A revision alone has no historical ABA detection;
+history events and deletion tombstones are separate immutable records, not Apply
+conditions.
 
 `Apply(ctx, request)` supports exactly these request types:
 
@@ -80,7 +83,8 @@ using the existing Profile grammar, documents have at most 1 MiB, each metadata
 file at most 8192 bytes, each enumerated filename at most 255 bytes, and a recovery
 scan at most 4096 repository entries, including unrelated files. There are only
 six recognized in-flight artifact leaves plus the permanent lock. Metadata has a
-fixed object shape with at most two object levels; unknown keys, versions,
+fixed object shape with at most two object levels; bound history preparation can
+add three leaves, or four when first adoption is required. Unknown keys, versions,
 noncanonical encodings, duplicate fields, trailing content, inconsistent object
 identities and operation shapes are rejected. Journal data contains validated
 names, never filesystem paths. Artifact leaves are derived by the implementation.
@@ -91,13 +95,16 @@ Unrelated non-reserved files are preserved.
 
 All in-flight leaves use the non-`.json` prefix `.profile-transaction-` and remain
 inside `profiles`. One transaction is in flight at a time. Its canonical plan
-records format version 1, a random transaction identifier, operation, validated
+records format version 2, a random transaction identifier, operation, validated
 names, original source identity/hash/length, and staged identity/hash/length.
-The plan's metadata format is separate from all document codecs.
+It also binds the digest of the exact prepared history transaction. Recovery
+continues to decode format version 1 plans without assigning them a history
+obligation. The plan's metadata format is separate from all document codecs.
 
 1. **Preparation:** create `stage` exclusively, write exact bytes, check full
    write, file sync and close, reread and compare with the owned desired bytes,
-   and sync the directory. Bind that verified staged identity, then write/sync/close `pending`,
+   and sync the directory. Bind that verified staged identity, prepare and sync
+   the exact history transaction, then write/sync/close `pending`,
    then rename it to `plan` and sync the directory. Public names are unchanged.
    Delete needs no stage. Recheck observed source/destination state and cancellation.
 2. **Decision:** hard-link `plan` to `decision`, then sync the directory. Both
@@ -130,8 +137,48 @@ values and pair aliases; a version header alone is insufficient. Impossible,
 malformed or future-version preparation bytes are preserved.
 Abort cleanup can itself be interrupted after deleting the stage. After a decision,
 recovery rolls forward or preserves evidence and reports interference/uncertainty.
-There is no post-commit backup restoration or user-facing undo. Unknown future or
+There is no automatic post-commit byte rollback. Explicit Profile history restore
+is a new conditional mutation that produces another event. Unknown future or
 externally inconsistent states remain untouched and may block mutation.
+
+## Bound history publication and maintenance
+
+Every successful mutation has one exact history transaction prepared before the
+Profile decision. Its full intended snapshot is written and synchronized before
+the decision can exist; deletion instead stores the last live bytes behind its
+tombstone. When an existing Profile has no lineage, its first mutation also
+prepares a protected adoption predecessor containing the bytes about to be
+displaced. Clone creates a new lineage and records its source lineage; rename
+keeps the existing lineage.
+
+The immutable Profile plan digest-binds the canonical nested history record,
+snapshot identities and bytes, event/lineage IDs, and any automatic retention
+candidates. Validation occurs again at decision publication. Recovery completes
+the decided Profile/history pair, accepts an already-published record or snapshot
+only after exact validation, and synchronizes it before cleanup. Mismatched bound
+evidence is retained and reports an unsafe recovery requirement.
+
+History preparation precedes the first Profile plan leaf. A bounded descriptor-
+relative orphan scan makes that pre-plan phase durably discoverable: validated
+unbound `txn_*` leaves are removed and synchronized during abort/recovery, including
+after process death or interrupted cleanup. A plan-bound transaction is never
+treated as an orphan. Corruption is restrictive for the affected lineage while a
+corrupt unrelated lineage does not disable another Profile mutation.
+
+History is stored in the private mode-0700 `profiles/history` directory, opened
+from the already validated repository descriptor. Lineage directories are 0700;
+snapshots, event records, name bindings, pins and maintenance journals are owned
+0600 regular single-link files. Reads validate bounded immutable records and full
+snapshot digests. Public history and semantic diff remain sanitized; snapshot
+bytes are returned only to the internal restore path.
+
+Pin changes and explicit prune use separate versioned maintenance journals under
+the repository lock. Valid interrupted `pins.next` and `prune.json` states finish
+idempotently, including partial record/snapshot deletion. Automatic retention
+keeps the latest 100 ordinary events, while pins and recovery-protected
+predecessors remain protected. Each lineage is capped at 256 committed events and
+32 MiB of logical snapshots; admission fails before the Profile decision when no
+safe candidates can satisfy the quota.
 
 ## Outcomes, cancellation and durability
 
@@ -145,6 +192,12 @@ secondary cleanup/release failures through joined errors. In particular:
   `Unknown` with evidence retained. A namespace sync error never becomes success.
 - A synchronized terminal receipt establishes `Committed`; subsequent cleanup or
   release errors still return an error with that committed outcome.
+- A committed transaction outcome can return `Outcome.History` with the exact
+  lineage and event IDs read from the history transaction whose digest is bound
+  into the immutable decision. This includes a decided transaction completed by
+  `Recover`; the identity describes that recovered transaction, not a later
+  `Apply`. It is captured while the lock is held, so callers do not rediscover it
+  from a later history-head read.
 - Cancellation after the decision begins does not skip settlement or required
   synchronization. Recovery checks cancellation before changing state and then
   finishes its chosen safe sequence. Filesystem calls have no hard deadline.
@@ -180,6 +233,12 @@ Recovery settles the earlier transaction first; an already-published Profile the
 produces the existing duplicate-name error, without opening the builder or saving
 again. Recovery failure is reported before duplicate detection. No unrelated
 Profile must be created to reach recovery, and no new CLI command is needed.
+
+For conditional clone restore, `HistoryRequest.ExpectedSourceLineage` is an
+additional internal condition. It is persisted in the version-two plan and must
+match the source name's current lineage during locked preparation and the
+digest-bound history record during validation/recovery. Name reuse with identical
+Profile bytes therefore remains a conflict rather than changing lineage authority.
 
 `Store.Load`, repository Read, Profile list/show/validate and doctor do not invoke
 recovery. Inspection and diagnostics retain their existing passive, non-snapshot

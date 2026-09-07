@@ -27,6 +27,16 @@ type Revision struct {
 	digest [32]byte
 	valid  bool
 }
+
+// String returns the bounded public compare-and-apply digest. It contains no
+// document bytes or path material.
+func (r Revision) String() string {
+	if !r.valid {
+		return ""
+	}
+	return "pr_" + fmt.Sprintf("%x", r.digest)
+}
+
 type Snapshot struct {
 	Exists   bool
 	Bytes    []byte
@@ -61,6 +71,16 @@ const (
 type Outcome struct {
 	State            State
 	RecoveryRequired bool
+	// History identifies the exact event of the committed transaction represented
+	// by this outcome, including a decided transaction completed by Recover. It
+	// does not identify a later Apply, and callers must not infer transaction
+	// identity from a subsequent repository history read.
+	History *HistoryIdentity
+}
+
+type HistoryIdentity struct {
+	LineageID string
+	EventID   string
 }
 
 // OutcomeError preserves the truthful outcome through legacy Store signatures.
@@ -101,10 +121,21 @@ type DeleteRequest struct {
 	Name     string
 	Expected Revision
 }
+
+// HistoryRequest annotates an ordinary repository request with a sanitized
+// event class and, for restore only, its already selected lineage.
+type HistoryRequest struct {
+	Request               Request
+	Operation             string
+	Lineage               string
+	ExpectedSourceLineage string
+}
 type change struct {
 	op, source, destination             string
 	sourceRevision, destinationRevision Revision
 	data                                []byte
+	historyOp, lineage, sourceLineage   string
+	expectedSourceLineage               string
 }
 
 func (r CreateRequest) change() change {
@@ -121,6 +152,14 @@ func (r RenameRequest) change() change {
 }
 func (r DeleteRequest) change() change {
 	return change{op: "delete", source: r.Name, sourceRevision: r.Expected}
+}
+func (r HistoryRequest) change() change {
+	if r.Request == nil {
+		return change{}
+	}
+	c := r.Request.change()
+	c.historyOp, c.lineage, c.expectedSourceLineage = r.Operation, r.Lineage, r.ExpectedSourceLineage
+	return c
 }
 func (c change) validate() error {
 	if len(c.data) > MaxDocumentBytes {
@@ -152,6 +191,21 @@ func (c change) validate() error {
 			return ErrConflict
 		}
 	default:
+		return ErrConflict
+	}
+	if c.historyOp != "" {
+		switch c.historyOp {
+		case "create", "edit", "clone", "rename", "delete", "import", "migration", "restore":
+		default:
+			return ErrConflict
+		}
+	}
+	if c.expectedSourceLineage != "" {
+		if c.op != "clone" || !lineagePattern.MatchString(c.expectedSourceLineage) {
+			return ErrConflict
+		}
+	}
+	if c.lineage != "" && !lineagePattern.MatchString(c.lineage) {
 		return ErrConflict
 	}
 	return nil
@@ -268,9 +322,13 @@ func (r *Repository) Apply(ctx context.Context, request Request) (out Outcome, e
 		out.RecoveryRequired = cleanup.RecoveryRequired
 		return out, errors.Join(err, cleanupErr)
 	}
+	if err = d.historyValidate(p); err != nil {
+		out.RecoveryRequired = true
+		return out, err
+	}
 	// From this point a commit decision can exist; errors require explicit recovery.
 	out = Outcome{State: Unknown, RecoveryRequired: true}
-	if err = d.link("plan", "decision", "decision.publish"); err != nil {
+	if err = d.linkValidated("plan", "decision", "decision.publish", func() error { return d.historyValidate(p) }); err != nil {
 		return
 	}
 	if err = d.sync("decision.sync"); err != nil {

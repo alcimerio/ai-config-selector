@@ -13,13 +13,15 @@ import (
 // All filenames are derived locally. Journal bytes contain only validated names,
 // exact object identities and content hashes, never paths or codec instructions.
 type plan struct {
-	Version     int
-	ID          string
-	Operation   string
-	Source      string
-	Destination string
-	Before      *identity
-	Stage       *identity
+	Version               int
+	ID                    string
+	Operation             string
+	Source                string
+	Destination           string
+	Before                *identity
+	Stage                 *identity
+	HistoryDigest         string `json:"HistoryDigest,omitempty"`
+	ExpectedSourceLineage string `json:"ExpectedSourceLineage,omitempty"`
 }
 
 func validIdentity(id *identity) bool {
@@ -43,7 +45,7 @@ func decodePlan(data []byte) (*plan, error) {
 		return nil, ErrUnsafe
 	}
 	id, e := hex.DecodeString(p.ID)
-	if e != nil || len(id) != 16 || hex.EncodeToString(id) != p.ID || p.Version != 1 {
+	if e != nil || len(id) != 16 || hex.EncodeToString(id) != p.ID || (p.Version != 1 && p.Version != 2) {
 		return nil, ErrUnsafe
 	}
 	if p.Source != "" && (!namePattern.MatchString(p.Source) || !validIdentity(p.Before)) {
@@ -56,6 +58,21 @@ func decodePlan(data []byte) (*plan, error) {
 		return nil, ErrUnsafe
 	}
 	if p.Operation != "delete" && !validIdentity(p.Stage) {
+		return nil, ErrUnsafe
+	}
+	if p.Version == 1 && p.HistoryDigest != "" {
+		return nil, ErrUnsafe
+	}
+	if p.Version == 2 {
+		if len(p.HistoryDigest) != 64 {
+			return nil, ErrUnsafe
+		}
+		b, e := hex.DecodeString(p.HistoryDigest)
+		if e != nil || hex.EncodeToString(b) != p.HistoryDigest {
+			return nil, ErrUnsafe
+		}
+	}
+	if p.ExpectedSourceLineage != "" && (p.Operation != "clone" || !lineagePattern.MatchString(p.ExpectedSourceLineage)) {
 		return nil, ErrUnsafe
 	}
 	switch p.Operation {
@@ -85,7 +102,7 @@ func (d *directory) prepare(ctx context.Context, c change) (*plan, error) {
 	if _, err := rand.Read(random[:]); err != nil {
 		return nil, err
 	}
-	p := &plan{Version: 1, ID: hex.EncodeToString(random[:]), Operation: c.op, Source: c.source, Destination: c.destination}
+	p := &plan{Version: 2, ID: hex.EncodeToString(random[:]), Operation: c.op, Source: c.source, Destination: c.destination, ExpectedSourceLineage: c.expectedSourceLineage}
 	if c.source != "" {
 		before, err := d.read(c.source+".json", MaxDocumentBytes, 1)
 		if err != nil {
@@ -126,6 +143,9 @@ func (d *directory) prepare(ctx context.Context, c change) (*plan, error) {
 		if err = d.sync("stage.directory-sync"); err != nil {
 			return nil, err
 		}
+	}
+	if err := d.historyPrepare(c, p); err != nil {
+		return nil, err
 	}
 	encoded, err := json.Marshal(p)
 	if err != nil {
@@ -177,6 +197,12 @@ func (d *directory) recover(ctx context.Context) (out Outcome, err error) {
 		return out, err
 	}
 	if len(artifacts) == 0 {
+		if err = d.historyAbortOrphans(""); err != nil {
+			return out, err
+		}
+		if err = d.historyRecoverMaintenance(ctx); err != nil {
+			return out, err
+		}
 		out.State = NotCommitted
 		out.RecoveryRequired = false
 		return out, nil
@@ -377,6 +403,21 @@ func (d *directory) finish(p *plan) (out Outcome, err error) {
 			return
 		}
 	}
+	// Version-two decisions cover the Profile publication and its immutable
+	// history event. A failure here is deliberately Unknown and is completed by
+	// ordinary repository recovery before any later mutation.
+	var historyIdentity *HistoryIdentity
+	if p.Version == 2 {
+		if err = d.historyCommit(p); err != nil {
+			return
+		}
+		var identity HistoryIdentity
+		identity, err = d.historyResult(p)
+		if err != nil {
+			return
+		}
+		historyIdentity = &identity
+	}
 	if err = d.link("plan", "complete", "complete.publish"); err != nil {
 		return
 	}
@@ -384,6 +425,7 @@ func (d *directory) finish(p *plan) (out Outcome, err error) {
 		return
 	}
 	out.State = Committed
+	out.History = historyIdentity
 	artifacts, err = d.artifacts()
 	if err != nil {
 		return out, err
@@ -393,6 +435,13 @@ func (d *directory) finish(p *plan) (out Outcome, err error) {
 	return
 }
 func (d *directory) cleanup(p *plan, artifacts map[string]*object, committed bool) error {
+	if p != nil && p.Version == 2 {
+		if !committed {
+			if err := d.historyValidate(p); err != nil {
+				return err
+			}
+		}
+	}
 	// No terminal state produced by this engine retains a swap or pending leaf.
 	if committed {
 		if artifacts["swap"] != nil || artifacts["pending"] != nil {
@@ -470,6 +519,14 @@ func (d *directory) cleanup(p *plan, artifacts map[string]*object, committed boo
 		if err = d.sync("cleanup." + n + ".sync"); err != nil {
 			return err
 		}
+	}
+	if p != nil && p.Version == 2 {
+		if err := d.historyAbort(p.ID); err != nil {
+			return err
+		}
+	}
+	if err := d.historyAbortOrphans(""); err != nil {
+		return err
 	}
 	return nil
 }

@@ -79,6 +79,11 @@ and stale revisions never overwrite newer data. These commands need no client,
 credentials or Session. See the [mutation and recovery guide](docs/profile-mutations.md)
 for selection repair, preview controls, cancellation and uncertain outcomes.
 
+Committed Profile changes also create private recoverable history. Use
+`acs profile history`, sanitized `profile diff`, digest-bound `profile restore`,
+and explicit pin/prune maintenance as described in the
+[Profile history guide](docs/profile-history.md).
+
 ## Passive diagnostics (development source)
 
 Run `acs doctor` for core host and trusted backend-file checks without an account

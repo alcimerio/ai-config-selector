@@ -36,6 +36,9 @@ func main() {
 		return
 	}
 	informational := cli.App{Version: buildVersion(releaseVersion, debug.ReadBuildInfo), Input: os.Stdin, Output: os.Stdout, ErrorOutput: os.Stderr, Interactive: cli.StandardStreamsInteractive}
+	if handled, code := informational.RunProfileHistory(context.Background(), os.Args[1:], os.UserHomeDir); handled {
+		os.Exit(code)
+	}
 	if handled, code := informational.RunInformational(os.Args[1:]); handled {
 		os.Exit(code)
 	}
