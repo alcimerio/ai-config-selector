@@ -142,8 +142,19 @@ func TestPromotedArtifactNativeContainmentContract(t *testing.T) {
 func assertPromotedArtifactEffectiveExplanation(t *testing.T) {
 	binary := promotedBinary(t)
 	home, path := prepareRuntimeHome(t)
-	writeSharedTargetProfile(t, home, "explanation", "read-only")
+	writeSharedTargetProfile(t, home, "explanation", "read-write")
 	workspace := realTemporaryDirectory(t)
+	for _, directory := range []string{
+		filepath.Join(home, ".acs", "locks", "codex-auth"),
+		filepath.Join(home, ".acs", "quarantine", "codex-auth"),
+	} {
+		if err := os.MkdirAll(directory, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(directory, "state-sentinel"), []byte("unchanged\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
 	helper, err := filepath.Abs(os.Args[0])
 	if err != nil {
 		t.Fatal(err)
@@ -156,7 +167,7 @@ func assertPromotedArtifactEffectiveExplanation(t *testing.T) {
 		{name: "sandbox", recipe: "shell", explain: []string{"explain", "sandbox", "--profile", "explanation", "--json"}, execute: []string{"sandbox", "--profile", "explanation", "--dry-run"}},
 		{name: "devin", recipe: "devin", explain: []string{"explain", "devin", "--profile", "explanation", "--json"}, execute: []string{"devin", "--profile", "explanation", "--dry-run"}},
 		{name: "codex", recipe: "codex", explain: []string{"explain", "codex", "--profile", "explanation", "--auth", "work", "--json"}, execute: []string{"codex", "--profile", "explanation", "--auth", "work", "--dry-run"}},
-		{name: "run", recipe: "command", explain: []string{"explain", "run", "--profile", "explanation", "--json", "--", helper, "PRIVATE_NATIVE_ARGUMENT"}, execute: []string{"run", "--profile", "explanation", "--dry-run", "--", helper, "PRIVATE_NATIVE_ARGUMENT"}},
+		{name: "run", recipe: "command", explain: []string{"explain", "run", "--profile", "explanation", "--json", "--", helper, "--acs-generic-command-helper", "--tripwire", filepath.Join(workspace, "expected-digest-run-target")}, execute: []string{"run", "--profile", "explanation", "--dry-run", "--", helper, "--acs-generic-command-helper", "--tripwire", filepath.Join(workspace, "expected-digest-run-target")}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -243,7 +254,7 @@ func assertPromotedArtifactEffectiveExplanation(t *testing.T) {
 			linked := append(append([]string(nil), test.execute...), "--expect-authority-digest", result.Plan.Digest)
 			// The run grammar requires the expectation before the literal boundary.
 			if test.name == "run" {
-				linked = []string{"run", "--profile", "explanation", "--dry-run", "--expect-authority-digest", result.Plan.Digest, "--", helper, "PRIVATE_NATIVE_ARGUMENT"}
+				linked = []string{"run", "--profile", "explanation", "--dry-run", "--expect-authority-digest", result.Plan.Digest, "--", helper, "--acs-generic-command-helper", "--tripwire", filepath.Join(workspace, "expected-digest-run-target")}
 			}
 			linkedCommand := exec.Command(binary, linked...)
 			linkedCommand.Dir, linkedCommand.Env = workspace, nativeCandidateEnvironment(home, path, nil)
@@ -257,13 +268,25 @@ func assertPromotedArtifactEffectiveExplanation(t *testing.T) {
 			case "codex":
 				mismatchArguments = append(mismatchArguments, "--auth", "work")
 			case "run":
-				mismatchArguments = append(mismatchArguments, "--", helper, "PRIVATE_NATIVE_ARGUMENT")
+				mismatchArguments = append(mismatchArguments, "--", helper, "--acs-generic-command-helper", "--tripwire", filepath.Join(workspace, "expected-digest-run-target"))
 			}
+			beforeHome, beforeWorkspace := snapshotInspectionHome(t, home), snapshotInspectionHome(t, workspace)
 			mismatchCommand := exec.Command(binary, mismatchArguments...)
 			mismatchCommand.Dir, mismatchCommand.Env = workspace, nativeCandidateEnvironment(home, path, nil)
 			mismatchOutput, mismatchErr := mismatchCommand.CombinedOutput()
 			if mismatchErr == nil || !bytes.Contains(mismatchOutput, []byte("authority_plan_changed")) {
 				t.Fatalf("mismatch did not fail at semantic guard: err=%v output=%s", mismatchErr, mismatchOutput)
+			}
+			if after := snapshotInspectionHome(t, home); !reflect.DeepEqual(after, beforeHome) {
+				t.Fatalf("%s digest mismatch changed durable Profile/auth/lock/quarantine/home state: before=%#v after=%#v", test.name, beforeHome, after)
+			}
+			if after := snapshotInspectionHome(t, workspace); !reflect.DeepEqual(after, beforeWorkspace) {
+				t.Fatalf("%s digest mismatch invoked a workspace-visible target/preflight or changed workspace state: before=%#v after=%#v", test.name, beforeWorkspace, after)
+			}
+			for _, marker := range []string{"preflight-skills", "preflight-authentication", "interactive-started", "expected-digest-run-target"} {
+				if _, err := os.Stat(filepath.Join(workspace, marker)); !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("%s digest mismatch reached target/provider tripwire %q: %v", test.name, marker, err)
+				}
 			}
 			assertNoSessions(t, home)
 		})
@@ -417,6 +440,7 @@ func assertPromotedArtifactExplanationFailuresArePlanless(t *testing.T, binary, 
 		}
 		command := exec.Command(binary, "explain", "devin", "--profile", test.name, "--json")
 		command.Dir, command.Env = workspace, nativeCandidateEnvironment(home, path, nil)
+		beforeHome, beforeWorkspace := snapshotInspectionHome(t, home), snapshotInspectionHome(t, workspace)
 		output, err := command.CombinedOutput()
 		if err == nil || !bytes.Contains(output, []byte(`"plan":null`)) || !bytes.Contains(output, []byte(`"code":"`+test.code+`"`)) {
 			t.Fatalf("unsafe explanation failure %s: err=%v output=%s", test.name, err, output)
@@ -425,6 +449,12 @@ func assertPromotedArtifactExplanationFailuresArePlanless(t *testing.T, binary, 
 			if bytes.Contains(output, []byte(private)) {
 				t.Fatalf("explanation failure %s exposed %q: %s", test.name, private, output)
 			}
+		}
+		if after := snapshotInspectionHome(t, home); !reflect.DeepEqual(after, beforeHome) {
+			t.Fatalf("explanation failure %s changed durable home state: before=%#v after=%#v", test.name, beforeHome, after)
+		}
+		if after := snapshotInspectionHome(t, workspace); !reflect.DeepEqual(after, beforeWorkspace) {
+			t.Fatalf("explanation failure %s changed workspace state: before=%#v after=%#v", test.name, beforeWorkspace, after)
 		}
 		assertNoSessions(t, home)
 	}
@@ -530,6 +560,11 @@ func runPromotedArtifactGenericHelper(arguments []string) bool {
 				os.Exit(92)
 			}
 			_, _ = fmt.Fprintf(os.Stdout, "generic-pty-size:%d:%d\n", width, height)
+			return true
+		case "--tripwire":
+			if len(arguments) != 3 || !writeFakeDevinMarker(arguments[2]) {
+				os.Exit(91)
+			}
 			return true
 		}
 	}

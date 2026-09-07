@@ -32,6 +32,54 @@ import (
 
 type recordingGenericTarget struct{ calls int }
 
+type cliDurableEntry struct {
+	Mode  os.FileMode
+	Bytes string
+}
+
+func snapshotCLIDurableState(t *testing.T, root string) map[string]cliDurableEntry {
+	t.Helper()
+	snapshot := map[string]cliDurableEntry{}
+	if err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		value := cliDurableEntry{Mode: info.Mode()}
+		if info.Mode().IsRegular() {
+			contents, err := os.ReadFile(path)
+			if err != nil {
+				return err
+			}
+			value.Bytes = string(contents)
+		} else if info.Mode()&os.ModeSymlink != 0 {
+			value.Bytes, err = os.Readlink(path)
+			if err != nil {
+				return err
+			}
+		}
+		relative, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		snapshot[relative] = value
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return snapshot
+}
+
+func assertCLIDurableStateUnchanged(t *testing.T, root string, before map[string]cliDurableEntry) {
+	t.Helper()
+	if after := snapshotCLIDurableState(t, root); !reflect.DeepEqual(after, before) {
+		t.Fatalf("authority guard changed durable state: before=%#v after=%#v", before, after)
+	}
+}
+
 func (target *recordingGenericTarget) PlanLaunch(context.Context, string, category.ResolvedProfile, runcommand.Command) (launch.Plan, error) {
 	target.calls++
 	return launch.Plan{}, nil
@@ -120,23 +168,41 @@ func TestExpectedAuthorityDigestFailsBeforeLauncherOrCodexProvider(t *testing.T)
 	if _, err := devinStore.Create(devinProfile); err != nil {
 		t.Fatal(err)
 	}
+	for _, directory := range []string{
+		filepath.Join(home, ".acs", "sessions"),
+		filepath.Join(home, ".acs", "locks", "codex-auth"),
+		filepath.Join(home, ".acs", "quarantine", "codex-auth"),
+	} {
+		if err := os.MkdirAll(directory, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(directory, "state-sentinel"), []byte("unchanged\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
 	launcher := &recordingProfileLauncher{}
 	var stdout, stderr bytes.Buffer
 	app := cli.App{Categories: devinTarget.Categories(), Profiles: devinStore, SandboxLauncher: launcher, WorkingDirectory: home, Output: &stdout, ErrorOutput: &stderr}
 	mismatch := "sha256:" + strings.Repeat("0", 64)
+	before := snapshotCLIDurableState(t, home)
 	if code := app.Run(context.Background(), []string{"sandbox", "--profile", "example", "--expect-authority-digest", mismatch}); code != 1 || launcher.calls != 0 || !strings.Contains(stderr.String(), "authority_plan_changed") {
 		t.Fatalf("sandbox mismatch code=%d launcher calls=%d stderr=%q", code, launcher.calls, stderr.String())
 	}
+	assertCLIDurableStateUnchanged(t, home, before)
 	stderr.Reset()
+	before = snapshotCLIDurableState(t, home)
 	if code := app.Run(context.Background(), []string{"devin", "--profile", "example", "--expect-authority-digest", mismatch}); code != 1 || launcher.calls != 0 || !strings.Contains(stderr.String(), "authority_plan_changed") {
 		t.Fatalf("Devin mismatch code=%d launcher calls=%d stderr=%q", code, launcher.calls, stderr.String())
 	}
+	assertCLIDurableStateUnchanged(t, home, before)
 	generic := &recordingGenericTarget{}
 	stderr.Reset()
 	app.GenericTarget = generic
+	before = snapshotCLIDurableState(t, home)
 	if code := app.Run(context.Background(), []string{"run", "--profile", "example", "--expect-authority-digest", mismatch, "--", "/usr/bin/true"}); code != 1 || generic.calls != 0 || !strings.Contains(stderr.String(), "authority_plan_changed") {
 		t.Fatalf("generic mismatch code=%d target calls=%d stderr=%q", code, generic.calls, stderr.String())
 	}
+	assertCLIDurableStateUnchanged(t, home, before)
 
 	execution := &rejectingCodexExecution{}
 	codexTarget, err := codexadapter.New(codexadapter.Config{BinaryPath: "codex", ExistingHomeDir: home, Executor: execution})
@@ -153,9 +219,11 @@ func TestExpectedAuthorityDigestFailsBeforeLauncherOrCodexProvider(t *testing.T)
 	}
 	stderr.Reset()
 	app = cli.App{CodexTarget: codexTarget, CodexCategories: codexTarget.Categories(), CodexProfiles: codexStore, WorkingDirectory: home, Output: &stdout, ErrorOutput: &stderr}
+	before = snapshotCLIDurableState(t, home)
 	if code := app.Run(context.Background(), []string{"codex", "--profile", "example", "--expect-authority-digest", mismatch}); code != 1 || execution.calls != 0 || !strings.Contains(stderr.String(), "authority_plan_changed") {
 		t.Fatalf("Codex mismatch code=%d provider calls=%d stderr=%q", code, execution.calls, stderr.String())
 	}
+	assertCLIDurableStateUnchanged(t, home, before)
 }
 
 func TestPublicGenericCommandResolutionFailureIsSanitizedAndPrecedesTarget(t *testing.T) {
