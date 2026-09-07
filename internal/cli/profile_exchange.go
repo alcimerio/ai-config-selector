@@ -225,7 +225,7 @@ func (app App) importProfile(ctx context.Context, inv invocation) int {
 	if err != nil {
 		return app.fail("import Profile: destination condition is invalid")
 	}
-	outcome, applyErr := app.Repository.Apply(ctx, profilerepo.CreateRequest{Name: candidate.Name, Expected: expected, Bytes: canonical})
+	outcome, applyErr := app.Repository.Apply(ctx, profilerepo.HistoryRequest{Request: profilerepo.CreateRequest{Name: candidate.Name, Expected: expected, Bytes: canonical}, Operation: "import"})
 	if applyErr != nil || outcome.State != profilerepo.Committed || outcome.RecoveryRequired {
 		if applyErr == nil {
 			applyErr = errors.New("Profile transaction requires outcome inspection")

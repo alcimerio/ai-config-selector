@@ -136,6 +136,7 @@ func TestPromotedArtifactNativeContainmentContract(t *testing.T) {
 	t.Run("effective explanation is linked and narrowly observed", assertPromotedArtifactEffectiveExplanation)
 	t.Run("sandbox shell is credential-free contained and cleaned", assertPromotedArtifactSandboxShell)
 	t.Run("v3 common material and workspace modes are enforced", assertPromotedArtifactV3WorkspaceModes)
+	t.Run("restored deleted lineage executes contained shell and Devin", assertPromotedArtifactRestoredProfile)
 	t.Run("generic literal command uses candidate containment", assertPromotedArtifactGenericRun)
 	t.Run("filesystem environment descriptors sockets IP preflight and descendants", assertPromotedArtifactNativeContainment)
 	t.Run("Devin preflight and target generations are fresh while retained", assertPromotedArtifactDevinGenerations)
@@ -1804,6 +1805,112 @@ func assertPromotedArtifactV3WorkspaceModes(t *testing.T) {
 		assertMarkerAbsent(t, outside, "v3 shell wrote unrelated host path")
 		assertNoSessions(t, home)
 	}
+}
+
+// assertPromotedArtifactRestoredProfile deliberately prepares the Profile via
+// the supplied ACS binary.  It selects the deletion event by opaque lineage,
+// binds the preview digest to the confirmation, and only then observes the
+// restored intent through real shell and Devin launches.
+func assertPromotedArtifactRestoredProfile(t *testing.T) {
+	binary := promotedBinary(t)
+	home, path := prepareRuntimeHome(t)
+	root := realTemporaryDirectory(t)
+	workspace, tools := filepath.Join(root, "workspace"), filepath.Join(root, "tools")
+	for _, directory := range []string{workspace, tools} {
+		if err := os.Mkdir(directory, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	installPromotedArtifactFakeDevin(t, tools)
+	document := filepath.Join(root, "restored-profile.json")
+	if err := os.WriteFile(document, []byte(`{"version":3,"name":"native-history","common":{"skills":{"version":1,"selection":[]},"workspace":{"version":1,"selection":{"access":"read-write"}}},"overlays":{"devin":{"version":1}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	run := func(args ...string) []byte {
+		command := exec.Command(binary, args...)
+		command.Dir = workspace
+		command.Env = nativeCandidateEnvironment(home, tools+string(os.PathListSeparator)+path, nil)
+		output, err := command.CombinedOutput()
+		if err != nil {
+			t.Fatalf("restored Profile command %v: %v; output=%s", args, err, output)
+		}
+		return output
+	}
+	run("profile", "create", "--file", document)
+	var created struct {
+		LineageID string `json:"lineageId"`
+		Events    []struct {
+			EventID string `json:"eventId"`
+		} `json:"events"`
+	}
+	if output := run("profile", "history", "native-history", "--json"); json.Unmarshal(output, &created) != nil || created.LineageID == "" || len(created.Events) != 1 {
+		t.Fatalf("created restored-profile history=%s", output)
+	}
+	run("profile", "delete", "native-history", "--confirm", "native-history")
+	var deleted struct {
+		Events []struct {
+			EventID string `json:"eventId"`
+			Profile struct {
+				State string `json:"state"`
+			} `json:"profile"`
+		} `json:"events"`
+	}
+	if output := run("profile", "history", "--lineage", created.LineageID, "--json"); json.Unmarshal(output, &deleted) != nil || len(deleted.Events) < 2 || deleted.Events[0].EventID == "" || deleted.Events[0].Profile.State != "deleted" {
+		t.Fatalf("deleted restored-profile history=%s", output)
+	}
+	privateHistory := filepath.Join(home, ".acs", "profiles", "history", created.LineageID, deleted.Events[0].EventID+".json")
+	if info, err := os.Stat(privateHistory); err != nil || !info.Mode().IsRegular() {
+		t.Fatalf("restored Profile private history witness is unavailable: %v", err)
+	}
+	unrelatedRoot := realTemporaryDirectory(t)
+	unrelatedSecret, unrelatedWrite := filepath.Join(unrelatedRoot, "secret"), filepath.Join(unrelatedRoot, "write")
+	if err := os.WriteFile(unrelatedSecret, []byte("restored-profile-unrelated-secret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	assertNoSessions(t, home)
+	var preview struct {
+		Digest      string `json:"digest"`
+		Destination string `json:"destination"`
+	}
+	if output := run("profile", "restore", "--lineage", created.LineageID, "--revision", deleted.Events[0].EventID, "--dry-run", "--json"); json.Unmarshal(output, &preview) != nil || preview.Digest == "" || preview.Destination != "native-history" {
+		t.Fatalf("restored-profile preview=%s", output)
+	}
+	assertNoSessions(t, home)
+	run("profile", "restore", "--lineage", created.LineageID, "--revision", deleted.Events[0].EventID, "--expect", preview.Digest, "--confirm", "native-history", "--json")
+
+	beforeShell := promotedSessionSnapshot(t, binary, home, path)
+	shell := exec.Command(binary, "sandbox", "--profile", "native-history")
+	shell.Dir, shell.Env = workspace, nativeCandidateEnvironment(home, tools+string(os.PathListSeparator)+path, nil)
+	shell.Stdin = strings.NewReader("if cat " + strconv.Quote(unrelatedSecret) + " >/dev/null 2>&1; then exit 71; fi\n" +
+		"if cat " + strconv.Quote(privateHistory) + " >/dev/null 2>&1; then exit 72; fi\n" +
+		"if printf outside > " + strconv.Quote(unrelatedWrite) + " 2>/dev/null; then exit 73; fi\n" +
+		"printf restored-shell > ./restored-shell-marker\nexit 0\n")
+	if output, err := shell.CombinedOutput(); err != nil {
+		t.Fatalf("restored Profile shell: %v; output=%s", err, output)
+	}
+	if contents, err := os.ReadFile(filepath.Join(workspace, "restored-shell-marker")); err != nil || string(contents) != "restored-shell" {
+		t.Fatalf("restored Profile shell marker=%q err=%v", contents, err)
+	}
+	assertNoSessions(t, home)
+	assertNewRemovedPromotedSessions(t, binary, home, path, beforeShell, "shell")
+
+	if err := os.Symlink(privateHistory, filepath.Join(workspace, "host-secret-link")); err != nil {
+		t.Fatal(err)
+	}
+	writeFakeDevinConfiguration(t, workspace, fakeDevinConfiguration{HostSecret: unrelatedSecret, ExternalWritePath: unrelatedWrite})
+	beforeDevin := promotedSessionSnapshot(t, binary, home, path)
+	command := exec.Command(binary, "devin", "--profile", "native-history")
+	command.Dir, command.Env = workspace, nativeCandidateEnvironment(home, tools+string(os.PathListSeparator)+path, nil)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("restored Profile Devin: %v; output=%s", err, output)
+	}
+	result := readFakeDevinResult(t, workspace)
+	if !result.PreflightSkills || !result.PreflightAuthentication || !result.WorkspaceWritable || !result.SessionWritable || result.HostFileReadable || result.SymlinkEscapeReadable || result.ExternalWriteSucceeded {
+		t.Fatalf("restored Profile Devin observations=%+v", result)
+	}
+	assertMarkerAbsent(t, unrelatedWrite, "restored Profile Devin wrote unrelated host path")
+	assertNoSessions(t, home)
+	assertNewRemovedPromotedSessions(t, binary, home, path, beforeDevin, "devin")
 }
 
 func assertPromotedArtifactSandboxShell(t *testing.T) {
