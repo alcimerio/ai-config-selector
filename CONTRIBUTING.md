@@ -145,6 +145,10 @@ nonblocking.
 Release tags are immutable and created only after the release-preparation PR is
 merged to protected `main`.
 
+Start with the [next release preparation assessment](docs/release-readiness.md)
+for the exact source boundary, remaining evidence, and operator handoff. It is
+not a release announcement and does not assign a version.
+
 For a future release (using `v1.2.3` as an example):
 
 ```sh

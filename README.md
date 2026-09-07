@@ -493,8 +493,9 @@ refresh observation remains supplemental and is never a CI credential gate.
 
 - Devin and the fixed interactive Codex recipe are the production CLI adapters.
 - Skills is the only production Profile category.
-- The published v0.4.0 CLI cannot list, edit or delete Profiles; current development
-  source provides those commands. Neither provides CLI import or export.
+- The published v0.4.0 CLI cannot list, edit, delete, import, or export Profiles;
+  current development source provides those commands, including sanitized
+  portable exchange with explicit local bindings.
 - Repository-local Skills remain under Devin's control and are not copied into
   the credential-free sandbox shell.
 - Current development source and future releases support only macOS 26 on
