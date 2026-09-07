@@ -2,9 +2,11 @@ package sessionops_test
 
 import (
 	"bytes"
+	"encoding/hex"
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -103,6 +105,128 @@ func TestRecoveryRejectsStaleGenerationProof(t *testing.T) {
 	}
 }
 
+func TestArmRejectsUntrustedExistingRecordBeforeAnyMutation(t *testing.T) {
+	tests := []struct {
+		name  string
+		alter func(*testing.T, string, []byte)
+	}{
+		{
+			name: "malformed",
+			alter: func(t *testing.T, path string, _ []byte) {
+				if err := os.WriteFile(path, []byte(`{"version":`), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "duplicate key",
+			alter: func(t *testing.T, path string, valid []byte) {
+				duplicate := bytes.Replace(valid, []byte(`"version":1`), []byte(`"version":1,"version":1`), 1)
+				if err := os.WriteFile(path, duplicate, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "hard link",
+			alter: func(t *testing.T, path string, valid []byte) {
+				victim := filepath.Join(filepath.Dir(filepath.Dir(filepath.Dir(path))), "record-victim")
+				if err := os.WriteFile(victim, valid, 0o600); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Remove(path); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Link(victim, path); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "mismatched binding",
+			alter: func(t *testing.T, path string, valid []byte) {
+				var object map[string]any
+				if err := json.Unmarshal(valid, &object); err != nil {
+					t.Fatal(err)
+				}
+				object["rootToken"] = strings.Repeat("0", 64)
+				changed, err := json.Marshal(object)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, append(changed, '\n'), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			sessions := filepath.Join(root, ".acs", "sessions")
+			created, err := session.CreateTracked(sessions, root, nil, "shell")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := created.ArmOperation(nil); err != nil {
+				t.Fatal(err)
+			}
+			private := launch.SessionOperationsDirectory(sessions)
+			recordPath := filepath.Join(private, "records", created.PublicID()+".json")
+			capabilityPath := filepath.Join(private, "capabilities", created.PublicID()+".json")
+			validRecord, err := os.ReadFile(recordPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			test.alter(t, recordPath, validRecord)
+			beforeRecord, err := os.ReadFile(recordPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			beforeCapability, err := os.ReadFile(capabilityPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			beforeRoot := snapshotRegularFiles(t, created.RootDirectory())
+			if _, err := created.ArmOperation(bytes.Repeat([]byte{0x7a}, launch.RecoveryProofChallengeSize)); err == nil {
+				t.Fatal("second Arm accepted untrusted existing record")
+			}
+			afterRecord, _ := os.ReadFile(recordPath)
+			afterCapability, _ := os.ReadFile(capabilityPath)
+			afterRoot := snapshotRegularFiles(t, created.RootDirectory())
+			if !bytes.Equal(afterRecord, beforeRecord) || !bytes.Equal(afterCapability, beforeCapability) || !reflect.DeepEqual(afterRoot, beforeRoot) {
+				t.Fatal("rejected Arm mutated record, capability, or native proof")
+			}
+		})
+	}
+}
+
+func snapshotRegularFiles(t *testing.T, root string) map[string][]byte {
+	t.Helper()
+	result := map[string][]byte{}
+	if err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !entry.Type().IsRegular() {
+			return nil
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		relative, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		result[relative] = data
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return result
+}
+
 func TestDeferredCleanupDonePublishesRemovedFromLeaseOwner(t *testing.T) {
 	root := t.TempDir()
 	sessions := filepath.Join(root, ".acs", "sessions")
@@ -145,6 +269,53 @@ func TestDeferredCleanupDonePublishesRemovedFromLeaseOwner(t *testing.T) {
 	}
 }
 
+func TestFinalizeRemovalDoesNotTreatTrackedRootAbsenceAsCleanupProof(t *testing.T) {
+	root := t.TempDir()
+	sessions := filepath.Join(root, ".acs", "sessions")
+	created, err := session.CreateTracked(sessions, root, nil, "codex-auth")
+	if err != nil {
+		t.Fatal(err)
+	}
+	challenge, err := created.ArmOperation(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := created.PreserveForRecovery(); err != nil {
+		t.Fatal(err)
+	}
+	recovered, exists, err := launch.RecoverSession(sessions, filepath.Base(created.RootDirectory()))
+	if err != nil || !exists {
+		t.Fatalf("acquire physical cleanup = (%v, %v)", exists, err)
+	}
+	if err := recovered.Remove(); err != nil {
+		t.Fatal(err)
+	}
+	private := launch.SessionOperationsDirectory(sessions)
+	recordPath := filepath.Join(private, "records", created.PublicID()+".json")
+	capabilityPath := filepath.Join(private, "capabilities", created.PublicID()+".json")
+	beforeRecord, _ := os.ReadFile(recordPath)
+	beforeCapability, _ := os.ReadFile(capabilityPath)
+	store := sessionops.Store{SessionsDirectory: sessions}
+	err = store.FinalizeRemoval(filepath.Base(created.RootDirectory()), hex.EncodeToString(challenge), func() (bool, error) {
+		return false, nil
+	}, func() error {
+		t.Fatal("typed marker finalized without physical cleanup evidence")
+		return nil
+	})
+	if err == nil {
+		t.Fatal("tracked missing root was accepted as physical cleanup proof")
+	}
+	afterRecord, _ := os.ReadFile(recordPath)
+	afterCapability, _ := os.ReadFile(capabilityPath)
+	if !bytes.Equal(afterRecord, beforeRecord) || !bytes.Equal(afterCapability, beforeCapability) {
+		t.Fatal("missing-root rejection mutated durable recovery evidence")
+	}
+	inspected, inspectErr := store.Inspect(created.PublicID())
+	if inspectErr != nil || inspected.Session.State != sessionops.StateUnknown {
+		t.Fatalf("missing-root inspection = (%+v, %v)", inspected, inspectErr)
+	}
+}
+
 func TestPassiveMissingStoreDoesNotCreateState(t *testing.T) {
 	root := t.TempDir()
 	sessions := filepath.Join(root, ".acs", "sessions")
@@ -161,13 +332,68 @@ func TestPassiveMissingStoreDoesNotCreateState(t *testing.T) {
 	}
 }
 
+func TestRemovedRetentionPrunesMetadataButKeepsPermanentFenceInode(t *testing.T) {
+	root := t.TempDir()
+	sessions := filepath.Join(root, ".acs", "sessions")
+	created, err := session.CreateTracked(sessions, root, nil, "shell")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := created.ArmOperation(nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := created.PreserveForRecovery(); err != nil {
+		t.Fatal(err)
+	}
+	store := sessionops.Store{SessionsDirectory: sessions}
+	if result, err := store.Recover(created.PublicID()); err != nil || result.State != sessionops.StateRemoved {
+		t.Fatalf("initial recovery = (%+v, %v)", result, err)
+	}
+	private := launch.SessionOperationsDirectory(sessions)
+	recordPath := filepath.Join(private, "records", created.PublicID()+".json")
+	data, err := os.ReadFile(recordPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var object map[string]any
+	if err := json.Unmarshal(data, &object); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().UTC().Add(-sessionops.RemovedRetention - time.Hour).Truncate(time.Second).Format(time.RFC3339)
+	object["removedAt"], object["updatedAt"] = old, old
+	data, err = json.Marshal(object)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(recordPath, append(data, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	trigger, err := sessionops.NewTracker(sessions, filepath.Join(sessions, "session-retention-trigger"), "shell")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := trigger.Removed(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Inspect(created.PublicID()); err == nil || sessionops.Diagnostic(err) != "session_not_found" {
+		t.Fatalf("expired removed record remains: %v", err)
+	}
+	lockPath := filepath.Join(private, "locks", created.PublicID()+".lock")
+	info, err := os.Stat(lockPath)
+	if err != nil || !info.Mode().IsRegular() {
+		t.Fatalf("retention removed permanent fence inode: (%v, %v)", info, err)
+	}
+}
+
 func TestCorruptRecordIsInspectableWithoutMalformedBytes(t *testing.T) {
 	root := t.TempDir()
 	sessions := filepath.Join(root, ".acs", "sessions")
 	id := "ses_abcd234567abcdef234567abcd"
 	records := filepath.Join(launch.SessionOperationsDirectory(sessions), "records")
-	if err := os.MkdirAll(records, 0o700); err != nil {
-		t.Fatal(err)
+	for _, directory := range []string{records, filepath.Join(launch.SessionOperationsDirectory(sessions), "capabilities"), filepath.Join(launch.SessionOperationsDirectory(sessions), "locks")} {
+		if err := os.MkdirAll(directory, 0o700); err != nil {
+			t.Fatal(err)
+		}
 	}
 	secret := "PRIVATE-MALFORMED-CONTENT"
 	if err := os.WriteFile(filepath.Join(records, id+".json"), []byte(`{"version":1,"secret":"`+secret+`"}`), 0o600); err != nil {

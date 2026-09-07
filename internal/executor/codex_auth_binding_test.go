@@ -1,6 +1,7 @@
 package executor
 
 import (
+	"bytes"
 	"context"
 	"encoding/hex"
 	"errors"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/alcimerio/ai-config-selector/internal/launch"
 	"github.com/alcimerio/ai-config-selector/internal/session"
+	"github.com/alcimerio/ai-config-selector/internal/sessionops"
 )
 
 func TestStatusProjectsOneIdentityAndDiscardsUnchangedCredential(t *testing.T) {
@@ -256,6 +258,11 @@ func TestStatusCleanupUncertaintyPreservesProjectionUntilSettlementAndRecovery(t
 	if _, err := os.Stat(runner.sessionRoot); err != nil {
 		t.Fatalf("pending cleanup removed projection: %v", err)
 	}
+	tracked, err := (sessionops.Store{SessionsDirectory: sessionsDirectory}).List("")
+	if err != nil || len(tracked.Sessions) != 1 {
+		t.Fatalf("tracked Session before direct recovery = (%+v, %v)", tracked, err)
+	}
+	publicID := tracked.Sessions[0].ID
 	if disposition, err := registry.Recover(context.Background(), "work"); !errors.Is(err, ErrIdentityBusy) || disposition != QuarantinedUncertain {
 		t.Fatalf("pending recovery = (%q, %v)", disposition, err)
 	}
@@ -280,7 +287,154 @@ func TestStatusCleanupUncertaintyPreservesProjectionUntilSettlementAndRecovery(t
 		t.Fatalf("settled recovery = (%q, %v)", disposition, err)
 	}
 	assertNoSessionDirectories(t, sessionsDirectory)
+	assertRemovedSessionOperations(t, sessionsDirectory, publicID)
 }
+
+func assertRemovedSessionOperations(t *testing.T, sessionsDirectory, id string) {
+	t.Helper()
+	store := sessionops.Store{SessionsDirectory: sessionsDirectory}
+	inspected, err := store.Inspect(id)
+	if err != nil || inspected.Session.State != sessionops.StateRemoved || inspected.Session.Recovery.Allowed {
+		t.Fatalf("post-recovery inspect = (%+v, %v)", inspected, err)
+	}
+	listed, err := store.List("")
+	if err != nil || len(listed.Sessions) != 1 || listed.Sessions[0].ID != id || listed.Sessions[0].State != sessionops.StateRemoved {
+		t.Fatalf("post-recovery list = (%+v, %v)", listed, err)
+	}
+	recovered, err := store.Recover(id)
+	if err != nil || recovered.Outcome != "removed" || recovered.State != sessionops.StateRemoved {
+		t.Fatalf("post-recovery recover = (%+v, %v)", recovered, err)
+	}
+}
+
+func TestGeneralSessionRecoveryFinalizesTypedMarkerBeforeDirectRetry(t *testing.T) {
+	auth := testChatGPTAuthJSON(t, "user", "workspace")
+	registry, _, _, sessionsDirectory := newBindingTestRegistry(t, "work", auth)
+	created, err := session.CreateTracked(sessionsDirectory, registry.workingDirectory, nil, "codex-auth")
+	if err != nil {
+		t.Fatal(err)
+	}
+	challenge := bytes.Repeat([]byte{0x4d}, launch.RecoveryProofChallengeSize)
+	if _, err := created.ArmOperation(challenge); err != nil {
+		t.Fatal(err)
+	}
+	if err := registryTestResources(registry).quarantine.Create(context.Background(), quarantineMarker{
+		Version: recordVersion, Name: "work", SessionID: filepath.Base(created.RootDirectory()),
+		Phase: quarantinePrepared, ProofChallenge: hex.EncodeToString(challenge),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := created.PreserveForRecovery(); err != nil {
+		t.Fatal(err)
+	}
+	store := sessionops.Store{
+		SessionsDirectory: sessionsDirectory,
+		AuthRecovery: func() (sessionops.AuthRecovery, error) {
+			return testSessionOpsAuthRecovery{registry: registry, name: "work"}, nil
+		},
+	}
+	result, err := store.Recover(created.PublicID())
+	if err != nil || result.Outcome != "removed" || result.State != sessionops.StateRemoved {
+		t.Fatalf("general recovery = (%+v, %v)", result, err)
+	}
+	if disposition, err := registry.Recover(context.Background(), "work"); err != nil || disposition != DiscardedProjection {
+		t.Fatalf("direct retry after general recovery = (%q, %v)", disposition, err)
+	}
+	assertRemovedSessionOperations(t, sessionsDirectory, created.PublicID())
+}
+
+func TestMarkerDeleteFailureRetainsTypedAndGeneralRetryEvidence(t *testing.T) {
+	auth := testChatGPTAuthJSON(t, "user", "workspace")
+	registry, _, _, sessionsDirectory := newBindingTestRegistry(t, "work", auth)
+	cleanupDone := make(chan struct{})
+	registry.status = &pendingCleanupStatusRunner{cleanupDone: cleanupDone}
+	if status, err := registry.Status(context.Background(), "work"); !errors.Is(err, ErrBindingQuarantined) || status.Disposition != QuarantinedUncertain {
+		t.Fatalf("status = (%+v, %v)", status, err)
+	}
+	tracked, err := (sessionops.Store{SessionsDirectory: sessionsDirectory}).List("")
+	if err != nil || len(tracked.Sessions) != 1 {
+		t.Fatalf("tracked Session = (%+v, %v)", tracked, err)
+	}
+	id := tracked.Sessions[0].ID
+	close(cleanupDone)
+	deadline := time.Now().Add(time.Second)
+	for {
+		marker, exists, inspectErr := registryTestResources(registry).quarantine.Inspect(context.Background(), "work")
+		if inspectErr == nil && exists && marker.Phase == quarantineRecoverable {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("marker did not settle = (%+v, %v, %v)", marker, exists, inspectErr)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	underlying := registryTestResources(registry).quarantine
+	registryTestResources(registry).quarantine = deleteFailureQuarantine{bindingQuarantine: underlying}
+	if disposition, err := registry.Recover(context.Background(), "work"); !errors.Is(err, ErrBindingQuarantined) || disposition != QuarantinedUncertain {
+		t.Fatalf("direct recovery with marker delete failure = (%q, %v)", disposition, err)
+	}
+	capabilityPath := filepath.Join(launch.SessionOperationsDirectory(sessionsDirectory), "capabilities", id+".json")
+	if _, err := os.Stat(capabilityPath); err != nil {
+		t.Fatalf("general retry capability was not retained: %v", err)
+	}
+	if _, exists, err := underlying.Inspect(context.Background(), "work"); err != nil || !exists {
+		t.Fatalf("typed retry marker = (%v, %v)", exists, err)
+	}
+	store := sessionops.Store{
+		SessionsDirectory: sessionsDirectory,
+		AuthRecovery: func() (sessionops.AuthRecovery, error) {
+			return testSessionOpsAuthRecovery{registry: registry, name: "work"}, nil
+		},
+	}
+	if result, err := store.Recover(id); err == nil || result.Outcome != "removal_failed" {
+		t.Fatalf("general recovery ignored marker deletion failure = (%+v, %v)", result, err)
+	}
+	if _, err := os.Stat(capabilityPath); err != nil {
+		t.Fatalf("failed general retry discarded capability: %v", err)
+	}
+	registryTestResources(registry).quarantine = underlying
+	if result, err := store.Recover(id); err != nil || result.Outcome != "removed" {
+		t.Fatalf("general retry = (%+v, %v)", result, err)
+	}
+	if _, err := os.Stat(capabilityPath); !os.IsNotExist(err) {
+		t.Fatalf("finalized retry capability remains: %v", err)
+	}
+	if disposition, err := registry.Recover(context.Background(), "work"); err != nil || disposition != DiscardedProjection {
+		t.Fatalf("direct retry after finalization = (%q, %v)", disposition, err)
+	}
+}
+
+type testSessionOpsAuthRecovery struct {
+	registry *CodexAuthService
+	name     string
+}
+
+func (recovery testSessionOpsAuthRecovery) AcquireBySession(ctx context.Context, rootName string) (sessionops.AuthRecoveryBinding, bool, error) {
+	binding, err := recovery.registry.resources.AcquireRecovery(ctx, recovery.name)
+	if err != nil || binding == nil {
+		return nil, false, err
+	}
+	if binding.SessionID() != rootName {
+		_ = binding.Release()
+		return nil, false, nil
+	}
+	return testSessionOpsAuthBinding{binding: binding}, true, nil
+}
+
+type testSessionOpsAuthBinding struct{ binding recoveryResourceBinding }
+
+func (binding testSessionOpsAuthBinding) CleanupChallenge() string {
+	return binding.binding.CleanupChallenge()
+}
+func (binding testSessionOpsAuthBinding) Prepared() bool { return binding.binding.Prepared() }
+func (binding testSessionOpsAuthBinding) FinalizeRecovery(ctx context.Context, root string) error {
+	_, err := binding.binding.FinalizeRecovery(ctx, root)
+	return err
+}
+func (binding testSessionOpsAuthBinding) DeleteMarkerAfterProjectionRemoval(ctx context.Context) error {
+	return binding.binding.DeleteMarkerAfterProjectionRemoval(ctx)
+}
+func (binding testSessionOpsAuthBinding) Release() error { return binding.binding.Release() }
 
 func TestAsyncCleanupCannotTransitionANewerMarkerGeneration(t *testing.T) {
 	auth := testChatGPTAuthJSON(t, "user", "workspace")
@@ -821,9 +975,16 @@ func (runner *pendingCleanupStatusRunner) Prepare(context.Context) (statusPrepar
 func (runner *pendingCleanupStatusRunner) Run(
 	ctx context.Context,
 	created *session.Session,
-	_, _ string,
+	_, challenge string,
 	binding loginResourceBinding,
 ) statusRunResult {
+	decoded, err := hex.DecodeString(challenge)
+	if err != nil {
+		return statusRunResult{err: ErrStatusFailed, cleanupProven: true}
+	}
+	if _, err := created.ArmOperation(decoded); err != nil {
+		return statusRunResult{err: ErrStatusFailed, cleanupProven: true}
+	}
 	if binding == nil || binding.MarkCleanupPending(ctx) != nil {
 		return statusRunResult{err: ErrStatusFailed, cleanupProven: true}
 	}

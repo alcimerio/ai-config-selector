@@ -368,6 +368,24 @@ See [interactive Codex](docs/interactive-codex.md) and
 [named Codex authentication](docs/codex-auth.md) for the launch, storage,
 isolation, failure, and cleanup contracts.
 
+## Inspect and recover durable Sessions
+
+Every contained target publishes a sanitized durable Session ID and a private,
+generation-bound native cleanup capability. Passive inspection does not start a
+target or access credentials:
+
+```sh
+acs session list
+acs session inspect SESSION_ID --json
+acs session recover SESSION_ID
+```
+
+Recovery never kills or force-deletes a process. It requires an inactive lease,
+the exact current private generation, and a matching native supervisor proof;
+Codex Sessions also retain their typed identity and marker checks. See the
+[durable Session operations contract](docs/session-operations.md) for states,
+bounded JSON, retention, privacy, and failure behavior.
+
 ## Inspect the sandbox directly
 
 Open the fixed system shell inside the selected Profile's isolated Session:

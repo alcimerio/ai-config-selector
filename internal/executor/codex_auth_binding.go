@@ -11,6 +11,7 @@ import (
 	"github.com/alcimerio/ai-config-selector/internal/codexauthresource"
 	"github.com/alcimerio/ai-config-selector/internal/launch"
 	"github.com/alcimerio/ai-config-selector/internal/session"
+	"github.com/alcimerio/ai-config-selector/internal/sessionops"
 )
 
 // Status acquires one durable identity before executable preparation, projects
@@ -186,48 +187,47 @@ func (registry *CodexAuthService) Recover(ctx context.Context, value string) (Bi
 		return DiscardedProjection, nil
 	}
 	defer binding.Release()
-	recoverSession := launch.RecoverSession
-	if binding.Prepared() {
-		recoverSession = launch.RecoverPreparedSession
-	}
-	recovered, exists, err := recoverSession(registry.sessionsDirectory, binding.SessionID())
-	if errors.Is(err, launch.ErrSessionStillActive) {
-		return QuarantinedUncertain, fmt.Errorf("%w: %q", ErrIdentityBusy, value)
-	}
-	if err != nil {
-		return QuarantinedUncertain, ErrBindingQuarantined
-	}
-	if !exists {
-		if err := binding.DeleteMarkerAfterProjectionRemoval(ctx); err != nil {
-			return QuarantinedUncertain, ErrBindingQuarantined
+	disposition := codexauthresource.DiscardedProjection
+	remove := func() (bool, error) {
+		recoverSession := launch.RecoverSession
+		if binding.Prepared() {
+			recoverSession = launch.RecoverPreparedSession
 		}
-		return DiscardedProjection, nil
-	}
-	defer recovered.Preserve()
-	if binding.Prepared() {
+		recovered, exists, err := recoverSession(registry.sessionsDirectory, binding.SessionID())
+		if errors.Is(err, launch.ErrSessionStillActive) {
+			return false, fmt.Errorf("%w: %q", ErrIdentityBusy, value)
+		}
+		if err != nil {
+			return false, ErrBindingQuarantined
+		}
+		if !exists {
+			return false, nil
+		}
+		defer recovered.Preserve()
+		if binding.CleanupPending() {
+			challenge, decodeErr := hex.DecodeString(binding.CleanupChallenge())
+			proven, proofErr := registry.verifyCleanup(recovered.RootDir, challenge)
+			if decodeErr != nil || proofErr != nil || !proven {
+				return false, fmt.Errorf("%w: %q", ErrIdentityBusy, value)
+			}
+		}
+		if !binding.Prepared() {
+			finalized, err := binding.FinalizeRecovery(ctx, recovered.RootDir)
+			if err != nil {
+				return false, ErrBindingQuarantined
+			}
+			disposition = finalized
+		}
 		if err := recovered.Remove(); err != nil {
-			return QuarantinedUncertain, ErrBindingQuarantined
+			return false, ErrBindingQuarantined
 		}
-		if err := binding.DeleteMarkerAfterProjectionRemoval(ctx); err != nil {
-			return QuarantinedUncertain, ErrBindingQuarantined
+		return true, nil
+	}
+	finalize := func() error { return binding.DeleteMarkerAfterProjectionRemoval(ctx) }
+	if err := (sessionops.Store{SessionsDirectory: registry.sessionsDirectory}).FinalizeRemoval(binding.SessionID(), binding.CleanupChallenge(), remove, finalize); err != nil {
+		if errors.Is(err, ErrIdentityBusy) {
+			return QuarantinedUncertain, err
 		}
-		return DiscardedProjection, nil
-	}
-	if binding.CleanupPending() {
-		challenge, decodeErr := hex.DecodeString(binding.CleanupChallenge())
-		proven, proofErr := registry.verifyCleanup(recovered.RootDir, challenge)
-		if decodeErr != nil || proofErr != nil || !proven {
-			return QuarantinedUncertain, fmt.Errorf("%w: %q", ErrIdentityBusy, value)
-		}
-	}
-	disposition, err := binding.FinalizeRecovery(ctx, recovered.RootDir)
-	if err != nil {
-		return QuarantinedUncertain, ErrBindingQuarantined
-	}
-	if err := recovered.Remove(); err != nil {
-		return QuarantinedUncertain, ErrBindingQuarantined
-	}
-	if err := binding.DeleteMarkerAfterProjectionRemoval(ctx); err != nil {
 		return QuarantinedUncertain, ErrBindingQuarantined
 	}
 	return BindingDisposition(disposition), nil

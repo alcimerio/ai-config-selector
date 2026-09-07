@@ -427,9 +427,13 @@ directory by name, clear quarantine manually, or use logout as a recovery bypass
 Logout refuses quarantined names. Generic abandoned-Session cleanup is not a
 substitute for the owning authentication recovery proof.
 
-For a retained Devin or sandbox-shell Session, allow the original owner to finish
-its settlement/cleanup. There is no public `session recover` command or supported
-manual deletion recipe. Keep unresolved evidence when settlement cannot be proven.
+For any tracked contained Session, inspect the sanitized durable state with
+`acs session list` or `acs session inspect ID`. After allowing the original
+owner and descendants to settle, `acs session recover ID` can attempt the same
+proof-gated cleanup without killing a process or accepting a raw path. Keep
+unresolved evidence when the exact current proof cannot be established; there
+is still no supported manual deletion recipe. See
+[Durable Session inspection and recovery](session-operations.md).
 
 ACS never imports, changes or falls back to global `~/.codex/auth.json` or the
 global Codex OS-store namespace. Do not copy global authentication into ACS or
