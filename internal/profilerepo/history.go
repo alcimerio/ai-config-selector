@@ -10,6 +10,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -99,6 +100,8 @@ type historyTxn struct {
 	SnapshotDigest             string
 	Adoption                   *historyRecord `json:"Adoption,omitempty"`
 	AdoptionDigest             string         `json:"AdoptionDigest,omitempty"`
+	Prune                      []string       `json:"Prune,omitempty"`
+	PruneDigest                string         `json:"PruneDigest,omitempty"`
 }
 
 type historyNameBinding struct {
@@ -542,6 +545,23 @@ func (d *directory) historyPrepare(c change, p *plan) (result error) {
 	}
 	txn.Record = historyRecord{Version: 1, LineageID: lineage, EventID: event, Sequence: seq, ParentDigest: parent, Operation: c.historyOperation(), CreatedAt: time.Now().UTC().Format(time.RFC3339Nano), PreName: preName, PostName: postName, PreRevision: revisionText(preName, p.Before != nil, before), PostRevision: revisionText(postName, c.op != "delete", c.data), SnapshotName: snapshotName, SnapshotRevision: revisionText(snapshotName, true, snapshot), SnapshotDigest: digestHex(snapshot), Tombstone: c.op == "delete", SourceLineage: c.sourceLineage}
 	txn.SnapshotDigest = txn.Record.SnapshotDigest
+	retained := historyLineage{id: lineage, pins: source.pins}
+	if source.id == lineage {
+		retained.records = append(retained.records, source.records...)
+	}
+	if txn.Adoption != nil && txn.Adoption.LineageID == lineage {
+		retained.records = append(retained.records, *txn.Adoption)
+	}
+	retained.records = append(retained.records, txn.Record)
+	txn.Prune = pruneCandidates(retained, DefaultHistoryKeep)
+	if len(txn.Prune) > 0 {
+		b, _ := json.Marshal(struct {
+			Lineage string
+			Keep    int
+			IDs     []string
+		}{lineage, DefaultHistoryKeep, txn.Prune})
+		txn.PruneDigest = "hg_" + digestHex(b)
+	}
 	encoded, _ := json.Marshal(txn)
 	p.HistoryDigest = digestHex(encoded)
 	logical, e := historyLogicalBytes(root, lineage)
@@ -549,12 +569,15 @@ func (d *directory) historyPrepare(c change, p *plan) (result error) {
 		return e
 	}
 	extra := int64(len(snapshot))
-	count := len(source.records) + 1
-	if txn.Adoption != nil {
+	count := len(retained.records) - len(txn.Prune)
+	if txn.Adoption != nil && txn.Adoption.LineageID == lineage {
 		extra += int64(len(before))
-		count++
 	}
-	if count > MaxHistoryEvents || logical+extra > MaxHistoryBytes {
+	prunedBytes, e := historyCandidateBytes(root, lineage, txn.Prune)
+	if e != nil {
+		return e
+	}
+	if count > MaxHistoryEvents || logical+extra-prunedBytes > MaxHistoryBytes {
 		return ErrQuota
 	}
 	defer func() {
@@ -562,18 +585,18 @@ func (d *directory) historyPrepare(c change, p *plan) (result error) {
 			result = errors.Join(result, d.historyAbort(p.ID))
 		}
 	}()
-	if err = historyWriteNew(root, "txn_"+p.ID+".snapshot", snapshot, MaxDocumentBytes); err != nil {
+	if err = d.r.step("history.snapshot.prepare", func() error { return historyWriteNew(root, "txn_"+p.ID+".snapshot", snapshot, MaxDocumentBytes) }); err != nil {
 		return err
 	}
 	if txn.Adoption != nil {
-		if err = historyWriteNew(root, "txn_"+p.ID+".adoption", before, MaxDocumentBytes); err != nil {
+		if err = d.r.step("history.adoption.prepare", func() error { return historyWriteNew(root, "txn_"+p.ID+".adoption", before, MaxDocumentBytes) }); err != nil {
 			return err
 		}
 	}
-	if err = historyWriteNew(root, "txn_"+p.ID+".json", encoded, maxMetadataBytes); err != nil {
+	if err = d.r.step("history.transaction.prepare", func() error { return historyWriteNew(root, "txn_"+p.ID+".json", encoded, maxMetadataBytes) }); err != nil {
 		return err
 	}
-	return root.Sync()
+	return d.r.step("history.transaction.directory-sync", root.Sync)
 }
 
 func historyLogicalBytes(root *os.File, lineage string) (int64, error) {
@@ -604,6 +627,29 @@ func historyLogicalBytes(root *os.File, lineage string) (int64, error) {
 		n += st.Size
 	}
 	return n, nil
+}
+
+func historyCandidateBytes(root *os.File, lineage string, ids []string) (int64, error) {
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	dir, e := openLineage(root, lineage, false)
+	if e != nil {
+		return 0, e
+	}
+	defer dir.Close()
+	var total int64
+	for _, id := range ids {
+		var st unix.Stat_t
+		if e = unix.Fstatat(int(dir.Fd()), id+".snapshot", &st, unix.AT_SYMLINK_NOFOLLOW); e != nil {
+			return 0, e
+		}
+		if !privateRegular(&st, 1) || st.Size < 0 || st.Size > MaxDocumentBytes {
+			return 0, ErrUnsafe
+		}
+		total += st.Size
+	}
+	return total, nil
 }
 
 func (c change) historyOperation() string {
@@ -704,6 +750,23 @@ func validateHistoryTransaction(p *plan, txn historyTxn, snapshot []byte) error 
 			return ErrUnsafe
 		}
 	}
+	for _, id := range txn.Prune {
+		if !eventPattern.MatchString(id) {
+			return ErrUnsafe
+		}
+	}
+	if len(txn.Prune) > 0 {
+		b, _ := json.Marshal(struct {
+			Lineage string
+			Keep    int
+			IDs     []string
+		}{txn.LineageID, DefaultHistoryKeep, txn.Prune})
+		if txn.PruneDigest != "hg_"+digestHex(b) {
+			return ErrUnsafe
+		}
+	} else if txn.PruneDigest != "" {
+		return ErrUnsafe
+	}
 	return nil
 }
 
@@ -802,9 +865,33 @@ func (d *directory) historyCommit(p *plan) error {
 			return e
 		}
 	}
+	if len(txn.Prune) > 0 {
+		if e = commitBoundPrune(dir, txn.PruneDigest, txn.Prune); e != nil {
+			return e
+		}
+	}
 	// Keep the transaction witnesses until the repository complete receipt is
 	// durable. A retry can then validate the same snapshot/event pair.
 	return nil
+}
+
+func commitBoundPrune(dir *os.File, digest string, ids []string) error {
+	if pending, e := readPruneJournal(dir); e == nil {
+		if pending.Digest != digest || !slices.Equal(pending.Events, ids) {
+			return ErrUnsafe
+		}
+		return completePrune(dir, ids)
+	} else if !errors.Is(e, unix.ENOENT) {
+		return e
+	}
+	encoded, _ := json.Marshal(pruneJournal{1, digest, ids})
+	if e := historyWriteNew(dir, "prune.json", encoded, maxMetadataBytes); e != nil {
+		return e
+	}
+	if e := dir.Sync(); e != nil {
+		return e
+	}
+	return completePrune(dir, ids)
 }
 
 func publishHistoryRecord(d *directory, dir *os.File, record historyRecord, snapshot []byte) error {
@@ -847,6 +934,81 @@ func (d *directory) historyAbort(planID string) error {
 		}
 	}
 	return root.Sync()
+}
+
+func (d *directory) historyAbortOrphans(keep string) error {
+	root, err := openHistoryRoot(d, false)
+	if errors.Is(err, unix.ENOENT) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+	fd, err := unix.Openat(int(root.Fd()), ".", unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return err
+	}
+	scan := os.NewFile(uintptr(fd), "history transaction scan")
+	names, e := scan.Readdirnames(maxEntries + 1)
+	closeErr := scan.Close()
+	if e != nil && !errors.Is(e, io.EOF) {
+		return errors.Join(e, closeErr)
+	}
+	if closeErr != nil {
+		return closeErr
+	}
+	if len(names) > maxEntries {
+		return ErrUnsafe
+	}
+	targets := []string{}
+	for _, name := range names {
+		if !strings.HasPrefix(name, "txn_") {
+			continue
+		}
+		suffix := ""
+		for _, candidate := range []string{".json", ".snapshot", ".adoption"} {
+			if strings.HasSuffix(name, candidate) {
+				suffix = candidate
+				break
+			}
+		}
+		id := strings.TrimSuffix(strings.TrimPrefix(name, "txn_"), suffix)
+		if suffix == "" || len(id) != 32 {
+			return ErrUnsafe
+		}
+		if _, e := hex.DecodeString(id); e != nil || strings.ToLower(id) != id {
+			return ErrUnsafe
+		}
+		if id == keep {
+			continue
+		}
+		if _, e = historyRead(root, name, func() int {
+			if suffix == ".json" {
+				return maxMetadataBytes
+			}
+			return MaxDocumentBytes
+		}()); e != nil {
+			return e
+		}
+		targets = append(targets, name)
+	}
+	sort.Strings(targets)
+	for _, name := range targets {
+		if e = d.r.step("history.orphan.remove", func() error {
+			e := unix.Unlinkat(int(root.Fd()), name, 0)
+			if errors.Is(e, unix.ENOENT) {
+				return nil
+			}
+			return e
+		}); e != nil {
+			return e
+		}
+		if e = d.r.step("history.orphan.directory-sync", root.Sync); e != nil {
+			return e
+		}
+	}
+	return nil
 }
 
 func (r *Repository) HistorySnapshot(ctx context.Context, selector HistorySelector, event string) (historyRecord, []byte, error) {

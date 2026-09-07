@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -341,4 +342,139 @@ func TestCloneRecordsExplicitSourceLineage(t *testing.T) {
 	if len(lineage.records) != 1 || lineage.records[0].SourceLineage != sourceHistory.LineageID {
 		t.Fatalf("records=%+v", lineage.records)
 	}
+}
+
+func TestRenameDeleteAndNameReuseKeepDistinctLineages(t *testing.T) {
+	r := New(t.TempDir())
+	ctx := context.Background()
+	a, _ := r.Read(ctx, "alpha")
+	if _, e := r.Apply(ctx, CreateRequest{"alpha", a.Revision, []byte("alpha")}); e != nil {
+		t.Fatal(e)
+	}
+	alphaHistory, _ := r.History(ctx, HistorySelector{Name: "alpha"}, 100)
+	a, _ = r.Read(ctx, "alpha")
+	b, _ := r.Read(ctx, "beta")
+	if _, e := r.Apply(ctx, RenameRequest{"alpha", "beta", a.Revision, b.Revision, []byte("beta")}); e != nil {
+		t.Fatal(e)
+	}
+	if h, e := r.History(ctx, HistorySelector{Name: "alpha"}, 100); e != nil || len(h.Events) != 0 {
+		t.Fatalf("old name history=%+v err=%v", h, e)
+	}
+	renamed, e := r.History(ctx, HistorySelector{Name: "beta"}, 100)
+	if e != nil || renamed.LineageID != alphaHistory.LineageID {
+		t.Fatalf("renamed=%+v err=%v", renamed, e)
+	}
+	b, _ = r.Read(ctx, "beta")
+	if _, e = r.Apply(ctx, DeleteRequest{"beta", b.Revision}); e != nil {
+		t.Fatal(e)
+	}
+	deleted, e := r.History(ctx, HistorySelector{Lineage: renamed.LineageID}, 100)
+	if e != nil || deleted.Events[0].Profile.State != "deleted" {
+		t.Fatalf("deleted=%+v err=%v", deleted, e)
+	}
+	b, _ = r.Read(ctx, "beta")
+	if _, e = r.Apply(ctx, CreateRequest{"beta", b.Revision, []byte("reused")}); e != nil {
+		t.Fatal(e)
+	}
+	reused, e := r.History(ctx, HistorySelector{Name: "beta"}, 100)
+	if e != nil || reused.LineageID == deleted.LineageID {
+		t.Fatalf("reused=%+v old=%s err=%v", reused, deleted.LineageID, e)
+	}
+}
+
+func TestAutomaticRetentionKeepsBoundedOrdinaryHistory(t *testing.T) {
+	r := New(t.TempDir())
+	ctx := context.Background()
+	for i := 0; i < 105; i++ {
+		s, e := r.Read(ctx, "alpha")
+		if e != nil {
+			t.Fatal(e)
+		}
+		body := []byte(fmt.Sprintf("revision-%03d", i))
+		var request Request = ReplaceRequest{"alpha", s.Revision, body}
+		if !s.Exists {
+			request = CreateRequest{"alpha", s.Revision, body}
+		}
+		if out, e := r.Apply(ctx, request); e != nil || out.State != Committed {
+			t.Fatalf("mutation %d: %+v %v", i, out, e)
+		}
+	}
+	h, e := r.History(ctx, HistorySelector{Name: "alpha"}, 100)
+	if e != nil || len(h.Events) != 100 {
+		t.Fatalf("public history len=%d err=%v", len(h.Events), e)
+	}
+	d, e := r.open(false)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer d.close()
+	root, e := openHistoryRoot(d, false)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer root.Close()
+	lineage, e := resolveLineage(root, HistorySelector{Name: "alpha"})
+	if e != nil {
+		t.Fatal(e)
+	}
+	if len(lineage.records) > 101 {
+		t.Fatalf("retained %d records", len(lineage.records))
+	}
+}
+
+func assertNoHistoryTransactions(t *testing.T, r *Repository) {
+	t.Helper()
+	entries, e := os.ReadDir(filepath.Join(r.acsHome, "profiles", "history"))
+	if e != nil {
+		t.Fatal(e)
+	}
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), "txn_") {
+			t.Fatalf("stranded history witness %q", entry.Name())
+		}
+	}
+}
+
+func TestPreDecisionHistoryWitnessRecoveryRemovesEveryOrphan(t *testing.T) {
+	for _, process := range []bool{false, true} {
+		t.Run(fmt.Sprintf("process-%v", process), func(t *testing.T) {
+			r := seeded(t)
+			if process {
+				runKilled(t, r, "apply", "create", "pending.create.before")
+			} else {
+				failure := errors.New("pending failed")
+				r.hook = func(point string) error {
+					if point == "pending.create.before" {
+						return failure
+					}
+					return nil
+				}
+				out, e := r.Apply(context.Background(), operation("create"))
+				if !errors.Is(e, failure) || out.State != NotCommitted {
+					t.Fatalf("out=%+v err=%v", out, e)
+				}
+				r.hook = nil
+			}
+			for i := 0; i < 2; i++ {
+				out, e := r.Recover(context.Background())
+				if e != nil || out.RecoveryRequired {
+					t.Fatalf("recover %d: %+v %v", i, out, e)
+				}
+			}
+			assertNoHistoryTransactions(t, r)
+		})
+	}
+}
+
+func TestInterruptedOrphanCleanupIsRepeatable(t *testing.T) {
+	r := seeded(t)
+	runKilled(t, r, "apply", "create", "pending.create.before")
+	runKilled(t, r, "recover", "create", "history.orphan.remove.after")
+	for i := 0; i < 2; i++ {
+		out, e := r.Recover(context.Background())
+		if e != nil || out.RecoveryRequired {
+			t.Fatalf("recover %d: %+v %v", i, out, e)
+		}
+	}
+	assertNoHistoryTransactions(t, r)
 }

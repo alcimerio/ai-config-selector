@@ -193,6 +193,9 @@ func (d *directory) recover(ctx context.Context) (out Outcome, err error) {
 		return out, err
 	}
 	if len(artifacts) == 0 {
+		if err = d.historyAbortOrphans(""); err != nil {
+			return out, err
+		}
 		if err = d.historyRecoverMaintenance(ctx); err != nil {
 			return out, err
 		}
@@ -509,6 +512,9 @@ func (d *directory) cleanup(p *plan, artifacts map[string]*object, committed boo
 		if err := d.historyAbort(p.ID); err != nil {
 			return err
 		}
+	}
+	if err := d.historyAbortOrphans(""); err != nil {
+		return err
 	}
 	return nil
 }
