@@ -110,6 +110,11 @@ func isNilProcess(process launch.Process) bool {
 }
 
 func (e *Executor) prepareRetainedProcess(ctx context.Context, created *session.Session, request launch.ProcessRequest) (launch.Process, error) {
+	challenge, err := created.ConsumeOrArmOperation(request.RecoveryProofChallenge)
+	if err != nil {
+		return nil, err
+	}
+	request.RecoveryProofChallenge = challenge
 	process, err := e.sandbox.Prepare(ctx, request)
 	if err != nil {
 		return nil, err
@@ -210,7 +215,11 @@ func (e *Executor) runAttached(ctx context.Context, recipe attachedRecipe) (resu
 		Executable: executable, RuntimeAuthority: recipe.runtimeAuthority}); err != nil {
 		return err, false
 	}
-	created, err := session.Create(recipe.sessionsDirectory, recipe.workingDirectory, recipe.materializer)
+	target := "shell"
+	if recipe.command != nil {
+		target = "command"
+	}
+	created, err := session.CreateTracked(recipe.sessionsDirectory, recipe.workingDirectory, recipe.materializer, target)
 	if err != nil {
 		return err, false
 	}
@@ -301,7 +310,7 @@ func (e *Executor) RunDevin(ctx context.Context, request DevinRequest) (exitCode
 	if err := e.sandbox.Check(preflightContext, launch.SandboxCheck{Workspace: request.WorkingDirectory, WorkspaceAccess: request.WorkspaceAccess, SessionsDirectory: request.SessionsDirectory, Executable: request.Executable, RuntimeInputs: request.RuntimeInputs, RuntimeAuthority: request.RuntimeAuthority}); err != nil {
 		return 1, err
 	}
-	created, err := session.Create(request.SessionsDirectory, request.WorkingDirectory, request.Materializer)
+	created, err := session.CreateTracked(request.SessionsDirectory, request.WorkingDirectory, request.Materializer, "devin")
 	if err != nil {
 		return 1, err
 	}
@@ -371,7 +380,7 @@ func (e *Executor) VerifyDevin(ctx context.Context, request DevinRequest) (resul
 	if err := e.sandbox.Check(ctx, launch.SandboxCheck{Workspace: request.WorkingDirectory, WorkspaceAccess: request.WorkspaceAccess, SessionsDirectory: request.SessionsDirectory, Executable: request.Executable, RuntimeInputs: request.RuntimeInputs, RuntimeAuthority: request.RuntimeAuthority}); err != nil {
 		return err
 	}
-	created, err := session.Create(request.SessionsDirectory, request.WorkingDirectory, request.Materializer)
+	created, err := session.CreateTracked(request.SessionsDirectory, request.WorkingDirectory, request.Materializer, "devin")
 	if err != nil {
 		return err
 	}

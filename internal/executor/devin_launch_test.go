@@ -19,6 +19,7 @@ import (
 	"github.com/alcimerio/ai-config-selector/internal/devinruntime"
 	"github.com/alcimerio/ai-config-selector/internal/launch"
 	"github.com/alcimerio/ai-config-selector/internal/session"
+	"github.com/alcimerio/ai-config-selector/internal/sessionops"
 	"github.com/alcimerio/ai-config-selector/internal/skills"
 )
 
@@ -357,6 +358,39 @@ func TestLaunchRetainsSessionWhileStartupCleanupIsQuarantined(t *testing.T) {
 			t.Fatal("Session remained after startup quarantine completed")
 		}
 		time.Sleep(time.Millisecond)
+	}
+	waitForDurableSessionCompletion(t, fixture.sessionsDirectory)
+}
+
+// waitForDurableSessionCompletion observes the lifecycle's durable terminal
+// state instead of inferring completion from root or lease disappearance. The
+// removal observer publishes after physical cleanup and may still be running
+// in the retained process's asynchronous release goroutine.
+func waitForDurableSessionCompletion(t *testing.T, sessionsDirectory string) {
+	t.Helper()
+	timeout := time.NewTimer(2 * time.Second)
+	defer timeout.Stop()
+	changed := time.NewTicker(time.Millisecond)
+	defer changed.Stop()
+	for {
+		listed, err := (sessionops.Store{SessionsDirectory: sessionsDirectory}).List("")
+		if err == nil && len(listed.Sessions) > 0 {
+			complete := true
+			for _, item := range listed.Sessions {
+				if item.State != sessionops.StateRemoved {
+					complete = false
+					break
+				}
+			}
+			if complete {
+				return
+			}
+		}
+		select {
+		case <-timeout.C:
+			t.Fatalf("Session cleanup did not publish durable completion: %+v, %v", listed, err)
+		case <-changed.C:
+		}
 	}
 }
 

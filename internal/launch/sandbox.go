@@ -558,7 +558,8 @@ func validateSandboxCheck(request SandboxCheck) (validatedSandboxCheck, error) {
 	if err != nil {
 		return validatedSandboxCheck{}, sandboxError(SandboxUnsafePath, err)
 	}
-	if workspace == string(filepath.Separator) || workspace == sessionsDirectory || pathWithin(workspace, sessionsDirectory) {
+	privateSessionOperations := SessionOperationsDirectory(sessionsDirectory)
+	if workspace == string(filepath.Separator) || workspace == sessionsDirectory || pathWithin(workspace, sessionsDirectory) || pathsOverlap(workspace, privateSessionOperations) {
 		return validatedSandboxCheck{}, sandboxError(SandboxUnsafePath, nil)
 	}
 	executable, err := resolveExecutable(request.Executable)
@@ -570,7 +571,7 @@ func validateSandboxCheck(request SandboxCheck) (validatedSandboxCheck, error) {
 		return validatedSandboxCheck{}, sandboxError(SandboxUnsafePath, err)
 	}
 	for _, input := range runtimeInputs {
-		if broadRuntimeInput(input, workspace, sessionsDirectory) {
+		if broadRuntimeInput(input, workspace, sessionsDirectory) || pathsOverlap(input, privateSessionOperations) {
 			return validatedSandboxCheck{}, sandboxError(SandboxUnsafePath, nil)
 		}
 	}
@@ -579,7 +580,7 @@ func validateSandboxCheck(request SandboxCheck) (validatedSandboxCheck, error) {
 		return validatedSandboxCheck{}, sandboxError(SandboxUnsafePath, err)
 	}
 	for _, path := range append(append([]string(nil), runtimeProbePaths...), runtimeProbeTraversalPaths...) {
-		if broadRuntimeInput(path, workspace, sessionsDirectory) {
+		if broadRuntimeInput(path, workspace, sessionsDirectory) || pathsOverlap(path, privateSessionOperations) {
 			return validatedSandboxCheck{}, sandboxError(SandboxUnsafePath, nil)
 		}
 	}
@@ -596,6 +597,17 @@ func broadRuntimeInput(input, workspace, sessionsDirectory string) bool {
 		return true
 	}
 	return pathWithin(input, workspace) || pathWithin(input, sessionsDirectory)
+}
+
+func pathsOverlap(first, second string) bool {
+	return first == second || pathWithin(first, second) || pathWithin(second, first)
+}
+
+// SessionOperationsDirectory is outside every Session root and must also stay
+// outside every target workspace/runtime grant. It is shared with sessionops so
+// validation and persistence cannot drift to different private locations.
+func SessionOperationsDirectory(sessionsDirectory string) string {
+	return filepath.Join(filepath.Dir(filepath.Clean(sessionsDirectory)), "session-operations-v1")
 }
 
 type validatedProcessRequest struct {

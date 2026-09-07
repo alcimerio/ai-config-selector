@@ -17,6 +17,7 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -137,8 +138,116 @@ func TestPromotedArtifactNativeContainmentContract(t *testing.T) {
 	t.Run("v3 common material and workspace modes are enforced", assertPromotedArtifactV3WorkspaceModes)
 	t.Run("generic literal command uses candidate containment", assertPromotedArtifactGenericRun)
 	t.Run("filesystem environment descriptors sockets IP preflight and descendants", assertPromotedArtifactNativeContainment)
+	t.Run("Devin preflight and target generations are fresh while retained", assertPromotedArtifactDevinGenerations)
 	t.Run("preflight failure is categorized without target details", assertPromotedArtifactNativePreflightFailureIsSafe)
 	t.Run("missing backend OR invalid policy cannot start a marker", assertPromotedArtifactMissingBackendFailsClosed)
+}
+
+func assertPromotedArtifactDevinGenerations(t *testing.T) {
+	binary := promotedBinary(t)
+	home, path := prepareRuntimeHome(t)
+	root := realTemporaryDirectory(t)
+	workspace, tools := filepath.Join(root, "workspace"), filepath.Join(root, "tools")
+	if err := os.MkdirAll(workspace, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(tools, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeVersionThreeProfile(t, home, "generation", "read-write")
+	installPromotedArtifactFakeDevin(t, tools)
+	writeFakeDevinConfiguration(t, workspace, fakeDevinConfiguration{Mode: "session-generations"})
+	before := promotedSessionSnapshot(t, binary, home, path)
+	command := exec.Command(binary, "devin", "--profile", "generation")
+	command.Dir = workspace
+	command.Env = nativeCandidateEnvironment(home, tools+string(os.PathListSeparator)+path, nil)
+	var output synchronizedNativeCapture
+	command.Stdout, command.Stderr = &output, &output
+	if err := command.Start(); err != nil {
+		t.Fatal(err)
+	}
+	done := startNativeCommand(command)
+	t.Cleanup(func() {
+		for _, phase := range []string{"skills", "authentication", "interactive"} {
+			_ = writeFakeDevinMarker(filepath.Join(workspace, ".acs-phase-"+phase+"-release"))
+		}
+		settleNativeCommand(command, done)
+	})
+	var previous struct {
+		ID, RootName, Challenge string
+		Generation              uint64
+	}
+	for index, phase := range []string{"skills", "authentication", "interactive"} {
+		ready := filepath.Join(workspace, ".acs-phase-"+phase+"-ready")
+		if !waitForFakeDevinMarker(ready, 10*time.Second) {
+			t.Fatalf("%s phase did not become ready", phase)
+		}
+		cap := readLiveGenerationCapability(t, home)
+		phaseHome, err := os.ReadFile(ready)
+		wantHome := filepath.Join(home, ".acs", "sessions", cap.RootName, "home")
+		if err != nil || !samePromotedNativeFile(filepath.Clean(string(phaseHome)), wantHome) {
+			t.Fatalf("%s phase HOME is not bound to its private capability root", phase)
+		}
+		if index > 0 && (cap.ID != previous.ID || cap.RootName != previous.RootName || cap.Generation <= previous.Generation || cap.Challenge == previous.Challenge) {
+			t.Fatalf("%s capability identity or generation freshness check failed", phase)
+		}
+		sessionRoot := filepath.Join(home, ".acs", "sessions", cap.RootName)
+		if _, err := os.Lstat(filepath.Join(sessionRoot, ".acs-cleanup-proof-v1")); !os.IsNotExist(err) {
+			t.Fatalf("%s live process retained cleanup proof: %v", phase, err)
+		}
+		recoveryContext, cancelRecovery := context.WithTimeout(context.Background(), 5*time.Second)
+		recover := exec.CommandContext(recoveryContext, binary, "session", "recover", cap.ID, "--json")
+		recover.Env = nativeCandidateEnvironment(home, path, nil)
+		recoveryOutput, recoveryErr := recover.Output()
+		cancelRecovery()
+		var recovery struct {
+			Outcome string `json:"outcome"`
+		}
+		if recoveryErr == nil || json.Unmarshal(recoveryOutput, &recovery) != nil || (recovery.Outcome != "active" && recovery.Outcome != "busy") {
+			t.Fatalf("live %s recovery did not report active or busy: %v", phase, recoveryErr)
+		}
+		if info, err := os.Stat(sessionRoot); err != nil || !info.IsDir() {
+			t.Fatalf("live %s Session was removed during recovery refusal", phase)
+		}
+		previous = cap
+		if !writeFakeDevinMarker(filepath.Join(workspace, ".acs-phase-"+phase+"-release")) {
+			t.Fatal("release phase")
+		}
+	}
+	if err := waitNativeCommand(done, 15*time.Second); err != nil {
+		t.Fatalf("generation candidate: %v output=%s", err, output.String())
+	}
+	assertNoSessions(t, home)
+	assertNewRemovedPromotedSessions(t, binary, home, path, before, "devin")
+}
+
+func samePromotedNativeFile(left, right string) bool {
+	leftInfo, err := os.Stat(left)
+	if err != nil {
+		return false
+	}
+	rightInfo, err := os.Stat(right)
+	return err == nil && os.SameFile(leftInfo, rightInfo)
+}
+
+func readLiveGenerationCapability(t *testing.T, home string) struct {
+	ID, RootName, Challenge string
+	Generation              uint64
+} {
+	t.Helper()
+	entries, err := filepath.Glob(filepath.Join(home, ".acs", "session-operations-v1", "capabilities", "*.json"))
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("live capability entries=%v err=%v", entries, err)
+	}
+	var cap struct {
+		ID, RootName, Challenge string
+		Generation              uint64
+	}
+	contents, err := os.ReadFile(entries[0])
+	if err != nil || json.Unmarshal(contents, &cap) != nil || cap.ID == "" || cap.Generation == 0 || cap.Challenge == "" {
+		t.Fatalf("read live capability: %v", err)
+	}
+	return cap
 }
 
 func assertPromotedArtifactEffectiveExplanation(t *testing.T) {
@@ -724,6 +833,21 @@ type genericHelperObservation struct {
 	ExternalWrite   bool     `json:"externalWrite"`
 }
 
+type privateCapabilityObservation struct {
+	CurrentReadable        bool `json:"currentReadable"`
+	OtherReadable          bool `json:"otherReadable"`
+	EnvironmentLeak        bool `json:"environmentLeak"`
+	CurrentDescriptorLeak  bool `json:"currentDescriptorLeak"`
+	InjectedDescriptorLeak bool `json:"injectedDescriptorLeak"`
+}
+
+type privateCapabilityProbe struct {
+	Current       string `json:"current"`
+	Other         string `json:"other"`
+	CurrentDevice uint64 `json:"currentDevice"`
+	CurrentInode  uint64 `json:"currentInode"`
+}
+
 func runPromotedArtifactGenericHelper(arguments []string) bool {
 	if len(arguments) == 0 || arguments[0] != "--acs-generic-command-helper" {
 		return false
@@ -772,6 +896,45 @@ func runPromotedArtifactGenericHelper(arguments []string) bool {
 				os.Exit(91)
 			}
 			return true
+		case "--private-capability-live", "--private-capability-hold":
+			if len(arguments) != 4 {
+				os.Exit(90)
+			}
+			if !writeFakeDevinMarker(arguments[2]) {
+				os.Exit(89)
+			}
+			for !fakeDevinMarkerExists(arguments[3]) {
+				time.Sleep(10 * time.Millisecond)
+			}
+			if arguments[1] == "--private-capability-hold" {
+				return true
+			}
+			contents, err := os.ReadFile(filepath.Join(mustGetwd(), ".acs-native-private-capability-probe.json"))
+			if err != nil {
+				os.Exit(88)
+			}
+			var probe privateCapabilityProbe
+			if json.Unmarshal(contents, &probe) != nil || probe.Current == "" || probe.Other == "" || probe.CurrentDevice == 0 || probe.CurrentInode == 0 {
+				os.Exit(87)
+			}
+			current, currentErr := os.ReadFile(probe.Current)
+			other, otherErr := os.ReadFile(probe.Other)
+			observation := privateCapabilityObservation{
+				CurrentReadable:        currentErr == nil && len(current) != 0,
+				OtherReadable:          otherErr == nil && len(other) != 0,
+				EnvironmentLeak:        os.Getenv("ACS_SESSION_PRIVATE_CHALLENGE") != "",
+				InjectedDescriptorLeak: fakeDevinDescriptorContains(privateDescriptorValue),
+			}
+			for descriptor := 3; descriptor < 64; descriptor++ {
+				if nativeDescriptorMatches(descriptor, probe.CurrentDevice, probe.CurrentInode) {
+					observation.CurrentDescriptorLeak = true
+				}
+			}
+			encoded, _ := json.Marshal(observation)
+			if os.WriteFile(filepath.Join(mustGetwd(), ".acs-native-private-capability-result.json"), encoded, 0o600) != nil {
+				os.Exit(86)
+			}
+			return true
 		}
 	}
 	if len(arguments) < 3 {
@@ -791,6 +954,23 @@ func runPromotedArtifactGenericHelper(arguments []string) bool {
 	_ = json.NewEncoder(os.Stdout).Encode(observation)
 	_, _ = fmt.Fprintln(os.Stderr, "generic-stderr-ok")
 	return true
+}
+
+func TestNativeDescriptorIdentityDetectorPositiveControl(t *testing.T) {
+	file, err := os.CreateTemp(t.TempDir(), "descriptor-identity")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	device, inode := nativeFileIdentity(t, file.Name())
+	if !nativeDescriptorMatches(int(file.Fd()), device, inode) {
+		t.Fatal("descriptor identity detector missed an intentionally open descriptor")
+	}
+}
+
+func nativeDescriptorMatches(descriptor int, device, inode uint64) bool {
+	var stat unix.Stat_t
+	return unix.Fstat(descriptor, &stat) == nil && uint64(stat.Dev) == device && stat.Ino == inode
 }
 
 func assertPromotedArtifactGenericRun(t *testing.T) {
@@ -870,6 +1050,7 @@ func assertPromotedArtifactGenericRun(t *testing.T) {
 	}
 	assertNoSessions(t, home)
 
+	beforeGenericSessions := promotedSessionSnapshot(t, binary, home, path)
 	command := exec.Command(binary, "run", "--profile", "generic-readwrite", "--", helper,
 		"--acs-generic-command-helper", externalSecret, externalWrite, "space value", "", "--", "*.go", "$HOME")
 	command.Dir = workspace
@@ -896,6 +1077,25 @@ func assertPromotedArtifactGenericRun(t *testing.T) {
 		t.Fatalf("stderr = %q", stderr.String())
 	}
 	assertMarkerExists(t, filepath.Join(workspace, "generic-workspace-write"))
+	assertNoSessions(t, home)
+	assertNewRemovedPromotedSessions(t, binary, home, path, beforeGenericSessions, "command")
+
+	assertLiveTrackedCapabilityIsolation(t, binary, helper, home, path, workspace)
+	privateRoot := filepath.Join(home, ".acs", "session-operations-v1")
+	alias := filepath.Join(realTemporaryDirectory(t), "private-workspace-alias")
+	if err := os.Symlink(privateRoot, alias); err != nil {
+		t.Fatal(err)
+	}
+	aliasTripwire := filepath.Join(workspace, "private-alias-target-started")
+	aliasCommand := exec.Command(binary, "run", "--profile", "generic-readwrite", "--", helper,
+		"--acs-generic-command-helper", "--tripwire", aliasTripwire)
+	aliasCommand.Dir, aliasCommand.Env = alias, nativeCandidateEnvironment(home, path, nil)
+	aliasOutput, err := aliasCommand.CombinedOutput()
+	if err == nil {
+		t.Fatal("candidate accepted a workspace alias to private Session capabilities")
+	}
+	assertSafeCandidateFailure(t, aliasOutput, "unsafe_path", privateDescriptorValue, "other-session-private-challenge")
+	assertMarkerAbsent(t, aliasTripwire, "target started from a private capability workspace alias")
 	assertNoSessions(t, home)
 
 	readOnlyWorkspace := realTemporaryDirectory(t)
@@ -1003,6 +1203,241 @@ func assertPromotedArtifactGenericRun(t *testing.T) {
 		t.Fatalf("generic resize was not forwarded: %s", capture.String())
 	}
 	assertNoSessions(t, home)
+}
+
+// assertLiveTrackedCapabilityIsolation observes the candidate-created private
+// records while two actual contained commands remain live.  The target receives
+// only host-selected path names, never a capability challenge or record bytes.
+func assertLiveTrackedCapabilityIsolation(t *testing.T, binary, helper, home, path, workspace string) {
+	t.Helper()
+	capabilities := filepath.Join(home, ".acs", "session-operations-v1", "capabilities")
+	currentReady, currentRelease := filepath.Join(workspace, ".acs-native-current-ready"), filepath.Join(workspace, ".acs-native-current-release")
+	otherReady, otherRelease := filepath.Join(workspace, ".acs-native-other-ready"), filepath.Join(workspace, ".acs-native-other-release")
+	injectedPath := filepath.Join(workspace, ".acs-native-injected-descriptor")
+	if err := os.WriteFile(injectedPath, []byte(privateDescriptorValue), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	injected, err := os.Open(injectedPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = injected.Close() })
+	current := exec.Command(binary, "run", "--profile", "generic-readwrite", "--", helper, "--acs-generic-command-helper", "--private-capability-live", currentReady, currentRelease)
+	current.Dir, current.Env = workspace, nativeCandidateEnvironment(home, path, map[string]string{"ACS_SESSION_PRIVATE_CHALLENGE": "must-not-reach-target"})
+	current.ExtraFiles = []*os.File{injected}
+	var currentOutput synchronizedNativeCapture
+	current.Stdout, current.Stderr = &currentOutput, &currentOutput
+	if err := current.Start(); err != nil {
+		t.Fatal(err)
+	}
+	currentDone := startNativeCommand(current)
+	t.Cleanup(func() {
+		_ = writeFakeDevinMarker(currentRelease)
+		settleNativeCommand(current, currentDone)
+	})
+	if !waitForFakeDevinMarker(currentReady, 10*time.Second) {
+		t.Fatal("live current Session target did not become ready")
+	}
+	currentCapability := onlyNativeCapability(t, capabilities)
+
+	other := exec.Command(binary, "run", "--profile", "generic-readwrite", "--", helper, "--acs-generic-command-helper", "--private-capability-hold", otherReady, otherRelease)
+	other.Dir, other.Env = workspace, nativeCandidateEnvironment(home, path, nil)
+	if err := other.Start(); err != nil {
+		t.Fatal(err)
+	}
+	otherDone := startNativeCommand(other)
+	t.Cleanup(func() {
+		_ = writeFakeDevinMarker(otherRelease)
+		settleNativeCommand(other, otherDone)
+	})
+	if !waitForFakeDevinMarker(otherReady, 10*time.Second) {
+		t.Fatal("live other Session target did not become ready")
+	}
+	otherCapability := otherNativeCapability(t, capabilities, currentCapability)
+	currentDevice, currentInode := nativeFileIdentity(t, currentCapability)
+	probe, err := json.Marshal(privateCapabilityProbe{Current: currentCapability, Other: otherCapability, CurrentDevice: currentDevice, CurrentInode: currentInode})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, ".acs-native-private-capability-probe.json"), probe, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if !writeFakeDevinMarker(currentRelease) {
+		t.Fatal("release current capability witness")
+	}
+	if err := waitNativeCommand(currentDone, 10*time.Second); err != nil {
+		t.Fatalf("live current capability witness: %v; output=%s", err, currentOutput.String())
+	}
+	result, err := os.ReadFile(filepath.Join(workspace, ".acs-native-private-capability-result.json"))
+	if err != nil {
+		t.Fatal("read live capability observation")
+	}
+	var observation privateCapabilityObservation
+	if err := json.Unmarshal(result, &observation); err != nil {
+		t.Fatal("decode live capability observation")
+	}
+	if observation.CurrentReadable || observation.OtherReadable || observation.EnvironmentLeak || observation.CurrentDescriptorLeak || observation.InjectedDescriptorLeak {
+		t.Fatalf("contained target received current or cross-Session private authority: %+v", observation)
+	}
+	if !writeFakeDevinMarker(otherRelease) {
+		t.Fatal("release other capability witness")
+	}
+	if err := waitNativeCommand(otherDone, 10*time.Second); err != nil {
+		t.Fatalf("live other capability witness: %v", err)
+	}
+	assertNoSessions(t, home)
+}
+
+type synchronizedNativeCapture struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (capture *synchronizedNativeCapture) Write(contents []byte) (int, error) {
+	capture.mu.Lock()
+	defer capture.mu.Unlock()
+	return capture.b.Write(contents)
+}
+
+func (capture *synchronizedNativeCapture) String() string {
+	capture.mu.Lock()
+	defer capture.mu.Unlock()
+	return capture.b.String()
+}
+
+type nativeCommandDone struct {
+	done chan struct{}
+	err  error
+}
+
+func startNativeCommand(command *exec.Cmd) *nativeCommandDone {
+	result := &nativeCommandDone{done: make(chan struct{})}
+	go func() {
+		result.err = command.Wait()
+		close(result.done)
+	}()
+	return result
+}
+
+func waitNativeCommand(result *nativeCommandDone, timeout time.Duration) error {
+	select {
+	case <-result.done:
+		return result.err
+	case <-time.After(timeout):
+		return fmt.Errorf("did not settle within %s", timeout)
+	}
+}
+
+func settleNativeCommand(command *exec.Cmd, result *nativeCommandDone) {
+	select {
+	case <-result.done:
+		return
+	case <-time.After(2 * time.Second):
+		_ = command.Process.Kill()
+		select {
+		case <-result.done:
+		case <-time.After(2 * time.Second):
+		}
+	}
+}
+
+func nativeFileIdentity(t *testing.T, path string) (uint64, uint64) {
+	t.Helper()
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat host-observed private capability: %v", err)
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || stat.Dev == 0 || stat.Ino == 0 {
+		t.Fatalf("host private capability has no stable file identity: %#v", info.Sys())
+	}
+	return uint64(stat.Dev), stat.Ino
+}
+
+func onlyNativeCapability(t *testing.T, directory string) string {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		entries, _ := filepath.Glob(filepath.Join(directory, "*.json"))
+		if len(entries) == 1 {
+			return entries[0]
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("candidate did not publish exactly one current private capability in %s", directory)
+	return ""
+}
+
+func otherNativeCapability(t *testing.T, directory, current string) string {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		entries, _ := filepath.Glob(filepath.Join(directory, "*.json"))
+		for _, entry := range entries {
+			if entry != current {
+				return entry
+			}
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("candidate did not publish a second current private capability in %s", directory)
+	return ""
+}
+
+type promotedPublicSession struct {
+	ID       string `json:"id"`
+	State    string `json:"state"`
+	Target   string `json:"target"`
+	Revision uint64 `json:"revision"`
+}
+
+func promotedSessionSnapshot(t *testing.T, binary, home, path string) map[string]promotedPublicSession {
+	t.Helper()
+	command := exec.Command(binary, "session", "list", "--json")
+	command.Env = nativeCandidateEnvironment(home, path, nil)
+	output, err := command.Output()
+	if err != nil {
+		t.Fatalf("candidate session list: %v; output=%s", err, output)
+	}
+	var result struct {
+		Sessions []promotedPublicSession `json:"sessions"`
+	}
+	if err := json.Unmarshal(output, &result); err != nil {
+		t.Fatalf("decode candidate session list: %v; output=%s", err, output)
+	}
+	snapshot := make(map[string]promotedPublicSession, len(result.Sessions))
+	for _, item := range result.Sessions {
+		snapshot[item.ID] = item
+	}
+	return snapshot
+}
+
+func assertNewRemovedPromotedSessions(t *testing.T, binary, home, path string, before map[string]promotedPublicSession, target string) {
+	t.Helper()
+	after := promotedSessionSnapshot(t, binary, home, path)
+	found := 0
+	for id, item := range after {
+		if _, existed := before[id]; existed {
+			continue
+		}
+		found++
+		if item.State != "removed" || item.Target != target || item.Revision == 0 {
+			t.Fatalf("candidate lifecycle row = %+v", item)
+		}
+		inspect := exec.Command(binary, "session", "inspect", id, "--json")
+		inspect.Env = nativeCandidateEnvironment(home, path, nil)
+		output, err := inspect.Output()
+		if err != nil {
+			t.Fatalf("candidate session inspect: %v; output=%s", err, output)
+		}
+		text := string(output)
+		if !strings.Contains(text, `"state":"removed"`) || strings.Contains(text, "rootToken") || strings.Contains(text, "challenge") || strings.Contains(text, "session-") {
+			t.Fatalf("candidate session inspect was not sanitized: %s", output)
+		}
+	}
+	if found == 0 {
+		t.Fatal("candidate contained operation published no durable Session lifecycle row")
+	}
 }
 
 func assertGenericObservationMatchesDeclaration(t *testing.T, access string, facts map[string]nativeExplanationFact, observation genericHelperObservation) {
@@ -1408,6 +1843,7 @@ func assertPromotedArtifactSandboxShell(t *testing.T) {
 		"print -r -- $! > ./sandbox-descendant.pid\n" +
 		"print -r -- sandbox-shell-ok\n" +
 		"exit 0\n"
+	beforeShellSessions := promotedSessionSnapshot(t, binary, home, path)
 	command := exec.Command(binary, "sandbox", "--profile", "reviews")
 	command.Env = nativeCandidateEnvironment(home, path, nil)
 	command.Dir = workspace
@@ -1439,6 +1875,7 @@ func assertPromotedArtifactSandboxShell(t *testing.T) {
 		t.Fatalf("sandbox shell descendant %d survived completion: %v", pID, err)
 	}
 	assertNoSessions(t, home)
+	assertNewRemovedPromotedSessions(t, binary, home, path, beforeShellSessions, "shell")
 }
 
 func assertPromotedArtifactNativeReadiness(t *testing.T) {
@@ -1579,6 +2016,7 @@ func assertPromotedArtifactNativeContainment(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = descriptor.Close() })
+	beforeDevinSessions := promotedSessionSnapshot(t, binary, home, path)
 	command := exec.Command(binary, "devin", "--profile", "reviews")
 	command.Dir = workspace
 	command.Env = nativeCandidateEnvironment(home, tools+string(os.PathListSeparator)+path, map[string]string{
@@ -1637,6 +2075,7 @@ func assertPromotedArtifactNativeContainment(t *testing.T) {
 	assertMarkerAbsent(t, config.ExternalWritePath, "native containment wrote outside its allowed roots")
 	assertDescendantStopsAfterCandidateReturn(t, workspace)
 	assertNoSessions(t, home)
+	assertNewRemovedPromotedSessions(t, binary, home, path, beforeDevinSessions, "devin")
 }
 
 func assertPromotedArtifactNativePreflightFailureIsSafe(t *testing.T) {
@@ -1819,6 +2258,7 @@ func runPromotedArtifactFakeDevin(arguments []string) bool {
 func runFakeDevinSkills() {
 	workspace := mustGetwd()
 	configuration, _ := readFakeDevinConfiguration()
+	holdFakeDevinGenerationPhase(configuration, "skills", workspace)
 	if configuration.Mode == "shared-target-conformance" {
 		writeFakeDevinMarker(filepath.Join(os.Getenv("HOME"), fakeDevinSkillsProbeMarker))
 	} else {
@@ -1842,6 +2282,7 @@ func runFakeDevinAuthentication() {
 		_, _ = io.WriteString(os.Stderr, configuration.PrivateOutput)
 		os.Exit(66)
 	}
+	holdFakeDevinGenerationPhase(configuration, "authentication", mustGetwd())
 	credential := filepath.Join(os.Getenv("XDG_DATA_HOME"), "devin", "credentials.toml")
 	if _, err := os.Stat(credential); err != nil {
 		os.Exit(65)
@@ -1860,6 +2301,10 @@ func runFakeDevinInteractive() {
 		os.Exit(71)
 	}
 	workspace := mustGetwd()
+	holdFakeDevinGenerationPhase(configuration, "interactive", workspace)
+	if configuration.Mode == "session-generations" {
+		return
+	}
 	if configuration.Mode == "signal" || configuration.Mode == "resize" {
 		runFakeDevinTerminalFixture(configuration.Mode, workspace)
 		return
@@ -1897,6 +2342,24 @@ func runFakeDevinInteractive() {
 	}
 	if err := os.WriteFile(filepath.Join(workspace, fakeDevinResultName), contents, 0o600); err != nil {
 		os.Exit(73)
+	}
+}
+
+func holdFakeDevinGenerationPhase(configuration fakeDevinConfiguration, phase, workspace string) {
+	if configuration.Mode != "session-generations" {
+		return
+	}
+	ready := filepath.Join(workspace, ".acs-phase-"+phase+"-ready")
+	release := filepath.Join(workspace, ".acs-phase-"+phase+"-release")
+	if os.WriteFile(ready+".pending", []byte(os.Getenv("HOME")), 0o600) != nil || os.Rename(ready+".pending", ready) != nil {
+		os.Exit(70)
+	}
+	deadline := time.Now().Add(20 * time.Second)
+	for !fakeDevinMarkerExists(release) {
+		if time.Now().After(deadline) {
+			os.Exit(69)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 
@@ -2208,7 +2671,7 @@ func nativeCandidateEnvironment(home, path string, overrides map[string]string) 
 		}
 		environment = append(environment, entry)
 	}
-	for _, key := range []string{"HOME", "PATH", "TERM", "NO_COLOR", "ACS_NATIVE_CANDIDATE_SECRET", "ACS_GENERIC_HOST_SECRET"} {
+	for _, key := range []string{"HOME", "PATH", "TERM", "NO_COLOR", "ACS_NATIVE_CANDIDATE_SECRET", "ACS_GENERIC_HOST_SECRET", "ACS_SESSION_PRIVATE_CHALLENGE"} {
 		if value, ok := values[key]; ok {
 			environment = append(environment, key+"="+value)
 		}

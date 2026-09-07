@@ -62,6 +62,9 @@ func main() {
 	if handled, code := informational.RunProfileInspection(os.Args[1:], os.UserHomeDir); handled {
 		os.Exit(code)
 	}
+	if handled, code := informational.RunSessionOperations(os.Args[1:], os.UserHomeDir); handled {
+		os.Exit(code)
+	}
 	if handled, code := informational.RunDiagnostics(os.Args[1:], os.UserHomeDir); handled {
 		os.Exit(code)
 	}

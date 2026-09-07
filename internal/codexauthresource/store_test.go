@@ -110,6 +110,11 @@ func (markers *testMarkers) MarkCleanupPending(context.Context, CredentialRef) e
 	markers.marker.Phase = quarantineCleanupPending
 	return nil
 }
+func (markers *testMarkers) AdvanceCleanupChallenge(_ context.Context, _ CredentialRef, challenge string) error {
+	markers.marker.ProofChallenge = challenge
+	markers.marker.Phase = quarantinePrepared
+	return nil
+}
 func (markers *testMarkers) MarkRefreshAllowed(context.Context, CredentialRef) error {
 	markers.marker.RefreshAllowed = true
 	return nil
@@ -131,6 +136,25 @@ func TestAcquireLoginChecksExistingBeforeBindingEscapes(t *testing.T) {
 	}
 	if !lock.released {
 		t.Fatal("existing identity retained lock")
+	}
+}
+
+func TestBindingAdvancesExactCleanupChallengeGeneration(t *testing.T) {
+	oldChallenge := testCleanupProofChallenge
+	newChallenge := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	markers := &testMarkers{exists: true, marker: quarantineMarker{Version: recordVersion, Name: "work", SessionID: "session-fixture", Phase: quarantineCleanupPending, ProofChallenge: oldChallenge}}
+	binding := &Binding{store: &Store{markers: markers}, name: "work", lock: &testLock{}, sessionID: "session-fixture", challenge: oldChallenge}
+	if err := binding.AdvanceCleanupChallenge(context.Background(), newChallenge); err != nil {
+		t.Fatal(err)
+	}
+	if binding.challenge != newChallenge || markers.marker.ProofChallenge != newChallenge || markers.marker.Phase != quarantinePrepared {
+		t.Fatalf("advanced binding = %#v, marker = %#v", binding.challenge, markers.marker)
+	}
+	if _, err := binding.currentGeneration(context.Background(), quarantinePrepared); err != nil {
+		t.Fatalf("new generation rejected: %v", err)
+	}
+	if err := binding.SettlePending(context.Background(), "session-fixture", oldChallenge); !errors.Is(err, ErrBindingQuarantined) {
+		t.Fatalf("stale generation settled: %v", err)
 	}
 }
 

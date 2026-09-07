@@ -6,6 +6,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -89,8 +90,11 @@ func runNativeInstalledACSLockedCodexFixture(t *testing.T) {
 	loginNames := []string{identities["coding"], identities["readonly"], identities["recovery"]}
 	for _, identityName := range loginNames {
 		if !t.Run("installed ACS synthetic login transaction "+identityName, func(t *testing.T) {
+			before := installedSessionSnapshot(t, candidate, home, tools, workspace)
 			runInstalledSyntheticLogin(t, candidate, home, tools, workspace, identityName)
 			assertInstalledIdentityVisible(t, candidate, home, tools, workspace, identityName)
+			assertInstalledIdentityStatus(t, candidate, home, tools, workspace, identityName)
+			assertNewRemovedInstalledSessions(t, candidate, home, tools, workspace, before, "codex-auth")
 		}) {
 			t.FailNow()
 		}
@@ -110,6 +114,23 @@ func runNativeInstalledACSLockedCodexFixture(t *testing.T) {
 		t.Fatal(err)
 	}
 	isolationProbe := fmt.Sprintf(`; if cat %s >/dev/null 2>&1; then printf global-auth-read-bad; else printf global-auth-read-denied; fi; if cat %s >/dev/null 2>&1; then printf outside-read-bad; else printf outside-read-denied; fi; if printf bad > %s 2>/dev/null; then printf outside-write-bad; else printf outside-write-denied; fi`, strconv.Quote(globalAuth), strconv.Quote(outsideSecret), strconv.Quote(outsideWrite))
+	t.Run("locked Codex preflight and interactive generations remain private while live", func(t *testing.T) {
+		before := installedSessionSnapshot(t, candidate, home, tools, workspace)
+		fixture := newNativeResponsesFixture(t, "printf codex-native-tool-output"+isolationProbe, home)
+		defer fixture.server.Close()
+		coordination := nativeCodexPhaseCoordination{
+			versionReady:       filepath.Join(workspace, ".acs-codex-version-ready"),
+			versionRelease:     filepath.Join(workspace, ".acs-codex-version-release"),
+			interactiveReady:   filepath.Join(workspace, ".acs-codex-interactive-ready"),
+			interactiveRelease: filepath.Join(workspace, ".acs-codex-interactive-release"),
+		}
+		buildFixedCodexTrampoline(t, grantedTarget, fixture.server.URL+"/backend-api", filepath.Join(tools, "codex"), coordination)
+		fixture.coordination = &coordination
+		runInstalledCodexPTY(t, candidate, home, tools, workspace, "coding", fixture, false)
+		fixture.assert(t, false)
+		assertNoNativeSessions(t, filepath.Join(home, ".acs", "sessions"))
+		assertNewRemovedInstalledSessions(t, candidate, home, tools, workspace, before, "codex")
+	})
 	normalDescendantReady := filepath.Join(workspace, ".acs-normal-descendant-ready")
 	recoveryDescendantReady := filepath.Join(workspace, ".acs-recovery-descendant-ready")
 	codingCommand := "printf codex-native-tool-ok > ./codex-native-write; printf codex-native-tool-output" + isolationProbe
@@ -122,6 +143,7 @@ func runNativeInstalledACSLockedCodexFixture(t *testing.T) {
 		{name: "read-only denial", profile: "readonly", command: "printf forbidden > ./codex-native-readonly-write; printf codex-native-tool-output" + isolationProbe, marker: "codex-native-readonly-write", wantWrite: false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
+			before := installedSessionSnapshot(t, candidate, home, tools, workspace)
 			fixture := newNativeResponsesFixture(t, test.command, home)
 			fixture.descendantReady = test.descendantReady
 			defer fixture.server.Close()
@@ -141,6 +163,7 @@ func runNativeInstalledACSLockedCodexFixture(t *testing.T) {
 				t.Fatalf("read-only Codex wrote workspace marker: bytes=%q err=%v", contents, err)
 			}
 			assertNoNativeSessions(t, filepath.Join(home, ".acs", "sessions"))
+			assertNewRemovedInstalledSessions(t, candidate, home, tools, workspace, before, "codex")
 		})
 	}
 	t.Run("abrupt ACS termination and public recovery", func(t *testing.T) {
@@ -155,7 +178,9 @@ func runNativeInstalledACSLockedCodexFixture(t *testing.T) {
 		if err != nil || len(sessions) != 1 {
 			t.Fatalf("abrupt ACS termination retained %d recoverable Sessions", len(sessions))
 		}
-		runInstalledCodexRecovery(t, candidate, home, tools, workspace, identities["recovery"])
+		recoverable := inspectInstalledRecoverableSession(t, candidate, home, tools, workspace)
+		runConcurrentInstalledRecoveries(t, candidate, home, tools, workspace, identities["recovery"], recoverable.id)
+		assertInstalledSessionRemoved(t, candidate, home, tools, workspace, recoverable)
 		assertNoNativeSessions(t, filepath.Join(home, ".acs", "sessions"))
 		reuseFixture := newNativeResponsesFixture(t, "printf codex-native-tool-output"+isolationProbe, home)
 		defer reuseFixture.server.Close()
@@ -317,6 +342,16 @@ func assertInstalledIdentityVisible(t *testing.T, candidate, home, tools, worksp
 	}
 }
 
+func assertInstalledIdentityStatus(t *testing.T, candidate, home, tools, workspace, name string) {
+	t.Helper()
+	command := exec.Command(candidate, "codex", "auth", "status", "--name", name)
+	command.Dir, command.Env = workspace, nativeCandidateEnvironment(home, tools)
+	output, err := command.CombinedOutput()
+	if err != nil || !bytes.Contains(output, []byte(name)) || !bytes.Contains(output, []byte("authenticated")) {
+		t.Fatalf("installed ACS named identity status: %v; output=%q", err, output)
+	}
+}
+
 func runInstalledCodexPTY(t *testing.T, candidate, home, tools, workspace, profile string, fixture *nativeResponsesFixture, crashAfterTool bool) string {
 	t.Helper()
 	master, terminal, err := pty.Open()
@@ -361,6 +396,11 @@ func runInstalledCodexPTY(t *testing.T, candidate, home, tools, workspace, profi
 			t.Error("PTY fixture did not drain terminal capture")
 		}
 	}()
+	if fixture.coordination != nil {
+		versionCapability := observeNativeCodexPhase(t, candidate, home, tools, workspace, fixture.coordination.versionReady, fixture.coordination.versionRelease, nil)
+		fixture.coordination.versionCapability = &versionCapability
+		observeNativeCodexPhase(t, candidate, home, tools, workspace, fixture.coordination.interactiveReady, fixture.coordination.interactiveRelease, fixture.coordination.versionCapability)
+	}
 	select {
 	case err := <-wait:
 		finished = true
@@ -463,6 +503,152 @@ func runInstalledCodexRecovery(t *testing.T, candidate, home, tools, workspace, 
 	}
 }
 
+type installedPublicSession struct {
+	ID       string `json:"id"`
+	State    string `json:"state"`
+	Target   string `json:"target"`
+	Revision uint64 `json:"revision"`
+	Recovery struct {
+		Allowed bool `json:"allowed"`
+	} `json:"recovery"`
+}
+
+type installedRecoverableSession struct {
+	id     string
+	before map[string]installedPublicSession
+}
+
+func installedSessionSnapshot(t *testing.T, candidate, home, tools, workspace string) map[string]installedPublicSession {
+	t.Helper()
+	command := exec.Command(candidate, "session", "list", "--json")
+	command.Dir, command.Env = workspace, nativeCandidateEnvironment(home, tools)
+	output, err := command.Output()
+	if err != nil {
+		t.Fatalf("public Session list failed: %v; output=%q", err, output)
+	}
+	var listed struct {
+		Sessions []installedPublicSession `json:"sessions"`
+	}
+	if err := json.Unmarshal(output, &listed); err != nil {
+		t.Fatalf("decode public Session list: %v; output=%q", err, output)
+	}
+	result := make(map[string]installedPublicSession, len(listed.Sessions))
+	for _, item := range listed.Sessions {
+		result[item.ID] = item
+	}
+	return result
+}
+
+func assertNewRemovedInstalledSessions(t *testing.T, candidate, home, tools, workspace string, before map[string]installedPublicSession, target string) {
+	t.Helper()
+	after := installedSessionSnapshot(t, candidate, home, tools, workspace)
+	found := 0
+	for id, item := range after {
+		if _, existed := before[id]; existed {
+			continue
+		}
+		found++
+		if item.State != "removed" || item.Target != target || item.Revision == 0 {
+			t.Fatalf("candidate lifecycle row = %+v", item)
+		}
+	}
+	if found == 0 {
+		t.Fatalf("candidate %s operation published no durable Session lifecycle row", target)
+	}
+}
+
+func inspectInstalledRecoverableSession(t *testing.T, candidate, home, tools, workspace string) installedRecoverableSession {
+	t.Helper()
+	before := installedSessionSnapshot(t, candidate, home, tools, workspace)
+	var live []installedPublicSession
+	for _, item := range before {
+		if item.Target == "codex" && item.State != "removed" && item.Recovery.Allowed {
+			live = append(live, item)
+		}
+	}
+	if len(live) != 1 {
+		t.Fatalf("live recoverable Codex Sessions = %+v; all Sessions = %+v", live, before)
+	}
+	item := live[0]
+	if item.State != "active" && item.State != "settling" && item.State != "retryable" {
+		t.Fatalf("recoverable public Session state = %q; all Sessions = %+v", item.State, before)
+	}
+	inspect := exec.Command(candidate, "session", "inspect", item.ID, "--json")
+	inspect.Dir, inspect.Env = workspace, nativeCandidateEnvironment(home, tools)
+	inspected, err := inspect.Output()
+	if err != nil || !bytes.Contains(inspected, []byte(`"id":"`+item.ID+`"`)) || bytes.Contains(inspected, []byte("rootToken")) || bytes.Contains(inspected, []byte("challenge")) {
+		t.Fatalf("public Session inspect = %q, %v", inspected, err)
+	}
+	return installedRecoverableSession{id: item.ID, before: before}
+}
+
+func runConcurrentInstalledRecoveries(t *testing.T, candidate, home, tools, workspace, name, publicID string) {
+	t.Helper()
+	start := make(chan struct{})
+	type result struct {
+		output []byte
+		err    error
+	}
+	results := make(chan result, 2)
+	for _, arguments := range [][]string{{"codex", "auth", "recover", "--name", name}, {"session", "recover", publicID}} {
+		arguments := append([]string(nil), arguments...)
+		go func() {
+			<-start
+			command := exec.Command(candidate, arguments...)
+			command.Dir, command.Env = workspace, nativeCandidateEnvironment(home, tools)
+			output, err := command.CombinedOutput()
+			results <- result{output: output, err: err}
+		}()
+	}
+	close(start)
+	for range 2 {
+		select {
+		case result := <-results:
+			if result.err != nil && !bytes.Contains(result.output, []byte("in use")) && !bytes.Contains(result.output, []byte("busy")) && !bytes.Contains(result.output, []byte("active")) {
+				t.Fatalf("concurrent public recovery failed: %v; output=%q", result.err, result.output)
+			}
+		case <-time.After(15 * time.Second):
+			t.Fatal("concurrent public recovery deadlocked")
+		}
+	}
+	runInstalledCodexRecovery(t, candidate, home, tools, workspace, name)
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		command := exec.Command(candidate, "session", "recover", publicID)
+		command.Dir, command.Env = workspace, nativeCandidateEnvironment(home, tools)
+		output, err := command.CombinedOutput()
+		if err == nil && bytes.Contains(output, []byte("removed")) {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("public Session recovery did not converge: %v; output=%q", err, output)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+func assertInstalledSessionRemoved(t *testing.T, candidate, home, tools, workspace string, recoverable installedRecoverableSession) {
+	t.Helper()
+	command := exec.Command(candidate, "session", "inspect", recoverable.id, "--json")
+	command.Dir, command.Env = workspace, nativeCandidateEnvironment(home, tools)
+	output, err := command.Output()
+	if err != nil || !bytes.Contains(output, []byte(`"state":"removed"`)) || bytes.Contains(output, []byte("rootToken")) || bytes.Contains(output, []byte("challenge")) {
+		t.Fatalf("removed public Session = %q, %v", output, err)
+	}
+	after := installedSessionSnapshot(t, candidate, home, tools, workspace)
+	if item, exists := after[recoverable.id]; !exists || item.State != "removed" {
+		t.Fatalf("recovered Session did not remain as a removed public row: %+v", item)
+	}
+	for id, item := range recoverable.before {
+		if id == recoverable.id || item.State != "removed" {
+			continue
+		}
+		if preserved, exists := after[id]; !exists || preserved.State != "removed" {
+			t.Fatalf("old removed Session row %s was not preserved: %+v", id, preserved)
+		}
+	}
+}
+
 func assertNativeProcessRemoved(t *testing.T, pid int, message string) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
@@ -541,6 +727,95 @@ type nativeResponsesFixture struct {
 	preexistingHomes      map[string]struct{}
 	descendantReady       string
 	liveDescendantPID     int
+	coordination          *nativeCodexPhaseCoordination
+}
+
+// nativeCodexPhaseCoordination is intentionally fixture-only.  Its literal
+// paths let the host observe the Session selected by ACS without providing any
+// private capability contents or recovery proof to the locked target.
+type nativeCodexPhaseCoordination struct {
+	versionReady, versionRelease, interactiveReady, interactiveRelease string
+	versionCapability                                                  *nativeCodexCapability
+}
+
+type nativeCodexCapability struct {
+	ID, RootName, Challenge string
+	Generation              uint64
+}
+
+func observeNativeCodexPhase(t *testing.T, candidate, home, tools, workspace, ready, release string, previous *nativeCodexCapability) nativeCodexCapability {
+	t.Helper()
+	if !waitForNativeCodexMarker(ready, 15*time.Second) {
+		t.Fatalf("locked Codex phase did not become ready: %s", filepath.Base(ready))
+	}
+	capability := readLiveNativeCodexCapability(t, home)
+	phaseHome, err := os.ReadFile(ready)
+	wantHome := filepath.Join(home, ".acs", "sessions", capability.RootName, "home")
+	if err != nil || !sameNativeCodexFile(filepath.Clean(strings.TrimSpace(string(phaseHome))), wantHome) {
+		t.Fatal("locked Codex phase HOME is not bound to its private capability root")
+	}
+	if previous != nil && (capability.ID != previous.ID || capability.RootName != previous.RootName || capability.Generation <= previous.Generation || capability.Challenge == previous.Challenge) {
+		t.Fatalf("locked Codex capability generation was not fresh across phases")
+	}
+	root := filepath.Join(home, ".acs", "sessions", capability.RootName)
+	if _, err := os.Stat(filepath.Join(root, ".acs-cleanup-proof-v1")); !os.IsNotExist(err) {
+		t.Fatalf("live locked Codex phase retained a cleanup proof: %v", err)
+	}
+	context, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	recover := exec.CommandContext(context, candidate, "session", "recover", capability.ID, "--json")
+	recover.Dir, recover.Env = workspace, nativeCandidateEnvironment(home, tools)
+	output, err := recover.CombinedOutput()
+	if context.Err() != nil {
+		t.Fatal("public recovery did not settle while locked Codex was live")
+	}
+	var result struct {
+		Outcome string `json:"outcome"`
+	}
+	if err == nil || json.Unmarshal(output, &result) != nil || (result.Outcome != "active" && result.Outcome != "busy") {
+		t.Fatal("public recovery did not report active or busy for a live locked Codex Session")
+	}
+	if _, err := os.Stat(root); err != nil {
+		t.Fatalf("public recovery did not preserve the live locked Codex Session root: %v", err)
+	}
+	if err := os.WriteFile(release, []byte("release\n"), 0o600); err != nil {
+		t.Fatalf("release locked Codex phase: %v", err)
+	}
+	return capability
+}
+
+func sameNativeCodexFile(left, right string) bool {
+	leftInfo, err := os.Stat(left)
+	if err != nil {
+		return false
+	}
+	rightInfo, err := os.Stat(right)
+	return err == nil && os.SameFile(leftInfo, rightInfo)
+}
+
+func waitForNativeCodexMarker(path string, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if info, err := os.Stat(path); err == nil && info.Size() > 0 {
+			return true
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	return false
+}
+
+func readLiveNativeCodexCapability(t *testing.T, home string) nativeCodexCapability {
+	t.Helper()
+	entries, err := filepath.Glob(filepath.Join(home, ".acs", "session-operations-v1", "capabilities", "*.json"))
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("live locked Codex capability entries=%d err=%v", len(entries), err)
+	}
+	var capability nativeCodexCapability
+	contents, err := os.ReadFile(entries[0])
+	if err != nil || json.Unmarshal(contents, &capability) != nil || capability.ID == "" || capability.RootName == "" || capability.Generation == 0 || capability.Challenge == "" {
+		t.Fatalf("read live locked Codex capability: %v", err)
+	}
+	return capability
 }
 
 type nativeRequestObservation struct {
@@ -867,14 +1142,43 @@ func writeSSE(writer io.Writer, events ...map[string]any) {
 	}
 }
 
-func buildFixedCodexTrampoline(t *testing.T, target, baseURL, destination string) {
+func buildFixedCodexTrampoline(t *testing.T, target, baseURL, destination string, coordination ...nativeCodexPhaseCoordination) {
 	t.Helper()
 	source := filepath.Join(filepath.Dir(destination), "codex-trampoline.c")
 	openAIOverride := fmt.Sprintf("openai_base_url=%q", baseURL+"/codex")
 	chatGPTOverride := fmt.Sprintf("chatgpt_base_url=%q", baseURL)
-	program := fmt.Sprintf(`#include <stdlib.h>
+	var versionReady, versionRelease, interactiveReady, interactiveRelease string
+	if len(coordination) > 0 {
+		versionReady, versionRelease = coordination[0].versionReady, coordination[0].versionRelease
+		interactiveReady, interactiveRelease = coordination[0].interactiveReady, coordination[0].interactiveRelease
+	}
+	program := fmt.Sprintf(`#include <fcntl.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
+static int ready_and_wait(const char *ready, const char *release) {
+  if (ready[0] == '\0') return 0;
+  const char *home = getenv("HOME");
+  if (!home) return 122;
+  size_t temporary_length = strlen(ready) + 12;
+  char *temporary = malloc(temporary_length);
+  if (!temporary) return 123;
+  if (snprintf(temporary, temporary_length, "%%s.tmp-XXXXXX", ready) < 0) return 123;
+  int fd = mkstemp(temporary);
+  if (fd < 0) return 123;
+  if (fchmod(fd, 0600) != 0) { close(fd); unlink(temporary); return 124; }
+  size_t length = strlen(home);
+  if (write(fd, home, length) != (ssize_t)length || close(fd) != 0) { unlink(temporary); return 124; }
+  if (rename(temporary, ready) != 0) { unlink(temporary); return 124; }
+  struct stat info;
+  for (int attempt = 0; attempt < 1500; attempt++) {
+    if (stat(release, &info) == 0) return 0;
+    usleep(20000);
+  }
+  return 125;
+}
 int main(int argc, char **argv) {
   char **next = calloc((size_t)argc + 5, sizeof(char *));
   if (!next) return 120;
@@ -890,10 +1194,11 @@ int main(int argc, char **argv) {
 		next[argc + 2] = "-c";
 		next[argc + 3] = %s;
 	}
+	if (ready_and_wait(version ? %s : %s, version ? %s : %s) != 0) return 126;
   execv(next[0], next);
   return 121;
 }
-`, strconv.Quote(target), strconv.Quote(openAIOverride), strconv.Quote(chatGPTOverride))
+`, strconv.Quote(target), strconv.Quote(openAIOverride), strconv.Quote(chatGPTOverride), strconv.Quote(versionReady), strconv.Quote(interactiveReady), strconv.Quote(versionRelease), strconv.Quote(interactiveRelease))
 	if err := os.WriteFile(source, []byte(program), 0o600); err != nil {
 		t.Fatal(err)
 	}

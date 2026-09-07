@@ -2,6 +2,7 @@ package executor
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/hex"
 	"errors"
 	"sync"
@@ -11,9 +12,10 @@ import (
 )
 
 type containedRunResult struct {
-	err            error
-	cleanupProven  bool
-	cleanupProcess launch.Process
+	err              error
+	cleanupProven    bool
+	cleanupProcess   launch.Process
+	cleanupChallenge string
 }
 
 type containedOperationPreparation struct {
@@ -99,11 +101,15 @@ func runContainedCodex(
 	targetFailure error,
 	cleanupFailure error,
 ) containedRunResult {
+	proofChallenge, err := advanceProcessChallenge(ctx, binding, proofChallenge)
+	if err != nil {
+		return containedRunResult{err: targetFailure, cleanupProven: true}
+	}
 	challenge, err := hex.DecodeString(proofChallenge)
 	if err != nil || len(challenge) != launch.RecoveryProofChallengeSize {
 		return containedRunResult{err: targetFailure, cleanupProven: true}
 	}
-	if err := launch.PrepareSessionCleanupProof(created.RootDirectory(), challenge); err != nil {
+	if _, err := created.ArmOperation(challenge); err != nil {
 		return containedRunResult{err: targetFailure, cleanupProven: true}
 	}
 	if binding == nil {
@@ -126,14 +132,14 @@ func runContainedCodex(
 			// Process preparation already succeeded after the durable marker was
 			// armed. Without a valid retained handle, process-tree cleanup cannot
 			// be proven, so preserve the protected Session for recovery.
-			return containedRunResult{err: cleanupFailure, cleanupProven: false}
+			return containedRunResult{err: cleanupFailure, cleanupProven: false, cleanupChallenge: proofChallenge}
 		}
 		return containedRunResult{err: err, cleanupProven: true}
 	}
 	runErr, cleanupErr := settleRetainedProcess(process, retainedAttached, nil)
 	if cleanupErr != nil {
 		return containedRunResult{
-			err: cleanupFailure, cleanupProven: false, cleanupProcess: process,
+			err: cleanupFailure, cleanupProven: false, cleanupProcess: process, cleanupChallenge: proofChallenge,
 		}
 	}
 	if runErr != nil {
@@ -144,4 +150,20 @@ func runContainedCodex(
 		return containedRunResult{err: targetFailure, cleanupProven: true}
 	}
 	return containedRunResult{cleanupProven: true}
+}
+
+func advanceProcessChallenge(ctx context.Context, binding loginResourceBinding, fallback string) (string, error) {
+	typed, ok := binding.(processChallengeBinding)
+	if !ok {
+		return fallback, nil
+	}
+	challenge := make([]byte, launch.RecoveryProofChallengeSize)
+	if _, err := rand.Read(challenge); err != nil {
+		return "", err
+	}
+	encoded := hex.EncodeToString(challenge)
+	if err := typed.AdvanceCleanupChallenge(ctx, encoded); err != nil {
+		return "", err
+	}
+	return encoded, nil
 }

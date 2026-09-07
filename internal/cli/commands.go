@@ -5,6 +5,7 @@ import (
 	"github.com/alcimerio/ai-config-selector/internal/codexauth"
 	"github.com/alcimerio/ai-config-selector/internal/profile"
 	"github.com/alcimerio/ai-config-selector/internal/runcommand"
+	"github.com/alcimerio/ai-config-selector/internal/sessionops"
 	"strings"
 )
 
@@ -37,6 +38,10 @@ var commands = []commandSpec{
 	{path: "profile export", syntax: "acs profile export NAME [--file FILE]", description: "Export supported version-3 stored intent as deterministic sanitized exchange JSON.\nWithout --file, JSON is stdout and the classification report is stderr. Existing files are never replaced.", example: "acs profile export backend-review\n  acs profile export backend-review --file backend-review.acs-profile.json", nameOperand: true, valueFlag: "--file", optionalValue: true},
 	{path: "profile import", syntax: "acs profile import --file FILE --as NAME [--bindings FILE] [--dry-run]", description: "Import one untrusted exchange document through bounded validation and conditional no-overwrite creation.\nAll symbolic bindings must be explicit; --dry-run is passive and publishes nothing.", example: "acs profile import --file shared.acs-profile.json --as backend-review --bindings local-bindings.json --dry-run", valueFlag: "--file", auxValueFlag: "--as", thirdValueFlag: "--bindings", optionalThirdValue: true, boolFlag: "--dry-run"},
 	{path: "profile import validate", syntax: "acs profile import validate --file FILE [--bindings FILE] [--json]", description: "Passively validate one bounded exchange document and optional local bindings.\nThis does not change the existing acs profile validate NAME command and creates no storage or runtime state.", example: "acs profile import validate --file shared.acs-profile.json --json", valueFlag: "--file", auxValueFlag: "--bindings", optionalAuxValue: true, boolFlag: "--json"},
+	{path: "session", syntax: "acs session <list|inspect|recover> [flags]", description: "Inspect durable Session lifecycle records or attempt proof-gated recovery.", example: "acs session list --json", group: true},
+	{path: "session list", syntax: "acs session list [--state STATE] [--json]", description: "Passively list bounded sanitized durable Session records. Missing storage is empty; no runtime or provider is accessed.", example: "acs session list\n  acs session list --state retryable --json", valueFlag: "--state", optionalValue: true, boolFlag: "--json"},
+	{path: "session inspect", syntax: "acs session inspect ID [--json]", description: "Passively inspect one sanitized durable Session record without taking locks or changing files.", example: "acs session inspect ses_abcd234567abcdef234567abcd --json", nameOperand: true, boolFlag: "--json"},
+	{path: "session recover", syntax: "acs session recover ID [--json]", description: "Attempt bounded recovery using the exact private generation, inactive lease and native cleanup proof. It never kills or force-deletes a process.", example: "acs session recover ses_abcd234567abcdef234567abcd --json", nameOperand: true, boolFlag: "--json"},
 	{path: "explain", syntax: "acs explain <sandbox|devin|codex|run> [flags]", description: "Explain semantic Profile authority and registered execution requirements without creating a Session or starting a target.", example: "acs explain devin --profile backend-review\n  acs explain codex --profile backend-review --json", group: true},
 	{path: "explain sandbox", syntax: "acs explain sandbox --profile NAME [--check-native-readiness] [--json]", description: "Explain the fixed sandbox-shell intent. Native readiness is unchecked unless explicitly requested.", example: "acs explain sandbox --profile backend-review --json", valueFlag: "--profile", boolFlag: "--json", secondBoolFlag: "--check-native-readiness"},
 	{path: "explain devin", syntax: "acs explain devin --profile NAME [--check-native-readiness] [--json]", description: "Explain Devin authority, projection, configuration inheritance, and evidence without starting Devin.", example: "acs explain devin --profile backend-review", valueFlag: "--profile", boolFlag: "--json", secondBoolFlag: "--check-native-readiness"},
@@ -164,6 +169,11 @@ func parseCommand(args []string) (inv invocation, problem string) {
 	if inv.command.path == "doctor" && inv.value != "" && inv.value != "devin" && inv.value != "sandbox" && inv.value != "codex-auth" {
 		return inv, "target must be devin, sandbox or codex-auth"
 	}
+	if inv.command.path == "session list" && inv.value != "" {
+		if _, ok := sessionops.ParseState(inv.value); !ok {
+			return inv, "state must be active, settling, retryable, unproven, removable, removed, unknown or corrupt"
+		}
+	}
 	if inv.help {
 		return inv, ""
 	}
@@ -215,6 +225,9 @@ func parseCommand(args []string) (inv invocation, problem string) {
 	}
 	if inv.command.path == "profile export" && profile.ValidateName(inv.operand) != nil {
 		return inv, "invalid Profile name"
+	}
+	if (inv.command.path == "session inspect" || inv.command.path == "session recover") && !sessionops.ValidID(inv.operand) {
+		return inv, "invalid Session ID"
 	}
 	if inv.command.path == "profile import" && profile.ValidateName(inv.auxValue) != nil {
 		return inv, "invalid destination Profile name"
@@ -271,6 +284,12 @@ func ExplanationRequested(args []string) bool {
 	return problem == "" && !inv.help && strings.HasPrefix(inv.command.path, "explain ")
 }
 
+// SessionOperationsRequested identifies the syntax-validated pre-runtime path.
+func SessionOperationsRequested(args []string) bool {
+	inv, problem := parseCommand(args)
+	return problem == "" && !inv.help && strings.HasPrefix(inv.command.path, "session ")
+}
+
 // publicToken identifies command/flag spellings without echoing attached values,
 // private paths, terminal controls, or arbitrary positional arguments.
 func publicToken(token string) string {
@@ -313,7 +332,11 @@ func (app App) printHelp(command commandSpec) {
 		} else if command.valueFlag == "--confirm" {
 			fmt.Fprintln(app.Output, "  --confirm NAME  Exact name confirmation for deliberate noninteractive deletion")
 		} else if command.optionalValue {
-			fmt.Fprintln(app.Output, "  --target devin|sandbox|codex-auth  Optional workflow; not a backend selector")
+			if command.valueFlag == "--state" {
+				fmt.Fprintln(app.Output, "  --state STATE  Optional exact lifecycle-state filter")
+			} else {
+				fmt.Fprintln(app.Output, "  --target devin|sandbox|codex-auth  Optional workflow; not a backend selector")
+			}
 		} else {
 			fmt.Fprintf(app.Output, "  %s <name>  Required name\n", command.valueFlag)
 		}
@@ -381,6 +404,12 @@ func (app App) RunInformational(args []string) (handled bool, code int) {
 		}
 		if inv.command.path == "devin" {
 			fmt.Fprintln(app.ErrorOutput, "ACS will not start Devin without the required sandbox")
+		}
+		if len(args) != 0 && args[0] == "session" {
+			// Session operations reserve 2 for grammar/admission failures;
+			// operational outcomes use 0 or 1. Existing commands retain their
+			// historical usage status.
+			code = 2
 		}
 		return true, code
 	}
