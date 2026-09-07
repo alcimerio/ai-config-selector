@@ -67,7 +67,7 @@ func TestSameNameCreationRetryRecoversPublishedTransaction(t *testing.T) {
 					t.Fatal(err)
 				}
 				for _, entry := range entries {
-					if entry.Name() != "destination.json" && entry.Name() != ".profile-transaction-lock" {
+					if entry.Name() != "destination.json" && entry.Name() != ".profile-transaction-lock" && entry.Name() != "history" {
 						t.Fatal("retry left evidence", entry.Name())
 					}
 				}

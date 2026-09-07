@@ -27,6 +27,16 @@ type Revision struct {
 	digest [32]byte
 	valid  bool
 }
+
+// String returns the bounded public compare-and-apply digest. It contains no
+// document bytes or path material.
+func (r Revision) String() string {
+	if !r.valid {
+		return ""
+	}
+	return "pr_" + fmt.Sprintf("%x", r.digest)
+}
+
 type Snapshot struct {
 	Exists   bool
 	Bytes    []byte
@@ -101,10 +111,19 @@ type DeleteRequest struct {
 	Name     string
 	Expected Revision
 }
+
+// HistoryRequest annotates an ordinary repository request with a sanitized
+// event class and, for restore only, its already selected lineage.
+type HistoryRequest struct {
+	Request   Request
+	Operation string
+	Lineage   string
+}
 type change struct {
 	op, source, destination             string
 	sourceRevision, destinationRevision Revision
 	data                                []byte
+	historyOp, lineage, sourceLineage   string
 }
 
 func (r CreateRequest) change() change {
@@ -121,6 +140,14 @@ func (r RenameRequest) change() change {
 }
 func (r DeleteRequest) change() change {
 	return change{op: "delete", source: r.Name, sourceRevision: r.Expected}
+}
+func (r HistoryRequest) change() change {
+	if r.Request == nil {
+		return change{}
+	}
+	c := r.Request.change()
+	c.historyOp, c.lineage = r.Operation, r.Lineage
+	return c
 }
 func (c change) validate() error {
 	if len(c.data) > MaxDocumentBytes {
@@ -152,6 +179,16 @@ func (c change) validate() error {
 			return ErrConflict
 		}
 	default:
+		return ErrConflict
+	}
+	if c.historyOp != "" {
+		switch c.historyOp {
+		case "create", "edit", "clone", "rename", "delete", "import", "migration", "restore":
+		default:
+			return ErrConflict
+		}
+	}
+	if c.lineage != "" && !lineagePattern.MatchString(c.lineage) {
 		return ErrConflict
 	}
 	return nil
@@ -259,6 +296,11 @@ func (r *Repository) Apply(ctx context.Context, request Request) (out Outcome, e
 	}
 	p, err := d.prepare(ctx, c)
 	if err != nil {
+		cleanup, cleanupErr := d.recover(context.Background())
+		out.RecoveryRequired = cleanup.RecoveryRequired
+		return out, errors.Join(err, cleanupErr)
+	}
+	if err = d.historyPrepare(c, p); err != nil {
 		cleanup, cleanupErr := d.recover(context.Background())
 		out.RecoveryRequired = cleanup.RecoveryRequired
 		return out, errors.Join(err, cleanupErr)

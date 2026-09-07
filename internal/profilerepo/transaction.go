@@ -43,7 +43,7 @@ func decodePlan(data []byte) (*plan, error) {
 		return nil, ErrUnsafe
 	}
 	id, e := hex.DecodeString(p.ID)
-	if e != nil || len(id) != 16 || hex.EncodeToString(id) != p.ID || p.Version != 1 {
+	if e != nil || len(id) != 16 || hex.EncodeToString(id) != p.ID || (p.Version != 1 && p.Version != 2) {
 		return nil, ErrUnsafe
 	}
 	if p.Source != "" && (!namePattern.MatchString(p.Source) || !validIdentity(p.Before)) {
@@ -85,7 +85,7 @@ func (d *directory) prepare(ctx context.Context, c change) (*plan, error) {
 	if _, err := rand.Read(random[:]); err != nil {
 		return nil, err
 	}
-	p := &plan{Version: 1, ID: hex.EncodeToString(random[:]), Operation: c.op, Source: c.source, Destination: c.destination}
+	p := &plan{Version: 2, ID: hex.EncodeToString(random[:]), Operation: c.op, Source: c.source, Destination: c.destination}
 	if c.source != "" {
 		before, err := d.read(c.source+".json", MaxDocumentBytes, 1)
 		if err != nil {
@@ -377,6 +377,14 @@ func (d *directory) finish(p *plan) (out Outcome, err error) {
 			return
 		}
 	}
+	// Version-two decisions cover the Profile publication and its immutable
+	// history event. A failure here is deliberately Unknown and is completed by
+	// ordinary repository recovery before any later mutation.
+	if p.Version == 2 {
+		if err = d.historyCommit(p.ID); err != nil {
+			return
+		}
+	}
 	if err = d.link("plan", "complete", "complete.publish"); err != nil {
 		return
 	}
@@ -393,6 +401,11 @@ func (d *directory) finish(p *plan) (out Outcome, err error) {
 	return
 }
 func (d *directory) cleanup(p *plan, artifacts map[string]*object, committed bool) error {
+	if p != nil && p.Version == 2 {
+		if err := d.historyAbort(p.ID); err != nil {
+			return err
+		}
+	}
 	// No terminal state produced by this engine retains a swap or pending leaf.
 	if committed {
 		if artifacts["swap"] != nil || artifacts["pending"] != nil {
