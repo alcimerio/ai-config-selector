@@ -34,6 +34,11 @@ uses a mode-0600 same-directory temporary, complete write and sync, exclusive
 no-replace publication, and directory sync. Existing files, including symlinks,
 are never replaced. A failure after publication says that the destination may
 already contain the complete export and must be inspected before retrying.
+Cancellation is observed inside the publication action immediately before the
+exclusive rename. That observation and the filesystem syscall are not one atomic
+operation: if rename succeeds, the outcome remains published even when
+cancellation arrives concurrently or afterward, and directory durability is
+still attempted before cancellation and durability errors are reported together.
 
 Local source names and a nonempty Codex `authRef` are replaced by deterministic
 symbols. Skill paths remain exact source-relative logical intent; they are not

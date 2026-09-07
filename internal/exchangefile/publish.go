@@ -17,6 +17,9 @@ import (
 
 var ErrUnsafeDestination = errors.New("unsafe exchange output destination")
 
+// Outcome records whether the exclusive rename completed. Once Published is
+// true, later cancellation, durability, reporting, or cleanup errors do not
+// make the destination absent.
 type Outcome struct{ Published bool }
 
 type Publisher struct {
@@ -120,18 +123,27 @@ func (publisher Publisher) Publish(ctx context.Context, destination string, data
 	if err = validateParent(); err != nil {
 		return
 	}
-	if err = publisher.step("publish", func() error {
+	publishErr := publisher.step("publish", func() error {
+		// This is the final cancellation observation before the commit syscall.
+		// Cancellation can still race with that syscall; a successful rename is
+		// therefore always reported as published.
+		if cancelErr := ctx.Err(); cancelErr != nil {
+			return cancelErr
+		}
 		if renameErr := renameAtNoReplace(int(parent.Fd()), temporary, leaf); renameErr != nil {
 			return renameErr
 		}
 		temporaryExists = false
 		out.Published = true
 		return nil
-	}); err != nil {
+	})
+	if publishErr != nil && !out.Published {
+		err = publishErr
 		return
 	}
-	if err = publisher.step("directory-sync", parent.Sync); err != nil {
-		return
-	}
-	return out, nil
+	// A successful rename is already publication, so attempt directory
+	// durability even if a post-publication hook fails or cancellation arrives.
+	syncErr := publisher.step("directory-sync", parent.Sync)
+	err = errors.Join(publishErr, syncErr, ctx.Err())
+	return
 }
