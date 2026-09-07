@@ -16,8 +16,27 @@ import (
 	"testing"
 	"time"
 
+	"github.com/alcimerio/ai-config-selector/internal/codexauth"
 	"github.com/creack/pty"
 )
+
+const (
+	explanationStoredAuthRef   = "work"
+	explanationOverrideAuthRef = "private-auth-canary"
+	explanationLegacyAuthRef   = "private-legacy-auth"
+	explanationInactiveAuthRef = "private-inactive-auth"
+	explanationFirstAuthRef    = "private-auth-first"
+	explanationSecondAuthRef   = "private-auth-second"
+	explanationRunAuthRef      = "private-auth-override"
+)
+
+func TestExplanationFixtureAuthReferencesUseProductionGrammar(t *testing.T) {
+	for _, reference := range []string{explanationStoredAuthRef, explanationOverrideAuthRef, explanationLegacyAuthRef, explanationInactiveAuthRef, explanationFirstAuthRef, explanationSecondAuthRef, explanationRunAuthRef} {
+		if _, err := codexauth.ParseCredentialRef(reference); err != nil {
+			t.Errorf("fixture auth reference %q: %v", reference, err)
+		}
+	}
+}
 
 func TestPromotedArtifactReportsItsVersionAndCreatesAnEmptyProfileThroughAPTY(t *testing.T) {
 	binary := promotedBinary(t)
@@ -649,7 +668,7 @@ func writeSharedTargetProfile(t *testing.T, home, name, workspaceAccess string) 
 	if err := os.MkdirAll(directory, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	contents := fmt.Sprintf(`{"version":3,"name":%q,"common":{"skills":{"version":1,"selection":[{"source":"devin-config","relativePath":"review"},{"source":"shared-agents","relativePath":"delivery"}]},"workspace":{"version":1,"selection":{"access":%q}}},"overlays":{"devin":{"version":1},"codex":{"version":1,"authRef":"work"}}}`, name, workspaceAccess)
+	contents := fmt.Sprintf(`{"version":3,"name":%q,"common":{"skills":{"version":1,"selection":[{"source":"devin-config","relativePath":"review"},{"source":"shared-agents","relativePath":"delivery"}]},"workspace":{"version":1,"selection":{"access":%q}}},"overlays":{"devin":{"version":1},"codex":{"version":1,"authRef":%q}}}`, name, workspaceAccess, explanationStoredAuthRef)
 	if err := os.WriteFile(filepath.Join(directory, name+".json"), []byte(contents), 0o600); err != nil {
 		t.Fatal(err)
 	}

@@ -173,7 +173,7 @@ func assertPromotedArtifactEffectiveExplanation(t *testing.T) {
 	}{
 		{name: "sandbox", recipe: "shell", explain: []string{"explain", "sandbox", "--profile", "explanation", "--json"}, execute: []string{"sandbox", "--profile", "explanation", "--dry-run"}},
 		{name: "devin", recipe: "devin", explain: []string{"explain", "devin", "--profile", "explanation", "--json"}, execute: []string{"devin", "--profile", "explanation", "--dry-run"}},
-		{name: "codex", recipe: "codex", explain: []string{"explain", "codex", "--profile", "explanation", "--auth", "work", "--json"}, execute: []string{"codex", "--profile", "explanation", "--auth", "work", "--dry-run"}},
+		{name: "codex", recipe: "codex", explain: []string{"explain", "codex", "--profile", "explanation", "--auth", explanationStoredAuthRef, "--json"}, execute: []string{"codex", "--profile", "explanation", "--auth", explanationStoredAuthRef, "--dry-run"}},
 		{name: "run", recipe: "command", explain: []string{"explain", "run", "--profile", "explanation", "--json", "--", helper, "--acs-generic-command-helper", "--tripwire", filepath.Join(workspace, "expected-digest-run-target")}, execute: []string{"run", "--profile", "explanation", "--dry-run", "--", helper, "--acs-generic-command-helper", "--tripwire", filepath.Join(workspace, "expected-digest-run-target")}},
 	}
 	for _, test := range tests {
@@ -299,7 +299,7 @@ func assertPromotedArtifactEffectiveExplanation(t *testing.T) {
 			mismatchArguments := []string{test.name, "--profile", "explanation", "--expect-authority-digest", mismatch}
 			switch test.name {
 			case "codex":
-				mismatchArguments = append(mismatchArguments, "--auth", "work")
+				mismatchArguments = append(mismatchArguments, "--auth", explanationStoredAuthRef)
 			case "run":
 				mismatchArguments = append(mismatchArguments, "--", helper, "--acs-generic-command-helper", "--tripwire", filepath.Join(workspace, "expected-digest-run-target"))
 			}
@@ -434,8 +434,8 @@ func assertPromotedArtifactRunDigestMeaning(t *testing.T, binary, home, path, wo
 
 func assertPromotedArtifactCodexAuthDigestMeaning(t *testing.T, binary, home, path, workspace string) {
 	t.Helper()
-	writeNativeExplanationProfile(t, home, "auth-first", `"codex":{"version":1,"authRef":"private-auth-first"}`)
-	writeNativeExplanationProfile(t, home, "auth-second", `"codex":{"version":1,"authRef":"private-auth-second"}`)
+	writeNativeExplanationProfile(t, home, "auth-first", `"codex":{"version":1,"authRef":"`+explanationFirstAuthRef+`"}`)
+	writeNativeExplanationProfile(t, home, "auth-second", `"codex":{"version":1,"authRef":"`+explanationSecondAuthRef+`"}`)
 	explain := func(profileName string, override ...string) (string, []nativeExplanationFact) {
 		arguments := []string{"explain", "codex", "--profile", profileName, "--json"}
 		if len(override) != 0 {
@@ -447,7 +447,7 @@ func assertPromotedArtifactCodexAuthDigestMeaning(t *testing.T, binary, home, pa
 		if err != nil {
 			t.Fatalf("Codex auth explanation: %v; output=%s", err, output)
 		}
-		for _, private := range []string{"private-auth-first", "private-auth-second", "private-auth-override"} {
+		for _, private := range []string{explanationFirstAuthRef, explanationSecondAuthRef, explanationRunAuthRef} {
 			if bytes.Contains(output, []byte(private)) {
 				t.Fatalf("Codex explanation exposed auth reference %q: %s", private, output)
 			}
@@ -465,7 +465,7 @@ func assertPromotedArtifactCodexAuthDigestMeaning(t *testing.T, binary, home, pa
 	}
 	first, firstFacts := explain("auth-first")
 	second, _ := explain("auth-second")
-	override, overrideFacts := explain("auth-first", "private-auth-override")
+	override, overrideFacts := explain("auth-first", explanationRunAuthRef)
 	if first != second {
 		t.Fatal("opaque Codex auth reference value changed semantic authority digest")
 	}
@@ -513,10 +513,10 @@ func assertPromotedArtifactLegacyExplanations(t *testing.T, binary, home, path, 
 			}
 			assertNoSessions(t, home)
 		}
-		codex := exec.Command(binary, "explain", "codex", "--profile", profileName, "--auth", "PRIVATE-LEGACY-AUTH", "--json")
+		codex := exec.Command(binary, "explain", "codex", "--profile", profileName, "--auth", explanationLegacyAuthRef, "--json")
 		codex.Dir, codex.Env = workspace, nativeCandidateEnvironment(home, path, nil)
 		output, err := codex.CombinedOutput()
-		if err == nil || !bytes.Contains(output, []byte(`"plan":null`)) || !bytes.Contains(output, []byte(`"code":"profile_load_failed"`)) || bytes.Contains(output, []byte("PRIVATE-LEGACY-AUTH")) || bytes.Contains(output, []byte(home)) {
+		if err == nil || !bytes.Contains(output, []byte(`"plan":null`)) || !bytes.Contains(output, []byte(`"code":"profile_load_failed"`)) || bytes.Contains(output, []byte(explanationLegacyAuthRef)) || bytes.Contains(output, []byte(home)) {
 			t.Fatalf("legacy Codex failure is unsafe or reinterpreted: err=%v output=%s", err, output)
 		}
 		assertNoSessions(t, home)
@@ -529,9 +529,9 @@ func assertPromotedArtifactInactiveOverlayExplanations(t *testing.T, binary, hom
 		name, overlays string
 	}{
 		{name: "inactive-none", overlays: `"devin":{"version":1}`},
-		{name: "inactive-known", overlays: `"devin":{"version":1},"codex":{"version":1,"authRef":"PRIVATE-INACTIVE-AUTH"}`},
-		{name: "inactive-unknown-a", overlays: `"devin":{"version":1},"codex":{"version":1,"authRef":"PRIVATE-INACTIVE-AUTH"},"PRIVATE-OVERLAY-B":{"version":41,"payload":"PRIVATE-PAYLOAD-B"},"PRIVATE-OVERLAY-A":{"version":99,"payload":"PRIVATE-PAYLOAD-A"}`},
-		{name: "inactive-unknown-b", overlays: `"PRIVATE-OVERLAY-A":{"version":99,"payload":"PRIVATE-PAYLOAD-A"},"PRIVATE-OVERLAY-B":{"version":41,"payload":"PRIVATE-PAYLOAD-B"},"codex":{"version":1,"authRef":"PRIVATE-INACTIVE-AUTH"},"devin":{"version":1}`},
+		{name: "inactive-known", overlays: `"devin":{"version":1},"codex":{"version":1,"authRef":"` + explanationInactiveAuthRef + `"}`},
+		{name: "inactive-unknown-a", overlays: `"devin":{"version":1},"codex":{"version":1,"authRef":"` + explanationInactiveAuthRef + `"},"PRIVATE-OVERLAY-B":{"version":41,"payload":"PRIVATE-PAYLOAD-B"},"PRIVATE-OVERLAY-A":{"version":99,"payload":"PRIVATE-PAYLOAD-A"}`},
+		{name: "inactive-unknown-b", overlays: `"PRIVATE-OVERLAY-A":{"version":99,"payload":"PRIVATE-PAYLOAD-A"},"PRIVATE-OVERLAY-B":{"version":41,"payload":"PRIVATE-PAYLOAD-B"},"codex":{"version":1,"authRef":"` + explanationInactiveAuthRef + `"},"devin":{"version":1}`},
 	}
 	type decoded struct {
 		Plan struct {
@@ -548,7 +548,7 @@ func assertPromotedArtifactInactiveOverlayExplanations(t *testing.T, binary, hom
 		if err != nil {
 			t.Fatalf("inactive overlay explanation %s: %v; output=%s", candidate.name, err, output)
 		}
-		for _, private := range []string{"PRIVATE-INACTIVE-AUTH", "PRIVATE-OVERLAY-A", "PRIVATE-OVERLAY-B", "PRIVATE-PAYLOAD-A", "PRIVATE-PAYLOAD-B"} {
+		for _, private := range []string{explanationInactiveAuthRef, "PRIVATE-OVERLAY-A", "PRIVATE-OVERLAY-B", "PRIVATE-PAYLOAD-A", "PRIVATE-PAYLOAD-B"} {
 			if bytes.Contains(output, []byte(private)) {
 				t.Fatalf("inactive overlay explanation exposed %q: %s", private, output)
 			}
@@ -1003,10 +1003,11 @@ func TestPromotedArtifactSharedTargetConformance(t *testing.T) {
 		name := "shared-" + strings.ReplaceAll(access, "-", "")
 		writeSharedTargetProfile(t, home, name, access)
 		outputs := map[string]string{}
+		devinRequested, devinTargetAdded, devinEffective := map[string]nativeExplanationFact{}, map[string]nativeExplanationFact{}, map[string]nativeExplanationFact{}
 		for _, target := range []string{"devin", "codex"} {
 			arguments := []string{target, "--profile", name, "--dry-run"}
 			if target == "codex" && access == "read-write" {
-				arguments = append(arguments, "--auth", "private-auth-canary")
+				arguments = append(arguments, "--auth", explanationOverrideAuthRef)
 			}
 			command := exec.Command(binary, arguments...)
 			command.Env = nativeCandidateEnvironment(home, path, nil)
@@ -1039,7 +1040,7 @@ func TestPromotedArtifactSharedTargetConformance(t *testing.T) {
 			}
 			explainArguments := []string{"explain", target, "--profile", name, "--json"}
 			if target == "codex" && access == "read-write" {
-				explainArguments = append(explainArguments, "--auth", "private-auth-canary")
+				explainArguments = append(explainArguments, "--auth", explanationOverrideAuthRef)
 			}
 			explain := exec.Command(binary, explainArguments...)
 			explain.Env, explain.Dir = nativeCandidateEnvironment(home, path, nil), workspace
@@ -1047,7 +1048,7 @@ func TestPromotedArtifactSharedTargetConformance(t *testing.T) {
 			if err != nil {
 				t.Fatalf("installed candidate %s explanation: %v; output=%s", target, err, explanationOutput)
 			}
-			privateReferenceLeaked := target == "codex" && (bytes.Contains(explanationOutput, []byte(`"work"`)) || bytes.Contains(explanationOutput, []byte("private-auth-canary")))
+			privateReferenceLeaked := target == "codex" && (bytes.Contains(explanationOutput, []byte(explanationStoredAuthRef)) || bytes.Contains(explanationOutput, []byte(explanationOverrideAuthRef)))
 			if bytes.Contains(explanationOutput, []byte("unselected")) || bytes.Contains(explanationOutput, []byte(workspace)) || privateReferenceLeaked {
 				t.Fatalf("%s explanation exposed unselected/private binding: %s", target, explanationOutput)
 			}
@@ -1055,6 +1056,7 @@ func TestPromotedArtifactSharedTargetConformance(t *testing.T) {
 				Plan struct {
 					Requested   []nativeExplanationFact `json:"requested"`
 					TargetAdded []nativeExplanationFact `json:"targetAdded"`
+					Effective   []nativeExplanationFact `json:"effective"`
 				} `json:"plan"`
 			}
 			if err := json.Unmarshal(explanationOutput, &explanation); err != nil {
@@ -1072,6 +1074,17 @@ func TestPromotedArtifactSharedTargetConformance(t *testing.T) {
 			if target == "devin" && !nativeExplanationHasFact(explanation.Plan.TargetAdded, "devin.project-skills") {
 				t.Fatalf("Devin explanation omitted project inheritance: %s", explanationOutput)
 			}
+			if target == "devin" {
+				for _, fact := range explanation.Plan.Requested {
+					devinRequested[fact.ID] = fact
+				}
+				for _, fact := range explanation.Plan.TargetAdded {
+					devinTargetAdded[fact.ID] = fact
+				}
+				for _, fact := range explanation.Plan.Effective {
+					devinEffective[fact.ID] = fact
+				}
+			}
 			assertNoSessions(t, home)
 		}
 		for _, marker := range []string{
@@ -1084,9 +1097,9 @@ func TestPromotedArtifactSharedTargetConformance(t *testing.T) {
 				t.Fatalf("Devin shared dry-run omitted projection or project-local boundary %q", marker)
 			}
 		}
-		codexReference := "work"
+		codexReference := explanationStoredAuthRef
 		if access == "read-write" {
-			codexReference = "private-auth-canary"
+			codexReference = explanationOverrideAuthRef
 		}
 		for _, marker := range []string{
 			filepath.Join("<session>", "home", ".codex", "skills", "devin-config", "review"),
@@ -1103,7 +1116,7 @@ func TestPromotedArtifactSharedTargetConformance(t *testing.T) {
 			}
 		}
 		profileBytes, err := os.ReadFile(filepath.Join(home, ".acs", "profiles", name+".json"))
-		if err != nil || !bytes.Contains(profileBytes, []byte(`"authRef":"work"`)) || bytes.Contains(profileBytes, []byte("override")) {
+		if err != nil || !bytes.Contains(profileBytes, []byte(`"authRef":"`+explanationStoredAuthRef+`"`)) || bytes.Contains(profileBytes, []byte("override")) {
 			t.Fatalf("Codex dry-run override changed the stored opaque reference: %q, %v", profileBytes, err)
 		}
 
@@ -1124,6 +1137,19 @@ func TestPromotedArtifactSharedTargetConformance(t *testing.T) {
 		if err := json.Unmarshal(bytes.TrimSpace(output), &result); err != nil {
 			t.Fatalf("contained Devin fixture result is invalid: %v; output=%s", err, output)
 		}
+		if workspaceFact, found := devinRequested["common.workspace"]; !found || workspaceFact.Value.Access != access {
+			t.Fatalf("Devin behavioral result lacks matching declared workspace authority: %#v", workspaceFact)
+		}
+		for _, id := range []string{"devin.preflight.skills", "devin.preflight.authentication", "devin.credentials", "devin.project-skills", "skills.projection.devin-config:review", "skills.projection.shared-agents:delivery"} {
+			if _, found := devinTargetAdded[id]; !found {
+				t.Fatalf("Devin behavioral result lacks matching target declaration %s", id)
+			}
+		}
+		for _, id := range []string{"runtime.session", "skills.common.devin-config:review", "skills.common.shared-agents:delivery", "workspace.read"} {
+			if _, found := devinEffective[id]; !found {
+				t.Fatalf("Devin behavioral result lacks matching effective declaration %s", id)
+			}
+		}
 		for label, observed := range map[string]bool{
 			"both preflights":             result.PreflightSkills && result.PreflightAuthentication,
 			"selected common bytes":       result.SelectedCommonSkills,
@@ -1138,6 +1164,10 @@ func TestPromotedArtifactSharedTargetConformance(t *testing.T) {
 			}
 		}
 		wantWorkspaceWrite := access == "read-write"
+		_, declaresWorkspaceWrite := devinEffective["workspace.write"]
+		if declaresWorkspaceWrite != wantWorkspaceWrite {
+			t.Fatalf("Devin declared workspace write=%v, want %v", declaresWorkspaceWrite, wantWorkspaceWrite)
+		}
 		if result.WorkspaceWritable != wantWorkspaceWrite {
 			t.Fatalf("Devin %s workspace write = %v, want %v", access, result.WorkspaceWritable, wantWorkspaceWrite)
 		}
@@ -1148,7 +1178,7 @@ func TestPromotedArtifactSharedTargetConformance(t *testing.T) {
 		assertNoSessions(t, home)
 	}
 
-	legacy := exec.Command(binary, "codex", "--profile", "reviews", "--auth", "work", "--dry-run")
+	legacy := exec.Command(binary, "codex", "--profile", "reviews", "--auth", explanationStoredAuthRef, "--dry-run")
 	legacy.Env, legacy.Dir = nativeCandidateEnvironment(home, path, nil), workspace
 	if output, err := legacy.CombinedOutput(); err == nil || !strings.Contains(string(output), "unsupported schema version 1") {
 		t.Fatalf("installed Codex reinterpreted legacy Devin Profile: err=%v output=%s", err, output)

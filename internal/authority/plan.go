@@ -280,6 +280,10 @@ func cloneFacts(values []Fact) []Fact {
 	result := append([]Fact(nil), values...)
 	for index := range result {
 		result[index].Value.Names = append([]string(nil), result[index].Value.Names...)
+		if result[index].Value.Count != nil {
+			count := *result[index].Value.Count
+			result[index].Value.Count = &count
+		}
 		if result[index].Value.Identity != nil {
 			identity := *result[index].Value.Identity
 			result[index].Value.Identity = &identity
