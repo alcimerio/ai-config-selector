@@ -56,15 +56,18 @@ func TestInactiveUnknownOverlaysAreDeterministicOpaqueAndOutsideDigest(t *testin
 		"PRIVATE-KEY-A": {Version: 99},
 		"PRIVATE-KEY-B": {Version: 41},
 	}}
-	appendInactiveOverlays(&first, firstProfile, "devin")
-	appendInactiveOverlays(&second, secondProfile, "devin")
+	firstLimitations := appendInactiveOverlays(&first, firstProfile, "devin")
+	secondLimitations := appendInactiveOverlays(&second, secondProfile, "devin")
 	if first.AuthorityDigest != baseline.AuthorityDigest || second.AuthorityDigest != baseline.AuthorityDigest {
 		t.Fatal("presentation-only inactive overlays changed semantic digest")
 	}
-	if !reflect.DeepEqual(first.Unsupported, second.Unsupported) || len(first.Unsupported) != 2 {
-		t.Fatalf("unknown overlay rendering is not deterministic and one-per-overlay: first=%#v second=%#v", first.Unsupported, second.Unsupported)
+	if len(first.Unsupported) != 0 || len(second.Unsupported) != 0 {
+		t.Fatalf("unknown overlays fabricated semantic plan facts: first=%#v second=%#v", first.Unsupported, second.Unsupported)
 	}
-	encoded, err := json.Marshal(first.Unsupported)
+	if !reflect.DeepEqual(firstLimitations, secondLimitations) || len(firstLimitations) != 2 {
+		t.Fatalf("unknown overlay limitations are not deterministic and one-per-overlay: first=%#v second=%#v", firstLimitations, secondLimitations)
+	}
+	encoded, err := json.Marshal(firstLimitations)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,9 +76,9 @@ func TestInactiveUnknownOverlaysAreDeterministicOpaqueAndOutsideDigest(t *testin
 			t.Fatalf("unknown overlay key or payload escaped through presentation: %s", encoded)
 		}
 	}
-	for _, fact := range first.Unsupported {
-		if fact.Reason != "inactive_overlay_unknown_presentation_only_excluded_from_digest" || fact.Value.Mode != "opaque-inert" || fact.Source.ID != "unknown-overlay" {
-			t.Fatalf("unknown overlay fact is not a sanitized limitation: %#v", fact)
+	for _, limitation := range firstLimitations {
+		if limitation.Code != "inactive_overlay_unknown" || limitation.Detail == "" {
+			t.Fatalf("unknown overlay limitation is incomplete: %#v", limitation)
 		}
 	}
 }
@@ -119,23 +122,40 @@ func TestExplanationBoundsAreByteBasedAndInclusiveOnlyAtDeclaredMaximum(t *testi
 	for index := range maximumChecks {
 		maximumChecks[index] = explanationCheck{ID: "check", Status: "unchecked", Code: "code", Detail: "detail"}
 	}
-	if !explanationWithinBounds(authority.Explanation{Requested: maximumFacts}, maximumChecks) {
+	maximumLimitations := make([]explanationLimitation, maximumExplanationLimitations)
+	for index := range maximumLimitations {
+		maximumLimitations[index] = explanationLimitation{Code: "limit", Detail: "detail"}
+	}
+	if !explanationWithinBounds(authority.Explanation{Requested: maximumFacts}, maximumChecks, maximumLimitations) {
 		t.Fatal("declared exact fact/check maxima were rejected")
 	}
-	if !explanationWithinBounds(authority.Explanation{Requested: []authority.Fact{{ID: maximumString}}}, nil) {
+	if !explanationWithinBounds(authority.Explanation{Requested: []authority.Fact{{ID: maximumString}}}, nil, nil) {
 		t.Fatal("declared exact string byte maximum was rejected")
 	}
-	if explanationWithinBounds(authority.Explanation{Requested: append(maximumFacts, authority.Fact{})}, nil) {
+	if explanationWithinBounds(authority.Explanation{Requested: append(maximumFacts, authority.Fact{})}, nil, nil) {
 		t.Fatal("fact count above declared maximum was accepted")
 	}
-	if explanationWithinBounds(authority.Explanation{}, append(maximumChecks, explanationCheck{})) {
+	if explanationWithinBounds(authority.Explanation{}, append(maximumChecks, explanationCheck{}), nil) {
 		t.Fatal("check count above declared maximum was accepted")
 	}
-	if explanationWithinBounds(authority.Explanation{Requested: []authority.Fact{{ID: maximumString + "x"}}}, nil) {
+	if explanationWithinBounds(authority.Explanation{}, nil, append(maximumLimitations, explanationLimitation{})) {
+		t.Fatal("limitation count above declared maximum was accepted")
+	}
+	if explanationWithinBounds(authority.Explanation{Requested: []authority.Fact{{ID: maximumString + "x"}}}, nil, nil) {
 		t.Fatal("string above declared byte maximum was accepted")
 	}
-	if explanationWithinBounds(authority.Explanation{Requested: []authority.Fact{{ID: strings.Repeat("é", maximumExplanationStringBytes/2) + "x"}}}, nil) {
+	if explanationWithinBounds(authority.Explanation{Requested: []authority.Fact{{ID: strings.Repeat("é", maximumExplanationStringBytes/2) + "x"}}}, nil, nil) {
 		t.Fatal("multibyte string above declared byte maximum was accepted")
+	}
+	if explanationWithinBounds(authority.Explanation{}, nil, []explanationLimitation{{Code: "limit", Detail: maximumString + "x"}}) {
+		t.Fatal("limitation string above declared byte maximum was accepted")
+	}
+	selected := make([]authority.Fact, maximumExplanationSelectedSkills+1)
+	for index := range selected {
+		selected[index] = authority.Fact{ID: "skills.selected.test", Kind: "skill"}
+	}
+	if explanationWithinBounds(authority.Explanation{Requested: selected}, nil, nil) {
+		t.Fatal("selected Skill count above declared maximum was accepted")
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -84,6 +85,142 @@ func TestExplainJSONUsesResolvedAuthorityWithoutNativeProbe(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), `"id":"runtime.network"`) || !strings.Contains(stdout.String(), "local-ip-socket-bind-no-listen-coarse-outbound-ip-macos-dns") {
 		t.Fatalf("network facts incomplete: %s", stdout.String())
+	}
+}
+
+func TestExplainUnknownInactiveOverlaysAreSanitizedLimitationsOutsidePlanAndDigest(t *testing.T) {
+	var baselineDigest string
+	for index, overlays := range []string{
+		`"devin":{"version":1},"PRIVATE-OVERLAY-B":{"version":41,"payload":"PRIVATE-PAYLOAD-B"},"PRIVATE-OVERLAY-A":{"version":99,"payload":"PRIVATE-PAYLOAD-A"}`,
+		`"PRIVATE-OVERLAY-A":{"version":99,"payload":"PRIVATE-PAYLOAD-A"},"PRIVATE-OVERLAY-B":{"version":41,"payload":"PRIVATE-PAYLOAD-B"},"devin":{"version":1}`,
+	} {
+		home := t.TempDir()
+		target, err := devin.New(devin.Config{BinaryPath: "devin", ExistingHomeDir: home})
+		if err != nil {
+			t.Fatal(err)
+		}
+		profiles := filepath.Join(home, ".acs", "profiles")
+		if err := os.MkdirAll(profiles, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		name := fmt.Sprintf("unknown-overlays-%d", index)
+		document := fmt.Sprintf(`{"version":3,"name":%q,"common":{"skills":{"version":1,"selection":[]},"workspace":{"version":1,"selection":{"access":"read-only"}}},"overlays":{%s}}`, name, overlays)
+		if err := os.WriteFile(filepath.Join(profiles, name+".json"), []byte(document), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		store := profile.NewStore(filepath.Join(home, ".acs"), target.Categories())
+		var stdout, stderr bytes.Buffer
+		app := cli.App{Categories: target.Categories(), Profiles: store, WorkingDirectory: home, Output: &stdout, ErrorOutput: &stderr}
+		if code := app.Run(context.Background(), []string{"explain", "devin", "--profile", name, "--json"}); code != 0 {
+			t.Fatalf("JSON code=%d stderr=%q", code, stderr.String())
+		}
+		for _, private := range []string{"PRIVATE-OVERLAY-A", "PRIVATE-OVERLAY-B", "PRIVATE-PAYLOAD-A", "PRIVATE-PAYLOAD-B"} {
+			if strings.Contains(stdout.String(), private) {
+				t.Fatalf("unknown overlay data escaped: %s", stdout.String())
+			}
+		}
+		var result struct {
+			Plan struct {
+				Digest      string `json:"authorityDigest"`
+				Unsupported []struct {
+					ID string `json:"id"`
+				} `json:"unsupported"`
+			} `json:"plan"`
+			Limitations []struct {
+				Code, Detail string
+			} `json:"limitations"`
+		}
+		if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+			t.Fatal(err)
+		}
+		if index == 0 {
+			baselineDigest = result.Plan.Digest
+		} else if result.Plan.Digest != baselineDigest {
+			t.Fatalf("unknown overlay order changed digest: %q != %q", result.Plan.Digest, baselineDigest)
+		}
+		wantCodes := []string{"inactive_overlay_unknown", "inactive_overlay_unknown", "native_readiness_not_launch_readiness", "semantic_digest_only"}
+		if len(result.Limitations) != len(wantCodes) {
+			t.Fatalf("limitations = %#v, want codes %v", result.Limitations, wantCodes)
+		}
+		for position, want := range wantCodes {
+			if result.Limitations[position].Code != want || result.Limitations[position].Detail == "" {
+				t.Fatalf("limitation %d = %#v, want code %q with detail", position, result.Limitations[position], want)
+			}
+		}
+		for _, fact := range result.Plan.Unsupported {
+			if strings.HasPrefix(fact.ID, "overlay.inactive.unknown-") {
+				t.Fatalf("unknown inactive overlay fabricated a plan fact: %#v", fact)
+			}
+		}
+		stdout.Reset()
+		stderr.Reset()
+		if code := app.Run(context.Background(), []string{"explain", "devin", "--profile", name}); code != 0 || strings.Count(stdout.String(), "inactive_overlay_unknown:") != 2 {
+			t.Fatalf("human code=%d output=%s stderr=%s", code, stdout.String(), stderr.String())
+		}
+	}
+}
+
+func TestExplainUnknownInactiveOverlayAndLimitationBoundsFailWithoutPartialPlan(t *testing.T) {
+	for _, test := range []struct {
+		name, reason string
+		unknowns     int
+	}{
+		// The selected overlay plus 15 unknown overlays meets the overlay maximum,
+		// while the 15 per-overlay limitations plus two fixed limitations exceed
+		// the limitation maximum.
+		{name: "limitation count", unknowns: 15, reason: "actual limitations exceed their maximum"},
+		// The selected overlay plus 16 unknown overlays exceeds the overlay maximum.
+		{name: "overlay count", unknowns: 16, reason: "stored overlays exceed their maximum"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			home := t.TempDir()
+			target, err := devin.New(devin.Config{BinaryPath: "devin", ExistingHomeDir: home})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var overlays strings.Builder
+			overlays.WriteString(`"devin":{"version":1}`)
+			for index := 0; index < test.unknowns; index++ {
+				fmt.Fprintf(&overlays, `,"PRIVATE-OVERLAY-%d":{"version":%d,"payload":"PRIVATE-PAYLOAD-%d"}`, index, index+2, index)
+			}
+			profiles := filepath.Join(home, ".acs", "profiles")
+			if err := os.MkdirAll(profiles, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			document := fmt.Sprintf(`{"version":3,"name":"bounded-overlays","common":{"skills":{"version":1,"selection":[]},"workspace":{"version":1,"selection":{"access":"read-only"}}},"overlays":{%s}}`, overlays.String())
+			if err := os.WriteFile(filepath.Join(profiles, "bounded-overlays.json"), []byte(document), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			store := profile.NewStore(filepath.Join(home, ".acs"), target.Categories())
+			for _, format := range []struct {
+				name string
+				args []string
+			}{
+				{name: "json", args: []string{"explain", "devin", "--profile", "bounded-overlays", "--json"}},
+				{name: "human", args: []string{"explain", "devin", "--profile", "bounded-overlays"}},
+			} {
+				t.Run(format.name, func(t *testing.T) {
+					var stdout, stderr bytes.Buffer
+					app := cli.App{Categories: target.Categories(), Profiles: store, WorkingDirectory: home, Output: &stdout, ErrorOutput: &stderr}
+					if code := app.Run(context.Background(), format.args); code != 1 {
+						t.Fatalf("%s: code=%d stdout=%s stderr=%s", test.reason, code, stdout.String(), stderr.String())
+					}
+					output := stdout.String()
+					if format.name == "json" && (!strings.Contains(output, `"plan":null`) || !strings.Contains(output, `"code":"explanation_too_large"`)) {
+						t.Fatalf("%s omitted safe JSON diagnostic: %s", test.reason, output)
+					}
+					if format.name == "human" {
+						output = stderr.String()
+						if stdout.Len() != 0 || !strings.Contains(output, "explanation_too_large") {
+							t.Fatalf("%s omitted safe human diagnostic: stdout=%s stderr=%s", test.reason, stdout.String(), output)
+						}
+					}
+					if strings.Contains(output, "authorityDigest") || strings.Contains(output, "PRIVATE-OVERLAY") || strings.Contains(output, "PRIVATE-PAYLOAD") {
+						t.Fatalf("%s exposed a partial/private result: %s", test.reason, output)
+					}
+				})
+			}
+		})
 	}
 }
 

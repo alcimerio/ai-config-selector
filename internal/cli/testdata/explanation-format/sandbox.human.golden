@@ -69,8 +69,8 @@ Evidence:
     Use --check-native-readiness for the bounded native observation.
 
 Limitations:
-  semantic_digest_only: The digest excludes local paths, file contents, argument values, credentials, concrete project files, and host readiness; equal digests do not mean file-level execution-plan equality.
   native_readiness_not_launch_readiness: Native readiness, when requested, does not check target version, authentication, materialization, generated policy, preflights, or cleanup.
+  semantic_digest_only: The digest excludes local paths, file contents, argument values, credentials, concrete project files, and host readiness; equal digests do not mean file-level execution-plan equality.
 
 Current network authority is local-IP socket bind (not listen/inbound) plus coarse outbound IP and macOS DNS resolver access; no destination allowlist is enforced.
 Native readiness: unchecked (not probed); this is not launch readiness.

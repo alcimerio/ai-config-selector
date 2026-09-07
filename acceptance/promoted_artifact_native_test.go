@@ -560,6 +560,9 @@ func assertPromotedArtifactInactiveOverlayExplanations(t *testing.T, binary, hom
 			Digest      string                  `json:"authorityDigest"`
 			Unsupported []nativeExplanationFact `json:"unsupported"`
 		} `json:"plan"`
+		Limitations []struct {
+			Code, Detail string
+		} `json:"limitations"`
 	}
 	results := make(map[string]decoded, len(profiles))
 	for _, candidate := range profiles {
@@ -591,21 +594,26 @@ func assertPromotedArtifactInactiveOverlayExplanations(t *testing.T, binary, hom
 	if !nativeExplanationHasFact(results["inactive-known"].Plan.Unsupported, "overlay.inactive.codex") {
 		t.Fatalf("known inactive overlay is not reported: %#v", results["inactive-known"].Plan.Unsupported)
 	}
-	first, second := results["inactive-unknown-a"].Plan.Unsupported, results["inactive-unknown-b"].Plan.Unsupported
+	first, second := results["inactive-unknown-a"].Limitations, results["inactive-unknown-b"].Limitations
 	if !reflect.DeepEqual(first, second) {
 		t.Fatalf("unknown inactive overlay order changed presentation: first=%#v second=%#v", first, second)
 	}
 	unknownCount := 0
-	for _, fact := range first {
-		if fact.Reason == "inactive_overlay_unknown_presentation_only_excluded_from_digest" {
+	for _, limitation := range first {
+		if limitation.Code == "inactive_overlay_unknown" {
 			unknownCount++
-			if fact.Source.ID != "unknown-overlay" || fact.Source.Version != 0 {
-				t.Fatalf("unknown inactive overlay leaked source metadata: %#v", fact)
+			if limitation.Detail == "" {
+				t.Fatalf("unknown inactive overlay limitation omitted detail: %#v", limitation)
 			}
 		}
 	}
 	if unknownCount != 2 {
 		t.Fatalf("unknown inactive limitations = %d, want one per overlay: %#v", unknownCount, first)
+	}
+	for _, fact := range results["inactive-unknown-a"].Plan.Unsupported {
+		if strings.HasPrefix(fact.ID, "overlay.inactive.unknown-") {
+			t.Fatalf("unknown inactive overlay fabricated a plan fact: %#v", fact)
+		}
 	}
 }
 

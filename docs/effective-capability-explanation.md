@@ -43,10 +43,12 @@ workspace, executable, runtime and Session paths; argument and environment
 values; auth references; credentials; project files; raw native policy; and
 backend/target output are omitted.
 
-Unknown inactive version-3 overlays are reported as opaque and inert. Missing
-or unsupported selected overlays fail closed. Legacy v1/v2 Profiles remain
-Devin-bound, writable-workspace compatible, and use legacy Skill placement;
-explanation never migrates or rewrites them.
+Each unknown inactive version-3 overlay produces one sanitized
+`inactive_overlay_unknown` limitation. Its key and payload remain omitted, and
+it contributes no plan fact or digest input. Missing or unsupported selected
+overlays fail closed. Legacy v1/v2 Profiles remain Devin-bound,
+writable-workspace compatible, and use legacy Skill placement; explanation
+never migrates or rewrites them.
 
 ## Digest meaning
 

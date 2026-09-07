@@ -18,6 +18,8 @@ const maximumExplanationFacts = 4096
 const maximumExplanationStringBytes = 4096
 const maximumExplanationChecks = 32
 const maximumExplanationLimitations = 16
+const maximumExplanationSelectedSkills = 1024
+const maximumExplanationOverlays = 16
 
 type explanationProfile struct {
 	Name          string `json:"name"`
@@ -80,6 +82,9 @@ func (app App) RunExplanation(ctx context.Context, args []string) (bool, int) {
 	if err != nil {
 		return fail("profile_load_failed", "The selected Profile could not be loaded.")
 	}
+	if len(loaded.Overlays) > maximumExplanationOverlays {
+		return fail("explanation_too_large", "The semantic explanation exceeds a declared format bound.")
+	}
 	overlay := ""
 	if mode == "devin" || mode == "codex" {
 		overlay = mode
@@ -105,7 +110,17 @@ func (app App) RunExplanation(ctx context.Context, args []string) (bool, int) {
 		}
 	}
 	semantic := resolved.Explanation()
-	appendInactiveOverlays(&semantic, loaded, overlay)
+	limitations := []explanationLimitation{
+		{"semantic_digest_only", "The digest excludes local paths, file contents, argument values, credentials, concrete project files, and host readiness; equal digests do not mean file-level execution-plan equality."},
+		{"native_readiness_not_launch_readiness", "Native readiness, when requested, does not check target version, authentication, materialization, generated policy, preflights, or cleanup."},
+	}
+	limitations = append(limitations, appendInactiveOverlays(&semantic, loaded, overlay)...)
+	sort.Slice(limitations, func(i, j int) bool {
+		if limitations[i].Code != limitations[j].Code {
+			return limitations[i].Code < limitations[j].Code
+		}
+		return limitations[i].Detail < limitations[j].Detail
+	})
 	overlayCheck := explanationCheck{"profile.overlay", "unchecked", "not_applicable", "Common execution does not select a target overlay."}
 	if overlay != "" {
 		overlayCheck = explanationCheck{"profile.overlay", "pass", "selected_overlay_supported", "The selected target overlay is supported."}
@@ -157,13 +172,10 @@ func (app App) RunExplanation(ctx context.Context, args []string) (bool, int) {
 			exitCode = 1
 		}
 	}
-	if !explanationWithinBounds(semantic, checks) {
+	if !explanationWithinBounds(semantic, checks, limitations) {
 		return fail("explanation_too_large", "The semantic explanation exceeds a declared format bound.")
 	}
-	result := explanationResult{FormatVersion: 1, Operation: "explain", Profile: explanationProfile{Name: inv.value, StoredVersion: resolved.SourceVersion(), Compatibility: compatibility(resolved.SourceVersion())}, Intent: explanationIntent{Recipe: string(resolved.Requirements().Recipe), Overlay: optionalOverlay(overlay)}, Plan: &semantic, Checks: checks, Limitations: []explanationLimitation{
-		{"semantic_digest_only", "The digest excludes local paths, file contents, argument values, credentials, concrete project files, and host readiness; equal digests do not mean file-level execution-plan equality."},
-		{"native_readiness_not_launch_readiness", "Native readiness, when requested, does not check target version, authentication, materialization, generated policy, preflights, or cleanup."},
-	}, Diagnostic: nil}
+	result := explanationResult{FormatVersion: 1, Operation: "explain", Profile: explanationProfile{Name: inv.value, StoredVersion: resolved.SourceVersion(), Compatibility: compatibility(resolved.SourceVersion())}, Intent: explanationIntent{Recipe: string(resolved.Requirements().Recipe), Overlay: optionalOverlay(overlay)}, Plan: &semantic, Checks: checks, Limitations: limitations, Diagnostic: nil}
 	var output bytes.Buffer
 	if inv.enabled {
 		encoded, marshalErr := json.Marshal(result)
@@ -197,7 +209,7 @@ func (app App) writeExplanationDiagnostic(inv invocation, code, detail string) i
 	return 1
 }
 
-func appendInactiveOverlays(explanation *authority.Explanation, loaded profile.Profile, selected string) {
+func appendInactiveOverlays(explanation *authority.Explanation, loaded profile.Profile, selected string) []explanationLimitation {
 	ids := make([]string, 0, len(loaded.Overlays))
 	for id := range loaded.Overlays {
 		if id != selected {
@@ -205,28 +217,24 @@ func appendInactiveOverlays(explanation *authority.Explanation, loaded profile.P
 		}
 	}
 	sort.Strings(ids)
-	unknownIndex := 0
+	limitations := make([]explanationLimitation, 0)
 	for _, id := range ids {
 		payload := loaded.Overlays[id]
-		factID := "overlay.inactive." + id
-		source := authority.FactSource{Kind: "profile", ID: id, Version: payload.Version}
-		mode, reason := "inactive", "supported_inactive_overlay"
 		if payload.Support != "supported" {
-			unknownIndex++
-			factID = fmt.Sprintf("overlay.inactive.unknown-%d", unknownIndex)
-			source = authority.FactSource{Kind: "profile", ID: "unknown-overlay"}
-			mode, reason = "opaque-inert", "inactive_overlay_unknown"
+			limitations = append(limitations, explanationLimitation{Code: "inactive_overlay_unknown", Detail: "An unknown inactive overlay remains opaque and inert; its key and payload are omitted."})
+			continue
 		}
-		explanation.Unsupported = append(explanation.Unsupported, authority.Fact{ID: factID, Kind: "overlay", Value: authority.FactValue{Mode: mode}, Reason: reason + "_presentation_only_excluded_from_digest", Source: source})
+		explanation.Unsupported = append(explanation.Unsupported, authority.Fact{ID: "overlay.inactive." + id, Kind: "overlay", Value: authority.FactValue{Mode: "inactive"}, Reason: "supported_inactive_overlay_presentation_only_excluded_from_digest", Source: authority.FactSource{Kind: "profile", ID: id, Version: payload.Version}})
 	}
 	sort.Slice(explanation.Unsupported, func(i, j int) bool { return explanation.Unsupported[i].ID < explanation.Unsupported[j].ID })
+	return limitations
 }
 
-func explanationWithinBounds(explanation authority.Explanation, checks []explanationCheck) bool {
-	limitations := 2
-	if len(checks) > maximumExplanationChecks || limitations > maximumExplanationLimitations || len(explanation.Requested)+len(explanation.TargetAdded)+len(explanation.Effective)+len(explanation.Unsupported) > maximumExplanationFacts {
+func explanationWithinBounds(explanation authority.Explanation, checks []explanationCheck, limitations []explanationLimitation) bool {
+	if len(checks) > maximumExplanationChecks || len(limitations) > maximumExplanationLimitations || len(explanation.Requested)+len(explanation.TargetAdded)+len(explanation.Effective)+len(explanation.Unsupported) > maximumExplanationFacts {
 		return false
 	}
+	selectedSkills := 0
 	bounded := func(values ...string) bool {
 		for _, value := range values {
 			if len(value) > maximumExplanationStringBytes {
@@ -237,6 +245,9 @@ func explanationWithinBounds(explanation authority.Explanation, checks []explana
 	}
 	for _, list := range [][]authority.Fact{explanation.Requested, explanation.TargetAdded, explanation.Effective, explanation.Unsupported} {
 		for _, fact := range list {
+			if fact.Kind == "skill" && strings.HasPrefix(fact.ID, "skills.selected.") {
+				selectedSkills++
+			}
 			if !bounded(fact.ID, fact.Kind, fact.Reason, fact.Source.Kind, fact.Source.ID, fact.Value.Access, fact.Value.Mode, fact.Value.LogicalLocation, fact.Value.RequirementID) {
 				return false
 			}
@@ -248,8 +259,16 @@ func explanationWithinBounds(explanation authority.Explanation, checks []explana
 			}
 		}
 	}
+	if selectedSkills > maximumExplanationSelectedSkills {
+		return false
+	}
 	for _, check := range checks {
 		if !bounded(check.ID, check.Status, check.Code, check.Detail) {
+			return false
+		}
+	}
+	for _, limitation := range limitations {
+		if !bounded(limitation.Code, limitation.Detail) {
 			return false
 		}
 	}
