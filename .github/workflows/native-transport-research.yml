@@ -1,0 +1,50 @@
+name: Native transport research
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/native-transport-research.yml"
+      - "docs/native-transport-research.md"
+      - "internal/launch/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-transport-research-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  transport-probes:
+    name: Transport probes (darwin/arm64)
+    runs-on: macos-26
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Run bounded native transport probes
+        env:
+          ACS_RUN_NATIVE_TRANSPORT_PROBE: "1"
+          ACS_NATIVE_TRANSPORT_EVIDENCE: ${{ runner.temp }}/native-transport-evidence.json
+          ACS_NATIVE_TRANSPORT_JOB: Native transport research / Transport probes (darwin/arm64)
+        run: go test -count=1 -v -timeout=8m ./internal/launch -run '^TestNativeSeatbeltTransportResearchMatrix$'
+
+      - name: Upload sanitized operation evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: native-transport-evidence-${{ github.sha }}
+          path: ${{ runner.temp }}/native-transport-evidence.json
+          if-no-files-found: error
+          retention-days: 14
