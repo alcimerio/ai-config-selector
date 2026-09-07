@@ -434,6 +434,7 @@ func (store Store) Recover(id string) (RecoverResult, error) {
 	snapshotCap, snapshotCapExists, snapshotCapErr := store.readCapability(id)
 	var authBinding AuthRecoveryBinding
 	authMarkerMissing := false
+	authLookupGone := false
 	if snapshotCapErr == nil && snapshotCapExists && validBinding(snapshot, snapshotCap) && (snapshot.Target == "codex" || snapshot.Target == "codex-auth") {
 		if store.AuthRecovery == nil {
 			result.Outcome = "not_recoverable"
@@ -458,7 +459,12 @@ func (store Store) Recover(id string) (RecoverResult, error) {
 			result.Outcome = "not_recoverable"
 			return result, errors.New("not_recoverable")
 		}
-		if snapshotExists && (authBinding == nil || authBinding.CleanupChallenge() != snapshotCap.Challenge) {
+		if snapshotExists && authBinding == nil {
+			// The marker was observed before the typed lock, then disappeared
+			// while a competing direct recovery completed. Reconcile under the
+			// general fence below instead of treating this as invalid authority.
+			authLookupGone = true
+		} else if snapshotExists && authBinding.CleanupChallenge() != snapshotCap.Challenge {
 			if authBinding != nil {
 				_ = authBinding.Release()
 			}
@@ -493,7 +499,7 @@ func (store Store) Recover(id string) (RecoverResult, error) {
 		return result, errors.New("session_not_found")
 	}
 	cap, capExists, capErr := store.readCapability(id)
-	if rec != snapshot || cap != snapshotCap || capExists != snapshotCapExists || (capErr == nil) != (snapshotCapErr == nil) {
+	if !authLookupGone && (rec != snapshot || cap != snapshotCap || capExists != snapshotCapExists || (capErr == nil) != (snapshotCapErr == nil)) {
 		result.Outcome = "busy"
 		return result, errors.New("busy")
 	}
