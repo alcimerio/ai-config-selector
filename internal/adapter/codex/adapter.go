@@ -27,6 +27,7 @@ type Config struct {
 	BinaryPath      string
 	ExistingHomeDir string
 	RuntimeInputs   []string
+	RuntimeInputIDs []string
 	Executor        codexExecutor
 }
 
@@ -45,10 +46,13 @@ func New(config Config) (*Adapter, error) {
 	if config.BinaryPath == "" || config.ExistingHomeDir == "" {
 		return nil, errors.New("create Codex Adapter: binary path and existing home are required")
 	}
+	if len(config.RuntimeInputIDs) != len(config.RuntimeInputs) {
+		return nil, errors.New("create Codex Adapter: every runtime input requires a stable semantic ID")
+	}
 	a := &Adapter{home: filepath.Clean(config.ExistingHomeDir), auth: config.Executor}
-	skillsBinding, err := commonprofile.NewSkillsBinding(
-		func(ctx context.Context) ([]skills.SkillBundle, error) {
-			return devin.DiscoverCommonSkillCatalog(ctx, a.home)
+	skillsBinding, err := commonprofile.NewSelectedSkillsBinding(
+		func(ctx context.Context, references []skills.SkillReference) ([]skills.SkillBundle, error) {
+			return devin.DiscoverExactSkillReferences(ctx, a.home, references)
 		},
 		codexSkillProjection{},
 	)
@@ -60,7 +64,8 @@ func New(config Config) (*Adapter, error) {
 		return nil, err
 	}
 	a.categories, err = category.NewRegistryWithRequirements("codex", authority.TargetRequirements{
-		Recipe: authority.RecipeCodex, Executable: config.BinaryPath, RuntimeInputs: append([]string(nil), config.RuntimeInputs...),
+		Recipe: authority.RecipeCodex, Executable: config.BinaryPath, ExecutableRequirementID: "codex-cli-0.149.1",
+		RuntimeInputs: append([]string(nil), config.RuntimeInputs...), RuntimeInputIDs: append([]string(nil), config.RuntimeInputIDs...), Semantics: authority.CodexSemantics(),
 	}, []category.Registration{skillsBinding.Registration(), workspaceBinding.Registration()})
 	if err != nil {
 		return nil, err
@@ -102,6 +107,9 @@ func (a *Adapter) ResolveAuth(resolved category.ResolvedProfile, override string
 	}
 	if _, err := codexauth.ParseCredentialRef(effective); err != nil {
 		return category.ResolvedProfile{}, err
+	}
+	if override != "" {
+		return resolved.WithAuthOverride(effective), nil
 	}
 	return resolved.WithAuthRef(effective), nil
 }

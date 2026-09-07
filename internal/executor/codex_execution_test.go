@@ -1,6 +1,7 @@
 package executor
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -22,6 +23,41 @@ type executionMaterializer struct{ verifyErr error }
 func (executionMaterializer) Plan(context.Context, string, *launch.Plan) error { return nil }
 func (executionMaterializer) Materialize(home string) error {
 	return os.WriteFile(filepath.Join(home, "materialized"), []byte("yes"), 0o600)
+}
+
+func TestCodexGeneratedConfigurationConsumesTypedTargetSemantics(t *testing.T) {
+	baseline := authority.CodexSemantics()
+	changed := authority.CodexSemantics()
+	for index := range changed.Configuration {
+		if changed.Configuration[index].ID == "codex.approval" {
+			changed.Configuration[index].Mode = "on-request"
+		}
+	}
+	baselineArguments := strings.Join(codexExecutionArgumentsForSemantics(baseline, "", "/workspace"), "\n")
+	changedArguments := strings.Join(codexExecutionArgumentsForSemantics(changed, "", "/workspace"), "\n")
+	if baselineArguments == changedArguments || !strings.Contains(baselineArguments, `approval_policy="never"`) || !strings.Contains(changedArguments, `approval_policy="on-request"`) {
+		t.Fatalf("generated arguments did not consume typed approval decision: baseline=%q changed=%q", baselineArguments, changedArguments)
+	}
+	baselineHome, changedHome := t.TempDir(), t.TempDir()
+	if err := writeCodexExecutionConfigForSemantics(baselineHome, "", "/workspace", baseline); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeCodexExecutionConfigForSemantics(changedHome, "", "/workspace", changed); err != nil {
+		t.Fatal(err)
+	}
+	baselineConfig, _ := os.ReadFile(filepath.Join(baselineHome, ".codex", "config.toml"))
+	changedConfig, _ := os.ReadFile(filepath.Join(changedHome, ".codex", "config.toml"))
+	if bytes.Equal(baselineConfig, changedConfig) || !bytes.Contains(changedConfig, []byte(`approval_policy = "on-request"`)) {
+		t.Fatalf("generated file did not consume typed approval decision: baseline=%q changed=%q", baselineConfig, changedConfig)
+	}
+	baselinePlan := authority.New(nil, launch.WorkspaceAccessReadOnly, 3, "codex", authority.TargetRequirements{Recipe: authority.RecipeCodex, ExecutableRequirementID: "codex", Semantics: baseline})
+	changedPlan := authority.New(nil, launch.WorkspaceAccessReadOnly, 3, "codex", authority.TargetRequirements{Recipe: authority.RecipeCodex, ExecutableRequirementID: "codex", Semantics: changed})
+	if baselinePlan.AuthorityDigest() == changedPlan.AuthorityDigest() {
+		t.Fatal("typed generated-configuration change did not change authority digest")
+	}
+	if changed.Supports(authority.RecipeCodex) {
+		t.Fatal("production accepted a non-shipped target semantic variant")
+	}
 }
 
 type executionSandbox struct {

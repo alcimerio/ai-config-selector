@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/alcimerio/ai-config-selector/internal/authority"
 	"github.com/alcimerio/ai-config-selector/internal/category"
 	"github.com/alcimerio/ai-config-selector/internal/launch"
 	"github.com/alcimerio/ai-config-selector/internal/profile"
@@ -43,6 +44,15 @@ type SkillsContribution struct {
 type SkillsBinding = category.Binding[[]skills.SkillReference, []skills.SkillBundle, SkillsContribution]
 
 func NewSkillsBinding(discover func(context.Context) ([]skills.SkillBundle, error), projection SkillProjection) (SkillsBinding, error) {
+	if discover == nil {
+		return SkillsBinding{}, errors.New("common Skills registration is incomplete")
+	}
+	return NewSelectedSkillsBinding(func(ctx context.Context, _ []skills.SkillReference) ([]skills.SkillBundle, error) {
+		return discover(ctx)
+	}, projection)
+}
+
+func NewSelectedSkillsBinding(discover func(context.Context, []skills.SkillReference) ([]skills.SkillBundle, error), projection SkillProjection) (SkillsBinding, error) {
 	if discover == nil || projection == nil || projection.ID() == "" || projection.Version() < 1 {
 		return SkillsBinding{}, errors.New("common Skills registration is incomplete")
 	}
@@ -51,7 +61,7 @@ func NewSkillsBinding(discover func(context.Context) ([]skills.SkillBundle, erro
 		Empty:  func() []skills.SkillReference { return []skills.SkillReference{} },
 		Encode: EncodeSkillSelection, Decode: DecodeSkillSelection,
 		Resolve: func(ctx context.Context, references []skills.SkillReference) ([]skills.SkillBundle, error) {
-			catalog, err := discover(ctx)
+			catalog, err := discover(ctx, references)
 			if err != nil {
 				return nil, fmt.Errorf("discover common Skill Catalog: %w", err)
 			}
@@ -178,6 +188,30 @@ func (contribution SkillsContribution) MaterializeResolved(sessionHome string, s
 func (SkillsContribution) Verify(context.Context, launch.VerificationContext) error { return nil }
 func (contribution SkillsContribution) DevinExpectedCatalog() []skills.SkillReference {
 	return append([]skills.SkillReference(nil), contribution.expected...)
+}
+func (contribution SkillsContribution) SemanticFacts(sourceVersion int, overlay string) authority.Facts {
+	facts := authority.Facts{}
+	selected := append([]skills.SkillBundle(nil), contribution.selected...)
+	sort.Slice(selected, func(i, j int) bool {
+		if selected[i].Reference.Source != selected[j].Reference.Source {
+			return selected[i].Reference.Source < selected[j].Reference.Source
+		}
+		return selected[i].Reference.RelativePath < selected[j].Reference.RelativePath
+	})
+	for _, bundle := range selected {
+		identityText := string(bundle.Reference.Source) + ":" + filepath.ToSlash(bundle.Reference.RelativePath)
+		identity := &authority.SkillIdentity{Source: string(bundle.Reference.Source), RelativePath: filepath.ToSlash(bundle.Reference.RelativePath)}
+		source := authority.FactSource{Kind: "profile", ID: SkillsCapabilityID, Version: SkillsCapabilityVersion}
+		facts.Requested = append(facts.Requested, authority.Fact{ID: "skills.selected." + identityText, Kind: "skill", Value: authority.FactValue{Identity: identity}, Reason: "stored_selection", Source: source})
+		facts.Effective = append(facts.Effective, authority.Fact{ID: "skills.common." + identityText, Kind: "material", Value: authority.FactValue{Identity: identity, LogicalLocation: "session-home/common-skills"}, Reason: "selected_common_material", Source: source})
+		if sourceVersion < profile.CurrentVersion || overlay == contribution.projection.ID() {
+			if _, destination, err := contribution.projection.Destination(filepath.Join("<session>", "home"), bundle.Reference); err == nil {
+				logical := strings.TrimPrefix(filepath.ToSlash(destination), "<session>/home/")
+				facts.TargetAdded = append(facts.TargetAdded, authority.Fact{ID: "skills.projection." + identityText, Kind: "target-projection", Value: authority.FactValue{Identity: identity, LogicalLocation: "session-home/" + logical}, Reason: "selected_target_projection", Source: authority.FactSource{Kind: "target", ID: contribution.projection.ID(), Version: contribution.projection.Version()}})
+			}
+		}
+	}
+	return facts
 }
 func commonDestination(home string, reference skills.SkillReference) string {
 	return filepath.Join(home, ".acs", "common", "v1", SkillsCapabilityID, string(reference.Source), filepath.Clean(reference.RelativePath))

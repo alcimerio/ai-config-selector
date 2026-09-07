@@ -52,6 +52,7 @@ type DevinRequest struct {
 	ExistingHomeDirectory string
 	ExpectedCatalog       []skills.SkillReference
 	ResolvedPlan          *authority.Plan
+	RuntimeAuthority      launch.RuntimeAuthority
 }
 
 // CommandRequest contains one already-resolved literal command and the common
@@ -64,11 +65,11 @@ type CommandRequest struct {
 	Terminal          launch.Terminal
 }
 
-func (request ShellRequest) resolvedInputs() (launch.WorkspaceAccess, session.Materializer) {
+func (request ShellRequest) resolvedInputs() (launch.WorkspaceAccess, session.Materializer, launch.RuntimeAuthority) {
 	if request.ResolvedPlan != nil {
-		return request.ResolvedPlan.WorkspaceAccess(), *request.ResolvedPlan
+		return request.ResolvedPlan.WorkspaceAccess(), *request.ResolvedPlan, request.ResolvedPlan.RuntimeAuthority()
 	}
-	return request.WorkspaceAccess, request.Materializer
+	return request.WorkspaceAccess, request.Materializer, launch.DefaultRuntimeAuthority()
 }
 func (request DevinRequest) resolvedInputs() (launch.WorkspaceAccess, session.Materializer, []skills.SkillReference, authority.TargetRequirements) {
 	if request.ResolvedPlan != nil {
@@ -76,7 +77,7 @@ func (request DevinRequest) resolvedInputs() (launch.WorkspaceAccess, session.Ma
 	}
 	return request.WorkspaceAccess, request.Materializer, request.ExpectedCatalog, authority.TargetRequirements{
 		Recipe: authority.RecipeDevin, Executable: request.Executable,
-		RuntimeInputs: request.RuntimeInputs, ExistingHomeDirectory: request.ExistingHomeDirectory,
+		RuntimeInputs: request.RuntimeInputs, ExistingHomeDirectory: request.ExistingHomeDirectory, Semantics: authority.DevinSemantics(),
 	}
 }
 
@@ -168,13 +169,13 @@ func (e *Executor) RunShell(ctx context.Context, request ShellRequest) (resultEr
 	if e == nil || e.sandbox == nil {
 		return errors.New("contained shell executor is unavailable")
 	}
-	workspaceAccess, materializer := request.resolvedInputs()
+	workspaceAccess, materializer, runtimeAuthority := request.resolvedInputs()
 	if request.ResolvedPlan != nil && request.ResolvedPlan.Requirements().Recipe != authority.RecipeShell {
 		return errors.New("resolved authority does not select the shell execution recipe")
 	}
 	resultErr, _ = e.runAttached(ctx, attachedRecipe{
 		sessionsDirectory: request.SessionsDirectory, workingDirectory: request.WorkingDirectory,
-		workspaceAccess: workspaceAccess, materializer: materializer,
+		workspaceAccess: workspaceAccess, materializer: materializer, runtimeAuthority: runtimeAuthority,
 		executable: systemShell, arguments: []string{"-f"}, terminal: request.Terminal,
 	})
 	return resultErr
@@ -189,6 +190,7 @@ type attachedRecipe struct {
 	arguments         []string
 	command           *runcommand.Command
 	terminal          launch.Terminal
+	runtimeAuthority  launch.RuntimeAuthority
 }
 
 // runAttached is the one Session/process lifecycle for the fixed shell and an
@@ -205,7 +207,7 @@ func (e *Executor) runAttached(ctx context.Context, recipe attachedRecipe) (resu
 	}
 	if err := e.sandbox.Check(ctx, launch.SandboxCheck{Workspace: recipe.workingDirectory,
 		WorkspaceAccess: recipe.workspaceAccess, SessionsDirectory: recipe.sessionsDirectory,
-		Executable: executable}); err != nil {
+		Executable: executable, RuntimeAuthority: recipe.runtimeAuthority}); err != nil {
 		return err, false
 	}
 	created, err := session.Create(recipe.sessionsDirectory, recipe.workingDirectory, recipe.materializer)
@@ -228,7 +230,7 @@ func (e *Executor) runAttached(ctx context.Context, recipe attachedRecipe) (resu
 		Workspace: created.WorkingDirectory(), WorkspaceAccess: recipe.workspaceAccess,
 		SessionsDirectory: created.SessionsDirectory(), SessionDirectory: created.RootDirectory(),
 		SessionHome: created.HomeDirectory(), TemporaryDirectory: created.TemporaryDirectory(),
-		Executable: executable, Arguments: arguments, Terminal: recipe.terminal,
+		Executable: executable, Arguments: arguments, Terminal: recipe.terminal, RuntimeAuthority: recipe.runtimeAuthority,
 	})
 	if err != nil {
 		return err, false
@@ -252,7 +254,7 @@ func (e *Executor) RunCommand(ctx context.Context, request CommandRequest) (exit
 	runErr, cleanupFailed := e.runAttached(ctx, attachedRecipe{
 		sessionsDirectory: request.SessionsDirectory, workingDirectory: request.WorkingDirectory,
 		workspaceAccess: request.ResolvedPlan.WorkspaceAccess(), materializer: *request.ResolvedPlan,
-		command: &request.Command, terminal: request.Terminal,
+		command: &request.Command, terminal: request.Terminal, runtimeAuthority: request.ResolvedPlan.RuntimeAuthority(),
 	})
 	if cleanupFailed {
 		return 1, runErr
@@ -284,16 +286,19 @@ func (e *Executor) RunDevin(ctx context.Context, request DevinRequest) (exitCode
 		return 1, errors.New("contained Devin executor is unavailable")
 	}
 	workspaceAccess, materializer, expectedCatalog, requirements := request.resolvedInputs()
-	if requirements.Recipe != authority.RecipeDevin {
+	if requirements.Recipe != authority.RecipeDevin || !requirements.Semantics.Supports(authority.RecipeDevin) {
 		return 1, errors.New("resolved authority does not select the Devin execution recipe")
 	}
 	request.WorkspaceAccess, request.Materializer, request.ExpectedCatalog = workspaceAccess, materializer, expectedCatalog
 	request.Executable, request.RuntimeInputs, request.ExistingHomeDirectory = requirements.Executable, requirements.RuntimeInputs, requirements.ExistingHomeDirectory
+	if request.ResolvedPlan != nil {
+		request.RuntimeAuthority = request.ResolvedPlan.RuntimeAuthority()
+	}
 	preflightContext, cancelPreflight := context.WithCancel(ctx)
 	defer cancelPreflight()
 	supervisor := newDevinSignalSupervisor(cancelPreflight)
 	defer supervisor.stop()
-	if err := e.sandbox.Check(preflightContext, launch.SandboxCheck{Workspace: request.WorkingDirectory, WorkspaceAccess: request.WorkspaceAccess, SessionsDirectory: request.SessionsDirectory, Executable: request.Executable, RuntimeInputs: request.RuntimeInputs}); err != nil {
+	if err := e.sandbox.Check(preflightContext, launch.SandboxCheck{Workspace: request.WorkingDirectory, WorkspaceAccess: request.WorkspaceAccess, SessionsDirectory: request.SessionsDirectory, Executable: request.Executable, RuntimeInputs: request.RuntimeInputs, RuntimeAuthority: request.RuntimeAuthority}); err != nil {
 		return 1, err
 	}
 	created, err := session.Create(request.SessionsDirectory, request.WorkingDirectory, request.Materializer)
@@ -306,13 +311,13 @@ func (e *Executor) RunDevin(ctx context.Context, request DevinRequest) (exitCode
 			exitCode = 1
 		}
 	}()
+	if requirements.Semantics.CredentialProjection != "optional-allowlisted-value-omitted" {
+		return 1, errors.New("resolved authority has unsupported Devin credential projection")
+	}
 	if err := copyDevinCredentialIfPresent(filepath.Join(request.ExistingHomeDirectory, ".local", "share", "devin", "credentials.toml"), filepath.Join(created.HomeDirectory(), ".local", "share", "devin", "credentials.toml")); err != nil {
 		return 1, err
 	}
-	if err := e.verifyDevinSkills(preflightContext, created, request); err != nil {
-		return 1, err
-	}
-	if err := e.verifyDevinAuthentication(preflightContext, created, request); err != nil {
+	if err := e.runDevinPreflights(preflightContext, created, request, requirements.Semantics); err != nil {
 		return 1, err
 	}
 	if preflightContext.Err() != nil {
@@ -355,12 +360,15 @@ func (e *Executor) VerifyDevin(ctx context.Context, request DevinRequest) (resul
 		return errors.New("contained Devin executor is unavailable")
 	}
 	workspaceAccess, materializer, expectedCatalog, requirements := request.resolvedInputs()
-	if requirements.Recipe != authority.RecipeDevin {
+	if requirements.Recipe != authority.RecipeDevin || !requirements.Semantics.Supports(authority.RecipeDevin) {
 		return errors.New("resolved authority does not select the Devin execution recipe")
 	}
 	request.WorkspaceAccess, request.Materializer, request.ExpectedCatalog = workspaceAccess, materializer, expectedCatalog
 	request.Executable, request.RuntimeInputs, request.ExistingHomeDirectory = requirements.Executable, requirements.RuntimeInputs, requirements.ExistingHomeDirectory
-	if err := e.sandbox.Check(ctx, launch.SandboxCheck{Workspace: request.WorkingDirectory, WorkspaceAccess: request.WorkspaceAccess, SessionsDirectory: request.SessionsDirectory, Executable: request.Executable, RuntimeInputs: request.RuntimeInputs}); err != nil {
+	if request.ResolvedPlan != nil {
+		request.RuntimeAuthority = request.ResolvedPlan.RuntimeAuthority()
+	}
+	if err := e.sandbox.Check(ctx, launch.SandboxCheck{Workspace: request.WorkingDirectory, WorkspaceAccess: request.WorkspaceAccess, SessionsDirectory: request.SessionsDirectory, Executable: request.Executable, RuntimeInputs: request.RuntimeInputs, RuntimeAuthority: request.RuntimeAuthority}); err != nil {
 		return err
 	}
 	created, err := session.Create(request.SessionsDirectory, request.WorkingDirectory, request.Materializer)
@@ -372,13 +380,37 @@ func (e *Executor) VerifyDevin(ctx context.Context, request DevinRequest) (resul
 			resultErr = cleanupPrecedence(resultErr, removeErr)
 		}
 	}()
+	if requirements.Semantics.CredentialProjection != "optional-allowlisted-value-omitted" {
+		return errors.New("resolved authority has unsupported Devin credential projection")
+	}
 	if err := copyDevinCredentialIfPresent(filepath.Join(request.ExistingHomeDirectory, ".local", "share", "devin", "credentials.toml"), filepath.Join(created.HomeDirectory(), ".local", "share", "devin", "credentials.toml")); err != nil {
 		return err
 	}
-	if err := e.verifyDevinSkills(ctx, created, request); err != nil {
-		return err
+	return e.runDevinPreflights(ctx, created, request, requirements.Semantics)
+}
+
+func (e *Executor) runDevinPreflights(ctx context.Context, created *session.Session, request DevinRequest, semantics authority.TargetSemantics) error {
+	for _, preflight := range semantics.Preflights {
+		var err error
+		switch preflight.ID {
+		case "devin.preflight.skills":
+			if preflight.Mode != "contained-exact-catalog" {
+				return errors.New("unsupported Devin Skill preflight")
+			}
+			err = e.verifyDevinSkills(ctx, created, request)
+		case "devin.preflight.authentication":
+			if preflight.Mode != "contained-status" {
+				return errors.New("unsupported Devin authentication preflight")
+			}
+			err = e.verifyDevinAuthentication(ctx, created, request)
+		default:
+			return errors.New("unsupported Devin preflight")
+		}
+		if err != nil {
+			return err
+		}
 	}
-	return e.verifyDevinAuthentication(ctx, created, request)
+	return nil
 }
 
 // DevinExit is intentionally small: the adapter translates it to its stable
@@ -451,7 +483,7 @@ func (e *Executor) runDevinProbe(ctx context.Context, created *session.Session, 
 }
 
 func (e *Executor) prepareDevin(ctx context.Context, created *session.Session, request DevinRequest, arguments []string, terminal launch.Terminal) (launch.Process, error) {
-	return e.prepareRetainedProcess(ctx, created, launch.ProcessRequest{Workspace: created.WorkingDirectory(), WorkspaceAccess: request.WorkspaceAccess, SessionsDirectory: created.SessionsDirectory(), SessionDirectory: created.RootDirectory(), SessionHome: created.HomeDirectory(), TemporaryDirectory: created.TemporaryDirectory(), Executable: request.Executable, RuntimeInputs: request.RuntimeInputs, Arguments: arguments, Terminal: terminal})
+	return e.prepareRetainedProcess(ctx, created, launch.ProcessRequest{Workspace: created.WorkingDirectory(), WorkspaceAccess: request.WorkspaceAccess, SessionsDirectory: created.SessionsDirectory(), SessionDirectory: created.RootDirectory(), SessionHome: created.HomeDirectory(), TemporaryDirectory: created.TemporaryDirectory(), Executable: request.Executable, RuntimeInputs: request.RuntimeInputs, Arguments: arguments, Terminal: terminal, RuntimeAuthority: request.RuntimeAuthority})
 }
 
 // prepareDevinInteractive commits the handoff before a process reference can

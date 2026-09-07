@@ -17,9 +17,10 @@ type containedRunResult struct {
 }
 
 type containedOperationPreparation struct {
-	config    codexLoginConfig
-	cleanup   func()
-	closeOnce sync.Once
+	config           codexLoginConfig
+	runtimeAuthority launch.RuntimeAuthority
+	cleanup          func()
+	closeOnce        sync.Once
 }
 
 func prepareContainedOperation(
@@ -37,6 +38,7 @@ func prepareContainedOperationWithAccess(
 	sandbox launch.ProcessSandbox,
 	workspaceAccess launch.WorkspaceAccess,
 	operationFailure error,
+	runtimeAuthorities ...launch.RuntimeAuthority,
 ) (*containedOperationPreparation, error) {
 	if sandbox == nil {
 		return nil, operationFailure
@@ -55,11 +57,15 @@ func prepareContainedOperationWithAccess(
 	}
 	preparedConfig := config
 	preparedConfig.BinaryPath = executable
-	preparation := &containedOperationPreparation{config: preparedConfig, cleanup: cleanup}
+	runtimeAuthority := launch.DefaultRuntimeAuthority()
+	if len(runtimeAuthorities) != 0 {
+		runtimeAuthority = runtimeAuthorities[0]
+	}
+	preparation := &containedOperationPreparation{config: preparedConfig, cleanup: cleanup, runtimeAuthority: runtimeAuthority}
 	if err := sandbox.Check(ctx, launch.SandboxCheck{
 		Workspace: config.WorkingDirectory, WorkspaceAccess: workspaceAccess, SessionsDirectory: config.SessionsDirectory,
 		Executable: executable, RuntimeInputs: config.RuntimeInputs,
-		RuntimeProbePaths: config.RuntimeProbePaths,
+		RuntimeProbePaths: config.RuntimeProbePaths, RuntimeAuthority: runtimeAuthority,
 	}); err != nil {
 		preparation.Close()
 		return nil, err

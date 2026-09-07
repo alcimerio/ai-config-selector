@@ -129,12 +129,190 @@ func TestPromotedArtifactNativeContainmentContract(t *testing.T) {
 	}
 
 	t.Run("readiness is native and sanitized", assertPromotedArtifactNativeReadiness)
+	t.Run("effective explanation is linked and narrowly observed", assertPromotedArtifactEffectiveExplanation)
 	t.Run("sandbox shell is credential-free contained and cleaned", assertPromotedArtifactSandboxShell)
 	t.Run("v3 common material and workspace modes are enforced", assertPromotedArtifactV3WorkspaceModes)
 	t.Run("generic literal command uses candidate containment", assertPromotedArtifactGenericRun)
 	t.Run("filesystem environment descriptors sockets IP preflight and descendants", assertPromotedArtifactNativeContainment)
 	t.Run("preflight failure is categorized without target details", assertPromotedArtifactNativePreflightFailureIsSafe)
 	t.Run("missing backend OR invalid policy cannot start a marker", assertPromotedArtifactMissingBackendFailsClosed)
+}
+
+func assertPromotedArtifactEffectiveExplanation(t *testing.T) {
+	binary := promotedBinary(t)
+	home, path := prepareRuntimeHome(t)
+	writeSharedTargetProfile(t, home, "explanation", "read-only")
+	workspace := realTemporaryDirectory(t)
+	helper, err := filepath.Abs(os.Args[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name, recipe string
+		explain      []string
+		execute      []string
+	}{
+		{name: "sandbox", recipe: "shell", explain: []string{"explain", "sandbox", "--profile", "explanation", "--json"}, execute: []string{"sandbox", "--profile", "explanation", "--dry-run"}},
+		{name: "devin", recipe: "devin", explain: []string{"explain", "devin", "--profile", "explanation", "--json"}, execute: []string{"devin", "--profile", "explanation", "--dry-run"}},
+		{name: "codex", recipe: "codex", explain: []string{"explain", "codex", "--profile", "explanation", "--auth", "work", "--json"}, execute: []string{"codex", "--profile", "explanation", "--auth", "work", "--dry-run"}},
+		{name: "run", recipe: "command", explain: []string{"explain", "run", "--profile", "explanation", "--json", "--", helper, "PRIVATE_NATIVE_ARGUMENT"}, execute: []string{"run", "--profile", "explanation", "--dry-run", "--", helper, "PRIVATE_NATIVE_ARGUMENT"}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			command := exec.Command(binary, test.explain...)
+			command.Dir, command.Env = workspace, nativeCandidateEnvironment(home, path, nil)
+			output, err := command.CombinedOutput()
+			if err != nil {
+				t.Fatalf("explain: %v; output=%s", err, output)
+			}
+			if bytes.Contains(output, []byte("PRIVATE_NATIVE_ARGUMENT")) || bytes.Contains(output, []byte(home)) || bytes.Contains(output, []byte(workspace)) {
+				t.Fatalf("explanation exposed a private binding: %s", output)
+			}
+			var result struct {
+				FormatVersion int `json:"formatVersion"`
+				Intent        struct {
+					Recipe string `json:"recipe"`
+				} `json:"intent"`
+				Plan struct {
+					Digest      string                  `json:"authorityDigest"`
+					Requested   []nativeExplanationFact `json:"requested"`
+					TargetAdded []nativeExplanationFact `json:"targetAdded"`
+					Effective   []nativeExplanationFact `json:"effective"`
+					Unsupported []nativeExplanationFact `json:"unsupported"`
+				} `json:"plan"`
+				Checks []nativeExplanationCheck `json:"checks"`
+			}
+			if err := json.Unmarshal(output, &result); err != nil || result.FormatVersion != 1 || result.Intent.Recipe != test.recipe || !strings.HasPrefix(result.Plan.Digest, "sha256:") {
+				t.Fatalf("invalid explanation: %v; output=%s", err, output)
+			}
+			for _, id := range []string{"runtime.devices", "runtime.mach-services", "runtime.metadata", "runtime.network", "runtime.sysctls"} {
+				found := false
+				for _, fact := range result.Plan.Effective {
+					found = found || fact.ID == id
+				}
+				if !found {
+					t.Fatalf("explanation omitted %s: %s", id, output)
+				}
+			}
+			for _, id := range []string{"execution.recipe", "common.workspace"} {
+				if !nativeExplanationHasFact(result.Plan.Requested, id) {
+					t.Fatalf("requested facts omitted %s: %s", id, output)
+				}
+			}
+			for _, id := range []string{"unsupported.arbitrary-executables", "unsupported.arbitrary-host-paths", "unsupported.host-environment", "unsupported.network-destinations", "unsupported.raw-policy", "unsupported.sandbox-bypass", "unsupported.target-pass-through"} {
+				if !nativeExplanationHasFact(result.Plan.Unsupported, id) {
+					t.Fatalf("unsupported facts omitted %s: %s", id, output)
+				}
+			}
+			if !nativeExplanationHasCheck(result.Checks, "native.platform", "unchecked", "not_probed") || !nativeExplanationHasCheck(result.Checks, "native.backend", "unchecked", "not_probed") {
+				t.Fatalf("default explanation performed or misreported native readiness: %s", output)
+			}
+			for _, id := range map[string][]string{
+				"sandbox": {"sandbox.shell"},
+				"devin":   {"devin.credentials", "devin.preflight.authentication", "devin.preflight.skills", "devin.project-skills", "target.executable"},
+				"codex":   {"codex.approval", "codex.auth-storage", "codex.credentials", "codex.mcp", "codex.plugins", "codex.sandbox", "target.executable"},
+				"run":     {"run.command"},
+			}[test.name] {
+				if !nativeExplanationHasFact(result.Plan.TargetAdded, id) {
+					t.Fatalf("target-added facts omitted %s: %s", id, output)
+				}
+			}
+			facts := map[string]struct {
+				Mode  string
+				Names []string
+			}{}
+			for _, fact := range result.Plan.Effective {
+				facts[fact.ID] = struct {
+					Mode  string
+					Names []string
+				}{fact.Value.Mode, fact.Value.Names}
+			}
+			if got := facts["runtime.network"].Mode; got != "local-ip-bind-and-coarse-outbound-ip-macos-dns" {
+				t.Fatalf("network declaration = %q", got)
+			}
+			if got := facts["runtime.sysctls"].Names; !reflect.DeepEqual(got, []string{"hw.pagesize", "hw.pagesize_compat", "hw.ncpu"}) {
+				t.Fatalf("sysctl declaration = %q", got)
+			}
+			if got := facts["runtime.mach-services"].Names; !reflect.DeepEqual(got, []string{"com.apple.SecurityServer", "com.apple.trustd.agent"}) {
+				t.Fatalf("Mach-service declaration = %q", got)
+			}
+			linked := append(append([]string(nil), test.execute...), "--expect-authority-digest", result.Plan.Digest)
+			// The run grammar requires the expectation before the literal boundary.
+			if test.name == "run" {
+				linked = []string{"run", "--profile", "explanation", "--dry-run", "--expect-authority-digest", result.Plan.Digest, "--", helper, "PRIVATE_NATIVE_ARGUMENT"}
+			}
+			linkedCommand := exec.Command(binary, linked...)
+			linkedCommand.Dir, linkedCommand.Env = workspace, nativeCandidateEnvironment(home, path, nil)
+			if linkedOutput, err := linkedCommand.CombinedOutput(); err != nil {
+				t.Fatalf("linked dry-run: %v; output=%s", err, linkedOutput)
+			}
+			assertNoSessions(t, home)
+			mismatch := "sha256:" + strings.Repeat("0", 64)
+			mismatchArguments := []string{test.name, "--profile", "explanation", "--expect-authority-digest", mismatch}
+			switch test.name {
+			case "codex":
+				mismatchArguments = append(mismatchArguments, "--auth", "work")
+			case "run":
+				mismatchArguments = append(mismatchArguments, "--", helper, "PRIVATE_NATIVE_ARGUMENT")
+			}
+			mismatchCommand := exec.Command(binary, mismatchArguments...)
+			mismatchCommand.Dir, mismatchCommand.Env = workspace, nativeCandidateEnvironment(home, path, nil)
+			mismatchOutput, mismatchErr := mismatchCommand.CombinedOutput()
+			if mismatchErr == nil || !bytes.Contains(mismatchOutput, []byte("authority_plan_changed")) {
+				t.Fatalf("mismatch did not fail at semantic guard: err=%v output=%s", mismatchErr, mismatchOutput)
+			}
+			assertNoSessions(t, home)
+		})
+	}
+	readiness := exec.Command(binary, "explain", "sandbox", "--profile", "explanation", "--check-native-readiness", "--json")
+	readiness.Dir, readiness.Env = workspace, nativeCandidateEnvironment(home, path, nil)
+	output, err := readiness.CombinedOutput()
+	if err != nil || !bytes.Contains(output, []byte(`"id":"native.backend","status":"pass","code":"backend_ready"`)) || !bytes.Contains(output, []byte(`"id":"runtime.enforcement","status":"unchecked"`)) {
+		t.Fatalf("bounded native readiness: %v; output=%s", err, output)
+	}
+	assertNoSessions(t, home)
+}
+
+type nativeExplanationFact struct {
+	ID    string `json:"id"`
+	Value struct {
+		Access string   `json:"access"`
+		Mode   string   `json:"mode"`
+		Names  []string `json:"names"`
+	} `json:"value"`
+}
+
+type nativeExplanationCheck struct {
+	ID     string `json:"id"`
+	Status string `json:"status"`
+	Code   string `json:"code"`
+}
+
+func nativeExplanationHasFact(facts []nativeExplanationFact, id string) bool {
+	for _, fact := range facts {
+		if fact.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
+func nativeExplanationFactByID(facts []nativeExplanationFact, id string) (nativeExplanationFact, bool) {
+	for _, fact := range facts {
+		if fact.ID == id {
+			return fact, true
+		}
+	}
+	return nativeExplanationFact{}, false
+}
+
+func nativeExplanationHasCheck(checks []nativeExplanationCheck, id, status, code string) bool {
+	for _, check := range checks {
+		if check.ID == id && check.Status == status && check.Code == code {
+			return true
+		}
+	}
+	return false
 }
 
 type genericHelperObservation struct {
@@ -485,6 +663,41 @@ func TestPromotedArtifactSharedTargetConformance(t *testing.T) {
 			}
 			if !strings.Contains(outputs[target], passiveBoundary) {
 				t.Fatalf("%s dry-run omitted passive boundary %q: %s", target, passiveBoundary, output)
+			}
+			explainArguments := []string{"explain", target, "--profile", name, "--json"}
+			if target == "codex" && access == "read-write" {
+				explainArguments = append(explainArguments, "--auth", "override")
+			}
+			explain := exec.Command(binary, explainArguments...)
+			explain.Env, explain.Dir = nativeCandidateEnvironment(home, path, nil), workspace
+			explanationOutput, err := explain.CombinedOutput()
+			if err != nil {
+				t.Fatalf("installed candidate %s explanation: %v; output=%s", target, err, explanationOutput)
+			}
+			privateReferenceLeaked := target == "codex" && (bytes.Contains(explanationOutput, []byte(`"work"`)) || bytes.Contains(explanationOutput, []byte("override")))
+			if bytes.Contains(explanationOutput, []byte("unselected")) || bytes.Contains(explanationOutput, []byte(workspace)) || privateReferenceLeaked {
+				t.Fatalf("%s explanation exposed unselected/private binding: %s", target, explanationOutput)
+			}
+			var explanation struct {
+				Plan struct {
+					Requested   []nativeExplanationFact `json:"requested"`
+					TargetAdded []nativeExplanationFact `json:"targetAdded"`
+				} `json:"plan"`
+			}
+			if err := json.Unmarshal(explanationOutput, &explanation); err != nil {
+				t.Fatalf("decode %s explanation: %v; output=%s", target, err, explanationOutput)
+			}
+			workspaceFact, found := nativeExplanationFactByID(explanation.Plan.Requested, "common.workspace")
+			if !found || workspaceFact.Value.Access != access {
+				t.Fatalf("%s explanation workspace = %#v, want %s", target, workspaceFact, access)
+			}
+			for _, id := range []string{"skills.selected.devin-config:review", "skills.selected.shared-agents:delivery"} {
+				if !nativeExplanationHasFact(explanation.Plan.Requested, id) {
+					t.Fatalf("%s explanation omitted exact selected identity %s", target, id)
+				}
+			}
+			if target == "devin" && !nativeExplanationHasFact(explanation.Plan.TargetAdded, "devin.project-skills") {
+				t.Fatalf("Devin explanation omitted project inheritance: %s", explanationOutput)
 			}
 			assertNoSessions(t, home)
 		}
@@ -844,6 +1057,7 @@ func assertPromotedArtifactNativeContainment(t *testing.T) {
 		"Session temporary":   result.TemporaryWritable,
 		"allowed environment": result.AllowedEnvironment,
 		"outbound IP":         result.OutboundIP,
+		"local IP bind":       result.LocalIPBind,
 		"descendant start":    result.DescendantStarted,
 	} {
 		if !actual {
@@ -856,6 +1070,7 @@ func assertPromotedArtifactNativeContainment(t *testing.T) {
 		"secret environment":   result.BlockedEnvironmentVisible,
 		"inherited descriptor": result.DescriptorLeaked,
 		"host Unix socket":     result.HostSocketReachable,
+		"local Unix bind":      result.LocalUnixBind,
 		"unrelated host write": result.ExternalWriteSucceeded,
 	} {
 		if actual {
@@ -968,6 +1183,8 @@ type fakeDevinResult struct {
 	DescriptorLeaked          bool `json:"descriptorLeaked"`
 	HostSocketReachable       bool `json:"hostSocketReachable"`
 	OutboundIP                bool `json:"outboundIP"`
+	LocalIPBind               bool `json:"localIPBind"`
+	LocalUnixBind             bool `json:"localUnixBind"`
 	ExternalWriteSucceeded    bool `json:"externalWriteSucceeded"`
 	DescendantStarted         bool `json:"descendantStarted"`
 	SelectedCommonSkills      bool `json:"selectedCommonSkills"`
@@ -1109,6 +1326,8 @@ func runFakeDevinInteractive() {
 		DescriptorLeaked:          fakeDevinDescriptorContains(configuration.DescriptorSentinel),
 		HostSocketReachable:       fakeDevinCanDial("unix", configuration.HostSocket),
 		OutboundIP:                fakeDevinCanDial("tcp", configuration.OutboundAddress),
+		LocalIPBind:               fakeDevinCanBind("tcp4", "127.0.0.1:0"),
+		LocalUnixBind:             fakeDevinCanBind("unix", filepath.Join(os.Getenv("HOME"), "denied-bind.sock")),
 		ExternalWriteSucceeded:    writeFakeDevinMarker(configuration.ExternalWritePath),
 	}
 	result.DescendantStarted = startFakeDevinDescendant()
@@ -1259,6 +1478,14 @@ func fakeDevinCanDial(network, address string) bool {
 		return false
 	}
 	return connection.Close() == nil
+}
+
+func fakeDevinCanBind(network, address string) bool {
+	listener, err := net.Listen(network, address)
+	if err != nil {
+		return false
+	}
+	return listener.Close() == nil
 }
 
 func writeFakeDevinMarker(path string) bool {

@@ -46,6 +46,7 @@ type Config struct {
 	BinaryPath      string
 	ExistingHomeDir string
 	RuntimeInputs   []string
+	RuntimeInputIDs []string
 }
 
 // devinExecutor is a private facade seam. Production always uses executor.New;
@@ -64,6 +65,7 @@ type Adapter struct {
 	workspaceCategory commonprofile.WorkspaceBinding
 	executor          devinExecutor
 	runtimeInputs     []string
+	runtimeInputIDs   []string
 }
 
 type SkillBundle = skills.SkillBundle
@@ -99,10 +101,14 @@ func newAdapter(config Config) (*Adapter, error) {
 	if config.ExistingHomeDir == "" {
 		return nil, errors.New("create Devin Adapter: existing home directory is required")
 	}
+	if len(config.RuntimeInputIDs) != len(config.RuntimeInputs) {
+		return nil, errors.New("create Devin Adapter: every runtime input requires a stable semantic ID")
+	}
 	adapter := &Adapter{
 		binaryPath:      config.BinaryPath,
 		existingHomeDir: filepath.Clean(config.ExistingHomeDir),
 		runtimeInputs:   append([]string(nil), config.RuntimeInputs...),
+		runtimeInputIDs: append([]string(nil), config.RuntimeInputIDs...),
 	}
 	adapter.executor = executor.New()
 	registry, binding, workspaceBinding, err := newCategoryRegistry(adapter)

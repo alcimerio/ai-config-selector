@@ -1,6 +1,7 @@
 package devin
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -92,7 +93,9 @@ func (devinSkillProjection) Materialize(sessionHome string, selected []skills.Sk
 }
 
 func newCategoryRegistry(adapter *Adapter) (*category.Registry, commonprofile.SkillsBinding, commonprofile.WorkspaceBinding, error) {
-	skillsBinding, err := commonprofile.NewSkillsBinding(adapter.DiscoverGlobalSkillCatalog, devinSkillProjection{})
+	skillsBinding, err := commonprofile.NewSelectedSkillsBinding(func(ctx context.Context, references []skills.SkillReference) ([]skills.SkillBundle, error) {
+		return DiscoverExactSkillReferences(ctx, adapter.existingHomeDir, references)
+	}, devinSkillProjection{})
 	if err != nil {
 		return nil, commonprofile.SkillsBinding{}, commonprofile.WorkspaceBinding{}, err
 	}
@@ -101,10 +104,13 @@ func newCategoryRegistry(adapter *Adapter) (*category.Registry, commonprofile.Sk
 		return nil, commonprofile.SkillsBinding{}, commonprofile.WorkspaceBinding{}, err
 	}
 	registry, err := category.NewRegistryWithRequirements("devin", authority.TargetRequirements{
-		Recipe:                authority.RecipeDevin,
-		Executable:            adapter.binaryPath,
-		RuntimeInputs:         append([]string(nil), adapter.runtimeInputs...),
-		ExistingHomeDirectory: adapter.existingHomeDir,
+		Recipe:                  authority.RecipeDevin,
+		Executable:              adapter.binaryPath,
+		ExecutableRequirementID: "devin-cli",
+		RuntimeInputs:           append([]string(nil), adapter.runtimeInputs...),
+		RuntimeInputIDs:         append([]string(nil), adapter.runtimeInputIDs...),
+		ExistingHomeDirectory:   adapter.existingHomeDir,
+		Semantics:               authority.DevinSemantics(),
 	}, []category.Registration{skillsBinding.Registration(), workspaceBinding.Registration()}, category.LegacyDecoder{Version: 1, Decode: decodeVersionOneProfile})
 	if err != nil {
 		return nil, commonprofile.SkillsBinding{}, commonprofile.WorkspaceBinding{}, err

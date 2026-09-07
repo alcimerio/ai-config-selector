@@ -8,7 +8,9 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/alcimerio/ai-config-selector/internal/authority"
 	"github.com/alcimerio/ai-config-selector/internal/category"
+	"github.com/alcimerio/ai-config-selector/internal/launch"
 	"github.com/alcimerio/ai-config-selector/internal/profile"
 	"github.com/alcimerio/ai-config-selector/internal/skills"
 )
@@ -17,6 +19,28 @@ type testProjection struct {
 	calls    int
 	original string
 	observed []byte
+}
+
+func TestSkillSemanticDigestUsesExactIdentityButNotBundlePath(t *testing.T) {
+	projection := &testProjection{}
+	planFor := func(reference skills.SkillReference, bundlePath string) authority.Plan {
+		contribution := SkillsContribution{selected: []skills.SkillBundle{{Reference: reference, BundlePath: bundlePath}}, projection: projection}
+		return authority.New([]authority.Contribution{{ID: SkillsCapabilityID, Value: contribution}}, launch.WorkspaceAccessReadOnly, 3, "devin", authority.TargetRequirements{Recipe: authority.RecipeDevin, ExecutableRequirementID: "devin-cli", Semantics: authority.DevinSemantics()})
+	}
+	identity := skills.SkillReference{Source: "shared-agents", RelativePath: "review"}
+	first := planFor(identity, "/private/source-one")
+	second := planFor(identity, "/different/private/source-two")
+	if first.AuthorityDigest() != second.AuthorityDigest() {
+		t.Fatal("private bundle path changed semantic digest")
+	}
+	changed := planFor(skills.SkillReference{Source: "devin-config", RelativePath: "review"}, "/private/source-one")
+	if first.AuthorityDigest() == changed.AuthorityDigest() {
+		t.Fatal("exact selected Skill source identity did not change semantic digest")
+	}
+	changed = planFor(skills.SkillReference{Source: "shared-agents", RelativePath: "different"}, "/private/source-one")
+	if first.AuthorityDigest() == changed.AuthorityDigest() {
+		t.Fatal("exact selected Skill relativePath did not change semantic digest")
+	}
 }
 
 func (*testProjection) ID() string   { return "devin" }

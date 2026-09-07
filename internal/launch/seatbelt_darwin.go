@@ -719,6 +719,10 @@ func quarantineSeatbeltCleanup(process *seatbeltProcess) {
 }
 
 func buildSeatbeltPolicy(request validatedProcessRequest) (string, []string, error) {
+	runtimeAuthority, err := normalizeRuntimeAuthority(request.runtimeAuthority)
+	if err != nil {
+		return "", nil, err
+	}
 	definitions := []string{
 		"-DWORKSPACE=" + request.workspace,
 		"-DSESSION=" + request.sessionDirectory,
@@ -758,6 +762,14 @@ func buildSeatbeltPolicy(request validatedProcessRequest) (string, []string, err
 		workspaceWriteRule = `
   (literal (param "WORKSPACE")) (subpath (param "WORKSPACE"))`
 	}
+	var sysctlRules strings.Builder
+	for _, name := range runtimeAuthority.SysctlNames {
+		fmt.Fprintf(&sysctlRules, "\n  (sysctl-name %q)", name)
+	}
+	var machServiceRules strings.Builder
+	for _, name := range runtimeAuthority.MachServices {
+		fmt.Fprintf(&machServiceRules, "\n(allow mach-lookup\n  (global-name %q))", name)
+	}
 	policy := `(version 1)
 (deny default)
 
@@ -770,10 +782,7 @@ func buildSeatbeltPolicy(request validatedProcessRequest) (string, []string, err
 
 ; Go runtime startup reads the host page size before initializing its heap and
 ; reads the CPU count while starting its scheduler.
-(allow sysctl-read
-  (sysctl-name "hw.pagesize")
-  (sysctl-name "hw.pagesize_compat")
-  (sysctl-name "hw.ncpu"))
+(allow sysctl-read` + sysctlRules.String() + `)
 
 ; The root literal permits pathname traversal without granting descendants.
 ; The tested system roots below provide the dynamic runtime and fixed-PATH
@@ -817,10 +826,7 @@ func buildSeatbeltPolicy(request validatedProcessRequest) (string, []string, err
 
 ; Security.framework reads system trust settings and evaluates platform TLS
 ; through these exact Mach services. All other Mach services remain denied.
-(allow mach-lookup
-  (global-name "com.apple.SecurityServer"))
-(allow mach-lookup
-  (global-name "com.apple.trustd.agent"))
+` + machServiceRules.String() + `
 
 ; Preserve the invoking terminal, raw mode, and resize operations.
 (allow pseudo-tty)

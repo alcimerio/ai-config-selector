@@ -328,6 +328,20 @@ func TestBuildProcessEnvironmentRejectsUnexpectedAllowedValueWithoutLeakingIt(t 
 	}
 }
 
+func TestRuntimeAuthorityZeroCompatibilityDoesNotDiscardExplicitFields(t *testing.T) {
+	if got, err := normalizeRuntimeAuthority(RuntimeAuthority{}); err != nil || !reflect.DeepEqual(got, DefaultRuntimeAuthority()) {
+		t.Fatalf("empty compatibility authority = %#v, %v", got, err)
+	}
+	if _, err := normalizeRuntimeAuthority(RuntimeAuthority{ProcessMode: "different"}); err == nil {
+		t.Fatal("zero-version authority silently discarded an explicit contradictory field")
+	}
+	defaultAuthority := DefaultRuntimeAuthority()
+	defaultAuthority.MachServices[0] = "changed"
+	if DefaultRuntimeAuthority().MachServices[0] == "changed" {
+		t.Fatal("default runtime authority aliases mutable nested data")
+	}
+}
+
 func TestValidateTerminalRejectsExtraFileDescriptor(t *testing.T) {
 	extra, err := os.CreateTemp(t.TempDir(), "extra-descriptor")
 	if err != nil {

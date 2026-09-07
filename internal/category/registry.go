@@ -201,7 +201,7 @@ func NewRegistry(target string, registrations ...Registration) (*Registry, error
 // NewRegistryWithLegacy assembles a Registry with explicit older envelope
 // decoders.
 func NewRegistryWithLegacy(target string, registrations []Registration, legacyDecoders ...LegacyDecoder) (*Registry, error) {
-	return NewRegistryWithRequirements(target, authority.TargetRequirements{Recipe: authority.RecipeDevin}, registrations, legacyDecoders...)
+	return NewRegistryWithRequirements(target, authority.TargetRequirements{Recipe: authority.RecipeDevin, ExecutableRequirementID: "devin-cli", Semantics: authority.DevinSemantics()}, registrations, legacyDecoders...)
 }
 
 // NewRegistryWithRequirements assembles a Registry with fixed intrinsic
@@ -212,6 +212,12 @@ func NewRegistryWithRequirements(target string, requirements authority.TargetReq
 	}
 	if requirements.Recipe != authority.RecipeDevin && requirements.Recipe != authority.RecipeCodex {
 		return nil, fmt.Errorf("category Registry target %q requires an unsupported execution recipe %q", target, requirements.Recipe)
+	}
+	if requirements.ExecutableRequirementID == "" || len(requirements.RuntimeInputIDs) != len(requirements.RuntimeInputs) {
+		return nil, fmt.Errorf("category Registry target %q has incomplete semantic requirement identities", target)
+	}
+	if !requirements.Semantics.Supports(requirements.Recipe) {
+		return nil, fmt.Errorf("category Registry target %q has unsupported target semantics", target)
 	}
 	registry := &Registry{
 		target:       target,

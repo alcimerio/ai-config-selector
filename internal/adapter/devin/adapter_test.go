@@ -53,6 +53,36 @@ func TestDiscoverGlobalSkillCatalogKeepsSourceIdentityForDuplicateNames(t *testi
 	}
 }
 
+func TestDiscoverExactSkillReferencesDoesNotInspectUnselectedBundles(t *testing.T) {
+	home := t.TempDir()
+	selected := filepath.Join(home, ".config", "devin", "skills", "selected")
+	unselected := filepath.Join(home, ".config", "devin", "skills", "unselected")
+	if err := os.MkdirAll(selected, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(selected, "SKILL.md"), []byte("# selected\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	inspected := []string{}
+	got, err := discoverExactSkillReferences(context.Background(), home, []skills.SkillReference{{Source: "devin-config", RelativePath: "selected"}}, func(path string) (os.FileInfo, error) {
+		inspected = append(inspected, path)
+		if strings.HasPrefix(path, unselected) {
+			t.Fatalf("inspected unselected bundle %q", path)
+		}
+		return os.Stat(path)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantInspected := []string{selected, filepath.Join(selected, "SKILL.md")}
+	if !reflect.DeepEqual(inspected, wantInspected) {
+		t.Fatalf("inspected paths = %q, want only selected identity %q", inspected, wantInspected)
+	}
+	if len(got) != 1 || got[0].Reference.RelativePath != "selected" {
+		t.Fatalf("resolved bundles = %#v", got)
+	}
+}
+
 func TestConfigDoesNotExposeProcessSandboxOverride(t *testing.T) {
 	sandboxType := reflect.TypeOf((*launch.ProcessSandbox)(nil)).Elem()
 	configType := reflect.TypeOf(Config{})

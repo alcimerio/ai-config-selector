@@ -358,10 +358,51 @@ func TestSeatbeltResolvesHostnameThroughMDNSSocketAlias(t *testing.T) {
 
 func TestSeatbeltReadsSystemTrustSettingsThroughSecurityServer(t *testing.T) {
 	skipSeatbeltNativeTestBinaryUnderRace(t)
-	request := seatbeltTestRequest(t)
-	request.arguments = []string{
-		"-test.run=TestSeatbeltHelperProcess", "--", "copy-system-trust-settings",
+	for _, test := range []struct {
+		name, omitted string
+	}{
+		{name: "registered SecurityServer permits system trust settings"},
+		{name: "omitting SecurityServer denies system trust settings", omitted: "com.apple.SecurityServer"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			request := seatbeltTestRequest(t)
+			request.arguments = []string{"-test.run=TestSeatbeltHelperProcess", "--", "copy-system-trust-settings"}
+			var output bytes.Buffer
+			request.terminal = Terminal{Output: &output, ErrorOutput: &output}
+			backend := newSeatbeltBackend(seatbeltExecutable)
+			if test.omitted != "" {
+				backend.policy = func(request validatedProcessRequest) (string, []string, error) {
+					policy, definitions, err := buildSeatbeltPolicy(request)
+					if err != nil {
+						return "", nil, err
+					}
+					rule := "(allow mach-lookup\n  (global-name \"" + test.omitted + "\"))"
+					policy, err = seatbeltRemovePolicyTextExactlyOnce(policy, rule, "SecurityServer rule")
+					return policy, definitions, err
+				}
+			}
+			process, err := backend.prepare(context.Background(), request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := process.Start(); err != nil {
+				t.Fatal(err)
+			}
+			err = process.Wait()
+			if test.omitted == "" && err != nil {
+				t.Fatalf("trust-settings read failed: %v; output=%q", err, output.String())
+			}
+			if test.omitted != "" && err == nil {
+				t.Fatalf("trust-settings read succeeded without %s; output=%q", test.omitted, output.String())
+			}
+		})
 	}
+}
+
+func TestSeatbeltExercisesRegisteredSysctlsAndLocalIPBind(t *testing.T) {
+	skipSeatbeltNativeTestBinaryUnderRace(t)
+	request := seatbeltTestRequest(t)
+	request.arguments = []string{"-test.run=TestSeatbeltHelperProcess", "--", "runtime-authority", request.sessionDirectory}
 	var output bytes.Buffer
 	request.terminal = Terminal{Output: &output, ErrorOutput: &output}
 	process, err := newSeatbeltBackend(seatbeltExecutable).prepare(context.Background(), request)
@@ -372,7 +413,10 @@ func TestSeatbeltReadsSystemTrustSettingsThroughSecurityServer(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := process.Wait(); err != nil {
-		t.Fatalf("trust-settings read failed: %v; output=%q", err, output.String())
+		t.Fatalf("registered sysctl/local-IP runtime authority failed: %v; output=%q", err, output.String())
+	}
+	if got := strings.TrimSpace(output.String()); got != "runtime-authority" {
+		t.Fatalf("runtime authority output = %q", got)
 	}
 }
 
@@ -2451,6 +2495,36 @@ func TestSeatbeltHelperProcess(t *testing.T) {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(111)
 		}
+		os.Exit(0)
+	case "runtime-authority":
+		for _, name := range DefaultRuntimeAuthority().SysctlNames {
+			if _, err := unix.SysctlUint32(name); err != nil {
+				fmt.Fprintf(os.Stderr, "registered sysctl %s failed: %v\n", name, err)
+				os.Exit(125)
+			}
+		}
+		if _, err := unix.Sysctl("kern.hostname"); !isSeatbeltPermission(err) {
+			fmt.Fprintf(os.Stderr, "unregistered sysctl was not denied: %v\n", err)
+			os.Exit(126)
+		}
+		listener, err := net.Listen("tcp4", "127.0.0.1:0")
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "local-IP bind failed: %v\n", err)
+			os.Exit(127)
+		}
+		_ = listener.Close()
+		unixPath := filepath.Join(arguments[1], "denied-bind.sock")
+		unixListener, err := net.Listen("unix", unixPath)
+		if err == nil {
+			_ = unixListener.Close()
+			fmt.Fprintln(os.Stderr, "unregistered Unix bind succeeded")
+			os.Exit(128)
+		}
+		if !isSeatbeltPermission(err) {
+			fmt.Fprintf(os.Stderr, "unregistered Unix bind had unexpected failure: %v\n", err)
+			os.Exit(129)
+		}
+		fmt.Fprintln(os.Stdout, "runtime-authority")
 		os.Exit(0)
 	case "security-policy-and-local-system-trust":
 		if _, inherited := os.LookupEnv(seatbeltParentCredentialSentinel); inherited {

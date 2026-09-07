@@ -13,6 +13,7 @@ import (
 type commandSpec struct {
 	path, syntax, description, example string
 	valueFlag, boolFlag                string
+	secondBoolFlag                     string
 	auxValueFlag                       string
 	thirdValueFlag                     string
 	group                              bool
@@ -36,14 +37,19 @@ var commands = []commandSpec{
 	{path: "profile export", syntax: "acs profile export NAME [--file FILE]", description: "Export supported version-3 stored intent as deterministic sanitized exchange JSON.\nWithout --file, JSON is stdout and the classification report is stderr. Existing files are never replaced.", example: "acs profile export backend-review\n  acs profile export backend-review --file backend-review.acs-profile.json", nameOperand: true, valueFlag: "--file", optionalValue: true},
 	{path: "profile import", syntax: "acs profile import --file FILE --as NAME [--bindings FILE] [--dry-run]", description: "Import one untrusted exchange document through bounded validation and conditional no-overwrite creation.\nAll symbolic bindings must be explicit; --dry-run is passive and publishes nothing.", example: "acs profile import --file shared.acs-profile.json --as backend-review --bindings local-bindings.json --dry-run", valueFlag: "--file", auxValueFlag: "--as", thirdValueFlag: "--bindings", optionalThirdValue: true, boolFlag: "--dry-run"},
 	{path: "profile import validate", syntax: "acs profile import validate --file FILE [--bindings FILE] [--json]", description: "Passively validate one bounded exchange document and optional local bindings.\nThis does not change the existing acs profile validate NAME command and creates no storage or runtime state.", example: "acs profile import validate --file shared.acs-profile.json --json", valueFlag: "--file", auxValueFlag: "--bindings", optionalAuxValue: true, boolFlag: "--json"},
+	{path: "explain", syntax: "acs explain <sandbox|devin|codex|run> [flags]", description: "Explain semantic Profile authority and registered execution requirements without creating a Session or starting a target.", example: "acs explain devin --profile backend-review\n  acs explain codex --profile backend-review --json", group: true},
+	{path: "explain sandbox", syntax: "acs explain sandbox --profile NAME [--check-native-readiness] [--json]", description: "Explain the fixed sandbox-shell intent. Native readiness is unchecked unless explicitly requested.", example: "acs explain sandbox --profile backend-review --json", valueFlag: "--profile", boolFlag: "--json", secondBoolFlag: "--check-native-readiness"},
+	{path: "explain devin", syntax: "acs explain devin --profile NAME [--check-native-readiness] [--json]", description: "Explain Devin authority, projection, configuration inheritance, and evidence without starting Devin.", example: "acs explain devin --profile backend-review", valueFlag: "--profile", boolFlag: "--json", secondBoolFlag: "--check-native-readiness"},
+	{path: "explain codex", syntax: "acs explain codex --profile NAME [--auth REF] [--check-native-readiness] [--json]", description: "Explain Codex authority, fixed generated configuration, inheritance, and redacted named-auth selection without provider access.", example: "acs explain codex --profile backend-review --auth work --json", valueFlag: "--profile", auxValueFlag: "--auth", optionalAuxValue: true, boolFlag: "--json", secondBoolFlag: "--check-native-readiness"},
+	{path: "explain run", syntax: "acs explain run --profile NAME [--check-native-readiness] [--json] -- COMMAND [ARG...]", description: "Explain one literal generic-command intent without starting the command. Argument values remain hidden.", example: "acs explain run --profile backend-review --json -- ./tool --flag", valueFlag: "--profile", boolFlag: "--json", secondBoolFlag: "--check-native-readiness"},
 
 	{path: "doctor", syntax: "acs doctor [--target devin|sandbox|codex-auth] [--json]", description: "Inspect passive host and backend-file prerequisites. Optional targets check executable availability only.\nVersions, authentication and actual sandbox enforcement remain unchecked. No processes run or files change.\ncodex-auth describes named authentication workflows; use Codex dry-run to inspect a Profile launch plan.", example: "acs doctor\n  acs doctor --target devin --json", valueFlag: "--target", boolFlag: "--json", optionalValue: true},
 	{path: "profile validate", syntax: "acs profile validate NAME [--json]", description: "Validate stored Profile structure and selected Skill-source resolution without a launch plan.\nPlatform, backend, executables, authentication and runtime remain unchecked. No files change.", example: "acs profile validate backend-review\n  acs profile validate --json backend-review", boolFlag: "--json", nameOperand: true},
-	{path: "run", syntax: "acs run --profile <name> [--dry-run] -- COMMAND [ARG...]", description: "Run one literal argv with common Profile authority and the required native sandbox.\nNo shell, target overlay, credentials, or host PATH is inherited.", example: "acs run --profile backend-review -- /usr/bin/git status\n  acs run --dry-run --profile backend-review -- ./tool --flag", valueFlag: "--profile", boolFlag: "--dry-run"},
-	{path: "devin", syntax: "acs devin --profile <name> [--dry-run]", description: "Launch Devin with a saved Profile. --dry-run inspects the plan without creating a Session.\nUse create-profile to open the interactive Profile Builder.", example: "acs devin --profile backend-review --dry-run\n  acs devin --profile backend-review", valueFlag: "--profile", boolFlag: "--dry-run"},
+	{path: "run", syntax: "acs run --profile <name> [--dry-run] [--expect-authority-digest DIGEST] -- COMMAND [ARG...]", description: "Run one literal argv with common Profile authority and the required native sandbox.\nNo shell, target overlay, credentials, or host PATH is inherited.", example: "acs run --profile backend-review -- /usr/bin/git status\n  acs run --dry-run --profile backend-review -- ./tool --flag", valueFlag: "--profile", boolFlag: "--dry-run", thirdValueFlag: "--expect-authority-digest", optionalThirdValue: true},
+	{path: "devin", syntax: "acs devin --profile <name> [--dry-run] [--expect-authority-digest DIGEST]", description: "Launch Devin with a saved Profile. --dry-run inspects the plan without creating a Session.\nUse create-profile to open the interactive Profile Builder.", example: "acs devin --profile backend-review --dry-run\n  acs devin --profile backend-review", valueFlag: "--profile", boolFlag: "--dry-run", thirdValueFlag: "--expect-authority-digest", optionalThirdValue: true},
 	{path: "devin create-profile", syntax: "acs devin create-profile --name <name>", description: "Create a new Profile using interactive stdin and stdout. Existing names are never overwritten.\nSelect Skills with Space/Enter; return with Left/Esc; choose Create Profile to save.\nCtrl+C cancels without saving (exit 130).", example: "acs devin create-profile --name backend-review", valueFlag: "--name"},
-	{path: "sandbox", syntax: "acs sandbox --profile <name> [--dry-run]", description: "Open /bin/zsh -f in the Profile sandbox without Devin credentials.\n--dry-run inspects the plan without creating a Session or starting a shell.", example: "acs sandbox --dry-run --profile backend-review\n  acs sandbox --profile backend-review", valueFlag: "--profile", boolFlag: "--dry-run"},
-	{path: "codex", syntax: "acs codex --profile <name> [--auth <ref>] [--dry-run]", description: "Launch interactive Codex with a common Profile and one ACS-owned named ChatGPT identity.\n--auth overrides the Profile authRef for this run. --dry-run validates syntax only and reports authentication unchecked.", example: "acs codex --profile backend-review --auth work --dry-run\n  acs codex --profile backend-review", valueFlag: "--profile", auxValueFlag: "--auth", optionalAuxValue: true, boolFlag: "--dry-run"},
+	{path: "sandbox", syntax: "acs sandbox --profile <name> [--dry-run] [--expect-authority-digest DIGEST]", description: "Open /bin/zsh -f in the Profile sandbox without Devin credentials.\n--dry-run inspects the plan without creating a Session or starting a shell.", example: "acs sandbox --dry-run --profile backend-review\n  acs sandbox --profile backend-review", valueFlag: "--profile", boolFlag: "--dry-run", thirdValueFlag: "--expect-authority-digest", optionalThirdValue: true},
+	{path: "codex", syntax: "acs codex --profile <name> [--auth <ref>] [--dry-run] [--expect-authority-digest DIGEST]", description: "Launch interactive Codex with a common Profile and one ACS-owned named ChatGPT identity.\n--auth overrides the Profile authRef for this run. --dry-run validates syntax only and reports authentication unchecked.", example: "acs codex --profile backend-review --auth work --dry-run\n  acs codex --profile backend-review", valueFlag: "--profile", auxValueFlag: "--auth", optionalAuxValue: true, boolFlag: "--dry-run", thirdValueFlag: "--expect-authority-digest", optionalThirdValue: true},
 	{path: "codex create-profile", syntax: "acs codex create-profile --name <name> [--auth <ref>]", description: "Create a common Profile with a supported Codex overlay through the interactive Profile Builder.\nWhen supplied, only the opaque named authentication reference is stored; credentials are never stored in a Profile.\nA Profile without authRef requires --auth on every real launch.", example: "acs codex create-profile --name backend-review --auth work", valueFlag: "--name", auxValueFlag: "--auth", optionalAuxValue: true},
 	{path: "codex auth", syntax: "acs codex auth <command> [flags]", description: "Manage ACS-owned ChatGPT identities in the macOS Keychain.\nLogin and status require codex-cli 0.149.1 and the required sandbox.\nThese commands do not launch interactive Codex or use the global Codex login.", example: "acs codex auth login --name work\n  acs codex auth status --name work", group: true},
 	{path: "codex auth login", syntax: "acs codex auth login --name <name> [--device-auth]", description: "Create a named ChatGPT identity; requires interactive stdin/stdout and codex-cli 0.149.1.\n--device-auth selects the device login flow. Existing names are never replaced.", example: "acs codex auth login --device-auth --name work", valueFlag: "--name", boolFlag: "--device-auth"},
@@ -55,13 +61,13 @@ var commands = []commandSpec{
 }
 
 type invocation struct {
-	command       commandSpec
-	value         string
-	auxValue      string
-	thirdValue    string
-	operand       string
-	enabled, help bool
-	arguments     []string
+	command                      commandSpec
+	value                        string
+	auxValue                     string
+	thirdValue                   string
+	operand                      string
+	enabled, secondEnabled, help bool
+	arguments                    []string
 }
 
 func parseCommand(args []string) (inv invocation, problem string) {
@@ -81,7 +87,7 @@ func parseCommand(args []string) (inv invocation, problem string) {
 		}
 	}
 	args = args[consumed:]
-	if inv.command.path == "run" && !helpCommand {
+	if (inv.command.path == "run" || inv.command.path == "explain run") && !helpCommand {
 		boundary := -1
 		for index, argument := range args {
 			if argument == "--" {
@@ -118,7 +124,7 @@ func parseCommand(args []string) (inv invocation, problem string) {
 			return inv, "unsupported positional argument"
 		}
 		flag, _, hasEquals := strings.Cut(arg, "=")
-		if helpCommand || (flag != "--help" && flag != inv.command.valueFlag && flag != inv.command.auxValueFlag && flag != inv.command.thirdValueFlag && flag != inv.command.boolFlag) {
+		if helpCommand || (flag != "--help" && flag != inv.command.valueFlag && flag != inv.command.auxValueFlag && flag != inv.command.thirdValueFlag && flag != inv.command.boolFlag && flag != inv.command.secondBoolFlag) {
 			return inv, "unsupported flag " + publicToken(flag)
 		}
 		if hasEquals {
@@ -151,6 +157,8 @@ func parseCommand(args []string) (inv invocation, problem string) {
 			inv.thirdValue = args[i]
 		case inv.command.boolFlag:
 			inv.enabled = true
+		case inv.command.secondBoolFlag:
+			inv.secondEnabled = true
 		}
 	}
 	if inv.command.path == "doctor" && inv.value != "" && inv.value != "devin" && inv.value != "sandbox" && inv.value != "codex-auth" {
@@ -185,6 +193,12 @@ func parseCommand(args []string) (inv invocation, problem string) {
 	if inv.command.path == "run" && profile.ValidateName(inv.value) != nil {
 		return inv, "invalid Profile name"
 	}
+	if strings.HasPrefix(inv.command.path, "explain ") && profile.ValidateName(inv.value) != nil {
+		return inv, "invalid Profile name"
+	}
+	if inv.command.thirdValueFlag == "--expect-authority-digest" && inv.thirdValue != "" && !validAuthorityDigest(inv.thirdValue) {
+		return inv, "invalid authority digest"
+	}
 	if isMutation(inv.command.path) {
 		if profile.ValidateName(inv.operand) != nil {
 			return inv, "invalid Profile name"
@@ -210,6 +224,18 @@ func parseCommand(args []string) (inv invocation, problem string) {
 	}
 
 	return inv, ""
+}
+
+func validAuthorityDigest(value string) bool {
+	if len(value) != len("sha256:")+64 || !strings.HasPrefix(value, "sha256:") {
+		return false
+	}
+	for _, character := range value[len("sha256:"):] {
+		if !(character >= '0' && character <= '9' || character >= 'a' && character <= 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 // GenericRunRequested identifies the validated command path so main can avoid
@@ -238,6 +264,11 @@ func ProfileCreateRequested(args []string) bool {
 func ProfileExchangeRequested(args []string) bool {
 	inv, problem := parseCommand(args)
 	return problem == "" && !inv.help && (inv.command.path == "profile export" || inv.command.path == "profile import" || inv.command.path == "profile import validate")
+}
+
+func ExplanationRequested(args []string) bool {
+	inv, problem := parseCommand(args)
+	return problem == "" && !inv.help && strings.HasPrefix(inv.command.path, "explain ")
 }
 
 // publicToken identifies command/flag spellings without echoing attached values,
@@ -301,7 +332,11 @@ func (app App) printHelp(command commandSpec) {
 		}
 	}
 	if command.thirdValueFlag != "" {
-		fmt.Fprintf(app.Output, "  %s FILE  Optional explicit local binding document\n", command.thirdValueFlag)
+		if command.thirdValueFlag == "--expect-authority-digest" {
+			fmt.Fprintf(app.Output, "  %s DIGEST  Optional expected semantic authority digest\n", command.thirdValueFlag)
+		} else {
+			fmt.Fprintf(app.Output, "  %s FILE  Optional explicit local binding document\n", command.thirdValueFlag)
+		}
 	}
 	if command.boolFlag != "" {
 		description := map[string]string{"--dry-run": "Inspect without launching", "--device-auth": "Use device login", "--json": "Emit versioned JSON format 1"}[command.boolFlag]
@@ -312,8 +347,11 @@ func (app App) printHelp(command commandSpec) {
 		}
 		fmt.Fprintf(app.Output, "  %s  %s\n", command.boolFlag, description)
 	}
+	if command.secondBoolFlag != "" {
+		fmt.Fprintln(app.Output, "  --check-native-readiness  Run the bounded platform and native-backend readiness observation")
+	}
 	fmt.Fprintln(app.Output, "  --help  Show this help without runtime access")
-	if command.path == "run" {
+	if command.path == "run" || command.path == "explain run" {
 		fmt.Fprintln(app.Output, "\nGrammar: --profile and --dry-run may be reordered before exactly one required -- boundary.\nEverything after that boundary is one literal child argv; a later -- belongs to the child.\nNo target pass-through, backend selection, sandbox bypass, or implicit shell is supported.")
 	} else if command.nameOperand {
 		fmt.Fprintln(app.Output, "\nGrammar: command words first, then exactly one NAME and flags in any order. Values use a separate token.\nEach flag may occur once. No extra operands, '=' syntax, '--' separator,\ntarget pass-through, backend selection, or sandbox bypass is supported.")
@@ -334,6 +372,9 @@ func (app App) printHelp(command commandSpec) {
 func (app App) RunInformational(args []string) (handled bool, code int) {
 	inv, problem := parseCommand(args)
 	if problem != "" {
+		if strings.HasPrefix(inv.command.path, "explain ") && containsArgument(args, "--json") {
+			return true, app.writeExplanationDiagnostic(inv, "invalid_invocation", "The explanation command syntax is invalid.")
+		}
 		code = app.fail("%s; try %s\nusage: %s", problem, helpPath(inv.command), inv.command.syntax)
 		if inv.command.path == "" {
 			fmt.Fprintln(app.ErrorOutput, "Use acs version to inspect the build.")
@@ -356,6 +397,15 @@ func (app App) RunInformational(args []string) (handled bool, code int) {
 		return true, 0
 	}
 	return false, 0
+}
+
+func containsArgument(arguments []string, wanted string) bool {
+	for _, argument := range arguments {
+		if argument == wanted {
+			return true
+		}
+	}
+	return false
 }
 
 func isMutation(command string) bool {

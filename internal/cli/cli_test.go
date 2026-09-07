@@ -26,8 +26,20 @@ import (
 	"github.com/alcimerio/ai-config-selector/internal/executor"
 	"github.com/alcimerio/ai-config-selector/internal/launch"
 	"github.com/alcimerio/ai-config-selector/internal/profile"
+	"github.com/alcimerio/ai-config-selector/internal/runcommand"
 	"github.com/alcimerio/ai-config-selector/internal/skills"
 )
+
+type recordingGenericTarget struct{ calls int }
+
+func (target *recordingGenericTarget) PlanLaunch(context.Context, string, category.ResolvedProfile, runcommand.Command) (launch.Plan, error) {
+	target.calls++
+	return launch.Plan{}, nil
+}
+func (target *recordingGenericTarget) Launch(context.Context, string, string, category.ResolvedProfile, runcommand.Command, launch.Terminal) (int, error) {
+	target.calls++
+	return 0, nil
+}
 
 func TestVersionPrintsTheInjectedBuildVersion(t *testing.T) {
 	var stdout bytes.Buffer
@@ -91,6 +103,58 @@ func TestCodexDryRunUsesOverrideAndDoesNotAcquireAuthenticationOrRunTarget(t *te
 		if !strings.Contains(stdout.String(), want) {
 			t.Fatalf("dry-run missing %q: %s", want, stdout.String())
 		}
+	}
+}
+
+func TestExpectedAuthorityDigestFailsBeforeLauncherOrCodexProvider(t *testing.T) {
+	home := t.TempDir()
+	devinTarget, err := devin.New(devin.Config{BinaryPath: "devin", ExistingHomeDir: home})
+	if err != nil {
+		t.Fatal(err)
+	}
+	devinStore := profile.NewStore(filepath.Join(home, ".acs-devin"), devinTarget.Categories())
+	devinProfile, err := devinTarget.Categories().NewProfile("example", devinTarget.Categories().NewDraft())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := devinStore.Create(devinProfile); err != nil {
+		t.Fatal(err)
+	}
+	launcher := &recordingProfileLauncher{}
+	var stdout, stderr bytes.Buffer
+	app := cli.App{Categories: devinTarget.Categories(), Profiles: devinStore, SandboxLauncher: launcher, WorkingDirectory: home, Output: &stdout, ErrorOutput: &stderr}
+	mismatch := "sha256:" + strings.Repeat("0", 64)
+	if code := app.Run(context.Background(), []string{"sandbox", "--profile", "example", "--expect-authority-digest", mismatch}); code != 1 || launcher.calls != 0 || !strings.Contains(stderr.String(), "authority_plan_changed") {
+		t.Fatalf("sandbox mismatch code=%d launcher calls=%d stderr=%q", code, launcher.calls, stderr.String())
+	}
+	stderr.Reset()
+	if code := app.Run(context.Background(), []string{"devin", "--profile", "example", "--expect-authority-digest", mismatch}); code != 1 || launcher.calls != 0 || !strings.Contains(stderr.String(), "authority_plan_changed") {
+		t.Fatalf("Devin mismatch code=%d launcher calls=%d stderr=%q", code, launcher.calls, stderr.String())
+	}
+	generic := &recordingGenericTarget{}
+	stderr.Reset()
+	app.GenericTarget = generic
+	if code := app.Run(context.Background(), []string{"run", "--profile", "example", "--expect-authority-digest", mismatch, "--", "/usr/bin/true"}); code != 1 || generic.calls != 0 || !strings.Contains(stderr.String(), "authority_plan_changed") {
+		t.Fatalf("generic mismatch code=%d target calls=%d stderr=%q", code, generic.calls, stderr.String())
+	}
+
+	execution := &rejectingCodexExecution{}
+	codexTarget, err := codexadapter.New(codexadapter.Config{BinaryPath: "codex", ExistingHomeDir: home, Executor: execution})
+	if err != nil {
+		t.Fatal(err)
+	}
+	codexStore := profile.NewStore(filepath.Join(home, ".acs-codex"), codexTarget.Categories())
+	codexProfile, err := codexTarget.Categories().NewProfileWithOverlay("example", codexTarget.Categories().NewDraft(), profile.OverlayPayload{Version: 1, AuthRef: "stored"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := codexStore.Create(codexProfile); err != nil {
+		t.Fatal(err)
+	}
+	stderr.Reset()
+	app = cli.App{CodexTarget: codexTarget, CodexCategories: codexTarget.Categories(), CodexProfiles: codexStore, WorkingDirectory: home, Output: &stdout, ErrorOutput: &stderr}
+	if code := app.Run(context.Background(), []string{"codex", "--profile", "example", "--expect-authority-digest", mismatch}); code != 1 || execution.calls != 0 || !strings.Contains(stderr.String(), "authority_plan_changed") {
+		t.Fatalf("Codex mismatch code=%d provider calls=%d stderr=%q", code, execution.calls, stderr.String())
 	}
 }
 
