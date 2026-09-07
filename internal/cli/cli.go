@@ -12,6 +12,7 @@ import (
 	"github.com/alcimerio/ai-config-selector/internal/builder"
 	"github.com/alcimerio/ai-config-selector/internal/category"
 	"github.com/alcimerio/ai-config-selector/internal/codexauth"
+	"github.com/alcimerio/ai-config-selector/internal/exchangefile"
 	"github.com/alcimerio/ai-config-selector/internal/launch"
 	"github.com/alcimerio/ai-config-selector/internal/profile"
 	"github.com/alcimerio/ai-config-selector/internal/profileinspect"
@@ -70,6 +71,10 @@ type ProfileInspector interface {
 	Show(string) profileinspect.Result
 }
 
+type ExchangePublisher interface {
+	Publish(context.Context, string, []byte) (exchangefile.Outcome, error)
+}
+
 type App struct {
 	Repository        ProfileRepository
 	MutationBuilder   ProfileMutationBuilder
@@ -98,6 +103,7 @@ type App struct {
 	// ReadProfileDocument is a test seam. Production uses the descriptor-backed
 	// bounded regular-file reader when this is nil.
 	ReadProfileDocument func(string) ([]byte, error)
+	ExchangePublisher   ExchangePublisher
 }
 
 // StandardStreamsInteractive reports whether both endpoints are actual
@@ -113,6 +119,9 @@ func StandardStreamsInteractive(input io.Reader, output io.Writer) bool {
 
 func (app App) Run(ctx context.Context, args []string) int {
 	if handled, code := app.RunInformational(args); handled {
+		return code
+	}
+	if handled, code := app.RunProfileExchange(ctx, args, os.UserHomeDir); handled {
 		return code
 	}
 	if handled, code := app.RunProfileMutations(ctx, args, os.UserHomeDir); handled {

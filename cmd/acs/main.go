@@ -53,6 +53,11 @@ func main() {
 		application := cli.App{Categories: editor.Categories(), Profiles: profile.NewStore(acsHome, editor.Categories()), Input: os.Stdin, Output: os.Stdout, ErrorOutput: os.Stderr}
 		os.Exit(application.Run(context.Background(), os.Args[1:]))
 	}
+	if cli.ProfileExchangeRequested(os.Args[1:]) {
+		if handled, code := informational.RunProfileExchange(context.Background(), os.Args[1:], os.UserHomeDir); handled {
+			os.Exit(code)
+		}
+	}
 	if handled, code := informational.RunProfileInspection(os.Args[1:], os.UserHomeDir); handled {
 		os.Exit(code)
 	}

@@ -16,6 +16,7 @@ import (
 	"github.com/alcimerio/ai-config-selector/internal/profile"
 	"github.com/alcimerio/ai-config-selector/internal/skillmaterial"
 	"github.com/alcimerio/ai-config-selector/internal/skills"
+	"golang.org/x/text/cases"
 	"golang.org/x/text/unicode/norm"
 )
 
@@ -193,7 +194,8 @@ func ValidateCommonDestinations(selected []skills.SkillBundle) error {
 		if clean == "." || clean == ".." || filepath.IsAbs(clean) || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
 			return fmt.Errorf("invalid common Skill destination %q", identity(bundle.Reference))
 		}
-		key := strings.ToLower(norm.NFC.String(string(bundle.Reference.Source) + "/" + filepath.ToSlash(clean)))
+		normalizedIdentity := norm.NFC.String(string(bundle.Reference.Source) + "/" + filepath.ToSlash(clean))
+		key := norm.NFC.String(cases.Fold().String(normalizedIdentity))
 		if previous, exists := seen[key]; exists {
 			return fmt.Errorf("common Skill destination collision between %q and %q", identity(previous), identity(bundle.Reference))
 		}

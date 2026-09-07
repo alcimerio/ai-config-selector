@@ -129,12 +129,23 @@ func TestResolvedCommonSkillsUseExactIdentityAndSelectedProjection(t *testing.T)
 func TestCommonDestinationRejectsCaseAndParentChildAliases(t *testing.T) {
 	for _, selected := range [][]skills.SkillBundle{
 		{{Reference: skills.SkillReference{Source: "shared-agents", RelativePath: "Review"}}, {Reference: skills.SkillReference{Source: "shared-agents", RelativePath: "review"}}},
+		{{Reference: skills.SkillReference{Source: "shared-agents", RelativePath: "Review/Σ"}}, {Reference: skills.SkillReference{Source: "shared-agents", RelativePath: "review/ς"}}},
 		{{Reference: skills.SkillReference{Source: "shared-agents", RelativePath: "review"}}, {Reference: skills.SkillReference{Source: "shared-agents", RelativePath: "review/nested"}}},
 		{{Reference: skills.SkillReference{Source: "shared-agents", RelativePath: "café"}}, {Reference: skills.SkillReference{Source: "shared-agents", RelativePath: "café"}}},
 	} {
 		if err := ValidateCommonDestinations(selected); err == nil {
 			t.Fatalf("accepted aliases %#v", selected)
 		}
+	}
+}
+
+func TestCommonDestinationPreservesCrossSourceNamespaceForUnicodeAliases(t *testing.T) {
+	selected := []skills.SkillBundle{
+		{Reference: skills.SkillReference{Source: "shared-agents", RelativePath: "Review/Σ"}},
+		{Reference: skills.SkillReference{Source: "devin-config", RelativePath: "review/ς"}},
+	}
+	if err := ValidateCommonDestinations(selected); err != nil {
+		t.Fatalf("cross-source aliases rejected: %v", err)
 	}
 }
 
