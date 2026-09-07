@@ -130,76 +130,15 @@ jobs:
             "${{ matrix.arch }}" \
             "$target_root/bin/codex"
 
-      - name: Run required interactive Codex gate
-        env:
-          ACS_RUN_NATIVE_AUTH_GATE: "1"
-          ACS_NATIVE_AUTH_RECOVERY_ROOT: ${{ runner.temp }}/acs-native-auth-recovery
-          ACS_TEST_CODEX_BINARY: ${{ runner.temp }}/codex-target-${{ matrix.os }}-${{ matrix.arch }}/bin/codex
-          ACS_TEST_CODEX_ARCHIVE: ${{ github.workspace }}/dist/codex-test-targets/codex_0.149.1_${{ matrix.os }}_${{ matrix.arch }}.tar.gz
-          ACS_PROMOTED_BINARY: ${{ runner.temp }}/acs-promoted-${{ matrix.os }}-${{ matrix.arch }}/bin/acs
-        run: go test ./internal/codexauthresource -run '^TestNativeInstalledACSExecutesLockedCodexToolThroughNamedIdentity$' -count=1 -v
-
-      - name: Recover early interactive Codex fixture state
-        if: always()
-        env:
-          ACS_RUN_NATIVE_AUTH_RECOVERY: "1"
-          ACS_NATIVE_AUTH_RECOVERY_ROOT: ${{ runner.temp }}/acs-native-auth-recovery
-        run: go test ./internal/codexauthresource -run '^TestNativeKeychainRecoveryEntrypoint$' -count=1
-
-      - name: Run native application, Adapter, installer, and PTY regressions
-        run: go test ./...
-
-      - name: Exercise shared target contract through supplied candidate
-        env:
-          ACS_PROMOTED_BINARY: ${{ runner.temp }}/acs-promoted-${{ matrix.os }}-${{ matrix.arch }}/bin/acs
-          ACS_PROMOTED_SANDBOX_BACKEND: ${{ matrix.sandbox_backend }}
-        run: go test ./acceptance -run '^TestPromotedArtifactSharedTargetConformance$' -count=1 -v
-
-      - name: Exercise generic contained command through supplied candidate
-        env:
-          ACS_PROMOTED_BINARY: ${{ runner.temp }}/acs-promoted-${{ matrix.os }}-${{ matrix.arch }}/bin/acs
-          ACS_PROMOTED_SANDBOX_BACKEND: ${{ matrix.sandbox_backend }}
-        run: go test ./acceptance -run '^TestPromotedArtifactNativeContainmentContract$/^generic_literal_command_uses_candidate_containment$' -count=1 -v
-
-      - name: Exercise effective explanation through supplied candidate
-        env:
-          ACS_PROMOTED_BINARY: ${{ runner.temp }}/acs-promoted-${{ matrix.os }}-${{ matrix.arch }}/bin/acs
-          ACS_PROMOTED_SANDBOX_BACKEND: ${{ matrix.sandbox_backend }}
-        run: go test ./acceptance -run '^TestPromotedArtifactNativeContainmentContract$/^effective_explanation_is_linked_and_narrowly_observed$' -count=1 -v
-
-      - name: Run supported native race tests
-        run: go test -race ./...
-
-      - name: Record native Profile repository filesystem and ownership evidence
-        run: go test ./internal/profilerepo -run '^(TestNativeVolumeAliasPolicy|TestIndependentWritersAndLiveKernelOwnership|TestRestrictedIdentityPermissionDenial)$' -count=1 -v
-
-      - name: Run credential-free native authentication evidence
-        env:
-          ACS_RUN_NATIVE_AUTH_GATE: "1"
-          ACS_NATIVE_AUTH_RECOVERY_ROOT: ${{ runner.temp }}/acs-native-auth-recovery
-          ACS_TEST_CODEX_BINARY: ${{ runner.temp }}/codex-target-${{ matrix.os }}-${{ matrix.arch }}/bin/codex
-          ACS_TEST_CODEX_ARCHIVE: ${{ github.workspace }}/dist/codex-test-targets/codex_0.149.1_${{ matrix.os }}_${{ matrix.arch }}.tar.gz
-          ACS_PROMOTED_BINARY: ${{ runner.temp }}/acs-promoted-${{ matrix.os }}-${{ matrix.arch }}/bin/acs
+      - name: Run shared native release candidate gates
         run: |
-          # Each disposable Keychain gets a fresh process for native framework state.
-          go test ./internal/codexauthresource -run '^TestNativeKeychainCredentialFreeContract$' -count=1
-          go test ./internal/codexauthresource -run '^TestNativeRealStoreInstalledTargetComposition$' -count=1 -v
-          go test ./internal/executor -run '^TestNativeInstalledTargetContainedStatusWithoutCredentials$' -count=1
-          go test ./internal/executor -run '^TestNativeDirectInstalledTargetInteractiveLifecycle$' -count=1 -v
-
-      - name: Recover native authentication gate state
-        if: always()
-        env:
-          ACS_RUN_NATIVE_AUTH_RECOVERY: "1"
-          ACS_NATIVE_AUTH_RECOVERY_ROOT: ${{ runner.temp }}/acs-native-auth-recovery
-        run: go test ./internal/codexauthresource -run '^TestNativeKeychainRecoveryEntrypoint$' -count=1
-
-      # Includes passive diagnostics, no-execution sentinels and no-write snapshots on Apple Silicon.
-      - name: Exercise installed candidate as a black box
-        env:
-          ACS_PROMOTED_BINARY: ${{ runner.temp }}/acs-promoted-${{ matrix.os }}-${{ matrix.arch }}/bin/acs
-          ACS_PROMOTED_SANDBOX_BACKEND: ${{ matrix.sandbox_backend }}
-        run: ACS_PROMOTED_VERSION="$ACS_CANDIDATE_VERSION" go test ./acceptance -count=1
+          scripts/run-native-candidate-gates.sh \
+            "$ACS_CANDIDATE_VERSION" \
+            "${RUNNER_TEMP}/acs-promoted-${{ matrix.os }}-${{ matrix.arch }}/bin/acs" \
+            "${RUNNER_TEMP}/codex-target-${{ matrix.os }}-${{ matrix.arch }}/bin/codex" \
+            "${GITHUB_WORKSPACE}/dist/codex-test-targets/codex_0.149.1_${{ matrix.os }}_${{ matrix.arch }}.tar.gz" \
+            "${RUNNER_TEMP}/acs-native-auth-recovery" \
+            "${{ matrix.sandbox_backend }}"
 
       - name: Record sanitized native candidate observation
         shell: bash
@@ -210,7 +149,8 @@ jobs:
             printf '%s\n' "- Target: \`${{ matrix.target }}\` on its required native runner."
             printf '%s\n' "- Backend observation: required native backend is \`${{ matrix.sandbox_backend }}\`."
             printf '%s\n' '- Candidate observation: the installed black-box containment and lifecycle suite passed.'
-            printf '%s\n' '- Authentication observation: the checksum-locked native target, isolated Keychain contract, fresh-process recovery gate, credential-free contained status, and harness-assisted real-target interactive tool lifecycle passed.'
+            printf '%s\n' '- Authentication observation: the official checksum-locked Codex CLI passed with synthetic authentication and a local simulated API, alongside the isolated Keychain, fresh-process recovery, credential-free contained status, and direct target lifecycle gates.'
+            printf '%s\n' '- Automation boundary: no maintainer credentials, real account login, hosted inference, or quota are used; real daily-use observation remains pending.'
             printf '%s\n' '- Interactive evidence boundary: direct raw-target containment and the installed-ACS trampoline-assisted loopback model turn are distinct observations; no fake target or production fixture hook is used.'
             printf '%s\n' '- Authentication boundary: production queries prohibit authentication UI, deterministic tests cover locked or unavailable mapping, and live locked-Keychain and ACL probes remain supplemental.'
             printf '%s\n' '- Generic command observation: literal argv, sanitized environment, pipes, standard output descriptors, workspace modes, unrelated-path denial, and Session settlement passed through the installed candidate.'
