@@ -74,6 +74,19 @@ not say every resolver or socket API supplies a hostname
 accessed 2026-09-07). **Documented.** Full coverage of the child CLIs is
 **unproven**.
 
+An app-proxy flow exposes `NEFlowMetaData`, but Apple says that metadata is
+present only for per-app VPN providers. On macOS, Apple documents `appRules` as
+associating MDM-managed apps with a per-app VPN configuration
+([NEFlowMetaData](https://developer.apple.com/documentation/networkextension/neflowmetadata),
+[Routing your VPN network traffic](https://developer.apple.com/documentation/networkextension/routing-your-vpn-network-traffic),
+accessed 2026-09-07). The `sourceProcessAuditToken` cited later is instead an
+`NEFilterFlow` content-filter API; it is not documented as an app-proxy-flow
+property. **Documented.** The proposed standalone transparent provider
+therefore has no documented exact process-identity channel. This is an early
+attribution prerequisite, not evidence that no supported standalone mechanism
+can exist. ACS will not add MDM enrollment or managed-child requirements to
+work around it.
+
 Transparent proxy settings route traffic according to included and excluded
 network rules, with exclusions taking priority. The documented included-rule
 restrictions give DNS special treatment and permit TCP, UDP, or either
@@ -166,10 +179,12 @@ is a deterministic no-go for this transparent byte-relay design.
   Linux is not macOS evidence, and policy text is not enforcement evidence.
 - No Network Extension was built, provisioned, installed, activated, or
   removed. Entitlement availability and user approval remain prerequisites.
-- Apple documents source-process audit identity for content-filter flows, but
-  the equivalent exact descendant identity needed by the proposed transparent
-  proxy flow is unresolved. App signing identity alone cannot distinguish two
-  concurrent executions of the same child CLI.
+- Apple documents source-process audit identity for content-filter flows, not
+  standalone transparent-proxy flows. `NEFlowMetaData` is limited to per-app
+  VPN, whose documented macOS app rules concern MDM-managed apps. The exact
+  descendant identity needed by this standalone prototype is unresolved, and
+  app signing identity alone cannot distinguish concurrent executions of the
+  same child CLI. MDM is not an ACS product prerequisite.
 - The documented rule APIs and DNS notes do not establish exhaustive capture
   for the bypass corpus below. That is a native observation obligation.
 - No real Devin or Codex destination, account, credential, external service,
@@ -184,12 +199,59 @@ is a deterministic no-go for this transparent byte-relay design.
 
 | Option | Assessment |
 | --- | --- |
-| Narrower Seatbelt destination predicates | Reject as the enforcement architecture. No cited Apple contract supplies stable hostname/address/port semantics; DNS answers change, and policy text cannot itself prove redirect, rebinding, UDP/QUIC, or target behavior. A disposable probe may establish a transport-denial observation only. |
+| Narrower Seatbelt destination predicates | Unsupported experiment, not a production architecture or disproved option. No cited Apple contract supplies stable hostname/address/port semantics; DNS answers change, and policy text cannot itself prove redirect, rebinding, UDP/QUIC, or target behavior. Disposable native allow/deny probes may establish transport behavior and ordering only. |
 | Proxy environment variables | Reject as enforcement. A hostile workload can ignore or remove them. Combining them with denied direct IP access could be useful for a cooperative compatibility experiment, but it still requires a kernel-enforced path to a controlled mediator and does not transparently cover arbitrary UDP/QUIC. |
-| Session-local listener or Unix socket | Reject as the complete architecture. It is narrow and can be authenticated, but ordinary child CLIs are not known to route every TCP/UDP operation through a custom local protocol. A loopback listener also needs a proved rule that allows only that endpoint. |
+| Session-local listener or Unix socket | Unsupported experiment, not a complete architecture or disproved option. It is narrow and can be authenticated, but ordinary child CLIs are not known to route every TCP/UDP operation through a custom local protocol. A loopback listener also needs a native proof that only the exact mediator path is allowed. |
 | Content or packet filter | Reject for the mandatory-mediator contract. A pass verdict lets the workload communicate with the destination; the filter does not exclusively own and copy the allowed connection. It may be defense in depth, not the sole authority. |
 | `pf`, route changes, packet tunnel, or a privileged daemon | Reject for this prototype. They mutate host-global networking or add privilege, have weak Session/process attribution, and expand the reviewed boundary. Apple also directs selective traffic proxying to transparent proxy rather than packet tunnel ([TN3120](https://developer.apple.com/documentation/technotes/tn3120-expected-use-cases-for-network-extension-packet-tunnel-providers), revised 2025-07-22, accessed 2026-09-07). |
-| Transparent proxy Network Extension plus current Seatbelt | **Leading candidate for design review.** It is application-transparent and provider-owned flow copying covers documented TCP and UDP shapes. Session attribution, exhaustive capture, fail-closed loss, and DNS/name behavior remain native gates; failure of an early deterministic gate can stop it before full implementation. |
+| Transparent proxy Network Extension plus current Seatbelt | **Leading conditional candidate for design review.** It is application-transparent and provider-owned flow copying covers documented TCP and UDP shapes. Standalone Session attribution and Seatbelt/provider ordering are prerequisites; exhaustive capture, fail-closed loss, and DNS/name behavior remain later native gates. |
+
+## Pre-implementation native gates
+
+Run these two bounded experiments before implementing the full mediator. They
+require the separately authorized extension activation, numeric local endpoints
+only, deterministic cleanup, and the same promoted prototype bytes. A failure
+stops this combined architecture; it is not a claim that macOS is defective or
+that every alternative is impossible.
+
+### Gate A: Seatbelt and transparent-provider ordering
+
+Start unique TCP and UDP listeners on numeric `127.0.0.1` endpoints so DNS is
+absent. Run the same probe under (a) the current ACS coarse remote-IP grant and
+(b) a disposable policy with the IP and mDNS grants removed. Each case records
+the Seatbelt operation/result, transparent-provider admission and decision,
+provider-created remote connection, and listener receipt.
+
+The removed-grant case passes only when both TCP and UDP produce positive
+provider admission/decision witnesses and the correct listener receives the
+unique bytes through the provider-owned connection. A denial before provider
+admission is a deterministic STOP for the proposed combined architecture. An
+all-denied result or client timeout is inconclusive without the separate
+Seatbelt and provider witnesses.
+
+In the same fixture, compare a minimal exact local mediator/socket allowance
+against unmediated numeric TCP and UDP. The allowed endpoint must receive its
+unique marker and every direct listener must remain silent; descriptor sealing
+is observed separately. This records feasibility evidence for the narrower
+Seatbelt/local-mediator experiments without promoting them to supported
+architecture.
+
+### Gate B: standalone Session attribution
+
+Using the non-per-app standalone transparent-provider configuration intended by
+this design, inventory only documented and actually populated proxy-flow
+identity fields. Prove that the provider can bind the exact flow-creating
+process to the live ACS descendant ledger and Session generation under PID
+reuse, concurrent identical child binaries, copied bearer material, and replay.
+A signing or bundle identity shared by executions is insufficient.
+
+The cited filter-flow `sourceProcessAuditToken` cannot satisfy this gate unless
+a supported API actually provides equivalent identity on the chosen proxy
+flow. `NEFlowMetaData` cannot be assumed present outside documented per-app VPN
+mode. If the standalone configuration lacks a documented and observed stable
+per-process channel, STOP before building the mediator. Do not add MDM or
+managed-target requirements to ACS; any different deployment or attribution
+design requires a separate review.
 
 ## Smallest full-property prototype
 
@@ -211,21 +273,23 @@ does not add Profile or command syntax.
    can claim candidate traffic. It starts in deny-by-default state for a
    registered Session. Every matching Session flow returns `true`; returning
    `false` is a test failure because Apple documents that as direct bypass.
-4. For every flow, the provider validates the source audit identity against a
-   fresh, stable ACS descendant identity and the active generation. Apple
-   documents an audit token identifying the process that created a filter flow
+4. Only after Gate B passes, the provider validates the proved proxy-flow
+   process identity against a fresh, stable ACS descendant identity and the
+   active generation. Apple documents an audit token identifying the process
+   that created a *filter* flow
    ([sourceProcessAuditToken](https://developer.apple.com/documentation/networkextension/nefilterflow/sourceprocessaudittoken),
-   accessed 2026-09-07), but equivalent usable identity on the chosen proxy
-   flow and race-free descendant binding are **unproven** and are early gates.
+   accessed 2026-09-07); it does not document that property for the chosen
+   proxy flow. Race-free descendant and generation binding remain unproven.
 5. The provider normalizes the requested endpoint, resolves names under the
    stated contract, rejects unapproved name/address/port/protocol combinations,
    opens the remote connection itself, and copies bounded data. It never asks
    the workload to honor proxy variables. Provider-created connections must be
    proven not to recurse into or bypass another Session decision.
-6. Seatbelt remains default-deny for filesystem, IPC, and descendants. The
-   prototype removes the current coarse IP and mDNS grants only in its
-   disposable policy. The Network Extension, not an environment convention,
-   is the sole path from the workload to an allowed transport endpoint.
+6. Seatbelt remains default-deny for filesystem, IPC, and descendants. Only
+   after Gate A passes, the prototype uses its proved disposable network policy
+   in place of the current coarse IP and mDNS grants. The Network Extension,
+   not an environment convention, is the sole path from the workload to an
+   allowed transport endpoint.
 7. Cancellation or any lost control/provider state closes both sides of every
    flow, rejects new flows, revokes the generation, waits for provider proof,
    then permits the existing Session cleanup. Uncertain provider cleanup keeps
@@ -248,6 +312,8 @@ policy string, exit zero, timeout alone, or fixture literal is not evidence.
 
 | Property | Required macOS 26 Apple Silicon probe and pass condition | Current state |
 | --- | --- | --- |
+| Seatbelt/provider ordering | Run Gate A with numeric TCP and UDP under current and removed network grants. The removed-grant case needs positive provider admission/decision and remote listener markers; a pre-provider Seatbelt denial stops the combined architecture. | Unproven; no Apple ordering contract cited |
+| Standalone flow attribution | Run Gate B without per-app VPN or MDM. A documented and populated per-process proxy-flow identity must bind to the exact descendant and Session generation under reuse, concurrency, theft, and replay. | Unproven; filter-flow token is not proxy-flow evidence |
 | Direct IPv4 and IPv6 | Separate local TCP listeners on `127.0.0.1` and `::1`; approved tuples receive unique bytes through provider-owned connections, while wrong address and port receive no listener marker. Repeat with numeric literals and connect-by-name. | Unproven |
 | Alternate DNS | Disposable UDP and TCP DNS endpoints plus a resolver witness. Raw port-53, custom resolver, system resolver, and connect-by-name attempts must all be mediated or denied; only mediator-authorized answers may lead to a connection. | Unproven; Apple documents special DNS rule behavior, not this coverage |
 | UDP | Local datagram echo with per-datagram IDs. Approved UDP arrives through a provider decision; denied UDP produces no server marker. | Unproven |
@@ -285,7 +351,9 @@ macOS 26 Apple Silicon passes every applicable matrix row, with:
    approved TCP, approved UDP, denied TCP, denied UDP, IPv4, IPv6, DNS,
    redirect, rebinding, local/private, real QUIC, Unix socket, descendant,
    inherited-FD, loss, cancellation, concurrency, theft, and replay cases;
-2. stable Session/process attribution without PID-only or bearer-only trust;
+2. a documented and observed standalone proxy-flow process identity bound to
+   stable Session/process attribution without PID-only, signing-only, per-app
+   metadata, MDM, or bearer-only trust;
 3. fail-closed startup, update, provider crash, control loss, and cleanup, with
    durable quarantine on uncertainty;
 4. exact requested-name-to-address semantics and explicit exclusion of TLS
@@ -298,6 +366,11 @@ macOS 26 Apple Silicon passes every applicable matrix row, with:
 **STOP / NO-GO** rather than weaken the criteria when any of these deterministic
 blockers is reproducible:
 
+- Gate A shows that removing the coarse Seatbelt grant denies numeric TCP or
+  UDP before positive provider admission and listener witnesses;
+- Gate B finds no documented and observed stable per-process identity channel
+  for the standalone proxy flow; do not substitute per-app metadata or add an
+  MDM/managed-target product requirement;
 - a Session flow can take the transparent provider's direct path, including
   raw IPv4/IPv6, alternate DNS, UDP, QUIC, or a descendant;
 - the provider cannot distinguish an active Session generation from another or
@@ -322,12 +395,13 @@ blocked UDP packet is never a go result.
 ## Next reviewed task
 
 Create one standalone native prototype repository or isolated test target that
-implements only the seven-component flow above. Before coding, independent
-review must freeze: the precise transport destination contract; provider rule
-set; source audit-token and descendant-ledger binding protocol; monotonic
-Session generation messages; fail-closed state machine; bounded flow-copy
-buffers; deterministic local DNS/TCP/UDP/HTTP/TLS/QUIC fixtures; restoration
-procedure; and matrix-to-witness mapping.
+implements Gate A and Gate B first. Stop before the seven-component mediator if
+either prerequisite fails. If both pass, independent review must freeze before
+further coding: the precise transport destination contract; provider rule set;
+the proved proxy-flow identity and descendant-ledger binding protocol;
+monotonic Session generation messages; fail-closed state machine; bounded
+flow-copy buffers; deterministic local DNS/TCP/UDP/HTTP/TLS/QUIC fixtures;
+restoration procedure; and matrix-to-witness mapping.
 
 The task must produce an immutable prototype head and artifact digest, native
 logs with sanitized operation witnesses, the exact macOS build, and a
