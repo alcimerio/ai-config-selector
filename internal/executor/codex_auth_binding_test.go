@@ -462,6 +462,45 @@ func TestDirectAndGeneralRecoveryRaceUsesOneAcyclicLockOrder(t *testing.T) {
 	}
 }
 
+func TestDirectRecoveryAllowsLegacyMarkerBesideUnrelatedTrackedSession(t *testing.T) {
+	auth := testChatGPTAuthJSON(t, "user", "workspace")
+	registry, _, _, sessionsDirectory := newBindingTestRegistry(t, "work", auth)
+	unrelated, err := session.CreateTracked(sessionsDirectory, registry.workingDirectory, nil, "shell")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := unrelated.ArmOperation(nil); err != nil {
+		t.Fatal(err)
+	}
+	defer unrelated.Remove()
+	legacy, err := session.Create(sessionsDirectory, registry.workingDirectory, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := legacy.ProtectForRecovery(); err != nil {
+		t.Fatal(err)
+	}
+	if err := registryTestResources(registry).quarantine.Create(context.Background(), quarantineMarker{
+		Version: recordVersion, Name: "work", SessionID: filepath.Base(legacy.RootDirectory()),
+		Phase: quarantinePrepared, ProofChallenge: testCleanupProofChallenge,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := legacy.PreserveForRecovery(); err != nil {
+		t.Fatal(err)
+	}
+	if disposition, err := registry.Recover(context.Background(), "work"); err != nil || disposition != DiscardedProjection {
+		t.Fatalf("mixed-installation legacy recovery = (%q, %v)", disposition, err)
+	}
+	if _, err := os.Stat(legacy.RootDirectory()); !os.IsNotExist(err) {
+		t.Fatalf("legacy projection remains: %v", err)
+	}
+	inspected, err := (sessionops.Store{SessionsDirectory: sessionsDirectory}).Inspect(unrelated.PublicID())
+	if err != nil || inspected.Session.State != sessionops.StateActive {
+		t.Fatalf("unrelated tracked Session changed = (%+v, %v)", inspected, err)
+	}
+}
+
 type testSessionOpsAuthRecovery struct {
 	registry *CodexAuthService
 	name     string

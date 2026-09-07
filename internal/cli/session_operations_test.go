@@ -3,6 +3,7 @@ package cli_test
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -55,20 +56,39 @@ func TestSessionCommandsArePassiveBeforeRuntimeAndEmitBoundedJSON(t *testing.T) 
 }
 
 func TestSessionHelpAndGrammarDoNotDiscoverHome(t *testing.T) {
-	var output, stderr bytes.Buffer
-	app := cli.App{Output: &output, ErrorOutput: &stderr}
-	for _, args := range [][]string{
-		{"session", "list", "--help"},
-		{"session", "list", "--state", "invalid"},
-		{"session", "recover", "session-private"},
-		{"session", "inspect", "ses_abcd234567abcdef234567abcd", "--", "private"},
+	for _, test := range []struct {
+		args       []string
+		code       int
+		wantOutput string
+	}{
+		{[]string{"session", "list", "--help"}, 0, "Usage:"},
+		{[]string{"session", "list", "--state", "invalid"}, 2, "state must be"},
+		{[]string{"session", "recover", "session-private"}, 2, "invalid Session ID"},
+		{[]string{"session", "inspect"}, 2, "missing required"},
+		{[]string{"session", "unknown"}, 2, "unknown command"},
+		{[]string{"session", "list", "--json", "--json"}, 2, "duplicate flag"},
+		{[]string{"session", "inspect", "ses_abcd234567abcdef234567abcd", "--", "private"}, 2, "unsupported flag"},
 	} {
+		var output, stderr bytes.Buffer
+		app := cli.App{Output: &output, ErrorOutput: &stderr}
 		homeCalls := 0
-		if handled, _ := app.RunInformational(args); !handled {
-			t.Fatalf("informational path did not handle %v", args)
+		homeLookup := func() (string, error) {
+			homeCalls++
+			return "", errors.New("home discovery tripwire")
+		}
+		handled, code := app.RunInformational(test.args)
+		if !handled {
+			handled, code = app.RunSessionOperations(test.args, homeLookup)
+		}
+		if !handled || code != test.code {
+			t.Fatalf("bootstrap result for %v = (%v, %d), want (true, %d)", test.args, handled, code, test.code)
 		}
 		if homeCalls != 0 {
-			t.Fatalf("home discovered for %v", args)
+			t.Fatalf("home discovered for %v", test.args)
+		}
+		combined := output.String() + stderr.String()
+		if !strings.Contains(combined, test.wantOutput) {
+			t.Fatalf("output for %v = %q, want %q", test.args, combined, test.wantOutput)
 		}
 	}
 }

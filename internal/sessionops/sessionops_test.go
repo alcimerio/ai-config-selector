@@ -443,3 +443,111 @@ func TestRecoveryRejectsDuplicateCapabilityWithoutRemovingRoot(t *testing.T) {
 		t.Fatalf("duplicate capability evidence changed: (%q, %v)", after, err)
 	}
 }
+
+func TestCompletionCannotBypassGenerationTokenOrRootBinding(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		mutate func(*testing.T, string, string)
+	}{
+		{
+			name: "generation",
+			mutate: func(t *testing.T, capabilityPath, _ string) {
+				mutateSessionJSON(t, capabilityPath, func(value map[string]any) {
+					value["generation"] = value["generation"].(float64) + 1
+					value["removed"] = true
+				})
+			},
+		},
+		{
+			name: "root token",
+			mutate: func(t *testing.T, capabilityPath, _ string) {
+				mutateSessionJSON(t, capabilityPath, func(value map[string]any) {
+					value["rootToken"] = strings.Repeat("0", 64)
+					value["removed"] = true
+				})
+			},
+		},
+		{
+			name: "root binding",
+			mutate: func(t *testing.T, capabilityPath, locks string) {
+				mutateSessionJSON(t, capabilityPath, func(value map[string]any) { value["removed"] = true })
+				entries, err := os.ReadDir(locks)
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, entry := range entries {
+					if strings.HasPrefix(entry.Name(), ".root-") {
+						mutateSessionJSON(t, filepath.Join(locks, entry.Name()), func(value map[string]any) { value["rootToken"] = strings.Repeat("1", 64) })
+						return
+					}
+				}
+				t.Fatal("root binding fixture not found")
+			},
+		},
+		{
+			name: "missing root binding before completion",
+			mutate: func(t *testing.T, capabilityPath, locks string) {
+				mutateSessionJSON(t, capabilityPath, func(value map[string]any) { value["removed"] = true })
+				entries, err := os.ReadDir(locks)
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, entry := range entries {
+					if strings.HasPrefix(entry.Name(), ".root-") {
+						if err := os.Remove(filepath.Join(locks, entry.Name())); err != nil {
+							t.Fatal(err)
+						}
+						return
+					}
+				}
+				t.Fatal("root binding fixture not found")
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			home := t.TempDir()
+			sessions := filepath.Join(home, ".acs", "sessions")
+			created, err := session.CreateTracked(sessions, home, nil, "command")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer created.Remove()
+			if _, err := created.ArmOperation(nil); err != nil {
+				t.Fatal(err)
+			}
+			private := launch.SessionOperationsDirectory(sessions)
+			capabilityPath := filepath.Join(private, "capabilities", created.PublicID()+".json")
+			test.mutate(t, capabilityPath, filepath.Join(private, "locks"))
+			result, err := (sessionops.Store{SessionsDirectory: sessions}).Recover(created.PublicID())
+			if err == nil || result.Outcome == "removed" {
+				t.Fatalf("mismatched completion authorized recovery: result=%+v err=%v", result, err)
+			}
+			if _, err := os.Stat(created.RootDirectory()); err != nil {
+				t.Fatalf("live root lost: %v", err)
+			}
+			if _, err := os.Stat(capabilityPath); err != nil {
+				t.Fatalf("mismatched evidence discarded: %v", err)
+			}
+		})
+	}
+}
+
+func mutateSessionJSON(t *testing.T, path string, mutate func(map[string]any)) {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var value map[string]any
+	if err := json.Unmarshal(data, &value); err != nil {
+		t.Fatal(err)
+	}
+	mutate(value)
+	data, err = json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, append(data, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}

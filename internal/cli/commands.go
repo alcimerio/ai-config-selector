@@ -405,6 +405,12 @@ func (app App) RunInformational(args []string) (handled bool, code int) {
 		if inv.command.path == "devin" {
 			fmt.Fprintln(app.ErrorOutput, "ACS will not start Devin without the required sandbox")
 		}
+		if len(args) != 0 && args[0] == "session" {
+			// Session operations reserve 2 for grammar/admission failures;
+			// operational outcomes use 0 or 1. Existing commands retain their
+			// historical usage status.
+			code = 2
+		}
 		return true, code
 	}
 	if inv.help {

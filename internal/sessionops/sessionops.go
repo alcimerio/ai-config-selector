@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base32"
 	"encoding/hex"
 	"encoding/json"
@@ -102,6 +103,13 @@ type capability struct {
 	Generation uint64 `json:"generation"`
 	Challenge  string `json:"challenge"`
 	Removed    bool   `json:"removed,omitempty"`
+}
+
+type rootBinding struct {
+	Version   int    `json:"version"`
+	ID        string `json:"id"`
+	RootName  string `json:"rootName"`
+	RootToken string `json:"rootToken"`
 }
 
 type Store struct {
@@ -219,6 +227,16 @@ func (tracker *Tracker) Arm(challenge []byte) ([]byte, error) {
 	} else if tracker.generation != 0 {
 		return nil, errors.New("arm ACS Session: binding changed")
 	}
+	binding := rootBinding{Version: SchemaVersion, ID: tracker.id, RootName: filepath.Base(tracker.root), RootToken: tracker.rootToken}
+	currentBinding, bindingExists, bindingErr := tracker.store.readRootBinding(binding.RootName)
+	if bindingErr != nil || (bindingExists && currentBinding != binding) || (!bindingExists && tracker.generation != 0) {
+		return nil, errors.New("arm ACS Session: binding changed")
+	}
+	if !bindingExists {
+		if err := tracker.store.writeRootBinding(binding); err != nil {
+			return nil, err
+		}
+	}
 	nextGeneration := tracker.generation + 1
 	now := tracker.store.now()
 	capability := capability{Version: SchemaVersion, ID: tracker.id, RootName: filepath.Base(tracker.root), RootToken: tracker.rootToken, Generation: nextGeneration, Challenge: hex.EncodeToString(challenge)}
@@ -251,10 +269,28 @@ func (tracker *Tracker) Removed() error {
 		tracker.store.storage.close()
 		return nil
 	}
-	if err := tracker.store.removeCapability(tracker.id); err != nil {
-		return err
+	fence, err := tracker.store.openFence(tracker.id)
+	if err != nil {
+		return errors.New("update ACS Session: coordination failed")
 	}
-	err := tracker.transition(StateRemoved, formatTime(tracker.store.now()))
+	defer closeLocked(fence)
+	rec, exists, readErr := tracker.store.readRecord(tracker.id)
+	cap, capExists, capErr := tracker.store.readCapability(tracker.id)
+	if readErr != nil || capErr != nil || !exists || !capExists || rec.RootToken != tracker.rootToken || rec.Generation != tracker.generation || !validBinding(rec, cap) {
+		return errors.New("update ACS Session: binding changed")
+	}
+	cap.Removed = true
+	if err = tracker.store.writeCapability(cap); err == nil {
+		rec.Revision++
+		rec.State, rec.UpdatedAt, rec.RemovedAt = StateRemoved, formatTime(tracker.store.now()), formatTime(tracker.store.now())
+		err = tracker.store.writeRecord(rec)
+	}
+	if err == nil {
+		err = tracker.store.removeRootBinding(filepath.Base(tracker.root))
+	}
+	if err == nil {
+		err = tracker.store.removeCapability(tracker.id)
+	}
 	if err == nil {
 		tracker.store.storage.close()
 	}
@@ -283,7 +319,11 @@ func (store Store) List(filter State) (ListResult, error) {
 	result := ListResult{SchemaVersion: SchemaVersion, Sessions: []PublicSession{}}
 	bound, err := store.bindStorage(false)
 	if errors.Is(err, os.ErrNotExist) {
-		result.UntrackedCount = store.countUntracked(nil)
+		count, countErr := store.countUntracked(nil)
+		if countErr != nil {
+			return result, errors.New("session_registry_limit")
+		}
+		result.UntrackedCount = count
 		return result, nil
 	}
 	if err != nil {
@@ -325,7 +365,11 @@ func (store Store) List(filter State) (ListResult, error) {
 		}
 	}
 	sort.Slice(result.Sessions, func(i, j int) bool { return result.Sessions[i].ID < result.Sessions[j].ID })
-	result.UntrackedCount = store.countUntracked(trackedRoots)
+	count, countErr := store.countUntracked(trackedRoots)
+	if countErr != nil {
+		return result, errors.New("session_registry_limit")
+	}
+	result.UntrackedCount = count
 	encoded, _ := json.Marshal(result)
 	if len(encoded) > MaxPublicJSONBytes {
 		return ListResult{SchemaVersion: SchemaVersion, Sessions: []PublicSession{}}, errors.New("session_output_limit")
@@ -443,7 +487,24 @@ func (store Store) Recover(id string) (RecoverResult, error) {
 		result.Outcome = "removed"
 		return result, nil
 	}
-	if (rec.State == StateRemoved || rec.State == StateRemovable) && capErr == nil && capExists && cap.Removed {
+	if capErr != nil || !capExists || !validBinding(rec, cap) {
+		result.Outcome, result.State = "unproven", StateUnproven
+		if rec.State != StateRemoved {
+			_ = store.restrict(rec, StateUnproven)
+		}
+		return result, errors.New("unproven")
+	}
+	rootBinding, rootBindingExists, rootBindingErr := store.readRootBinding(cap.RootName)
+	rootBindingMismatch := rootBindingExists && (rootBinding.ID != rec.ID || rootBinding.RootName != cap.RootName || rootBinding.RootToken != rec.RootToken)
+	missingBeforeCompletedFinalization := !rootBindingExists && !(rec.State == StateRemoved && cap.Removed)
+	if rootBindingErr != nil || rootBindingMismatch || missingBeforeCompletedFinalization {
+		result.Outcome, result.State = "unproven", StateUnproven
+		if rec.State != StateRemoved {
+			_ = store.restrict(rec, StateUnproven)
+		}
+		return result, errors.New("unproven")
+	}
+	if capErr == nil && capExists && cap.Removed {
 		if rec.State != StateRemoved {
 			rec.Revision++
 			rec.State, rec.UpdatedAt, rec.RemovedAt = StateRemoved, formatTime(store.now()), formatTime(store.now())
@@ -458,6 +519,10 @@ func (store Store) Recover(id string) (RecoverResult, error) {
 				return result, errors.New("removal_failed")
 			}
 		}
+		if err := store.removeRootBinding(cap.RootName); err != nil {
+			result.Outcome = "removal_failed"
+			return result, errors.New("removal_failed")
+		}
 		if capExists {
 			if err := store.removeCapability(id); err != nil {
 				result.Outcome = "removal_failed"
@@ -471,11 +536,6 @@ func (store Store) Recover(id string) (RecoverResult, error) {
 	if rec.State == StateRemoved {
 		result.Outcome = "removal_failed"
 		return result, errors.New("removal_failed")
-	}
-	if capErr != nil || !capExists || !validBinding(rec, cap) {
-		result.Outcome, result.State = "unproven", StateUnproven
-		_ = store.restrict(rec, StateUnproven)
-		return result, errors.New("unproven")
 	}
 	recovered, rootExists, recoverErr := launch.RecoverSession(store.SessionsDirectory, cap.RootName)
 	if errors.Is(recoverErr, launch.ErrSessionStillActive) {
@@ -545,6 +605,10 @@ func (store Store) Recover(id string) (RecoverResult, error) {
 			return result, errors.New("removal_failed")
 		}
 	}
+	if err := store.removeRootBinding(freshCap.RootName); err != nil {
+		result.Outcome, result.State = "removal_failed", StateRemoved
+		return result, errors.New("removal_failed")
+	}
 	if err := store.removeCapability(id); err != nil {
 		result.Outcome, result.State = "removal_failed", StateRemoved
 		return result, errors.New("removal_failed")
@@ -601,8 +665,8 @@ func (store Store) FinalizeRemoval(rootName, challenge string, remove func() (bo
 		matched = capability
 	}
 	if matched.ID == "" {
-		entries, entriesErr := store.storage.records.entries(1)
-		if entriesErr != nil || len(entries) != 0 {
+		_, tracked, bindingErr := store.readRootBinding(rootName)
+		if bindingErr != nil || tracked {
 			return errors.New("session_registry_unavailable")
 		}
 		if _, err := remove(); err != nil {
@@ -617,7 +681,10 @@ func (store Store) FinalizeRemoval(rootName, challenge string, remove func() (bo
 	defer closeLocked(fence)
 	rec, exists, err := store.readRecord(matched.ID)
 	fresh, capExists, capErr := store.readCapability(matched.ID)
-	if err != nil || capErr != nil || !exists || !capExists || fresh != matched || !validBinding(rec, fresh) || fresh.Challenge != challenge {
+	binding, bindingExists, bindingErr := store.readRootBinding(rootName)
+	bindingMismatch := bindingExists && (binding.ID != rec.ID || binding.RootName != fresh.RootName || binding.RootToken != rec.RootToken)
+	missingBeforeCompletedFinalization := !bindingExists && !(rec.State == StateRemoved && fresh.Removed)
+	if err != nil || capErr != nil || bindingErr != nil || !exists || !capExists || fresh != matched || !validBinding(rec, fresh) || fresh.Challenge != challenge || bindingMismatch || missingBeforeCompletedFinalization {
 		return errors.New("session_registry_unavailable")
 	}
 	if !fresh.Removed {
@@ -641,6 +708,9 @@ func (store Store) FinalizeRemoval(rootName, challenge string, remove func() (bo
 		}
 	}
 	if err := finalize(); err != nil {
+		return err
+	}
+	if err := store.removeRootBinding(rootName); err != nil {
 		return err
 	}
 	return store.removeCapability(matched.ID)
@@ -682,15 +752,21 @@ func corruptPublic(id string) PublicSession {
 	return PublicSession{ID: id, State: StateCorrupt, Observation: "durable", Recovery: Recovery{Allowed: false, Action: "none"}}
 }
 
-func (store Store) countUntracked(tracked map[string]bool) int {
+func (store Store) countUntracked(tracked map[string]bool) (int, error) {
 	directory, err := os.Open(store.SessionsDirectory)
 	if err != nil {
-		return 0
+		if errors.Is(err, os.ErrNotExist) {
+			return 0, nil
+		}
+		return 0, err
 	}
 	defer directory.Close()
 	entries, err := directory.ReadDir(MaxScannedEntries + 1)
 	if err != nil && !errors.Is(err, io.EOF) {
-		return 0
+		return 0, err
+	}
+	if len(entries) > MaxScannedEntries {
+		return 0, errors.New("session registry limit")
 	}
 	count := 0
 	for _, entry := range entries[:min(len(entries), MaxScannedEntries)] {
@@ -698,7 +774,7 @@ func (store Store) countUntracked(tracked map[string]bool) int {
 			count++
 		}
 	}
-	return count
+	return count, nil
 }
 
 func (store Store) readRecord(id string) (record, bool, error) {
@@ -728,6 +804,21 @@ func (store Store) readCapability(id string) (capability, bool, error) {
 	challenge, challengeErr := hex.DecodeString(value.Challenge)
 	if value.Version != SchemaVersion || value.ID != id || !strings.HasPrefix(value.RootName, "session-") || filepath.Base(value.RootName) != value.RootName || len(value.RootToken) != 64 || value.Generation == 0 || challengeErr != nil || len(challenge) != launch.RecoveryProofChallengeSize {
 		return value, true, errors.New("invalid capability")
+	}
+	return value, true, nil
+}
+
+func (store Store) readRootBinding(rootName string) (rootBinding, bool, error) {
+	var value rootBinding
+	if store.storage == nil || filepath.Base(rootName) != rootName || !strings.HasPrefix(rootName, "session-") {
+		return value, false, errors.New("invalid root binding")
+	}
+	exists, err := readStrict(store.storage.locks, rootBindingName(rootName), &value)
+	if err != nil || !exists {
+		return value, exists, err
+	}
+	if value.Version != SchemaVersion || !ValidID(value.ID) || value.RootName != rootName || len(value.RootToken) != 64 {
+		return value, true, errors.New("invalid root binding")
 	}
 	return value, true, nil
 }
@@ -802,6 +893,9 @@ func (store Store) writeRecord(value record) error {
 func (store Store) writeCapability(value capability) error {
 	return store.writeJSON(store.storage.capabilities, value.ID+".json", value)
 }
+func (store Store) writeRootBinding(value rootBinding) error {
+	return store.writeJSON(store.storage.locks, rootBindingName(value.RootName), value)
+}
 
 func (store Store) writeJSON(directory *privateDirectory, name string, value any) error {
 	if store.storage == nil || directory == nil {
@@ -823,6 +917,17 @@ func (store Store) removeCapability(id string) error {
 		return errors.New("session_registry_unavailable")
 	}
 	return nil
+}
+func (store Store) removeRootBinding(rootName string) error {
+	if store.storage == nil || store.storage.locks.unlink(rootBindingName(rootName)) != nil {
+		return errors.New("session_registry_unavailable")
+	}
+	return nil
+}
+
+func rootBindingName(rootName string) string {
+	digest := sha256.Sum256([]byte(rootName))
+	return ".root-" + hex.EncodeToString(digest[:]) + ".json"
 }
 
 func (store Store) openFence(id string) (*os.File, error) {

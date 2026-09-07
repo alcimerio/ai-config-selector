@@ -891,6 +891,7 @@ func assertPromotedArtifactGenericRun(t *testing.T) {
 	}
 	assertNoSessions(t, home)
 
+	beforeGenericSessions := promotedSessionSnapshot(t, binary, home, path)
 	command := exec.Command(binary, "run", "--profile", "generic-readwrite", "--", helper,
 		"--acs-generic-command-helper", externalSecret, externalWrite, "space value", "", "--", "*.go", "$HOME")
 	command.Dir = workspace
@@ -918,6 +919,7 @@ func assertPromotedArtifactGenericRun(t *testing.T) {
 	}
 	assertMarkerExists(t, filepath.Join(workspace, "generic-workspace-write"))
 	assertNoSessions(t, home)
+	assertNewRemovedPromotedSessions(t, binary, home, path, beforeGenericSessions, "command")
 
 	privateRoot := filepath.Join(home, ".acs", "session-operations-v1")
 	capabilities := filepath.Join(privateRoot, "capabilities")
@@ -1076,6 +1078,62 @@ func assertPromotedArtifactGenericRun(t *testing.T) {
 		t.Fatalf("generic resize was not forwarded: %s", capture.String())
 	}
 	assertNoSessions(t, home)
+}
+
+type promotedPublicSession struct {
+	ID       string `json:"id"`
+	State    string `json:"state"`
+	Target   string `json:"target"`
+	Revision uint64 `json:"revision"`
+}
+
+func promotedSessionSnapshot(t *testing.T, binary, home, path string) map[string]promotedPublicSession {
+	t.Helper()
+	command := exec.Command(binary, "session", "list", "--json")
+	command.Env = nativeCandidateEnvironment(home, path, nil)
+	output, err := command.Output()
+	if err != nil {
+		t.Fatalf("candidate session list: %v; output=%s", err, output)
+	}
+	var result struct {
+		Sessions []promotedPublicSession `json:"sessions"`
+	}
+	if err := json.Unmarshal(output, &result); err != nil {
+		t.Fatalf("decode candidate session list: %v; output=%s", err, output)
+	}
+	snapshot := make(map[string]promotedPublicSession, len(result.Sessions))
+	for _, item := range result.Sessions {
+		snapshot[item.ID] = item
+	}
+	return snapshot
+}
+
+func assertNewRemovedPromotedSessions(t *testing.T, binary, home, path string, before map[string]promotedPublicSession, target string) {
+	t.Helper()
+	after := promotedSessionSnapshot(t, binary, home, path)
+	found := 0
+	for id, item := range after {
+		if _, existed := before[id]; existed {
+			continue
+		}
+		found++
+		if item.State != "removed" || item.Target != target || item.Revision == 0 {
+			t.Fatalf("candidate lifecycle row = %+v", item)
+		}
+		inspect := exec.Command(binary, "session", "inspect", id, "--json")
+		inspect.Env = nativeCandidateEnvironment(home, path, nil)
+		output, err := inspect.Output()
+		if err != nil {
+			t.Fatalf("candidate session inspect: %v; output=%s", err, output)
+		}
+		text := string(output)
+		if !strings.Contains(text, `"state":"removed"`) || strings.Contains(text, "rootToken") || strings.Contains(text, "challenge") || strings.Contains(text, "session-") {
+			t.Fatalf("candidate session inspect was not sanitized: %s", output)
+		}
+	}
+	if found == 0 {
+		t.Fatal("candidate contained operation published no durable Session lifecycle row")
+	}
 }
 
 func assertGenericObservationMatchesDeclaration(t *testing.T, access string, facts map[string]nativeExplanationFact, observation genericHelperObservation) {

@@ -19,6 +19,9 @@ type privateDirectory struct {
 	ino    uint64
 	parent *privateDirectory
 	leaf   string
+
+	beforeRename func(string) error
+	beforeUnlink func(string) error
 }
 
 func pinPrivateChild(parent *privateDirectory, name string, create bool) (*privateDirectory, error) {
@@ -220,6 +223,11 @@ func (directory *privateDirectory) write(name string, data []byte) error {
 	if directory.validate() != nil {
 		return errors.New("private directory changed")
 	}
+	if directory.beforeRename != nil {
+		if err := directory.beforeRename(name); err != nil {
+			return err
+		}
+	}
 	if err := unix.Renameat(int(directory.file.Fd()), temporaryName, int(directory.file.Fd()), name); err != nil {
 		return err
 	}
@@ -230,6 +238,11 @@ func (directory *privateDirectory) write(name string, data []byte) error {
 func (directory *privateDirectory) unlink(name string) error {
 	if !validLeaf(name) || directory.validate() != nil {
 		return errors.New("private directory changed")
+	}
+	if directory.beforeUnlink != nil {
+		if err := directory.beforeUnlink(name); err != nil {
+			return err
+		}
 	}
 	if err := unix.Unlinkat(int(directory.file.Fd()), name, 0); err != nil && !errors.Is(err, unix.ENOENT) {
 		return err

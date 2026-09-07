@@ -155,7 +155,9 @@ func runNativeInstalledACSLockedCodexFixture(t *testing.T) {
 		if err != nil || len(sessions) != 1 {
 			t.Fatalf("abrupt ACS termination retained %d recoverable Sessions", len(sessions))
 		}
-		runInstalledCodexRecovery(t, candidate, home, tools, workspace, identities["recovery"])
+		publicID := inspectInstalledRecoverableSession(t, candidate, home, tools, workspace)
+		runConcurrentInstalledRecoveries(t, candidate, home, tools, workspace, identities["recovery"], publicID)
+		assertInstalledSessionRemoved(t, candidate, home, tools, workspace, publicID)
 		assertNoNativeSessions(t, filepath.Join(home, ".acs", "sessions"))
 		reuseFixture := newNativeResponsesFixture(t, "printf codex-native-tool-output"+isolationProbe, home)
 		defer reuseFixture.server.Close()
@@ -460,6 +462,111 @@ func runInstalledCodexRecovery(t *testing.T, candidate, home, tools, workspace, 
 			t.Fatalf("public Codex identity recovery failed: %v; output=%q", err, output)
 		}
 		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+func inspectInstalledRecoverableSession(t *testing.T, candidate, home, tools, workspace string) string {
+	t.Helper()
+	command := exec.Command(candidate, "session", "list", "--json")
+	command.Dir, command.Env = workspace, nativeCandidateEnvironment(home, tools)
+	output, err := command.Output()
+	if err != nil {
+		t.Fatalf("public Session list failed: %v; output=%q", err, output)
+	}
+	var listed struct {
+		Sessions []struct {
+			ID       string `json:"id"`
+			State    string `json:"state"`
+			Target   string `json:"target"`
+			Recovery struct {
+				Allowed bool `json:"allowed"`
+			} `json:"recovery"`
+		} `json:"sessions"`
+	}
+	if err := json.Unmarshal(output, &listed); err != nil {
+		t.Fatalf("decode public Session list: %v; output=%q", err, output)
+	}
+	var live []struct {
+		ID       string `json:"id"`
+		State    string `json:"state"`
+		Target   string `json:"target"`
+		Recovery struct {
+			Allowed bool `json:"allowed"`
+		} `json:"recovery"`
+	}
+	for _, item := range listed.Sessions {
+		if item.Target == "codex" && item.State != "removed" && item.Recovery.Allowed {
+			live = append(live, item)
+		}
+	}
+	if len(live) != 1 {
+		t.Fatalf("live recoverable Codex Sessions = %+v; all Sessions = %+v", live, listed.Sessions)
+	}
+	item := live[0]
+	if item.State != "active" && item.State != "settling" && item.State != "retryable" {
+		t.Fatalf("recoverable public Session state = %q; all Sessions = %+v", item.State, listed.Sessions)
+	}
+	inspect := exec.Command(candidate, "session", "inspect", item.ID, "--json")
+	inspect.Dir, inspect.Env = workspace, nativeCandidateEnvironment(home, tools)
+	inspected, err := inspect.Output()
+	if err != nil || !bytes.Contains(inspected, []byte(`"id":"`+item.ID+`"`)) || bytes.Contains(inspected, []byte("rootToken")) || bytes.Contains(inspected, []byte("challenge")) {
+		t.Fatalf("public Session inspect = %q, %v", inspected, err)
+	}
+	return item.ID
+}
+
+func runConcurrentInstalledRecoveries(t *testing.T, candidate, home, tools, workspace, name, publicID string) {
+	t.Helper()
+	start := make(chan struct{})
+	type result struct {
+		output []byte
+		err    error
+	}
+	results := make(chan result, 2)
+	for _, arguments := range [][]string{{"codex", "auth", "recover", "--name", name}, {"session", "recover", publicID}} {
+		arguments := append([]string(nil), arguments...)
+		go func() {
+			<-start
+			command := exec.Command(candidate, arguments...)
+			command.Dir, command.Env = workspace, nativeCandidateEnvironment(home, tools)
+			output, err := command.CombinedOutput()
+			results <- result{output: output, err: err}
+		}()
+	}
+	close(start)
+	for range 2 {
+		select {
+		case result := <-results:
+			if result.err != nil && !bytes.Contains(result.output, []byte("in use")) && !bytes.Contains(result.output, []byte("busy")) && !bytes.Contains(result.output, []byte("active")) {
+				t.Fatalf("concurrent public recovery failed: %v; output=%q", result.err, result.output)
+			}
+		case <-time.After(15 * time.Second):
+			t.Fatal("concurrent public recovery deadlocked")
+		}
+	}
+	runInstalledCodexRecovery(t, candidate, home, tools, workspace, name)
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		command := exec.Command(candidate, "session", "recover", publicID)
+		command.Dir, command.Env = workspace, nativeCandidateEnvironment(home, tools)
+		output, err := command.CombinedOutput()
+		if err == nil && bytes.Contains(output, []byte("removed")) {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("public Session recovery did not converge: %v; output=%q", err, output)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+func assertInstalledSessionRemoved(t *testing.T, candidate, home, tools, workspace, publicID string) {
+	t.Helper()
+	command := exec.Command(candidate, "session", "inspect", publicID, "--json")
+	command.Dir, command.Env = workspace, nativeCandidateEnvironment(home, tools)
+	output, err := command.Output()
+	if err != nil || !bytes.Contains(output, []byte(`"state":"removed"`)) || bytes.Contains(output, []byte("rootToken")) || bytes.Contains(output, []byte("challenge")) {
+		t.Fatalf("removed public Session = %q, %v", output, err)
 	}
 }
 
