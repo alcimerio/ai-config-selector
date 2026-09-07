@@ -125,6 +125,12 @@ go build -o ./bin/acs ./cmd/acs
 
 A source build reports `acs devel`.
 
+For a promoted but unpublished candidate, use the
+[candidate migration and rollback guide](docs/release-migration-guide.md). It
+requires operator-supplied artifact identity and checksums, keeps binary rollback
+separate from stored-data compatibility, and leaves real daily-use observation
+pending. Do not substitute its current-source commands into v0.4.0 instructions.
+
 The published v0.4.0 installer historically accepts macOS arm64 and amd64.
 Future installers built from current source accept only Apple Silicon (`arm64`).
 Each verifies the selected archive against the release's `SHA256SUMS`, validates the embedded version and
