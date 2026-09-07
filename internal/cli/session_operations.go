@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -31,6 +32,9 @@ type codexSessionRecoveryBinding struct {
 
 func (recovery codexSessionRecovery) AcquireBySession(ctx context.Context, id string) (sessionops.AuthRecoveryBinding, bool, error) {
 	binding, exists, err := recovery.store.AcquireRecoveryBySession(ctx, id)
+	if errors.Is(err, codexauthresource.ErrIdentityBusy) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		err = sessionops.ErrAuthBusy
+	}
 	if binding == nil {
 		return nil, exists, err
 	}

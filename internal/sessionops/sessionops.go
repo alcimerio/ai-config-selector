@@ -24,6 +24,10 @@ import (
 	"github.com/alcimerio/ai-config-selector/internal/launch"
 )
 
+// ErrAuthBusy is returned by the typed-auth composition boundary when the
+// identity is currently owned by another process.
+var ErrAuthBusy = errors.New("typed authentication busy")
+
 const (
 	SchemaVersion      = 1
 	MaxRecordBytes     = 16 << 10
@@ -447,8 +451,7 @@ func (store Store) Recover(id string) (RecoverResult, error) {
 			// Typed stores cannot import sessionops for a shared sentinel; preserve
 			// the public contention outcome for their wrapped busy errors while
 			// treating all other acquisition failures as ambiguous authority.
-			msg := strings.ToLower(err.Error())
-			if strings.Contains(msg, "busy") || strings.Contains(msg, "in use") || strings.Contains(msg, "timeout") {
+			if errors.Is(err, ErrAuthBusy) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
 				result.Outcome = "busy"
 				return result, errors.New("busy")
 			}
