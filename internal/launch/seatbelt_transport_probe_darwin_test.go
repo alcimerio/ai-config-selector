@@ -412,7 +412,15 @@ type seatbeltReceiptRecorder interface {
 
 func newSeatbeltTransportFixture(t *testing.T) *seatbeltTransportFixture {
 	t.Helper()
-	root := t.TempDir()
+	root, err := os.MkdirTemp("/tmp", "acs-ntp-")
+	if err != nil {
+		t.Fatalf("create short disposable Unix-socket root: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := os.RemoveAll(root); err != nil {
+			t.Errorf("remove disposable Unix-socket root: %v", err)
+		}
+	})
 	fixture := &seatbeltTransportFixture{
 		tcp4Allowed: newSeatbeltTCPRecorder(t, "tcp4-allowed", "tcp4", "127.0.0.1:0"),
 		tcp4Denied:  newSeatbeltTCPRecorder(t, "tcp4-denied", "tcp4", "127.0.0.1:0"),
