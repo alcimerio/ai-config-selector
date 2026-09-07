@@ -71,9 +71,10 @@ const (
 type Outcome struct {
 	State            State
 	RecoveryRequired bool
-	// History identifies the exact event committed by this Apply call. It is
-	// populated only for a successfully committed HistoryRequest; callers must
-	// not infer transaction identity from a later repository history read.
+	// History identifies the exact event of the committed transaction represented
+	// by this outcome, including a decided transaction completed by Recover. It
+	// does not identify a later Apply, and callers must not infer transaction
+	// identity from a subsequent repository history read.
 	History *HistoryIdentity
 }
 

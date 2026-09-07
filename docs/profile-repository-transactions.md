@@ -192,10 +192,12 @@ secondary cleanup/release failures through joined errors. In particular:
   `Unknown` with evidence retained. A namespace sync error never becomes success.
 - A synchronized terminal receipt establishes `Committed`; subsequent cleanup or
   release errors still return an error with that committed outcome.
-- A successful `Apply` of a `HistoryRequest` returns `Outcome.History` with the
-  exact lineage and event IDs read from the history transaction whose digest is
-  bound into the immutable decision. This identity is captured while the lock is
-  held; callers do not rediscover it from a later history-head read.
+- A committed transaction outcome can return `Outcome.History` with the exact
+  lineage and event IDs read from the history transaction whose digest is bound
+  into the immutable decision. This includes a decided transaction completed by
+  `Recover`; the identity describes that recovered transaction, not a later
+  `Apply`. It is captured while the lock is held, so callers do not rediscover it
+  from a later history-head read.
 - Cancellation after the decision begins does not skip settlement or required
   synchronization. Recovery checks cancellation before changing state and then
   finishes its chosen safe sequence. Filesystem calls have no hard deadline.
