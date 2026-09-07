@@ -16,6 +16,7 @@ import (
 	"github.com/alcimerio/ai-config-selector/internal/authority"
 	"github.com/alcimerio/ai-config-selector/internal/launch"
 	"github.com/alcimerio/ai-config-selector/internal/session"
+	"github.com/alcimerio/ai-config-selector/internal/sessionops"
 	"github.com/alcimerio/ai-config-selector/internal/skills"
 )
 
@@ -611,7 +612,19 @@ func eventuallyEmptyDirectory(t *testing.T, path string) {
 	for {
 		entries, err := os.ReadDir(path)
 		if err == nil && len(entries) == 0 {
-			return
+			listed, listErr := (sessionops.Store{SessionsDirectory: path}).List("")
+			if listErr == nil {
+				complete := true
+				for _, item := range listed.Sessions {
+					if item.State != sessionops.StateRemoved {
+						complete = false
+						break
+					}
+				}
+				if complete {
+					return
+				}
+			}
 		}
 		if time.Now().After(deadline) {
 			t.Fatalf("Session remained after cleanup proof: %v %v", entries, err)

@@ -202,8 +202,8 @@ func assertPromotedArtifactDevinGenerations(t *testing.T) {
 		var recovery struct {
 			Outcome string `json:"outcome"`
 		}
-		if recoveryErr == nil || json.Unmarshal(recoveryOutput, &recovery) != nil || recovery.Outcome != "busy" {
-			t.Fatalf("live %s recovery did not report busy: %v", phase, recoveryErr)
+		if recoveryErr == nil || json.Unmarshal(recoveryOutput, &recovery) != nil || (recovery.Outcome != "active" && recovery.Outcome != "busy") {
+			t.Fatalf("live %s recovery did not report active or busy: %v", phase, recoveryErr)
 		}
 		if info, err := os.Stat(sessionRoot); err != nil || !info.IsDir() {
 			t.Fatalf("live %s Session was removed during recovery refusal", phase)

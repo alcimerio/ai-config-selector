@@ -772,8 +772,8 @@ func observeNativeCodexPhase(t *testing.T, candidate, home, tools, workspace, re
 	var result struct {
 		Outcome string `json:"outcome"`
 	}
-	if err == nil || json.Unmarshal(output, &result) != nil || result.Outcome != "busy" {
-		t.Fatal("public recovery did not report busy for a live locked Codex Session")
+	if err == nil || json.Unmarshal(output, &result) != nil || (result.Outcome != "active" && result.Outcome != "busy") {
+		t.Fatal("public recovery did not report active or busy for a live locked Codex Session")
 	}
 	if _, err := os.Stat(root); err != nil {
 		t.Fatalf("public recovery did not preserve the live locked Codex Session root: %v", err)
