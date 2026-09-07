@@ -324,13 +324,33 @@ func assertPromotedArtifactEffectiveExplanation(t *testing.T) {
 			assertNoSessions(t, home)
 		})
 	}
-	readiness := exec.Command(binary, "explain", "sandbox", "--profile", "explanation", "--check-native-readiness", "--json")
-	readiness.Dir, readiness.Env = workspace, nativeCandidateEnvironment(home, path, nil)
-	output, err := readiness.CombinedOutput()
-	if err != nil || !bytes.Contains(output, []byte(`"id":"native.backend","status":"pass","code":"backend_ready"`)) || !bytes.Contains(output, []byte(`"id":"runtime.enforcement","status":"unchecked"`)) {
-		t.Fatalf("bounded native readiness: %v; output=%s", err, output)
+	for _, test := range tests {
+		arguments := append([]string(nil), test.explain...)
+		insertAt := len(arguments)
+		for index, argument := range arguments {
+			if argument == "--" {
+				insertAt = index
+				break
+			}
+		}
+		arguments = append(arguments, "")
+		copy(arguments[insertAt+1:], arguments[insertAt:])
+		arguments[insertAt] = "--check-native-readiness"
+		beforeHome, beforeWorkspace := snapshotInspectionHome(t, home), snapshotInspectionHome(t, workspace)
+		readiness := exec.Command(binary, arguments...)
+		readiness.Dir, readiness.Env = workspace, nativeCandidateEnvironment(home, path, nil)
+		output, err := readiness.CombinedOutput()
+		if err != nil || !bytes.Contains(output, []byte(`"id":"native.backend","status":"pass","code":"backend_ready"`)) || !bytes.Contains(output, []byte(`"id":"native.platform","status":"pass","code":"supported_platform"`)) || !bytes.Contains(output, []byte(`"id":"runtime.enforcement","status":"unchecked"`)) {
+			t.Fatalf("bounded native readiness for %s: %v; output=%s", test.name, err, output)
+		}
+		if after := snapshotInspectionHome(t, home); !reflect.DeepEqual(after, beforeHome) {
+			t.Fatalf("bounded native readiness for %s changed durable home state: before=%#v after=%#v", test.name, beforeHome, after)
+		}
+		if after := snapshotInspectionHome(t, workspace); !reflect.DeepEqual(after, beforeWorkspace) {
+			t.Fatalf("bounded native readiness for %s changed workspace state: before=%#v after=%#v", test.name, beforeWorkspace, after)
+		}
+		assertNoSessions(t, home)
 	}
-	assertNoSessions(t, home)
 	writeVersionTwoProfile(t, home, "reviews-v2")
 	assertPromotedArtifactLegacyExplanations(t, binary, home, path, workspace, helper)
 	assertPromotedArtifactInactiveOverlayExplanations(t, binary, home, path, workspace)
@@ -786,6 +806,41 @@ func assertPromotedArtifactGenericRun(t *testing.T) {
 	if err := os.WriteFile(externalSecret, []byte("private\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	declarations := map[string]map[string]nativeExplanationFact{}
+	for access, profileName := range map[string]string{"read-write": "generic-readwrite", "read-only": "generic-readonly"} {
+		explain := exec.Command(binary, "explain", "run", "--profile", profileName, "--json", "--", helper,
+			"--acs-generic-command-helper", externalSecret, externalWrite)
+		explain.Dir, explain.Env = workspace, nativeCandidateEnvironment(home, path, map[string]string{"ACS_GENERIC_HOST_SECRET": "hidden"})
+		output, err := explain.CombinedOutput()
+		if err != nil {
+			t.Fatalf("generic %s explanation: %v; output=%s", access, err, output)
+		}
+		var result struct {
+			Plan struct {
+				Requested   []nativeExplanationFact `json:"requested"`
+				TargetAdded []nativeExplanationFact `json:"targetAdded"`
+				Effective   []nativeExplanationFact `json:"effective"`
+			} `json:"plan"`
+		}
+		if err := json.Unmarshal(output, &result); err != nil {
+			t.Fatalf("decode generic %s explanation: %v; output=%s", access, err, output)
+		}
+		facts := map[string]nativeExplanationFact{}
+		for _, list := range [][]nativeExplanationFact{result.Plan.Requested, result.Plan.TargetAdded, result.Plan.Effective} {
+			for _, fact := range list {
+				facts[fact.ID] = fact
+			}
+		}
+		if workspaceFact, found := facts["common.workspace"]; !found || workspaceFact.Value.Access != access {
+			t.Fatalf("generic %s explanation workspace fact = %#v", access, workspaceFact)
+		}
+		for _, id := range []string{"run.command", "run.literal-argv", "runtime.environment", "runtime.environment.fixed-path", "runtime.environment.synthetic", "runtime.process", "runtime.session", "runtime.terminal", "runtime.devices", "workspace.read"} {
+			if _, found := facts[id]; !found {
+				t.Fatalf("generic %s explanation omitted declaration %s", access, id)
+			}
+		}
+		declarations[access] = facts
+	}
 	privateArgument := "private-argument-must-not-appear"
 	dryRun := exec.Command(binary, "run", "--dry-run", "--profile", "generic-readwrite", "--", helper, privateArgument)
 	dryRun.Dir = workspace
@@ -826,6 +881,7 @@ func assertPromotedArtifactGenericRun(t *testing.T) {
 		!observation.WorkspaceWrite || observation.ExternalRead || observation.ExternalWrite {
 		t.Fatalf("generic observation = %#v", observation)
 	}
+	assertGenericObservationMatchesDeclaration(t, "read-write", declarations["read-write"], observation)
 	if stderr.String() != "generic-stderr-ok\n" {
 		t.Fatalf("stderr = %q", stderr.String())
 	}
@@ -846,6 +902,7 @@ func assertPromotedArtifactGenericRun(t *testing.T) {
 	if observation.WorkspaceWrite {
 		t.Fatal("read-only generic command wrote to workspace")
 	}
+	assertGenericObservationMatchesDeclaration(t, "read-only", declarations["read-only"], observation)
 	assertNoSessions(t, home)
 
 	nonzero := exec.Command(binary, "run", "--profile", "generic-readwrite", "--", helper, "--acs-generic-command-helper", "--exit-23")
@@ -936,6 +993,21 @@ func assertPromotedArtifactGenericRun(t *testing.T) {
 		t.Fatalf("generic resize was not forwarded: %s", capture.String())
 	}
 	assertNoSessions(t, home)
+}
+
+func assertGenericObservationMatchesDeclaration(t *testing.T, access string, facts map[string]nativeExplanationFact, observation genericHelperObservation) {
+	t.Helper()
+	_, declaresWrite := facts["workspace.write"]
+	wantWrite := access == "read-write"
+	if declaresWrite != wantWrite || observation.WorkspaceWrite != wantWrite {
+		t.Fatalf("generic %s declaration/observation workspace write = (%v, %v), want %v", access, declaresWrite, observation.WorkspaceWrite, wantWrite)
+	}
+	if !observation.SafePath || !observation.HostSecretGone || !observation.HomeIsSynthetic {
+		t.Fatalf("generic %s environment observation did not corroborate fixed-path/synthetic/environment declarations: %#v", access, observation)
+	}
+	if observation.ExternalRead || observation.ExternalWrite {
+		t.Fatalf("generic %s behavior exceeded declared workspace/Session authority: %#v", access, observation)
+	}
 }
 
 func exitStatusIs(err error, status int) bool {
@@ -1240,6 +1312,29 @@ func assertPromotedArtifactV3WorkspaceModes(t *testing.T) {
 		writable bool
 	}{{"readonly", false}, {"coding", true}} {
 		workspace := realTemporaryDirectory(t)
+		explain := exec.Command(binary, "explain", "sandbox", "--profile", test.profile, "--json")
+		explain.Env, explain.Dir = nativeCandidateEnvironment(home, path, nil), workspace
+		explanationOutput, err := explain.CombinedOutput()
+		if err != nil {
+			t.Fatalf("installed v3 %s explanation: %v; output=%s", test.profile, err, explanationOutput)
+		}
+		var explanation struct {
+			Plan struct {
+				Requested []nativeExplanationFact `json:"requested"`
+				Effective []nativeExplanationFact `json:"effective"`
+			} `json:"plan"`
+		}
+		if err := json.Unmarshal(explanationOutput, &explanation); err != nil {
+			t.Fatalf("decode v3 %s explanation: %v; output=%s", test.profile, err, explanationOutput)
+		}
+		workspaceFact, found := nativeExplanationFactByID(explanation.Plan.Requested, "common.workspace")
+		wantAccess := "read-only"
+		if test.writable {
+			wantAccess = "read-write"
+		}
+		if !found || workspaceFact.Value.Access != wantAccess || nativeExplanationHasFact(explanation.Plan.Effective, "workspace.write") != test.writable || !nativeExplanationHasFact(explanation.Plan.Effective, "runtime.session") {
+			t.Fatalf("v3 %s declared authority does not match expected behavioral case: %#v", test.profile, explanation.Plan)
+		}
 		commands := "set -u\n" +
 			"test \"$(cat \"$HOME/.acs/common/v1/skills/devin-config/review/SKILL.md\")\" != \"\" || exit 61\n" +
 			"test ! -e \"$HOME/.config/devin/skills/review/SKILL.md\" || exit 62\n" +
@@ -1429,6 +1524,39 @@ func assertPromotedArtifactNativeContainment(t *testing.T) {
 	}
 	assertExternalWriteFixtureIsUnrelated(t, config.ExternalWritePath, workspace, home)
 	writeFakeDevinConfiguration(t, workspace, config)
+	explain := exec.Command(binary, "explain", "devin", "--profile", "reviews", "--json")
+	explain.Dir, explain.Env = workspace, nativeCandidateEnvironment(home, tools+string(os.PathListSeparator)+path, map[string]string{
+		"ACS_NATIVE_CANDIDATE_SECRET": privateEnvironmentValue,
+	})
+	explanationOutput, err := explain.CombinedOutput()
+	if err != nil {
+		t.Fatalf("native containment explanation: %v; output=%s", err, explanationOutput)
+	}
+	var explanation struct {
+		Plan struct {
+			Requested []nativeExplanationFact `json:"requested"`
+			Effective []nativeExplanationFact `json:"effective"`
+		} `json:"plan"`
+	}
+	if err := json.Unmarshal(explanationOutput, &explanation); err != nil {
+		t.Fatalf("decode native containment explanation: %v; output=%s", err, explanationOutput)
+	}
+	workspaceFact, found := nativeExplanationFactByID(explanation.Plan.Requested, "common.workspace")
+	if !found || workspaceFact.Value.Access != "read-write" {
+		t.Fatalf("native containment explanation workspace fact = %#v", workspaceFact)
+	}
+	declared := map[string]nativeExplanationFact{}
+	for _, fact := range explanation.Plan.Effective {
+		declared[fact.ID] = fact
+	}
+	for _, id := range []string{"runtime.environment", "runtime.environment.fixed-path", "runtime.environment.synthetic", "runtime.devices", "runtime.network", "runtime.process", "runtime.session", "runtime.terminal", "workspace.read", "workspace.write"} {
+		if _, found := declared[id]; !found {
+			t.Fatalf("native containment behavior lacks matching effective declaration %s", id)
+		}
+	}
+	if declared["runtime.network"].Value.Mode != "local-ip-socket-bind-no-listen-coarse-outbound-ip-macos-dns" {
+		t.Fatalf("native containment network declaration = %#v", declared["runtime.network"])
+	}
 
 	descriptor, err := os.Open(hostSecret)
 	if err != nil {

@@ -624,6 +624,14 @@ type materializerFunc func(string) error
 
 func (f materializerFunc) Materialize(home string) error { return f(home) }
 
+type authorityMaterializerFunc func(string) error
+
+func (authorityMaterializerFunc) Plan(context.Context, string, *launch.Plan) error { return nil }
+func (f authorityMaterializerFunc) Materialize(home string) error                  { return f(home) }
+func (authorityMaterializerFunc) Verify(context.Context, launch.VerificationContext) error {
+	return nil
+}
+
 type shellExit struct{ code int }
 
 func (e *shellExit) Error() string { return "shell exit" }
@@ -672,8 +680,7 @@ func TestRunDevinProjectsOnlyAllowlistedCredentialAndSelectedFiles(t *testing.T)
 		// and credential copy. Stop there without introducing a fake probe result.
 		return &launch.SandboxError{Category: launch.SandboxProcessStartFailed}
 	}
-	request := DevinRequest{SessionsDirectory: t.TempDir(), WorkingDirectory: t.TempDir(), ExistingHomeDirectory: source, Executable: "fixture-devin"}
-	request.Materializer = materializerFunc(func(home string) error {
+	materializer := authorityMaterializerFunc(func(home string) error {
 		for _, directory := range []string{".config/devin/skills/selected", ".agents/skills/selected"} {
 			if err := os.CopyFS(filepath.Join(home, filepath.FromSlash(directory)), os.DirFS(filepath.Join("..", "adapter", "devin", "testdata", "selected-skill"))); err != nil {
 				return err
@@ -681,9 +688,17 @@ func TestRunDevinProjectsOnlyAllowlistedCredentialAndSelectedFiles(t *testing.T)
 		}
 		return nil
 	})
+	plan := authority.New([]authority.Contribution{{ID: "selected-skills", Value: materializer}}, launch.WorkspaceAccessReadOnly, 3, "devin", authority.TargetRequirements{
+		Recipe: authority.RecipeDevin, Executable: "fixture-devin", ExistingHomeDirectory: source, Semantics: authority.DevinSemantics(),
+	})
+	callerMaterialized := false
+	request := DevinRequest{
+		SessionsDirectory: t.TempDir(), WorkingDirectory: t.TempDir(), ExistingHomeDirectory: t.TempDir(), Executable: "caller-must-not-select",
+		Materializer: materializerFunc(func(string) error { callerMaterialized = true; return nil }), ResolvedPlan: &plan,
+	}
 	code, err := newExecutor(sandbox).RunDevin(context.Background(), request)
-	if !inspected || code != 1 || err == nil || process.starts != 0 {
-		t.Fatalf("inspection result = %t, %d, %v", inspected, code, err)
+	if !inspected || callerMaterialized || code != 1 || err == nil || process.starts != 0 {
+		t.Fatalf("inspection/caller-materialization result = %t/%t, %d, %v", inspected, callerMaterialized, code, err)
 	}
 	eventuallyEmptyDirectory(t, request.SessionsDirectory)
 }

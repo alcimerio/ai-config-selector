@@ -21,7 +21,7 @@ import (
 )
 
 const (
-	explanationStoredAuthRef   = "work"
+	explanationStoredAuthRef   = "private-stored-auth-canary"
 	explanationOverrideAuthRef = "private-auth-canary"
 	explanationLegacyAuthRef   = "private-legacy-auth"
 	explanationInactiveAuthRef = "private-inactive-auth"
