@@ -2057,7 +2057,6 @@ func TestSeatbeltNativeRoutesTerminalSignalsOnlyToContainedTarget(t *testing.T) 
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer master.Close()
 			defer terminal.Close()
 			command := exec.Command(os.Args[0], "-test.run=^TestSeatbeltNativePTYHarness$")
 			command.Env = append(os.Environ(),
@@ -2072,23 +2071,33 @@ func TestSeatbeltNativeRoutesTerminalSignalsOnlyToContainedTarget(t *testing.T) 
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer ptyOutput.Close()
+			if err := unix.SetNonblock(int(master.Fd()), true); err != nil {
+				_ = ptyOutput.Close()
+				t.Fatal(err)
+			}
+			drainCancel := make(chan struct{})
 			drainDone := make(chan error, 1)
-			go func() { drainDone <- drainSeatbeltPTYOutput(master, ptyOutput) }()
+			go func() { drainDone <- drainSeatbeltPTYOutput(master, ptyOutput, drainCancel) }()
 			drainStopped := false
 			stopDrain := func() {
 				if drainStopped {
 					return
 				}
 				drainStopped = true
-				_ = master.Close()
+				close(drainCancel)
+				joined := false
 				select {
 				case err := <-drainDone:
-					if err != nil && !errors.Is(err, os.ErrClosed) && !errors.Is(err, syscall.EBADF) {
+					joined = true
+					if err != nil {
 						t.Errorf("drain native PTY output: %v", err)
 					}
 				case <-time.After(time.Second):
-					t.Error("native PTY output drain did not stop after master close")
+					t.Error("native PTY output drain did not stop after explicit cancellation")
+				}
+				if joined {
+					_ = master.Close()
+					_ = ptyOutput.Close()
 				}
 			}
 			defer stopDrain()
@@ -2105,7 +2114,7 @@ func TestSeatbeltNativeRoutesTerminalSignalsOnlyToContainedTarget(t *testing.T) 
 			waitForSeatbeltPTYMarkerWithDiagnostics(t, paths.scannerStarted, commandDone, master, paths)
 			switch test.signal {
 			case syscall.SIGINT:
-				if _, err := master.Write([]byte{3}); err != nil {
+				if err := writeSeatbeltPTYMaster(master, []byte{3}); err != nil {
 					t.Fatal(err)
 				}
 			case syscall.SIGWINCH:
@@ -2114,11 +2123,11 @@ func TestSeatbeltNativeRoutesTerminalSignalsOnlyToContainedTarget(t *testing.T) 
 				}
 			}
 			waitForSeatbeltPTYMarkerWithDiagnostics(t, paths.received, commandDone, master, paths)
-			if _, err := master.Write([]byte("snapshot\n")); err != nil {
+			if err := writeSeatbeltPTYMaster(master, []byte("snapshot\n")); err != nil {
 				t.Fatal(err)
 			}
 			waitForSeatbeltPTYMarkerWithDiagnostics(t, paths.snapshot, commandDone, master, paths)
-			if _, err := master.Write([]byte("release\n")); err != nil {
+			if err := writeSeatbeltPTYMaster(master, []byte("release\n")); err != nil {
 				t.Fatal(err)
 			}
 			waitSeatbeltNativePTYHarness(t, command, commandDone, master, paths)
@@ -2158,6 +2167,35 @@ func TestSeatbeltPTYReadyPublicationIsAtomicAndContentValid(t *testing.T) {
 	}
 	if group, published, err := readSeatbeltPTYReady(ready); err != nil || !published || group != 1234 {
 		t.Fatalf("reader rejected committed ready state: group=%d published=%v err=%v", group, published, err)
+	}
+}
+
+func TestSeatbeltPTYOutputDrainCancelsWhileSlaveRemainsOpen(t *testing.T) {
+	master, terminal, err := pty.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer master.Close()
+	defer terminal.Close()
+	if err := unix.SetNonblock(int(master.Fd()), true); err != nil {
+		t.Fatal(err)
+	}
+	output, err := os.CreateTemp(t.TempDir(), "pty-output-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer output.Close()
+	cancel := make(chan struct{})
+	done := make(chan error, 1)
+	go func() { done <- drainSeatbeltPTYOutput(master, output, cancel) }()
+	close(cancel)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("nonblocking PTY drain did not honor cancellation while slave remained open")
 	}
 }
 
@@ -2451,20 +2489,14 @@ func readSeatbeltPTYFile(path string) []byte {
 	return contents
 }
 
-func drainSeatbeltPTYOutput(master, output *os.File) error {
+func drainSeatbeltPTYOutput(master, output *os.File, cancel <-chan struct{}) error {
 	descriptor := int(master.Fd())
 	buffer := make([]byte, 4096)
 	for {
-		poll := []unix.PollFd{{Fd: int32(descriptor), Events: unix.POLLIN | unix.POLLHUP}}
-		ready, err := unix.Poll(poll, 100)
-		if err != nil {
-			if errors.Is(err, syscall.EINTR) {
-				continue
-			}
-			return err
-		}
-		if ready == 0 {
-			continue
+		select {
+		case <-cancel:
+			return nil
+		default:
 		}
 		count, err := unix.Read(descriptor, buffer)
 		if count > 0 {
@@ -2472,13 +2504,48 @@ func drainSeatbeltPTYOutput(master, output *os.File) error {
 				return writeErr
 			}
 		}
+		if errors.Is(err, syscall.EAGAIN) || errors.Is(err, syscall.EWOULDBLOCK) {
+			select {
+			case <-cancel:
+				return nil
+			case <-time.After(10 * time.Millisecond):
+				continue
+			}
+		}
+		if errors.Is(err, syscall.EINTR) {
+			continue
+		}
 		if err != nil {
 			return err
 		}
-		if count == 0 || poll[0].Revents&(unix.POLLHUP|unix.POLLNVAL) != 0 {
+		if count == 0 {
 			return nil
 		}
 	}
+}
+
+func writeSeatbeltPTYMaster(master *os.File, contents []byte) error {
+	deadline := time.Now().Add(5 * time.Second)
+	for len(contents) != 0 {
+		count, err := unix.Write(int(master.Fd()), contents)
+		if count > 0 {
+			contents = contents[count:]
+		}
+		if errors.Is(err, syscall.EAGAIN) || errors.Is(err, syscall.EWOULDBLOCK) {
+			if time.Now().After(deadline) {
+				return errors.New("timed out writing native PTY input")
+			}
+			time.Sleep(time.Millisecond)
+			continue
+		}
+		if errors.Is(err, syscall.EINTR) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func assertSeatbeltPTYForegroundRestored(t *testing.T, terminal *os.File) {

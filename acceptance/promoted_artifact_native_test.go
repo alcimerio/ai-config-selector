@@ -302,6 +302,102 @@ func assertPromotedArtifactEffectiveExplanation(t *testing.T) {
 	assertPromotedArtifactLegacyExplanations(t, binary, home, path, workspace, helper)
 	assertPromotedArtifactInactiveOverlayExplanations(t, binary, home, path, workspace)
 	assertPromotedArtifactExplanationFailuresArePlanless(t, binary, home, path, workspace)
+	assertPromotedArtifactRunDigestMeaning(t, binary, home, path, workspace, helper)
+	assertPromotedArtifactCodexAuthDigestMeaning(t, binary, home, path, workspace)
+}
+
+func assertPromotedArtifactRunDigestMeaning(t *testing.T, binary, home, path, workspace, helper string) {
+	t.Helper()
+	workspaceHelper := filepath.Join(workspace, "candidate-helper")
+	contents, err := os.ReadFile(helper)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(workspaceHelper, contents, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	digest := func(arguments ...string) string {
+		invocation := []string{"explain", "run", "--profile", "explanation", "--json", "--"}
+		invocation = append(invocation, arguments...)
+		command := exec.Command(binary, invocation...)
+		command.Dir, command.Env = workspace, nativeCandidateEnvironment(home, path, nil)
+		output, err := command.CombinedOutput()
+		if err != nil {
+			t.Fatalf("run digest explanation: %v; output=%s", err, output)
+		}
+		for _, private := range arguments[1:] {
+			if private != "" && bytes.Contains(output, []byte(private)) {
+				t.Fatalf("run explanation exposed literal argument value %q: %s", private, output)
+			}
+		}
+		var result struct {
+			Plan struct {
+				Digest string `json:"authorityDigest"`
+			} `json:"plan"`
+		}
+		if err := json.Unmarshal(output, &result); err != nil || result.Plan.Digest == "" {
+			t.Fatalf("decode run digest: %v; output=%s", err, output)
+		}
+		return result.Plan.Digest
+	}
+	first := digest(helper, "PRIVATE-ARGV-ONE")
+	second := digest(helper, "PRIVATE-ARGV-TWO")
+	changedCount := digest(helper, "PRIVATE-ARGV-ONE", "PRIVATE-ARGV-TWO")
+	changedForm := digest("./candidate-helper", "PRIVATE-ARGV-ONE")
+	if first != second {
+		t.Fatal("literal argv values changed semantic authority digest")
+	}
+	if first == changedCount || first == changedForm {
+		t.Fatal("literal argument count or validated executable form was absent from semantic authority digest")
+	}
+}
+
+func assertPromotedArtifactCodexAuthDigestMeaning(t *testing.T, binary, home, path, workspace string) {
+	t.Helper()
+	writeNativeExplanationProfile(t, home, "auth-first", `"codex":{"version":1,"authRef":"PRIVATE-AUTH-FIRST"}`)
+	writeNativeExplanationProfile(t, home, "auth-second", `"codex":{"version":1,"authRef":"PRIVATE-AUTH-SECOND"}`)
+	explain := func(profileName string, override ...string) (string, []nativeExplanationFact) {
+		arguments := []string{"explain", "codex", "--profile", profileName, "--json"}
+		if len(override) != 0 {
+			arguments = append(arguments, "--auth", override[0])
+		}
+		command := exec.Command(binary, arguments...)
+		command.Dir, command.Env = workspace, nativeCandidateEnvironment(home, path, nil)
+		output, err := command.CombinedOutput()
+		if err != nil {
+			t.Fatalf("Codex auth explanation: %v; output=%s", err, output)
+		}
+		for _, private := range []string{"PRIVATE-AUTH-FIRST", "PRIVATE-AUTH-SECOND", "PRIVATE-AUTH-OVERRIDE"} {
+			if bytes.Contains(output, []byte(private)) {
+				t.Fatalf("Codex explanation exposed auth reference %q: %s", private, output)
+			}
+		}
+		var result struct {
+			Plan struct {
+				Digest    string                  `json:"authorityDigest"`
+				Requested []nativeExplanationFact `json:"requested"`
+			} `json:"plan"`
+		}
+		if err := json.Unmarshal(output, &result); err != nil {
+			t.Fatalf("decode Codex auth explanation: %v; output=%s", err, output)
+		}
+		return result.Plan.Digest, result.Plan.Requested
+	}
+	first, firstFacts := explain("auth-first")
+	second, _ := explain("auth-second")
+	override, overrideFacts := explain("auth-first", "PRIVATE-AUTH-OVERRIDE")
+	if first != second {
+		t.Fatal("opaque Codex auth reference value changed semantic authority digest")
+	}
+	if first == override {
+		t.Fatal("overlay versus one-run auth binding origin was absent from semantic authority digest")
+	}
+	if fact, found := nativeExplanationFactByID(firstFacts, "codex.authentication"); !found || fact.Reason != "overlay" {
+		t.Fatalf("overlay auth binding origin missing: %#v", firstFacts)
+	}
+	if fact, found := nativeExplanationFactByID(overrideFacts, "codex.authentication"); !found || fact.Reason != "one_run_override" {
+		t.Fatalf("one-run auth binding origin missing: %#v", overrideFacts)
+	}
 }
 
 func assertPromotedArtifactLegacyExplanations(t *testing.T, binary, home, path, workspace, helper string) {
