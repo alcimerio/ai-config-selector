@@ -71,6 +71,15 @@ const (
 type Outcome struct {
 	State            State
 	RecoveryRequired bool
+	// History identifies the exact event committed by this Apply call. It is
+	// populated only for a successfully committed HistoryRequest; callers must
+	// not infer transaction identity from a later repository history read.
+	History *HistoryIdentity
+}
+
+type HistoryIdentity struct {
+	LineageID string
+	EventID   string
 }
 
 // OutcomeError preserves the truthful outcome through legacy Store signatures.
@@ -115,15 +124,17 @@ type DeleteRequest struct {
 // HistoryRequest annotates an ordinary repository request with a sanitized
 // event class and, for restore only, its already selected lineage.
 type HistoryRequest struct {
-	Request   Request
-	Operation string
-	Lineage   string
+	Request               Request
+	Operation             string
+	Lineage               string
+	ExpectedSourceLineage string
 }
 type change struct {
 	op, source, destination             string
 	sourceRevision, destinationRevision Revision
 	data                                []byte
 	historyOp, lineage, sourceLineage   string
+	expectedSourceLineage               string
 }
 
 func (r CreateRequest) change() change {
@@ -146,7 +157,7 @@ func (r HistoryRequest) change() change {
 		return change{}
 	}
 	c := r.Request.change()
-	c.historyOp, c.lineage = r.Operation, r.Lineage
+	c.historyOp, c.lineage, c.expectedSourceLineage = r.Operation, r.Lineage, r.ExpectedSourceLineage
 	return c
 }
 func (c change) validate() error {
@@ -185,6 +196,11 @@ func (c change) validate() error {
 		switch c.historyOp {
 		case "create", "edit", "clone", "rename", "delete", "import", "migration", "restore":
 		default:
+			return ErrConflict
+		}
+	}
+	if c.expectedSourceLineage != "" {
+		if c.op != "clone" || !lineagePattern.MatchString(c.expectedSourceLineage) {
 			return ErrConflict
 		}
 	}

@@ -690,15 +690,18 @@ func (app App) profileRestore(ctx context.Context, r historyRepository, selector
 	if cloneSourceName != "" {
 		requestedLineage = ""
 	}
-	out, err := r.Apply(ctx, profilerepo.HistoryRequest{Request: request, Operation: "restore", Lineage: requestedLineage})
+	expectedSourceLineage := ""
+	if cloneSourceName != "" {
+		expectedSourceLineage = selected.LineageID
+	}
+	out, err := r.Apply(ctx, profilerepo.HistoryRequest{Request: request, Operation: "restore", Lineage: requestedLineage, ExpectedSourceLineage: expectedSourceLineage})
 	if err != nil || out.State != profilerepo.Committed || out.RecoveryRequired {
 		return app.restoreApplyError(inv, out, err)
 	}
-	committed, inspectErr := r.History(ctx, profilerepo.HistorySelector{Name: destination}, 1)
-	if inspectErr != nil || len(committed.Events) != 1 || committed.Events[0].Operation != "restore" {
-		return app.historyError(inv, 1, "committed_inspection_failed", "restore committed, but its new history event could not be inspected; do not retry")
+	if out.History == nil || out.History.LineageID == "" || out.History.EventID == "" {
+		return app.historyError(inv, 1, "committed_inspection_failed", "restore committed, but its transaction-bound history identity is unavailable; do not retry")
 	}
-	return app.writeSimpleHistory(inv, map[string]any{"schemaVersion": 1, "operation": "profile.restore", "status": "committed", "lineageId": committed.LineageID, "sourceLineageId": selected.LineageID, "eventId": committed.Events[0].EventID, "selectedEventId": selected.EventID, "destination": destination})
+	return app.writeSimpleHistory(inv, map[string]any{"schemaVersion": 1, "operation": "profile.restore", "status": "committed", "lineageId": out.History.LineageID, "sourceLineageId": selected.LineageID, "eventId": out.History.EventID, "selectedEventId": selected.EventID, "destination": destination})
 }
 
 func bindingDecisionStatus(decision string) string {

@@ -13,14 +13,15 @@ import (
 // All filenames are derived locally. Journal bytes contain only validated names,
 // exact object identities and content hashes, never paths or codec instructions.
 type plan struct {
-	Version       int
-	ID            string
-	Operation     string
-	Source        string
-	Destination   string
-	Before        *identity
-	Stage         *identity
-	HistoryDigest string `json:"HistoryDigest,omitempty"`
+	Version               int
+	ID                    string
+	Operation             string
+	Source                string
+	Destination           string
+	Before                *identity
+	Stage                 *identity
+	HistoryDigest         string `json:"HistoryDigest,omitempty"`
+	ExpectedSourceLineage string `json:"ExpectedSourceLineage,omitempty"`
 }
 
 func validIdentity(id *identity) bool {
@@ -71,6 +72,9 @@ func decodePlan(data []byte) (*plan, error) {
 			return nil, ErrUnsafe
 		}
 	}
+	if p.ExpectedSourceLineage != "" && (p.Operation != "clone" || !lineagePattern.MatchString(p.ExpectedSourceLineage)) {
+		return nil, ErrUnsafe
+	}
 	switch p.Operation {
 	case "create":
 		if p.Source != "" || p.Destination == "" || p.Before != nil {
@@ -98,7 +102,7 @@ func (d *directory) prepare(ctx context.Context, c change) (*plan, error) {
 	if _, err := rand.Read(random[:]); err != nil {
 		return nil, err
 	}
-	p := &plan{Version: 2, ID: hex.EncodeToString(random[:]), Operation: c.op, Source: c.source, Destination: c.destination}
+	p := &plan{Version: 2, ID: hex.EncodeToString(random[:]), Operation: c.op, Source: c.source, Destination: c.destination, ExpectedSourceLineage: c.expectedSourceLineage}
 	if c.source != "" {
 		before, err := d.read(c.source+".json", MaxDocumentBytes, 1)
 		if err != nil {
@@ -402,10 +406,17 @@ func (d *directory) finish(p *plan) (out Outcome, err error) {
 	// Version-two decisions cover the Profile publication and its immutable
 	// history event. A failure here is deliberately Unknown and is completed by
 	// ordinary repository recovery before any later mutation.
+	var historyIdentity *HistoryIdentity
 	if p.Version == 2 {
 		if err = d.historyCommit(p); err != nil {
 			return
 		}
+		var identity HistoryIdentity
+		identity, err = d.historyResult(p)
+		if err != nil {
+			return
+		}
+		historyIdentity = &identity
 	}
 	if err = d.link("plan", "complete", "complete.publish"); err != nil {
 		return
@@ -414,6 +425,7 @@ func (d *directory) finish(p *plan) (out Outcome, err error) {
 		return
 	}
 	out.State = Committed
+	out.History = historyIdentity
 	artifacts, err = d.artifacts()
 	if err != nil {
 		return out, err

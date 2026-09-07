@@ -465,6 +465,9 @@ func (d *directory) historyPrepare(c change, p *plan) (result error) {
 			return err
 		}
 	}
+	if c.expectedSourceLineage != "" && source.id != c.expectedSourceLineage {
+		return ErrConflict
+	}
 	if c.lineage != "" && source.id == "" {
 		source, err = resolveLineage(root, HistorySelector{Lineage: c.lineage})
 		if err != nil {
@@ -702,6 +705,15 @@ func (d *directory) historyValidate(p *plan) error {
 }
 
 func validateHistoryAttachment(root *os.File, p *plan, txn historyTxn, allowPublished bool) error {
+	if p.ExpectedSourceLineage != "" {
+		source, sourceErr := resolveLineage(root, HistorySelector{Name: p.Source})
+		if sourceErr != nil || source.id != p.ExpectedSourceLineage {
+			if allowPublished {
+				return errors.Join(ErrUnsafe, sourceErr)
+			}
+			return errors.Join(ErrConflict, sourceErr)
+		}
+	}
 	lineage, err := readLineage(root, txn.LineageID)
 	if errors.Is(err, unix.ENOENT) || allowPublished && err == nil && len(lineage.records) == 0 {
 		if txn.Adoption != nil && txn.Adoption.LineageID == txn.LineageID {
@@ -787,6 +799,9 @@ func validateHistoryTransaction(p *plan, txn historyTxn, snapshot []byte) error 
 	}
 	if p.Operation == "clone" {
 		if rec.SourceLineage == "" || !lineagePattern.MatchString(rec.SourceLineage) {
+			return ErrUnsafe
+		}
+		if p.ExpectedSourceLineage != "" && rec.SourceLineage != p.ExpectedSourceLineage {
 			return ErrUnsafe
 		}
 	} else if rec.SourceLineage != "" {
@@ -934,6 +949,26 @@ func (d *directory) historyCommit(p *plan) error {
 	// Keep the transaction witnesses until the repository complete receipt is
 	// durable. A retry can then validate the same snapshot/event pair.
 	return nil
+}
+
+// historyResult returns the event identity from the exact transaction bytes
+// digest-bound to the immutable repository decision. The repository lock is
+// still held, so this cannot observe a following mutation.
+func (d *directory) historyResult(p *plan) (HistoryIdentity, error) {
+	root, err := openHistoryRoot(d, false)
+	if err != nil {
+		return HistoryIdentity{}, err
+	}
+	defer root.Close()
+	data, err := historyRead(root, "txn_"+p.ID+".json", maxMetadataBytes)
+	if err != nil || digestHex(data) != p.HistoryDigest {
+		return HistoryIdentity{}, errors.Join(ErrUnsafe, err)
+	}
+	var txn historyTxn
+	if err = decodeStrict(data, &txn); err != nil || txn.Version != 1 || txn.PlanID != p.ID || txn.LineageID != txn.Record.LineageID || txn.EventID != txn.Record.EventID || !lineagePattern.MatchString(txn.LineageID) || !eventPattern.MatchString(txn.EventID) {
+		return HistoryIdentity{}, ErrUnsafe
+	}
+	return HistoryIdentity{LineageID: txn.LineageID, EventID: txn.EventID}, nil
 }
 
 func commitBoundPrune(dir *os.File, digest string, ids []string) error {
