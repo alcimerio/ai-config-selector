@@ -421,6 +421,10 @@ func newSeatbeltTransportFixture(t *testing.T) *seatbeltTransportFixture {
 			t.Errorf("remove disposable Unix-socket root: %v", err)
 		}
 	})
+	canonicalRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatalf("resolve disposable Unix-socket root: %v", err)
+	}
 	fixture := &seatbeltTransportFixture{
 		tcp4Allowed: newSeatbeltTCPRecorder(t, "tcp4-allowed", "tcp4", "127.0.0.1:0"),
 		tcp4Denied:  newSeatbeltTCPRecorder(t, "tcp4-denied", "tcp4", "127.0.0.1:0"),
@@ -430,8 +434,8 @@ func newSeatbeltTransportFixture(t *testing.T) *seatbeltTransportFixture {
 		udp4Denied:  newSeatbeltUDPRecorder(t, "udp4-denied", "udp4", "127.0.0.1:0"),
 		udp6Allowed: newSeatbeltUDPRecorder(t, "udp6-allowed", "udp6", "[::1]:0"),
 		udp6Denied:  newSeatbeltUDPRecorder(t, "udp6-denied", "udp6", "[::1]:0"),
-		unixAllowed: newSeatbeltTCPRecorder(t, "unix-allowed", "unix", filepath.Join(root, "allowed.sock")),
-		unixDenied:  newSeatbeltTCPRecorder(t, "unix-denied", "unix", filepath.Join(root, "denied.sock")),
+		unixAllowed: newSeatbeltTCPRecorder(t, "unix-allowed", "unix", filepath.Join(canonicalRoot, "allowed.sock")),
+		unixDenied:  newSeatbeltTCPRecorder(t, "unix-denied", "unix", filepath.Join(canonicalRoot, "denied.sock")),
 	}
 	fixture.all = []seatbeltReceiptRecorder{
 		fixture.tcp4Allowed, fixture.tcp4Denied, fixture.tcp6Allowed, fixture.tcp6Denied,
