@@ -328,6 +328,24 @@ func TestBuildProcessEnvironmentRejectsUnexpectedAllowedValueWithoutLeakingIt(t 
 	}
 }
 
+func TestBuildProcessEnvironmentConsumesTypedSyntheticNamesAndFixedPath(t *testing.T) {
+	authority := DefaultRuntimeAuthority()
+	authority.FixedPath = "/typed/fixed/path"
+	authority.SyntheticEnvironmentNames = []string{"TMPDIR", "HOME"}
+	got, err := buildProcessEnvironmentForAuthority("/session/home", "/session/tmp", nil, authority)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"TMPDIR=/session/tmp", "HOME=/session/home", "PATH=/typed/fixed/path"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("typed runtime environment was not consumed: got=%q want=%q", got, want)
+	}
+	authority.SyntheticEnvironmentNames = []string{"UNREGISTERED"}
+	if _, err := buildProcessEnvironmentForAuthority("/session/home", "/session/tmp", nil, authority); err == nil {
+		t.Fatal("unregistered synthetic environment binding was silently ignored")
+	}
+}
+
 func TestRuntimeAuthorityZeroCompatibilityDoesNotDiscardExplicitFields(t *testing.T) {
 	if got, err := normalizeRuntimeAuthority(RuntimeAuthority{}); err != nil || !reflect.DeepEqual(got, DefaultRuntimeAuthority()) {
 		t.Fatalf("empty compatibility authority = %#v, %v", got, err)
@@ -337,8 +355,12 @@ func TestRuntimeAuthorityZeroCompatibilityDoesNotDiscardExplicitFields(t *testin
 	}
 	defaultAuthority := DefaultRuntimeAuthority()
 	defaultAuthority.MachServices[0] = "changed"
+	defaultAuthority.SyntheticEnvironmentNames[0] = "changed"
 	if DefaultRuntimeAuthority().MachServices[0] == "changed" {
 		t.Fatal("default runtime authority aliases mutable nested data")
+	}
+	if DefaultRuntimeAuthority().SyntheticEnvironmentNames[0] == "changed" {
+		t.Fatal("default synthetic environment authority aliases mutable nested data")
 	}
 }
 

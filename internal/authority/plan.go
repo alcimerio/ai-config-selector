@@ -381,13 +381,15 @@ func recipeFacts(plan Plan) Facts {
 func runtimeFacts(runtime launch.RuntimeAuthority) Facts {
 	effective := []Fact{
 		{ID: "runtime.devices", Kind: "device", Value: FactValue{Mode: runtime.DeviceMode}, Reason: "acs_runtime", Source: FactSource{Kind: "acs", ID: "native-sandbox", Version: runtime.Version}},
-		{ID: "runtime.environment", Kind: "environment", Value: FactValue{Mode: "synthetic-home-xdg-tmp-fixed-path", Names: append([]string(nil), runtime.InheritedEnvironmentNames...)}, Reason: "acs_runtime", Source: FactSource{Kind: "acs", ID: "native-sandbox", Version: runtime.Version}},
-		{ID: "runtime.mach-services", Kind: "mach-service", Value: FactValue{Names: append([]string(nil), runtime.MachServices...)}, Reason: "acs_runtime", Source: FactSource{Kind: "acs", ID: "native-sandbox", Version: runtime.Version}},
+		{ID: "runtime.environment", Kind: "environment", Value: FactValue{Mode: "conditional-inheritance-values-omitted", Names: sortedStrings(runtime.InheritedEnvironmentNames)}, Reason: "acs_runtime", Source: FactSource{Kind: "acs", ID: "native-sandbox", Version: runtime.Version}},
+		{ID: "runtime.environment.fixed-path", Kind: "environment", Value: FactValue{Mode: runtime.FixedPath, Names: []string{"PATH"}}, Reason: "acs_runtime", Source: FactSource{Kind: "acs", ID: "native-sandbox", Version: runtime.Version}},
+		{ID: "runtime.environment.synthetic", Kind: "environment", Value: FactValue{Mode: "session-relative-values-omitted", Names: sortedStrings(runtime.SyntheticEnvironmentNames)}, Reason: "acs_runtime", Source: FactSource{Kind: "acs", ID: "native-sandbox", Version: runtime.Version}},
+		{ID: "runtime.mach-services", Kind: "mach-service", Value: FactValue{Names: sortedStrings(runtime.MachServices)}, Reason: "acs_runtime", Source: FactSource{Kind: "acs", ID: "native-sandbox", Version: runtime.Version}},
 		{ID: "runtime.metadata", Kind: "filesystem-metadata", Value: FactValue{Mode: runtime.MetadataMode}, Reason: "acs_runtime", Source: FactSource{Kind: "acs", ID: "native-sandbox", Version: runtime.Version}},
 		{ID: "runtime.network", Kind: "network", Value: FactValue{Mode: runtime.NetworkMode}, Reason: "acs_runtime", Source: FactSource{Kind: "acs", ID: "native-sandbox", Version: runtime.Version}},
 		{ID: "runtime.process", Kind: "process", Value: FactValue{Mode: runtime.ProcessMode}, Reason: "acs_runtime", Source: FactSource{Kind: "acs", ID: "native-sandbox", Version: runtime.Version}},
 		{ID: "runtime.session", Kind: "filesystem", Value: FactValue{Access: runtime.SessionAccess}, Reason: "intrinsic_session", Source: FactSource{Kind: "acs", ID: "session", Version: runtime.Version}},
-		{ID: "runtime.sysctls", Kind: "sysctl", Value: FactValue{Names: append([]string(nil), runtime.SysctlNames...)}, Reason: "acs_runtime", Source: FactSource{Kind: "acs", ID: "native-sandbox", Version: runtime.Version}},
+		{ID: "runtime.sysctls", Kind: "sysctl", Value: FactValue{Names: sortedStrings(runtime.SysctlNames)}, Reason: "acs_runtime", Source: FactSource{Kind: "acs", ID: "native-sandbox", Version: runtime.Version}},
 		{ID: "runtime.system-read", Kind: "filesystem", Value: FactValue{Access: "read", Mode: runtime.SystemReadMode}, Reason: "acs_runtime", Source: FactSource{Kind: "acs", ID: "native-sandbox", Version: runtime.Version}},
 		{ID: "runtime.terminal", Kind: "terminal", Value: FactValue{Mode: runtime.TerminalMode}, Reason: "acs_runtime", Source: FactSource{Kind: "acs", ID: "native-sandbox", Version: runtime.Version}},
 	}
@@ -401,7 +403,14 @@ func runtimeFacts(runtime launch.RuntimeAuthority) Facts {
 		{ID: "unsupported.raw-policy", Kind: "isolation", Value: FactValue{Mode: "caller-supplied"}, Reason: "not_supported", Source: FactSource{Kind: "acs", ID: "native-sandbox"}},
 		{ID: "unsupported.durable-session-operations", Kind: "session", Value: FactValue{Mode: "public-management-ui"}, Reason: "not_supported", Source: FactSource{Kind: "acs", ID: "session"}},
 	}
-	return Facts{Effective: effective, Unsupported: unsupported}
+	targetAdded := []Fact{{ID: "runtime.session-destinations", Kind: "session-destination", Value: FactValue{Names: []string{"session-home", "session-temporary", "session-home/.config", "session-home/.local/share", "session-home/.cache", "session-home/.local/state"}}, Reason: "intrinsic_session", Source: FactSource{Kind: "acs", ID: "session", Version: runtime.Version}}}
+	return Facts{TargetAdded: targetAdded, Effective: effective, Unsupported: unsupported}
+}
+
+func sortedStrings(values []string) []string {
+	result := append([]string(nil), values...)
+	sort.Strings(result)
+	return result
 }
 
 func canonicalFactEncoding(fact Fact) []byte {

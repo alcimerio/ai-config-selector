@@ -239,6 +239,8 @@ type RuntimeAuthority struct {
 	NetworkMode               string
 	TerminalMode              string
 	DeviceMode                string
+	FixedPath                 string
+	SyntheticEnvironmentNames []string
 	InheritedEnvironmentNames []string
 	SysctlNames               []string
 	MachServices              []string
@@ -248,12 +250,15 @@ func DefaultRuntimeAuthority() RuntimeAuthority {
 	return RuntimeAuthority{Version: 1, ProcessMode: "same-sandbox-descendants", SystemReadMode: "bounded-macos-runtime",
 		MetadataMode: "executable-and-session-ancestors", SessionAccess: "private-read-write",
 		NetworkMode: "local-ip-socket-bind-no-listen-coarse-outbound-ip-macos-dns", TerminalMode: "attached-pty-signals-resize", DeviceMode: "bounded-tty-random-null-fd",
+		FixedPath:                 safeProcessPath,
+		SyntheticEnvironmentNames: []string{"HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME", "XDG_STATE_HOME", "TMPDIR"},
 		InheritedEnvironmentNames: []string{"TERM", "COLORTERM", "LANG", "LC_ALL", "LC_CTYPE"},
 		SysctlNames:               []string{"hw.pagesize", "hw.pagesize_compat", "hw.ncpu"},
 		MachServices:              []string{"com.apple.SecurityServer", "com.apple.trustd.agent"}}
 }
 
 func (value RuntimeAuthority) Clone() RuntimeAuthority {
+	value.SyntheticEnvironmentNames = append([]string(nil), value.SyntheticEnvironmentNames...)
 	value.InheritedEnvironmentNames = append([]string(nil), value.InheritedEnvironmentNames...)
 	value.SysctlNames = append([]string(nil), value.SysctlNames...)
 	value.MachServices = append([]string(nil), value.MachServices...)
@@ -877,15 +882,28 @@ func buildProcessEnvironmentForAuthority(sessionHome, temporaryDirectory string,
 			values[key] = value
 		}
 	}
-	environment := []string{
-		"HOME=" + sessionHome,
-		"XDG_CONFIG_HOME=" + filepath.Join(sessionHome, ".config"),
-		"XDG_DATA_HOME=" + filepath.Join(sessionHome, ".local", "share"),
-		"XDG_CACHE_HOME=" + filepath.Join(sessionHome, ".cache"),
-		"XDG_STATE_HOME=" + filepath.Join(sessionHome, ".local", "state"),
-		"TMPDIR=" + temporaryDirectory,
-		"PATH=" + safeProcessPath,
+	environment := make([]string, 0, len(authority.SyntheticEnvironmentNames)+1+len(authority.InheritedEnvironmentNames))
+	for _, name := range authority.SyntheticEnvironmentNames {
+		var value string
+		switch name {
+		case "HOME":
+			value = sessionHome
+		case "XDG_CONFIG_HOME":
+			value = filepath.Join(sessionHome, ".config")
+		case "XDG_DATA_HOME":
+			value = filepath.Join(sessionHome, ".local", "share")
+		case "XDG_CACHE_HOME":
+			value = filepath.Join(sessionHome, ".cache")
+		case "XDG_STATE_HOME":
+			value = filepath.Join(sessionHome, ".local", "state")
+		case "TMPDIR":
+			value = temporaryDirectory
+		default:
+			return nil, sandboxError(SandboxInvalidEnvironment, nil)
+		}
+		environment = append(environment, name+"="+value)
 	}
+	environment = append(environment, "PATH="+authority.FixedPath)
 	for _, key := range authority.InheritedEnvironmentNames {
 		if value, exists := values[key]; exists {
 			environment = append(environment, key+"="+value)

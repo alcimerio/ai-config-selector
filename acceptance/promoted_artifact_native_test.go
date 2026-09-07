@@ -186,7 +186,7 @@ func assertPromotedArtifactEffectiveExplanation(t *testing.T) {
 			if err := json.Unmarshal(output, &result); err != nil || result.FormatVersion != 1 || result.Intent.Recipe != test.recipe || !strings.HasPrefix(result.Plan.Digest, "sha256:") {
 				t.Fatalf("invalid explanation: %v; output=%s", err, output)
 			}
-			for _, id := range []string{"runtime.devices", "runtime.mach-services", "runtime.metadata", "runtime.network", "runtime.sysctls"} {
+			for _, id := range []string{"runtime.devices", "runtime.environment", "runtime.environment.fixed-path", "runtime.environment.synthetic", "runtime.mach-services", "runtime.metadata", "runtime.network", "runtime.session", "runtime.sysctls"} {
 				found := false
 				for _, fact := range result.Plan.Effective {
 					found = found || fact.ID == id
@@ -218,6 +218,9 @@ func assertPromotedArtifactEffectiveExplanation(t *testing.T) {
 					t.Fatalf("target-added facts omitted %s: %s", id, output)
 				}
 			}
+			if !nativeExplanationHasFact(result.Plan.TargetAdded, "runtime.session-destinations") {
+				t.Fatalf("target-added facts omitted runtime.session-destinations: %s", output)
+			}
 			facts := map[string]struct {
 				Mode  string
 				Names []string
@@ -231,7 +234,7 @@ func assertPromotedArtifactEffectiveExplanation(t *testing.T) {
 			if got := facts["runtime.network"].Mode; got != "local-ip-socket-bind-no-listen-coarse-outbound-ip-macos-dns" {
 				t.Fatalf("network declaration = %q", got)
 			}
-			if got := facts["runtime.sysctls"].Names; !reflect.DeepEqual(got, []string{"hw.pagesize", "hw.pagesize_compat", "hw.ncpu"}) {
+			if got := facts["runtime.sysctls"].Names; !reflect.DeepEqual(got, []string{"hw.ncpu", "hw.pagesize", "hw.pagesize_compat"}) {
 				t.Fatalf("sysctl declaration = %q", got)
 			}
 			if got := facts["runtime.mach-services"].Names; !reflect.DeepEqual(got, []string{"com.apple.SecurityServer", "com.apple.trustd.agent"}) {
@@ -634,7 +637,7 @@ func TestPromotedArtifactSharedTargetConformance(t *testing.T) {
 		for _, target := range []string{"devin", "codex"} {
 			arguments := []string{target, "--profile", name, "--dry-run"}
 			if target == "codex" && access == "read-write" {
-				arguments = append(arguments, "--auth", "override")
+				arguments = append(arguments, "--auth", "private-auth-canary")
 			}
 			command := exec.Command(binary, arguments...)
 			command.Env = nativeCandidateEnvironment(home, path, nil)
@@ -667,7 +670,7 @@ func TestPromotedArtifactSharedTargetConformance(t *testing.T) {
 			}
 			explainArguments := []string{"explain", target, "--profile", name, "--json"}
 			if target == "codex" && access == "read-write" {
-				explainArguments = append(explainArguments, "--auth", "override")
+				explainArguments = append(explainArguments, "--auth", "private-auth-canary")
 			}
 			explain := exec.Command(binary, explainArguments...)
 			explain.Env, explain.Dir = nativeCandidateEnvironment(home, path, nil), workspace
@@ -675,7 +678,7 @@ func TestPromotedArtifactSharedTargetConformance(t *testing.T) {
 			if err != nil {
 				t.Fatalf("installed candidate %s explanation: %v; output=%s", target, err, explanationOutput)
 			}
-			privateReferenceLeaked := target == "codex" && (bytes.Contains(explanationOutput, []byte(`"work"`)) || bytes.Contains(explanationOutput, []byte("override")))
+			privateReferenceLeaked := target == "codex" && (bytes.Contains(explanationOutput, []byte(`"work"`)) || bytes.Contains(explanationOutput, []byte("private-auth-canary")))
 			if bytes.Contains(explanationOutput, []byte("unselected")) || bytes.Contains(explanationOutput, []byte(workspace)) || privateReferenceLeaked {
 				t.Fatalf("%s explanation exposed unselected/private binding: %s", target, explanationOutput)
 			}
@@ -714,7 +717,7 @@ func TestPromotedArtifactSharedTargetConformance(t *testing.T) {
 		}
 		codexReference := "work"
 		if access == "read-write" {
-			codexReference = "override"
+			codexReference = "private-auth-canary"
 		}
 		for _, marker := range []string{
 			filepath.Join("<session>", "home", ".codex", "skills", "devin-config", "review"),

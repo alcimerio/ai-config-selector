@@ -74,7 +74,7 @@ func TestAuthorityManifestIsCanonicalAndContainsIntrinsicNativeGrants(t *testing
 	if got := factByID(t, explanation.Effective, "runtime.mach-services").Value.Names; !reflect.DeepEqual(got, []string{"com.apple.SecurityServer", "com.apple.trustd.agent"}) {
 		t.Fatalf("Mach services = %q", got)
 	}
-	if got := factByID(t, explanation.Effective, "runtime.sysctls").Value.Names; !reflect.DeepEqual(got, []string{"hw.pagesize", "hw.pagesize_compat", "hw.ncpu"}) {
+	if got := factByID(t, explanation.Effective, "runtime.sysctls").Value.Names; !reflect.DeepEqual(got, []string{"hw.ncpu", "hw.pagesize", "hw.pagesize_compat"}) {
 		t.Fatalf("sysctls = %q", got)
 	}
 	explanation.Effective[0].Value.Names = append(explanation.Effective[0].Value.Names, "mutated")
@@ -110,6 +110,55 @@ func TestAuthorityDigestTracksSemanticAuthorityButNotPrivateBindings(t *testing.
 	}
 	if !strings.HasPrefix(base.AuthorityDigest(), "sha256:") || len(base.AuthorityDigest()) != len("sha256:")+64 {
 		t.Fatalf("digest = %q", base.AuthorityDigest())
+	}
+}
+
+func TestAuthorityDigestTracksEveryRuntimeAuthorityFieldAndIgnoresSetOrder(t *testing.T) {
+	base := New(nil, launch.WorkspaceAccessReadOnly, 3, "")
+	mutations := []struct {
+		name   string
+		mutate func(*launch.RuntimeAuthority)
+	}{
+		{"version", func(value *launch.RuntimeAuthority) { value.Version++ }},
+		{"process", func(value *launch.RuntimeAuthority) { value.ProcessMode += "-changed" }},
+		{"system-read", func(value *launch.RuntimeAuthority) { value.SystemReadMode += "-changed" }},
+		{"metadata", func(value *launch.RuntimeAuthority) { value.MetadataMode += "-changed" }},
+		{"session", func(value *launch.RuntimeAuthority) { value.SessionAccess += "-changed" }},
+		{"network", func(value *launch.RuntimeAuthority) { value.NetworkMode += "-changed" }},
+		{"terminal", func(value *launch.RuntimeAuthority) { value.TerminalMode += "-changed" }},
+		{"device", func(value *launch.RuntimeAuthority) { value.DeviceMode += "-changed" }},
+		{"fixed-path", func(value *launch.RuntimeAuthority) { value.FixedPath += ":/changed" }},
+		{"synthetic-environment", func(value *launch.RuntimeAuthority) {
+			value.SyntheticEnvironmentNames = append(value.SyntheticEnvironmentNames, "CHANGED")
+		}},
+		{"inherited-environment", func(value *launch.RuntimeAuthority) {
+			value.InheritedEnvironmentNames = append(value.InheritedEnvironmentNames, "CHANGED")
+		}},
+		{"sysctls", func(value *launch.RuntimeAuthority) { value.SysctlNames = append(value.SysctlNames, "changed") }},
+		{"mach-services", func(value *launch.RuntimeAuthority) { value.MachServices = append(value.MachServices, "changed") }},
+	}
+	for _, mutation := range mutations {
+		t.Run(mutation.name, func(t *testing.T) {
+			changed := base
+			changed.runtimeAuthority = base.runtimeAuthority.Clone()
+			mutation.mutate(&changed.runtimeAuthority)
+			changed.explanation = buildExplanation(changed)
+			if changed.AuthorityDigest() == base.AuthorityDigest() {
+				t.Fatalf("runtime authority field %q is absent from semantic digest", mutation.name)
+			}
+		})
+	}
+
+	reordered := base
+	reordered.runtimeAuthority = base.runtimeAuthority.Clone()
+	for _, values := range []*[]string{&reordered.runtimeAuthority.SyntheticEnvironmentNames, &reordered.runtimeAuthority.InheritedEnvironmentNames, &reordered.runtimeAuthority.SysctlNames, &reordered.runtimeAuthority.MachServices} {
+		for left, right := 0, len(*values)-1; left < right; left, right = left+1, right-1 {
+			(*values)[left], (*values)[right] = (*values)[right], (*values)[left]
+		}
+	}
+	reordered.explanation = buildExplanation(reordered)
+	if reordered.AuthorityDigest() != base.AuthorityDigest() {
+		t.Fatal("set-like runtime registration order changed semantic digest")
 	}
 }
 
