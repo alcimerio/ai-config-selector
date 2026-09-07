@@ -21,6 +21,7 @@ jobs:
       source-commit: ${{ steps.identity.outputs.source_commit }}
       tag-object: ${{ steps.identity.outputs.tag_object }}
       artifact-name: ${{ steps.artifact-name.outputs.name }}
+      target-artifact-name: ${{ steps.artifact-name.outputs.target_name }}
 
     steps:
       - name: Check out the tagged source
@@ -50,16 +51,30 @@ jobs:
       - name: Build the candidate exactly once
         run: scripts/release-candidate.sh "$GITHUB_REF_NAME"
 
+      - name: Fetch and verify locked native authentication target exactly once
+        run: scripts/fetch-codex-test-targets.sh scripts/codex-test-targets.lock dist/codex-test-targets
+
       - name: Name the exact candidate artifact set
         id: artifact-name
         shell: bash
-        run: echo "name=release-candidate-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" >>"$GITHUB_OUTPUT"
+        run: |
+          echo "name=release-candidate-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" >>"$GITHUB_OUTPUT"
+          echo "target_name=release-codex-target-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" >>"$GITHUB_OUTPUT"
 
       - name: Upload the exact candidate artifact set
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ${{ steps.artifact-name.outputs.name }}
           path: dist/release-candidate
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+
+      - name: Upload immutable native authentication target
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.artifact-name.outputs.target_name }}
+          path: dist/codex-test-targets
           if-no-files-found: error
           compression-level: 0
           retention-days: 1
@@ -97,6 +112,12 @@ jobs:
           name: ${{ needs.candidate.outputs.artifact-name }}
           path: dist/release-candidate
 
+      - name: Download immutable native authentication target
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ needs.candidate.outputs.target-artifact-name }}
+          path: dist/codex-test-targets
+
       - name: Restore installer mode normalized by artifact transport
         shell: bash
         run: |
@@ -119,17 +140,26 @@ jobs:
             dist/release-candidate \
             "$install_root/bin"
 
-      - name: Run native regressions
-        run: go test ./...
+      - name: Install verified matching authentication target
+        shell: bash
+        run: |
+          target_root="${RUNNER_TEMP}/codex-target-${{ matrix.os }}-${{ matrix.arch }}"
+          mkdir -p "$target_root/bin"
+          scripts/install-codex-test-target.sh \
+            scripts/codex-test-targets.lock \
+            dist/codex-test-targets \
+            "${{ matrix.arch }}" \
+            "$target_root/bin/codex"
 
-      - name: Run supported native race tests
-        run: go test -race ./...
-
-      - name: Exercise installed candidate as a black box
-        env:
-          ACS_PROMOTED_BINARY: ${{ runner.temp }}/acs-release-${{ matrix.os }}-${{ matrix.arch }}/bin/acs
-          ACS_PROMOTED_SANDBOX_BACKEND: ${{ matrix.sandbox_backend }}
-        run: ACS_PROMOTED_VERSION="$GITHUB_REF_NAME" go test ./acceptance -count=1
+      - name: Run shared native release candidate gates
+        run: |
+          scripts/run-native-candidate-gates.sh \
+            "$GITHUB_REF_NAME" \
+            "${RUNNER_TEMP}/acs-release-${{ matrix.os }}-${{ matrix.arch }}/bin/acs" \
+            "${RUNNER_TEMP}/codex-target-${{ matrix.os }}-${{ matrix.arch }}/bin/codex" \
+            "${GITHUB_WORKSPACE}/dist/codex-test-targets/codex_0.149.1_${{ matrix.os }}_${{ matrix.arch }}.tar.gz" \
+            "${RUNNER_TEMP}/acs-native-auth-recovery" \
+            "${{ matrix.sandbox_backend }}"
 
       - name: Record sanitized native candidate observation
         shell: bash
@@ -140,6 +170,8 @@ jobs:
             printf '%s\n' "- Target: \`${{ matrix.target }}\` on its required native runner."
             printf '%s\n' "- Backend observation: required native backend is \`${{ matrix.sandbox_backend }}\`."
             printf '%s\n' '- Candidate observation: the installed black-box containment and lifecycle suite passed.'
+            printf '%s\n' '- Authentication observation: the official checksum-locked Codex CLI passed with synthetic authentication and a local simulated API, alongside the isolated Keychain, fresh-process recovery, credential-free contained status, and direct target lifecycle gates.'
+            printf '%s\n' '- Automation boundary: no maintainer credentials, real account login, hosted inference, or quota are used; real daily-use observation remains pending.'
             printf '%s\n' '- Generic command observation: literal argv, sanitized environment, pipes, standard output descriptors, workspace modes, unrelated-path denial, and Session settlement passed through the installed candidate.'
             printf '%s\n' '- Compatibility rule: this candidate supports macOS 26 on Apple Silicon and uses the verified system Seatbelt backend.'
             printf '%s\n' '- The candidate itself is never rebuilt in this job.'

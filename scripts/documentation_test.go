@@ -63,6 +63,7 @@ func TestCurrentDocumentationDefinesTheV040MacOSSandboxShellContract(t *testing.
 
 func TestReleaseArtifactContractIsExactlyOneAppleSiliconTarget(t *testing.T) {
 	repository := ".."
+	sharedGates := readRepositoryFile(t, repository, filepath.Join("scripts", "run-native-candidate-gates.sh"))
 	for _, workflow := range []string{"promoted-artifacts.yml", "release.yml"} {
 		text := readRepositoryFile(t, repository, filepath.Join(".github", "workflows", workflow))
 		for _, row := range []string{
@@ -81,12 +82,12 @@ func TestReleaseArtifactContractIsExactlyOneAppleSiliconTarget(t *testing.T) {
 			}
 		}
 		for _, required := range []string{
-			"Exercise installed candidate as a black box",
+			"scripts/run-native-candidate-gates.sh",
 			"go test -race ./...",
 			"The candidate itself is never rebuilt in this job.",
 			"No credentials, account data, target output, Session contents, private paths, generated policy, environment values, or control characters are recorded.",
 		} {
-			if !strings.Contains(text, required) {
+			if !strings.Contains(text, required) && !strings.Contains(sharedGates, required) {
 				t.Errorf("%s omits release guard %q", workflow, required)
 			}
 		}
@@ -203,30 +204,38 @@ func TestGenericRunDocumentationAndCandidateGateStayBoundToLiteralContainment(t 
 		}
 	}
 	workflow := readRepositoryFile(t, "..", filepath.Join(".github", "workflows", "promoted-artifacts.yml"))
-	if !strings.Contains(workflow, "Exercise generic contained command through supplied candidate") ||
-		!strings.Contains(workflow, "TestPromotedArtifactNativeContainmentContract") {
-		t.Fatal("promoted candidate gate omits the explicit generic command observation")
+	sharedGates := readRepositoryFile(t, "..", filepath.Join("scripts", "run-native-candidate-gates.sh"))
+	if !strings.Contains(workflow, "scripts/run-native-candidate-gates.sh") ||
+		!strings.Contains(sharedGates, "run_acceptance_test ./acceptance -count=1") {
+		t.Fatal("promoted candidate gate omits the unfiltered installed-candidate acceptance")
 	}
 }
 
 func TestPromotedArtifactGateUsesLockedNativeAuthenticationTargets(t *testing.T) {
 	workflow := readRepositoryFile(t, "..", filepath.Join(".github", "workflows", "promoted-artifacts.yml"))
+	sharedGates := readRepositoryFile(t, "..", filepath.Join("scripts", "run-native-candidate-gates.sh"))
 	for _, required := range []string{
 		"scripts/fetch-codex-test-targets.sh scripts/codex-test-targets.lock dist/codex-test-targets",
 		"codex-test-targets-${{ github.sha }}",
 		"scripts/install-codex-test-target.sh",
-		"ACS_RUN_NATIVE_AUTH_GATE: \"1\"",
-		"ACS_TEST_CODEX_BINARY:",
-		"go test ./internal/codexauthresource -run '^TestNativeKeychainCredentialFreeContract$'",
-		"go test ./internal/codexauthresource -run '^TestNativeRealStoreInstalledTargetComposition$'",
-		"go test ./internal/executor -run '^TestNativeInstalledTargetContainedStatusWithoutCredentials$'",
-		"ACS_NATIVE_AUTH_RECOVERY_ROOT:",
-		"ACS_RUN_NATIVE_AUTH_RECOVERY: \"1\"",
-		"TestNativeKeychainRecoveryEntrypoint",
-		"if: always()",
+		"scripts/run-native-candidate-gates.sh",
 	} {
 		if !strings.Contains(workflow, required) {
 			t.Errorf("promoted-artifact workflow omits native authentication guard %q", required)
+		}
+	}
+	for _, required := range []string{
+		"ACS_RUN_NATIVE_AUTH_GATE=1",
+		"ACS_TEST_CODEX_BINARY",
+		"run_auth_test ./internal/codexauthresource -run '^TestNativeKeychainCredentialFreeContract$'",
+		"run_auth_test ./internal/codexauthresource -run '^TestNativeRealStoreInstalledTargetComposition$'",
+		"run_auth_test ./internal/executor -run '^TestNativeInstalledTargetContainedStatusWithoutCredentials$'",
+		"ACS_NATIVE_AUTH_RECOVERY_ROOT",
+		"ACS_RUN_NATIVE_AUTH_RECOVERY=1",
+		"TestNativeKeychainRecoveryEntrypoint",
+	} {
+		if !strings.Contains(sharedGates, required) {
+			t.Errorf("shared native gate omits authentication guard %q", required)
 		}
 	}
 	if strings.Count(workflow, "scripts/fetch-codex-test-targets.sh") != 1 {
@@ -235,6 +244,30 @@ func TestPromotedArtifactGateUsesLockedNativeAuthenticationTargets(t *testing.T)
 	for _, forbidden := range []string{"secrets.", "actions/upload-artifact" + "@" + "master"} {
 		if strings.Contains(workflow, forbidden) {
 			t.Errorf("promoted-artifact workflow contains unsafe authentication gate content %q", forbidden)
+		}
+	}
+}
+
+func TestReleaseAndPromotedWorkflowsExecuteOneSharedNativeGate(t *testing.T) {
+	for _, workflowName := range []string{"promoted-artifacts.yml", "release.yml"} {
+		workflow := readRepositoryFile(t, "..", filepath.Join(".github", "workflows", workflowName))
+		for _, required := range []string{
+			"scripts/fetch-codex-test-targets.sh scripts/codex-test-targets.lock dist/codex-test-targets",
+			"scripts/install-codex-test-target.sh",
+			"scripts/run-native-candidate-gates.sh",
+			"official checksum-locked Codex CLI",
+			"synthetic authentication and a local simulated API",
+			"real daily-use observation remains pending",
+		} {
+			if !strings.Contains(workflow, required) {
+				t.Errorf("%s omits shared native release behavior %q", workflowName, required)
+			}
+		}
+		if strings.Count(workflow, "scripts/fetch-codex-test-targets.sh") != 1 {
+			t.Errorf("%s must fetch the locked target exactly once", workflowName)
+		}
+		if strings.Count(workflow, "scripts/run-native-candidate-gates.sh") != 1 {
+			t.Errorf("%s must execute the shared native gate exactly once", workflowName)
 		}
 	}
 }
@@ -320,13 +353,17 @@ func TestSharedTargetConformanceDocumentationAndNativeGateStayExplicit(t *testin
 		}
 	}
 	workflow := readRepositoryFile(t, "..", filepath.Join(".github", "workflows", "promoted-artifacts.yml"))
+	sharedGates := readRepositoryFile(t, "..", filepath.Join("scripts", "run-native-candidate-gates.sh"))
 	for _, required := range []string{
-		"Exercise shared target contract through supplied candidate",
-		"go test ./acceptance -run '^TestPromotedArtifactSharedTargetConformance$' -count=1 -v",
-		"ACS_PROMOTED_BINARY:",
+		"scripts/run-native-candidate-gates.sh",
 	} {
 		if !strings.Contains(workflow, required) {
 			t.Errorf("promoted artifact workflow omits shared target gate %q", required)
+		}
+	}
+	for _, required := range []string{"run_acceptance_test ./acceptance -count=1", "ACS_PROMOTED_BINARY"} {
+		if !strings.Contains(sharedGates, required) {
+			t.Errorf("shared native gate omits shared target coverage %q", required)
 		}
 	}
 }
