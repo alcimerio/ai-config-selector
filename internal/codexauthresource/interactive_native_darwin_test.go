@@ -751,8 +751,8 @@ func observeNativeCodexPhase(t *testing.T, candidate, home, tools, workspace, re
 	capability := readLiveNativeCodexCapability(t, home)
 	phaseHome, err := os.ReadFile(ready)
 	wantHome := filepath.Join(home, ".acs", "sessions", capability.RootName, "home")
-	if err != nil || filepath.Clean(strings.TrimSpace(string(phaseHome))) != wantHome {
-		t.Fatalf("locked Codex phase HOME is not bound to its private capability root: err=%v", err)
+	if err != nil || !sameNativeCodexFile(filepath.Clean(strings.TrimSpace(string(phaseHome))), wantHome) {
+		t.Fatal("locked Codex phase HOME is not bound to its private capability root")
 	}
 	if previous != nil && (capability.ID != previous.ID || capability.RootName != previous.RootName || capability.Generation <= previous.Generation || capability.Challenge == previous.Challenge) {
 		t.Fatalf("locked Codex capability generation was not fresh across phases")
@@ -782,6 +782,15 @@ func observeNativeCodexPhase(t *testing.T, candidate, home, tools, workspace, re
 		t.Fatalf("release locked Codex phase: %v", err)
 	}
 	return capability
+}
+
+func sameNativeCodexFile(left, right string) bool {
+	leftInfo, err := os.Stat(left)
+	if err != nil {
+		return false
+	}
+	rightInfo, err := os.Stat(right)
+	return err == nil && os.SameFile(leftInfo, rightInfo)
 }
 
 func waitForNativeCodexMarker(path string, timeout time.Duration) bool {

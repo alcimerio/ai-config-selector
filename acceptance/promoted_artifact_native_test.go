@@ -184,7 +184,8 @@ func assertPromotedArtifactDevinGenerations(t *testing.T) {
 		}
 		cap := readLiveGenerationCapability(t, home)
 		phaseHome, err := os.ReadFile(ready)
-		if err != nil || filepath.Clean(string(phaseHome)) != filepath.Join(home, ".acs", "sessions", cap.RootName, "home") {
+		wantHome := filepath.Join(home, ".acs", "sessions", cap.RootName, "home")
+		if err != nil || !samePromotedNativeFile(filepath.Clean(string(phaseHome)), wantHome) {
 			t.Fatalf("%s phase HOME is not bound to its private capability root", phase)
 		}
 		if index > 0 && (cap.ID != previous.ID || cap.RootName != previous.RootName || cap.Generation <= previous.Generation || cap.Challenge == previous.Challenge) {
@@ -218,6 +219,15 @@ func assertPromotedArtifactDevinGenerations(t *testing.T) {
 	}
 	assertNoSessions(t, home)
 	assertNewRemovedPromotedSessions(t, binary, home, path, before, "devin")
+}
+
+func samePromotedNativeFile(left, right string) bool {
+	leftInfo, err := os.Stat(left)
+	if err != nil {
+		return false
+	}
+	rightInfo, err := os.Stat(right)
+	return err == nil && os.SameFile(leftInfo, rightInfo)
 }
 
 func readLiveGenerationCapability(t *testing.T, home string) struct {
