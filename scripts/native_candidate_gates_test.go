@@ -35,6 +35,64 @@ func TestNativeCandidateGatesRequireSuppliedArtifacts(t *testing.T) {
 }
 
 func TestNativeCandidateGatesPropagateFailureRecoverAndProtectIdentity(t *testing.T) {
+	t.Run("baseline identity read failures stop before test discovery", func(t *testing.T) {
+		for _, mode := range []string{"hash-baseline-fail", "hash-baseline-empty", "hash-baseline-malformed"} {
+			t.Run(mode, func(t *testing.T) {
+				fixture := newNativeGateFixture(t)
+				fixture.run(t, mode, false, "candidate identity could not be read")
+				if contents, err := os.ReadFile(fixture.callsPath); err == nil {
+					t.Fatalf("baseline identity failure reached Go test discovery:\n%s", contents)
+				} else if !os.IsNotExist(err) {
+					t.Fatal(err)
+				}
+			})
+		}
+	})
+
+	t.Run("final identity read failures fail the gate", func(t *testing.T) {
+		for _, mode := range []string{"hash-final-fail", "hash-final-empty", "hash-final-malformed"} {
+			t.Run(mode, func(t *testing.T) {
+				fixture := newNativeGateFixture(t)
+				fixture.run(t, mode, false, "supplied artifact identity changed during validation")
+				if !strings.Contains(fixture.calls(t), "TestNativeKeychainRecoveryEntrypoint") {
+					t.Fatal("final identity failure omitted recovery")
+				}
+			})
+		}
+	})
+
+	t.Run("final identity failure does not erase the primary failure", func(t *testing.T) {
+		for _, mode := range []string{"fail-primary-final-fail", "fail-primary-final-empty", "fail-primary-final-malformed"} {
+			t.Run(mode, func(t *testing.T) {
+				fixture := newNativeGateFixture(t)
+				output, err := fixture.command(mode).CombinedOutput()
+				if err == nil {
+					t.Fatal("native candidate gate accepted primary and final identity failures")
+				}
+				exitError, ok := err.(*exec.ExitError)
+				if !ok || exitError.ExitCode() != 23 {
+					t.Fatalf("exit error = %v, want primary status 23; output=%q", err, output)
+				}
+				if !strings.Contains(string(output), "supplied artifact identity changed during validation") {
+					t.Fatalf("final identity diagnostic omitted: %q", output)
+				}
+			})
+		}
+	})
+
+	t.Run("missing recovery entrypoint stops before native target work", func(t *testing.T) {
+		fixture := newNativeGateFixture(t)
+		fixture.run(t, "missing-recovery", false, "required test TestNativeKeychainRecoveryEntrypoint is unavailable")
+		calls := fixture.calls(t)
+		if !strings.Contains(calls, "-list ^TestNativeKeychainRecoveryEntrypoint$") {
+			t.Fatalf("recovery discovery was not attempted:\n%s", calls)
+		}
+		if strings.Contains(calls, "-run ^TestNativeInstalledACSExecutesLockedCodexToolThroughNamedIdentity$") ||
+			strings.Contains(calls, "-run ^TestNativeKeychainRecoveryEntrypoint$") {
+			t.Fatalf("missing recovery entrypoint reached native target work or cleanup:\n%s", calls)
+		}
+	})
+
 	t.Run("gate failure is preserved and recovery runs", func(t *testing.T) {
 		fixture := newNativeGateFixture(t)
 		fixture.run(t, "fail-primary", false, "primary gate failed")
@@ -127,6 +185,7 @@ type nativeGateFixture struct {
 	target    string
 	archive   string
 	callsPath string
+	hashCalls string
 }
 
 func newNativeGateFixture(t *testing.T) nativeGateFixture {
@@ -139,6 +198,7 @@ func newNativeGateFixture(t *testing.T) nativeGateFixture {
 		target:    filepath.Join(root, "codex"),
 		archive:   filepath.Join(root, "codex.tar.gz"),
 		callsPath: filepath.Join(root, "calls"),
+		hashCalls: filepath.Join(root, "hash-calls"),
 	}
 	if err := os.Mkdir(fixture.bin, 0o700); err != nil {
 		t.Fatal(err)
@@ -156,18 +216,39 @@ printf 'auth=%s promoted=%s version=%s backend=%s recovery=%s go %s\n' "${ACS_RU
 previous=
 for argument do
   if [ "$previous" = -list ]; then
-    printf '%s\n' "$argument" | tr -d '^$'
+    case "$ACS_TEST_MODE:$argument" in
+      missing-recovery:'^TestNativeKeychainRecoveryEntrypoint$') ;;
+      *) printf '%s\n' "$argument" | tr -d '^$' ;;
+    esac
   fi
   previous="$argument"
 done
 case "$ACS_TEST_MODE:$*" in
   fail-primary*:*"-run ^TestNativeInstalledACSExecutesLockedCodexToolThroughNamedIdentity$"*) printf '%s\n' 'primary gate failed' >&2; exit 23 ;;
-  fail-*recovery:*TestNativeKeychainRecoveryEntrypoint*) printf '%s\n' 'recovery failed' >&2; exit 29 ;;
+  fail-*recovery:*"-run ^TestNativeKeychainRecoveryEntrypoint$"*) printf '%s\n' 'recovery failed' >&2; exit 29 ;;
   mutate-candidate:*"-run ^TestNativeInstalledACSExecutesLockedCodexToolThroughNamedIdentity$"*) printf '%s\n' replacement >"$ACS_PROMOTED_BINARY"; chmod 0700 "$ACS_PROMOTED_BINARY" ;;
 esac
 exit 0
 `
 	if err := os.WriteFile(filepath.Join(fixture.bin, "go"), []byte(fakeGo), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	fakeShasum := `#!/bin/sh
+count=0
+if [ -f "$ACS_TEST_HASH_CALLS" ]; then read -r count <"$ACS_TEST_HASH_CALLS"; fi
+count=$((count + 1))
+printf '%s\n' "$count" >"$ACS_TEST_HASH_CALLS"
+case "$ACS_TEST_MODE:$count" in
+  hash-baseline-fail:1) exit 41 ;;
+  hash-baseline-empty:1) exit 0 ;;
+  hash-baseline-malformed:1) printf '%s\n' malformed; exit 0 ;;
+  hash-final-fail:*|fail-primary-final-fail:*) if [ "$count" -gt 3 ]; then exit 41; fi ;;
+  hash-final-empty:*|fail-primary-final-empty:*) if [ "$count" -gt 3 ]; then exit 0; fi ;;
+  hash-final-malformed:*|fail-primary-final-malformed:*) if [ "$count" -gt 3 ]; then printf '%s\n' malformed; exit 0; fi ;;
+esac
+exec "$ACS_REAL_SHASUM" "$@"
+`
+	if err := os.WriteFile(filepath.Join(fixture.bin, "shasum"), []byte(fakeShasum), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	return fixture
@@ -191,6 +272,8 @@ func (fixture nativeGateFixture) command(mode string) *exec.Cmd {
 		"PATH="+fixture.bin+":"+os.Getenv("PATH"),
 		"ACS_TEST_CALLS="+fixture.callsPath,
 		"ACS_TEST_MODE="+mode,
+		"ACS_TEST_HASH_CALLS="+fixture.hashCalls,
+		"ACS_REAL_SHASUM=/usr/bin/shasum",
 		"ACS_PROMOTED_VERSION=ambient-version",
 		"ACS_PROMOTED_BINARY=/ambient/candidate",
 		"ACS_PROMOTED_SANDBOX_BACKEND=ambient-backend",

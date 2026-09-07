@@ -38,9 +38,21 @@ unset ACS_PROMOTED_VERSION ACS_PROMOTED_BINARY ACS_PROMOTED_SANDBOX_BACKEND
 unset ACS_RUN_NATIVE_AUTH_GATE ACS_RUN_NATIVE_AUTH_RECOVERY
 unset ACS_NATIVE_AUTH_RECOVERY_ROOT ACS_TEST_CODEX_BINARY ACS_TEST_CODEX_ARCHIVE
 
-candidate_digest="$(shasum -a 256 "$candidate_binary" | awk '{print $1}')" || fail "candidate identity could not be read"
-codex_digest="$(shasum -a 256 "$codex_binary" | awk '{print $1}')" || fail "Codex identity could not be read"
-archive_digest="$(shasum -a 256 "$codex_archive" | awk '{print $1}')" || fail "Codex archive identity could not be read"
+read_digest() {
+  digest_output="$(shasum -a 256 "$1")" || return 1
+  read_digest_value="${digest_output%% *}"
+  [ "${#read_digest_value}" -eq 64 ] || return 1
+  case "$read_digest_value" in
+    *[!0-9a-f]*) return 1 ;;
+  esac
+}
+
+read_digest "$candidate_binary" || fail "candidate identity could not be read"
+candidate_digest="$read_digest_value"
+read_digest "$codex_binary" || fail "Codex identity could not be read"
+codex_digest="$read_digest_value"
+read_digest "$codex_archive" || fail "Codex archive identity could not be read"
+archive_digest="$read_digest_value"
 
 run_auth_test() {
   ACS_PROMOTED_BINARY="$candidate_binary" \
@@ -75,15 +87,18 @@ finish() {
     go test ./internal/codexauthresource -run '^TestNativeKeychainRecoveryEntrypoint$' -count=1
   recovery_status=$?
 
-  current_candidate_digest="$(shasum -a 256 "$candidate_binary" 2>/dev/null | awk '{print $1}')"
-  current_codex_digest="$(shasum -a 256 "$codex_binary" 2>/dev/null | awk '{print $1}')"
-  current_archive_digest="$(shasum -a 256 "$codex_archive" 2>/dev/null | awk '{print $1}')"
   identity_status=0
-  if [ "$current_candidate_digest" != "$candidate_digest" ] ||
-     [ "$current_codex_digest" != "$codex_digest" ] ||
-     [ "$current_archive_digest" != "$archive_digest" ]; then
-    printf '%s\n' "run native candidate gates: supplied artifact identity changed during validation" >&2
+  if ! read_digest "$candidate_binary" || [ "$read_digest_value" != "$candidate_digest" ]; then
     identity_status=1
+  fi
+  if ! read_digest "$codex_binary" || [ "$read_digest_value" != "$codex_digest" ]; then
+    identity_status=1
+  fi
+  if ! read_digest "$codex_archive" || [ "$read_digest_value" != "$archive_digest" ]; then
+    identity_status=1
+  fi
+  if [ "$identity_status" -ne 0 ]; then
+    printf '%s\n' "run native candidate gates: supplied artifact identity changed during validation" >&2
   fi
 
   if [ "$primary_status" -ne 0 ]; then
@@ -100,6 +115,7 @@ handle_signal() {
   trap - HUP INT TERM
   exit "$signal_status"
 }
+require_test ./internal/codexauthresource TestNativeKeychainRecoveryEntrypoint
 trap finish EXIT
 trap 'handle_signal 129' HUP
 trap 'handle_signal 130' INT
