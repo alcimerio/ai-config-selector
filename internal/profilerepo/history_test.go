@@ -2,6 +2,7 @@ package profilerepo
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -143,10 +144,201 @@ func TestHistoryCreationStaysBoundToValidatedRepositoryDescriptor(t *testing.T) 
 		return nil
 	}
 	out, err := r.Apply(context.Background(), CreateRequest{"alpha", absent.Revision, []byte("new")})
-	if err == nil || out.State != Unknown || !out.RecoveryRequired {
+	if err == nil || out.State != NotCommitted || !out.RecoveryRequired {
 		t.Fatalf("out=%+v err=%v", out, err)
 	}
 	if _, err := os.Stat(filepath.Join(home, "profiles", "history")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("replacement received history: %v", err)
+	}
+}
+
+func TestHistoryTransactionIsDigestBoundToImmutableProfilePlan(t *testing.T) {
+	r := New(t.TempDir())
+	ctx := context.Background()
+	absent, _ := r.Read(ctx, "alpha")
+	tampered := false
+	r.hook = func(point string) error {
+		if point != "decision.publish.before" || tampered {
+			return nil
+		}
+		tampered = true
+		entries, e := os.ReadDir(filepath.Join(r.acsHome, "profiles", "history"))
+		if e != nil {
+			return e
+		}
+		for _, entry := range entries {
+			if !strings.HasPrefix(entry.Name(), "txn_") || !strings.HasSuffix(entry.Name(), ".json") {
+				continue
+			}
+			path := filepath.Join(r.acsHome, "profiles", "history", entry.Name())
+			data, e := os.ReadFile(path)
+			if e != nil {
+				return e
+			}
+			var txn historyTxn
+			if e = json.Unmarshal(data, &txn); e != nil {
+				return e
+			}
+			txn.Record.LineageID = "ln_00000000000000000000000000000000"
+			data, e = json.Marshal(txn)
+			if e != nil {
+				return e
+			}
+			return os.WriteFile(path, data, 0600)
+		}
+		return errors.New("transaction witness missing")
+	}
+	out, err := r.Apply(ctx, CreateRequest{"alpha", absent.Revision, []byte("new")})
+	if err == nil || out.State != Unknown || !out.RecoveryRequired {
+		t.Fatalf("out=%+v err=%v", out, err)
+	}
+	if current, _ := r.Read(ctx, "alpha"); current.Exists {
+		t.Fatal("tampered history authorized public mutation")
+	}
+	if out, err = r.Recover(ctx); err == nil || !out.RecoveryRequired {
+		t.Fatalf("recovery discarded restrictive evidence: %+v %v", out, err)
+	}
+}
+
+func TestInterruptedPinAndPruneRecoverUnderRepositoryLock(t *testing.T) {
+	ctx := context.Background()
+	t.Run("pin", func(t *testing.T) {
+		r := New(t.TempDir())
+		a, _ := r.Read(ctx, "alpha")
+		if _, e := r.Apply(ctx, CreateRequest{"alpha", a.Revision, []byte("one")}); e != nil {
+			t.Fatal(e)
+		}
+		h, _ := r.History(ctx, HistorySelector{Name: "alpha"}, 100)
+		dir := filepath.Join(r.acsHome, "profiles", "history", h.LineageID)
+		data, _ := json.Marshal(struct {
+			Version int      `json:"version"`
+			Events  []string `json:"events"`
+		}{1, []string{h.Events[0].EventID}})
+		if e := os.WriteFile(filepath.Join(dir, "pins.next"), data, 0600); e != nil {
+			t.Fatal(e)
+		}
+		for i := 0; i < 2; i++ {
+			out, e := r.Recover(ctx)
+			if e != nil || out.RecoveryRequired {
+				t.Fatalf("recover %d: %+v %v", i, out, e)
+			}
+		}
+		h, e := r.History(ctx, HistorySelector{Name: "alpha"}, 100)
+		if e != nil || !h.Events[0].Pinned {
+			t.Fatalf("history=%+v err=%v", h, e)
+		}
+	})
+	t.Run("partial-prune", func(t *testing.T) {
+		r := New(t.TempDir())
+		for _, body := range []string{"one", "two", "three", "four"} {
+			s, _ := r.Read(ctx, "alpha")
+			var request Request = ReplaceRequest{"alpha", s.Revision, []byte(body)}
+			if !s.Exists {
+				request = CreateRequest{"alpha", s.Revision, []byte(body)}
+			}
+			if _, e := r.Apply(ctx, request); e != nil {
+				t.Fatal(e)
+			}
+		}
+		h, _ := r.History(ctx, HistorySelector{Name: "alpha"}, 100)
+		preview, e := r.PreviewPrune(ctx, h.LineageID, 1)
+		if e != nil {
+			t.Fatal(e)
+		}
+		d, e := r.open(false)
+		if e != nil {
+			t.Fatal(e)
+		}
+		root, e := openHistoryRoot(d, false)
+		if e != nil {
+			t.Fatal(e)
+		}
+		lineage, e := resolveLineage(root, HistorySelector{Lineage: h.LineageID})
+		if e != nil {
+			t.Fatal(e)
+		}
+		ids := pruneCandidates(lineage, 1)
+		root.Close()
+		d.close()
+		if len(ids) == 0 {
+			t.Fatal("no candidates")
+		}
+		dir := filepath.Join(r.acsHome, "profiles", "history", h.LineageID)
+		journal, _ := json.Marshal(pruneJournal{1, preview.Digest, ids})
+		if e = os.WriteFile(filepath.Join(dir, "prune.json"), journal, 0600); e != nil {
+			t.Fatal(e)
+		}
+		if e = os.Remove(filepath.Join(dir, ids[0]+".json")); e != nil {
+			t.Fatal(e)
+		}
+		for i := 0; i < 2; i++ {
+			out, e := r.Recover(ctx)
+			if e != nil || out.RecoveryRequired {
+				t.Fatalf("recover %d: %+v %v", i, out, e)
+			}
+		}
+		if _, e = r.History(ctx, HistorySelector{Name: "alpha"}, 100); e != nil {
+			t.Fatal(e)
+		}
+		if _, e = os.Stat(filepath.Join(dir, ids[0]+".snapshot")); !errors.Is(e, os.ErrNotExist) {
+			t.Fatalf("partial snapshot retained: %v", e)
+		}
+	})
+	t.Run("corrupt-lineage-is-local", func(t *testing.T) {
+		r := New(t.TempDir())
+		for _, name := range []string{"alpha", "bravo"} {
+			s, _ := r.Read(ctx, name)
+			if _, e := r.Apply(ctx, CreateRequest{name, s.Revision, []byte(name)}); e != nil {
+				t.Fatal(e)
+			}
+		}
+		h, _ := r.History(ctx, HistorySelector{Name: "alpha"}, 100)
+		dir := filepath.Join(r.acsHome, "profiles", "history", h.LineageID)
+		if e := os.WriteFile(filepath.Join(dir, "pins.next"), []byte(`{"version":2,"events":[]}`), 0600); e != nil {
+			t.Fatal(e)
+		}
+		a, _ := r.Read(ctx, "alpha")
+		out, e := r.Apply(ctx, ReplaceRequest{"alpha", a.Revision, []byte("changed")})
+		if e == nil || out.State != NotCommitted {
+			t.Fatalf("affected lineage out=%+v err=%v", out, e)
+		}
+		b, _ := r.Read(ctx, "bravo")
+		out, e = r.Apply(ctx, ReplaceRequest{"bravo", b.Revision, []byte("changed")})
+		if e != nil || out.State != Committed {
+			t.Fatalf("unrelated lineage out=%+v err=%v", out, e)
+		}
+	})
+}
+
+func TestCloneRecordsExplicitSourceLineage(t *testing.T) {
+	r := New(t.TempDir())
+	ctx := context.Background()
+	src, _ := r.Read(ctx, "source")
+	if _, e := r.Apply(ctx, CreateRequest{"source", src.Revision, []byte("source")}); e != nil {
+		t.Fatal(e)
+	}
+	sourceHistory, _ := r.History(ctx, HistorySelector{Name: "source"}, 100)
+	dst, _ := r.Read(ctx, "copy")
+	src, _ = r.Read(ctx, "source")
+	if _, e := r.Apply(ctx, CloneRequest{"source", "copy", src.Revision, dst.Revision, []byte("copy")}); e != nil {
+		t.Fatal(e)
+	}
+	copyHistory, _ := r.History(ctx, HistorySelector{Name: "copy"}, 100)
+	d, e := r.open(false)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer d.close()
+	root, e := openHistoryRoot(d, false)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer root.Close()
+	lineage, e := resolveLineage(root, HistorySelector{Lineage: copyHistory.LineageID})
+	if e != nil {
+		t.Fatal(e)
+	}
+	if len(lineage.records) != 1 || lineage.records[0].SourceLineage != sourceHistory.LineageID {
+		t.Fatalf("records=%+v", lineage.records)
 	}
 }

@@ -444,7 +444,7 @@ func (r *Repository) History(ctx context.Context, selector HistorySelector, limi
 	return result, nil
 }
 
-func (d *directory) historyPrepare(c change, p *plan) error {
+func (d *directory) historyPrepare(c change, p *plan) (result error) {
 	root, err := openHistoryRoot(d, true)
 	if err != nil {
 		return err
@@ -470,7 +470,19 @@ func (d *directory) historyPrepare(c change, p *plan) error {
 		if !lineagePattern.MatchString(c.lineage) {
 			return ErrConflict
 		}
+		if source.id != "" && source.id != c.lineage {
+			return ErrConflict
+		}
 		lineage = c.lineage
+	}
+	if c.op == "clone" {
+		c.sourceLineage = source.id
+		if c.sourceLineage == "" {
+			c.sourceLineage, err = randomHistoryID("ln_")
+			if err != nil {
+				return err
+			}
+		}
 	}
 	event, err := randomHistoryID("ev_")
 	if err != nil {
@@ -517,14 +529,21 @@ func (d *directory) historyPrepare(c change, p *plan) error {
 		if e != nil {
 			return e
 		}
-		adoption := historyRecord{Version: 1, LineageID: lineage, EventID: adoptionID, Sequence: 1, Operation: "adoption", CreatedAt: time.Now().UTC().Format(time.RFC3339Nano), PreName: preName, PostName: preName, PreRevision: revisionText(preName, true, before), PostRevision: revisionText(preName, true, before), SnapshotName: preName, SnapshotRevision: revisionText(preName, true, before), SnapshotDigest: digestHex(before)}
+		adoptionLineage := lineage
+		if c.op == "clone" {
+			adoptionLineage = c.sourceLineage
+		}
+		adoption := historyRecord{Version: 1, LineageID: adoptionLineage, EventID: adoptionID, Sequence: 1, Operation: "adoption", CreatedAt: time.Now().UTC().Format(time.RFC3339Nano), PreName: preName, PostName: preName, PreRevision: revisionText(preName, true, before), PostRevision: revisionText(preName, true, before), SnapshotName: preName, SnapshotRevision: revisionText(preName, true, before), SnapshotDigest: digestHex(before)}
 		txn.Adoption, txn.AdoptionDigest = &adoption, adoption.SnapshotDigest
 		adoptionBytes, _ := json.Marshal(adoption)
-		parent, seq = digestHex(adoptionBytes), 2
+		if c.op != "clone" {
+			parent, seq = digestHex(adoptionBytes), 2
+		}
 	}
 	txn.Record = historyRecord{Version: 1, LineageID: lineage, EventID: event, Sequence: seq, ParentDigest: parent, Operation: c.historyOperation(), CreatedAt: time.Now().UTC().Format(time.RFC3339Nano), PreName: preName, PostName: postName, PreRevision: revisionText(preName, p.Before != nil, before), PostRevision: revisionText(postName, c.op != "delete", c.data), SnapshotName: snapshotName, SnapshotRevision: revisionText(snapshotName, true, snapshot), SnapshotDigest: digestHex(snapshot), Tombstone: c.op == "delete", SourceLineage: c.sourceLineage}
 	txn.SnapshotDigest = txn.Record.SnapshotDigest
 	encoded, _ := json.Marshal(txn)
+	p.HistoryDigest = digestHex(encoded)
 	logical, e := historyLogicalBytes(root, lineage)
 	if e != nil {
 		return e
@@ -538,6 +557,11 @@ func (d *directory) historyPrepare(c change, p *plan) error {
 	if count > MaxHistoryEvents || logical+extra > MaxHistoryBytes {
 		return ErrQuota
 	}
+	defer func() {
+		if result != nil {
+			result = errors.Join(result, d.historyAbort(p.ID))
+		}
+	}()
 	if err = historyWriteNew(root, "txn_"+p.ID+".snapshot", snapshot, MaxDocumentBytes); err != nil {
 		return err
 	}
@@ -589,7 +613,102 @@ func (c change) historyOperation() string {
 	return c.op
 }
 
-func (d *directory) historyCommit(planID string) error {
+func (d *directory) historyValidate(p *plan) error {
+	if p == nil || p.Version != 2 || len(p.HistoryDigest) != 64 {
+		return ErrUnsafe
+	}
+	root, err := openHistoryRoot(d, false)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+	data, err := historyRead(root, "txn_"+p.ID+".json", maxMetadataBytes)
+	if err != nil {
+		return err
+	}
+	if digestHex(data) != p.HistoryDigest {
+		return ErrUnsafe
+	}
+	var txn historyTxn
+	if err = decodeStrict(data, &txn); err != nil {
+		return err
+	}
+	snapshot, err := historyRead(root, "txn_"+p.ID+".snapshot", MaxDocumentBytes)
+	if err != nil {
+		return err
+	}
+	if err = validateHistoryTransaction(p, txn, snapshot); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateHistoryTransaction(p *plan, txn historyTxn, snapshot []byte) error {
+	if txn.Version != 1 || txn.PlanID != p.ID || txn.LineageID != txn.Record.LineageID || txn.EventID != txn.Record.EventID || !lineagePattern.MatchString(txn.LineageID) || !eventPattern.MatchString(txn.EventID) || digestHex(snapshot) != txn.SnapshotDigest || txn.Record.SnapshotDigest != txn.SnapshotDigest {
+		return ErrUnsafe
+	}
+	rec := txn.Record
+	if rec.Version != 1 || rec.Sequence < 1 || rec.PreName == "" || rec.PostName == "" || rec.CreatedAt == "" {
+		return ErrUnsafe
+	}
+	pre, post := p.Source, p.Destination
+	if p.Operation == "replace" || p.Operation == "delete" {
+		post = p.Source
+	}
+	if pre == "" {
+		pre = post
+	}
+	if rec.PreName != pre || rec.PostName != post {
+		return ErrUnsafe
+	}
+	wantDigest := ""
+	wantName := post
+	if p.Operation == "delete" {
+		if p.Before == nil || !rec.Tombstone {
+			return ErrUnsafe
+		}
+		wantDigest = p.Before.Hash
+		wantName = pre
+		if rec.PostRevision != revisionText(post, false, nil) {
+			return ErrUnsafe
+		}
+	} else {
+		if p.Stage == nil || rec.Tombstone {
+			return ErrUnsafe
+		}
+		wantDigest = p.Stage.Hash
+		if rec.PostRevision != revisionText(post, true, snapshot) {
+			return ErrUnsafe
+		}
+	}
+	if rec.SnapshotName != wantName || rec.SnapshotDigest != wantDigest || rec.SnapshotRevision != revisionText(wantName, true, snapshot) {
+		return ErrUnsafe
+	}
+	if p.Operation == "clone" {
+		if rec.SourceLineage == "" || !lineagePattern.MatchString(rec.SourceLineage) {
+			return ErrUnsafe
+		}
+	} else if rec.SourceLineage != "" {
+		return ErrUnsafe
+	}
+	if txn.Adoption != nil {
+		a := txn.Adoption
+		wantAdoptionLineage := txn.LineageID
+		if p.Operation == "clone" {
+			wantAdoptionLineage = rec.SourceLineage
+		}
+		if a.LineageID != wantAdoptionLineage || a.EventID == rec.EventID || a.Sequence != 1 || a.Operation != "adoption" || a.PostName != pre || a.Tombstone || txn.AdoptionDigest != a.SnapshotDigest {
+			return ErrUnsafe
+		}
+		if p.Operation != "clone" && rec.Sequence != 2 {
+			return ErrUnsafe
+		}
+	}
+	return nil
+}
+
+func (d *directory) historyCommit(p *plan) error {
+	planID := p.ID
 	root, err := openHistoryRoot(d, false)
 	if err != nil {
 		return err
@@ -598,6 +717,9 @@ func (d *directory) historyCommit(planID string) error {
 	data, err := historyRead(root, "txn_"+planID+".json", maxMetadataBytes)
 	if err != nil {
 		return err
+	}
+	if digestHex(data) != p.HistoryDigest {
+		return ErrUnsafe
 	}
 	var txn historyTxn
 	if err = decodeStrict(data, &txn); err != nil || txn.Version != 1 || txn.PlanID != planID || !lineagePattern.MatchString(txn.LineageID) || !eventPattern.MatchString(txn.EventID) {
@@ -613,14 +735,22 @@ func (d *directory) historyCommit(planID string) error {
 	}
 	defer dir.Close()
 	if txn.Adoption != nil {
-		if txn.Adoption.LineageID != txn.LineageID || !eventPattern.MatchString(txn.Adoption.EventID) || txn.Adoption.Sequence != 1 || txn.Adoption.Operation != "adoption" {
+		if !lineagePattern.MatchString(txn.Adoption.LineageID) || !eventPattern.MatchString(txn.Adoption.EventID) || txn.Adoption.Sequence != 1 || txn.Adoption.Operation != "adoption" {
 			return ErrUnsafe
 		}
 		adopted, e := historyRead(root, "txn_"+planID+".adoption", MaxDocumentBytes)
 		if e != nil || digestHex(adopted) != txn.AdoptionDigest || txn.Adoption.SnapshotDigest != txn.AdoptionDigest {
 			return errors.Join(ErrUnsafe, e)
 		}
-		if e = publishHistoryRecord(d, dir, *txn.Adoption, adopted); e != nil {
+		adoptionDir := dir
+		if txn.Adoption.LineageID != txn.LineageID {
+			adoptionDir, e = openLineage(root, txn.Adoption.LineageID, true)
+			if e != nil {
+				return e
+			}
+			defer adoptionDir.Close()
+		}
+		if e = publishHistoryRecord(d, adoptionDir, *txn.Adoption, adopted); e != nil {
 			return e
 		}
 	}
@@ -639,6 +769,24 @@ func (d *directory) historyCommit(planID string) error {
 	if !txn.Record.Tombstone {
 		binding, _ := json.Marshal(historyNameBinding{1, txn.Record.PostName, txn.LineageID})
 		leaf := historyNameLeaf(txn.Record.PostName)
+		existing, e := historyRead(root, leaf, maxMetadataBytes)
+		if e == nil && !bytes.Equal(existing, binding) {
+			return ErrConflict
+		}
+		if errors.Is(e, unix.ENOENT) {
+			if e = historyWriteNew(root, leaf, binding, maxMetadataBytes); e != nil {
+				return e
+			}
+		} else if e != nil {
+			return e
+		}
+		if e = root.Sync(); e != nil {
+			return e
+		}
+	}
+	if txn.Adoption != nil && txn.Adoption.LineageID != txn.LineageID {
+		binding, _ := json.Marshal(historyNameBinding{1, txn.Adoption.PostName, txn.Adoption.LineageID})
+		leaf := historyNameLeaf(txn.Adoption.PostName)
 		existing, e := historyRead(root, leaf, maxMetadataBytes)
 		if e == nil && !bytes.Equal(existing, binding) {
 			return ErrConflict
@@ -838,23 +986,16 @@ func (r *Repository) PreviewPrune(ctx context.Context, lineage string, keep int)
 		return p, e
 	}
 	defer root.Close()
+	return previewPruneRoot(root, lineage, keep)
+}
+
+func previewPruneRoot(root *os.File, lineage string, keep int) (PrunePreview, error) {
+	p := PrunePreview{SchemaVersion: 1, LineageID: lineage, Keep: keep}
 	l, e := resolveLineage(root, HistorySelector{Lineage: lineage})
 	if e != nil {
 		return p, e
 	}
-	ids := []string{}
-	ordinary := 0
-	for i := len(l.records) - 1; i >= 0; i-- {
-		rec := l.records[i]
-		if l.pins[rec.EventID] || i == len(l.records)-2 {
-			continue
-		}
-		ordinary++
-		if ordinary > keep {
-			ids = append(ids, rec.EventID)
-		}
-	}
-	sort.Strings(ids)
+	ids := pruneCandidates(l, keep)
 	p.CandidateCount = len(ids)
 	b, _ := json.Marshal(struct {
 		Lineage string
@@ -871,7 +1012,7 @@ func pruneCandidates(l historyLineage, keep int) []string {
 	for i := len(l.records) - 1; i >= 0; i-- {
 		rec := l.records[i]
 		// Keep pins, the current head, and the immediate recoverable predecessor.
-		if l.pins[rec.EventID] || i >= len(l.records)-2 {
+		if l.pins[rec.EventID] || i == len(l.records)-2 {
 			continue
 		}
 		ordinary++
@@ -888,11 +1029,8 @@ func pruneCandidates(l historyLineage, keep int) []string {
 // candidate set is durably journaled by its digest; an interrupted pass is safe
 // to repeat because missing candidates are treated as already collected.
 func (r *Repository) Prune(ctx context.Context, lineage string, keep int, expected string) (PrunePreview, error) {
-	preview, err := r.PreviewPrune(ctx, lineage, keep)
-	if err != nil {
-		return preview, err
-	}
-	if expected == "" || preview.Digest != expected {
+	preview := PrunePreview{SchemaVersion: 1, LineageID: lineage, Keep: keep}
+	if keep < 1 || keep > 100 || expected == "" {
 		return preview, ErrConflict
 	}
 	d, err := r.open(true)
@@ -907,25 +1045,35 @@ func (r *Repository) Prune(ctx context.Context, lineage string, keep int, expect
 	if _, err = d.recover(ctx); err != nil {
 		return preview, err
 	}
-	current, err := r.PreviewPrune(ctx, lineage, keep)
+	root, err := openHistoryRoot(d, false)
+	if err != nil {
+		return preview, err
+	}
+	defer root.Close()
+	dir, err := openLineage(root, lineage, false)
+	if err != nil {
+		return preview, err
+	}
+	defer dir.Close()
+	if pending, e := readPruneJournal(dir); e == nil {
+		if e = completePrune(dir, pending.Events); e != nil {
+			return preview, e
+		}
+		if pending.Digest == expected {
+			return PrunePreview{1, lineage, keep, len(pending.Events), expected}, nil
+		}
+	} else if !errors.Is(e, unix.ENOENT) {
+		return preview, e
+	}
+	current, err := previewPruneRoot(root, lineage, keep)
 	if err != nil || current.Digest != expected {
 		return current, errors.Join(ErrConflict, err)
 	}
-	root, err := openHistoryRoot(d, false)
-	if err != nil {
-		return current, err
-	}
-	defer root.Close()
 	l, err := resolveLineage(root, HistorySelector{Lineage: lineage})
 	if err != nil {
 		return current, err
 	}
 	ids := pruneCandidates(l, keep)
-	dir, err := openLineage(root, lineage, false)
-	if err != nil {
-		return current, err
-	}
-	defer dir.Close()
 	journal, _ := json.Marshal(struct {
 		Version int      `json:"version"`
 		Digest  string   `json:"digest"`
@@ -938,21 +1086,112 @@ func (r *Repository) Prune(ctx context.Context, lineage string, keep int, expect
 	if err = dir.Sync(); err != nil {
 		return current, err
 	}
-	for _, id := range ids {
-		for _, suffix := range []string{".json", ".snapshot"} {
-			if err = unix.Unlinkat(int(dir.Fd()), id+suffix, 0); err != nil && !errors.Is(err, unix.ENOENT) {
-				return current, err
-			}
-			if err = dir.Sync(); err != nil {
-				return current, err
-			}
-		}
-	}
-	if err = unix.Unlinkat(int(dir.Fd()), "prune.json", 0); err != nil && !errors.Is(err, unix.ENOENT) {
-		return current, err
-	}
-	if err = dir.Sync(); err != nil {
+	if err = completePrune(dir, ids); err != nil {
 		return current, err
 	}
 	return current, nil
+}
+
+type pruneJournal struct {
+	Version int      `json:"version"`
+	Digest  string   `json:"digest"`
+	Events  []string `json:"events"`
+}
+
+func readPruneJournal(dir *os.File) (pruneJournal, error) {
+	data, e := historyRead(dir, "prune.json", maxMetadataBytes)
+	if e != nil {
+		return pruneJournal{}, e
+	}
+	var p pruneJournal
+	if e = decodeStrict(data, &p); e != nil || p.Version != 1 || len(p.Events) > MaxHistoryEvents {
+		return p, ErrUnsafe
+	}
+	for _, id := range p.Events {
+		if !eventPattern.MatchString(id) {
+			return p, ErrUnsafe
+		}
+	}
+	return p, nil
+}
+func completePrune(dir *os.File, ids []string) error {
+	for _, id := range ids {
+		for _, suffix := range []string{".json", ".snapshot"} {
+			if e := unix.Unlinkat(int(dir.Fd()), id+suffix, 0); e != nil && !errors.Is(e, unix.ENOENT) {
+				return e
+			}
+			if e := dir.Sync(); e != nil {
+				return e
+			}
+		}
+	}
+	if e := unix.Unlinkat(int(dir.Fd()), "prune.json", 0); e != nil && !errors.Is(e, unix.ENOENT) {
+		return e
+	}
+	return dir.Sync()
+}
+
+func (d *directory) historyRecoverMaintenance(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	root, err := openHistoryRoot(d, false)
+	if errors.Is(err, unix.ENOENT) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+	ids, err := listLineageIDs(root)
+	if err != nil {
+		return err
+	}
+	for _, id := range ids {
+		if err = ctx.Err(); err != nil {
+			return err
+		}
+		dir, e := openLineage(root, id, false)
+		if e != nil {
+			continue
+		}
+		lineageFailed := false
+		if next, e := historyRead(dir, "pins.next", maxMetadataBytes); e == nil {
+			var pins struct {
+				Version int      `json:"version"`
+				Events  []string `json:"events"`
+			}
+			if e = decodeStrict(next, &pins); e != nil || pins.Version != 1 || len(pins.Events) > MaxHistoryEvents {
+				lineageFailed = true
+			}
+			for _, event := range pins.Events {
+				if !eventPattern.MatchString(event) {
+					lineageFailed = true
+				}
+			}
+			if !lineageFailed {
+				if e = unix.Renameat(int(dir.Fd()), "pins.next", int(dir.Fd()), "pins.json"); e != nil {
+					lineageFailed = true
+				}
+				if !lineageFailed {
+					if e = dir.Sync(); e != nil {
+						lineageFailed = true
+					}
+				}
+			}
+		} else if !errors.Is(e, unix.ENOENT) {
+			lineageFailed = true
+		}
+		if !lineageFailed {
+			if pending, e := readPruneJournal(dir); e == nil {
+				if e = completePrune(dir, pending.Events); e != nil {
+					lineageFailed = true
+				}
+			} else if !errors.Is(e, unix.ENOENT) {
+				lineageFailed = true
+			}
+		}
+		_ = dir.Close()
+	}
+	return nil
 }

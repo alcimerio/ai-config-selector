@@ -13,13 +13,14 @@ import (
 // All filenames are derived locally. Journal bytes contain only validated names,
 // exact object identities and content hashes, never paths or codec instructions.
 type plan struct {
-	Version     int
-	ID          string
-	Operation   string
-	Source      string
-	Destination string
-	Before      *identity
-	Stage       *identity
+	Version       int
+	ID            string
+	Operation     string
+	Source        string
+	Destination   string
+	Before        *identity
+	Stage         *identity
+	HistoryDigest string `json:"HistoryDigest,omitempty"`
 }
 
 func validIdentity(id *identity) bool {
@@ -57,6 +58,18 @@ func decodePlan(data []byte) (*plan, error) {
 	}
 	if p.Operation != "delete" && !validIdentity(p.Stage) {
 		return nil, ErrUnsafe
+	}
+	if p.Version == 1 && p.HistoryDigest != "" {
+		return nil, ErrUnsafe
+	}
+	if p.Version == 2 {
+		if len(p.HistoryDigest) != 64 {
+			return nil, ErrUnsafe
+		}
+		b, e := hex.DecodeString(p.HistoryDigest)
+		if e != nil || hex.EncodeToString(b) != p.HistoryDigest {
+			return nil, ErrUnsafe
+		}
 	}
 	switch p.Operation {
 	case "create":
@@ -127,6 +140,9 @@ func (d *directory) prepare(ctx context.Context, c change) (*plan, error) {
 			return nil, err
 		}
 	}
+	if err := d.historyPrepare(c, p); err != nil {
+		return nil, err
+	}
 	encoded, err := json.Marshal(p)
 	if err != nil {
 		return nil, err
@@ -177,6 +193,9 @@ func (d *directory) recover(ctx context.Context) (out Outcome, err error) {
 		return out, err
 	}
 	if len(artifacts) == 0 {
+		if err = d.historyRecoverMaintenance(ctx); err != nil {
+			return out, err
+		}
 		out.State = NotCommitted
 		out.RecoveryRequired = false
 		return out, nil
@@ -381,7 +400,7 @@ func (d *directory) finish(p *plan) (out Outcome, err error) {
 	// history event. A failure here is deliberately Unknown and is completed by
 	// ordinary repository recovery before any later mutation.
 	if p.Version == 2 {
-		if err = d.historyCommit(p.ID); err != nil {
+		if err = d.historyCommit(p); err != nil {
 			return
 		}
 	}
@@ -402,8 +421,10 @@ func (d *directory) finish(p *plan) (out Outcome, err error) {
 }
 func (d *directory) cleanup(p *plan, artifacts map[string]*object, committed bool) error {
 	if p != nil && p.Version == 2 {
-		if err := d.historyAbort(p.ID); err != nil {
-			return err
+		if !committed {
+			if err := d.historyValidate(p); err != nil {
+				return err
+			}
 		}
 	}
 	// No terminal state produced by this engine retains a swap or pending leaf.
@@ -481,6 +502,11 @@ func (d *directory) cleanup(p *plan, artifacts map[string]*object, committed boo
 			return err
 		}
 		if err = d.sync("cleanup." + n + ".sync"); err != nil {
+			return err
+		}
+	}
+	if p != nil && p.Version == 2 {
+		if err := d.historyAbort(p.ID); err != nil {
 			return err
 		}
 	}

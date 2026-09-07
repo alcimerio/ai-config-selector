@@ -300,19 +300,18 @@ func (r *Repository) Apply(ctx context.Context, request Request) (out Outcome, e
 		out.RecoveryRequired = cleanup.RecoveryRequired
 		return out, errors.Join(err, cleanupErr)
 	}
-	if err = d.historyPrepare(c, p); err != nil {
-		cleanup, cleanupErr := d.recover(context.Background())
-		out.RecoveryRequired = cleanup.RecoveryRequired
-		return out, errors.Join(err, cleanupErr)
-	}
 	if err = ctx.Err(); err != nil {
 		cleanup, cleanupErr := d.recover(context.Background())
 		out.RecoveryRequired = cleanup.RecoveryRequired
 		return out, errors.Join(err, cleanupErr)
 	}
+	if err = d.historyValidate(p); err != nil {
+		out.RecoveryRequired = true
+		return out, err
+	}
 	// From this point a commit decision can exist; errors require explicit recovery.
 	out = Outcome{State: Unknown, RecoveryRequired: true}
-	if err = d.link("plan", "decision", "decision.publish"); err != nil {
+	if err = d.linkValidated("plan", "decision", "decision.publish", func() error { return d.historyValidate(p) }); err != nil {
 		return
 	}
 	if err = d.sync("decision.sync"); err != nil {
