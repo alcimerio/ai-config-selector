@@ -75,6 +75,23 @@ func TestDecodeRejectsPostBindingAliasCollision(t *testing.T) {
 	}
 }
 
+func TestDecodeRejectsUnicodeCaseFoldAliasesSymbolicallyAndAfterBinding(t *testing.T) {
+	symbolic := []byte(`{"exchangeVersion":1,"profile":{"common":{"skills":{"version":1,"selection":[{"sourceBinding":"source-1","relativePath":"Review/Σ"},{"sourceBinding":"source-1","relativePath":"review/ς"}]},"workspace":{"version":1,"selection":{"access":"read-only"}}},"overlays":{"devin":{"version":1}}},"requirements":{"sources":[{"id":"source-1"}],"authentications":[]}}`)
+	if result := Decode(symbolic, nil, "imported"); result.Code != CodeUnsafePath || result.Candidate != nil {
+		t.Fatalf("symbolic aliases = %#v", result)
+	}
+
+	postBinding := []byte(`{"exchangeVersion":1,"profile":{"common":{"skills":{"version":1,"selection":[{"sourceBinding":"source-1","relativePath":"Review/Σ"},{"sourceBinding":"source-2","relativePath":"review/ς"}]},"workspace":{"version":1,"selection":{"access":"read-only"}}},"overlays":{"devin":{"version":1}}},"requirements":{"sources":[{"id":"source-1"},{"id":"source-2"}],"authentications":[]}}`)
+	same := []byte(`{"bindingVersion":1,"sources":{"source-1":"shared-agents","source-2":"shared-agents"},"authentications":{}}`)
+	if result := Decode(postBinding, same, "imported"); result.Code != CodeBindingConflict || result.Candidate != nil {
+		t.Fatalf("post-binding aliases = %#v", result)
+	}
+	distinct := []byte(`{"bindingVersion":1,"sources":{"source-1":"shared-agents","source-2":"devin-config"},"authentications":{}}`)
+	if result := Decode(postBinding, distinct, "imported"); result.Code != CodeValid || result.Candidate == nil {
+		t.Fatalf("cross-source aliases = %#v", result)
+	}
+}
+
 func TestDecodeChecksPostBindingOverlapAndPreservesCrossSourceNamespace(t *testing.T) {
 	document := []byte(`{"exchangeVersion":1,"profile":{"common":{"skills":{"version":1,"selection":[{"sourceBinding":"source-1","relativePath":"review"},{"sourceBinding":"source-2","relativePath":"review/child"}]},"workspace":{"version":1,"selection":{"access":"read-only"}}},"overlays":{"devin":{"version":1}}},"requirements":{"sources":[{"id":"source-1"},{"id":"source-2"}],"authentications":[]}}`)
 	same := []byte(`{"bindingVersion":1,"sources":{"source-1":"shared-agents","source-2":"shared-agents"},"authentications":{}}`)

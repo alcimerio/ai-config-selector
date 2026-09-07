@@ -63,6 +63,57 @@ func TestPublishReportsPostPublicationFailure(t *testing.T) {
 	}
 }
 
+func TestPublishObservesCancellationAtPublicationBoundary(t *testing.T) {
+	directory := t.TempDir()
+	destination := filepath.Join(directory, "profile.json")
+	ctx, cancel := context.WithCancel(context.Background())
+	publisher := Publisher{Hook: func(point string) error {
+		if point == "publish.before" {
+			cancel()
+		}
+		return nil
+	}}
+	outcome, err := publisher.Publish(ctx, destination, []byte("complete"))
+	if !errors.Is(err, context.Canceled) || outcome.Published {
+		t.Fatalf("outcome = %#v, %v", outcome, err)
+	}
+	if _, statErr := os.Lstat(destination); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("destination exists: %v", statErr)
+	}
+	entries, readErr := os.ReadDir(directory)
+	if readErr != nil || len(entries) != 0 {
+		t.Fatalf("owned temporary remained: %#v, %v", entries, readErr)
+	}
+}
+
+func TestPublishReportsCancellationAfterPublicationAndAttemptsDurability(t *testing.T) {
+	destination := filepath.Join(t.TempDir(), "profile.json")
+	ctx, cancel := context.WithCancel(context.Background())
+	directorySyncObserved := false
+	durabilityErr := errors.New("injected durability failure")
+	publisher := Publisher{Hook: func(point string) error {
+		switch point {
+		case "publish.after":
+			cancel()
+		case "directory-sync.before":
+			directorySyncObserved = true
+			return durabilityErr
+		}
+		return nil
+	}}
+	outcome, err := publisher.Publish(ctx, destination, []byte("complete"))
+	if !errors.Is(err, context.Canceled) || !errors.Is(err, durabilityErr) || !outcome.Published {
+		t.Fatalf("outcome = %#v, %v", outcome, err)
+	}
+	if !directorySyncObserved {
+		t.Fatal("directory durability was not attempted")
+	}
+	contents, readErr := os.ReadFile(destination)
+	if readErr != nil || string(contents) != "complete" {
+		t.Fatalf("published = %q, %v", contents, readErr)
+	}
+}
+
 func TestPublishRefusesExistingSymlink(t *testing.T) {
 	directory := t.TempDir()
 	target := filepath.Join(directory, "target")
