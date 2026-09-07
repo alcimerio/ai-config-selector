@@ -2067,15 +2067,27 @@ func TestSeatbeltNativeRoutesTerminalSignalsOnlyToContainedTarget(t *testing.T) 
 			)
 			command.Stdin, command.Stdout, command.Stderr = terminal, terminal, terminal
 			command.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true, Ctty: 0}
+			paths := seatbeltNativePTYPaths(root)
+			ptyOutput, err := os.OpenFile(paths.ptyOutput, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer ptyOutput.Close()
+			drainDone := make(chan error, 1)
+			go func() {
+				_, copyErr := io.Copy(ptyOutput, master)
+				drainDone <- copyErr
+			}()
 			if err := command.Start(); err != nil {
 				t.Fatal(err)
 			}
 			t.Cleanup(func() { _ = command.Process.Kill() })
+			commandDone := make(chan error, 1)
+			go func() { commandDone <- command.Wait() }()
 			if err := terminal.Close(); err != nil {
 				t.Fatal(err)
 			}
-			paths := seatbeltNativePTYPaths(root)
-			waitForSeatbeltPTYMarker(t, paths.ready)
+			waitForSeatbeltPTYMarkerWithDiagnostics(t, paths.ready, commandDone, master, paths)
 			switch test.signal {
 			case syscall.SIGINT:
 				if _, err := master.Write([]byte{3}); err != nil {
@@ -2086,15 +2098,21 @@ func TestSeatbeltNativeRoutesTerminalSignalsOnlyToContainedTarget(t *testing.T) 
 					t.Fatal(err)
 				}
 			}
-			waitForSeatbeltPTYMarker(t, paths.received)
+			waitForSeatbeltPTYMarkerWithDiagnostics(t, paths.received, commandDone, master, paths)
 			if _, err := master.Write([]byte("snapshot\n")); err != nil {
 				t.Fatal(err)
 			}
-			waitForSeatbeltPTYMarker(t, paths.snapshot)
+			waitForSeatbeltPTYMarkerWithDiagnostics(t, paths.snapshot, commandDone, master, paths)
 			if _, err := master.Write([]byte("release\n")); err != nil {
 				t.Fatal(err)
 			}
-			waitSeatbeltNativePTYHarness(t, command)
+			waitSeatbeltNativePTYHarness(t, command, commandDone, master, paths)
+			if err := master.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if err := <-drainDone; err != nil && !errors.Is(err, os.ErrClosed) {
+				t.Fatalf("drain native PTY output: %v", err)
+			}
 			if count, err := os.ReadFile(paths.observed); err != nil || string(count) != "1\n" {
 				t.Fatalf("terminal %s deliveries after release = %q, %v; want exactly one", test.signal, count, err)
 			}
@@ -2121,7 +2139,7 @@ func TestSeatbeltNativePTYHarness(t *testing.T) {
 	}
 	request.arguments = []string{
 		"-test.run=^TestSeatbeltNativePTYTarget$", "--", strconv.Itoa(signalNumber),
-		paths.ready, paths.received, paths.snapshot, paths.observed, paths.diagnostic,
+		paths.ready, paths.received, paths.snapshot, paths.observed, paths.diagnostic, paths.observation,
 	}
 	request.terminal = Terminal{Input: os.Stdin, Output: os.Stdout, ErrorOutput: os.Stderr}
 	harnessSignals := make(chan os.Signal, 8)
@@ -2161,10 +2179,13 @@ func TestSeatbeltNativePTYTarget(t *testing.T) {
 	signal.Notify(signals, want)
 	defer signal.Stop(signals)
 	commands := make(chan string, 2)
+	recordSeatbeltPTYObservation(arguments[6], "target-start "+seatbeltPTYTerminalObservation(os.Stdin))
 	go func() {
 		scanner := bufio.NewScanner(os.Stdin)
 		for scanner.Scan() {
-			commands <- scanner.Text()
+			line := scanner.Text()
+			recordSeatbeltPTYObservation(arguments[6], "scanner-line "+strconv.Quote(line))
+			commands <- line
 		}
 		diagnostic := "terminal scanner reached EOF"
 		if err := scanner.Err(); err != nil {
@@ -2184,6 +2205,7 @@ func TestSeatbeltNativePTYTarget(t *testing.T) {
 				t.Fatalf("received terminal signal %v, want %v", received, want)
 			}
 			deliveries++
+			recordSeatbeltPTYObservation(arguments[6], "signal-received "+received.String()+" "+seatbeltPTYTerminalObservation(os.Stdin))
 			if err := os.WriteFile(arguments[2], []byte(strconv.Itoa(deliveries)+"\n"), 0o600); err != nil {
 				t.Fatal(err)
 			}
@@ -2228,7 +2250,7 @@ func drainSeatbeltPTYSignals(t *testing.T, signals <-chan os.Signal, want syscal
 }
 
 type seatbeltPTYPaths struct {
-	ready, received, snapshot, observed, harnessObserved, diagnostic string
+	ready, received, snapshot, observed, harnessObserved, diagnostic, observation, ptyOutput string
 }
 
 func seatbeltNativePTYPaths(root string) seatbeltPTYPaths {
@@ -2237,6 +2259,7 @@ func seatbeltNativePTYPaths(root string) seatbeltPTYPaths {
 		ready: filepath.Join(base, "terminal-signal-ready"), received: filepath.Join(base, "terminal-signal-received"),
 		snapshot: filepath.Join(base, "terminal-signal-snapshot"), observed: filepath.Join(base, "terminal-signal-observed"),
 		harnessObserved: filepath.Join(base, "harness-terminal-signal-observed"), diagnostic: filepath.Join(base, "terminal-input-diagnostic"),
+		observation: filepath.Join(base, "terminal-input-observation"), ptyOutput: filepath.Join(root, "harness-pty-output.log"),
 	}
 }
 
@@ -2272,7 +2295,7 @@ func seatbeltPTYTargetArguments() []string {
 	for index, argument := range os.Args {
 		if argument == "--" {
 			arguments := os.Args[index+1:]
-			if len(arguments) == 6 {
+			if len(arguments) == 7 {
 				return arguments
 			}
 			break
@@ -2331,19 +2354,64 @@ func waitForSeatbeltPTYMarker(t *testing.T, path string) {
 	}
 }
 
-func waitSeatbeltNativePTYHarness(t *testing.T, command *exec.Cmd) {
+func waitForSeatbeltPTYMarkerWithDiagnostics(t *testing.T, path string, commandDone <-chan error, master *os.File, paths seatbeltPTYPaths) {
 	t.Helper()
-	wait := make(chan error, 1)
-	go func() { wait <- command.Wait() }()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if _, err := os.Stat(path); err == nil {
+			return
+		} else if !os.IsNotExist(err) {
+			t.Fatal(err)
+		}
+		select {
+		case err := <-commandDone:
+			t.Fatalf("native PTY harness exited before marker %q: %v; %s", filepath.Base(path), err, seatbeltPTYFailureDiagnostics(master, paths))
+		default:
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for Seatbelt terminal marker %q; %s", filepath.Base(path), seatbeltPTYFailureDiagnostics(master, paths))
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+func seatbeltPTYFailureDiagnostics(master *os.File, paths seatbeltPTYPaths) string {
+	diagnostic, _ := os.ReadFile(paths.diagnostic)
+	observation, _ := os.ReadFile(paths.observation)
+	output, _ := os.ReadFile(paths.ptyOutput)
+	return fmt.Sprintf("parent-terminal=(%s); input-diagnostic=%q; input-observation=%q; drained-pty-output=%q",
+		seatbeltPTYTerminalObservation(master), diagnostic, observation, output)
+}
+
+func seatbeltPTYTerminalObservation(terminal *os.File) string {
+	foreground, foregroundErr := unix.IoctlGetInt(int(terminal.Fd()), unix.TIOCGPGRP)
+	settings, settingsErr := unix.IoctlGetTermios(int(terminal.Fd()), unix.TIOCGETA)
+	if settingsErr != nil {
+		return fmt.Sprintf("foreground=%d foreground-error=%v termios-error=%v", foreground, foregroundErr, settingsErr)
+	}
+	return fmt.Sprintf("foreground=%d foreground-error=%v pgrp=%d lflag=%#x iflag=%#x", foreground, foregroundErr, syscall.Getpgrp(), settings.Lflag, settings.Iflag)
+}
+
+func recordSeatbeltPTYObservation(path, observation string) {
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		return
+	}
+	_, _ = fmt.Fprintln(file, observation)
+	_ = file.Close()
+}
+
+func waitSeatbeltNativePTYHarness(t *testing.T, command *exec.Cmd, wait <-chan error, master *os.File, paths seatbeltPTYPaths) {
+	t.Helper()
 	select {
 	case err := <-wait:
 		if err != nil {
-			t.Fatal(err)
+			t.Fatalf("native PTY harness failed: %v; %s", err, seatbeltPTYFailureDiagnostics(master, paths))
 		}
 	case <-time.After(5 * time.Second):
 		_ = command.Process.Kill()
 		<-wait
-		t.Fatal("native PTY harness did not exit after target release")
+		t.Fatalf("native PTY harness did not exit after target release; %s", seatbeltPTYFailureDiagnostics(master, paths))
 	}
 }
 

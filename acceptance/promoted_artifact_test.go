@@ -619,6 +619,18 @@ func writeVersionOneProfile(t *testing.T, home, name string) {
 	}
 }
 
+func writeVersionTwoProfile(t *testing.T, home, name string) {
+	t.Helper()
+	directory := filepath.Join(home, ".acs", "profiles")
+	if err := os.MkdirAll(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	contents := fmt.Sprintf(`{"version":2,"name":%q,"target":"devin","categories":{"skills":{"schemaVersion":1,"selection":[{"source":"devin-config","relativePath":"review"}]}}}`, name)
+	if err := os.WriteFile(filepath.Join(directory, name+".json"), []byte(contents), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func writeVersionThreeProfile(t *testing.T, home, name, workspaceAccess string) {
 	t.Helper()
 	directory := filepath.Join(home, ".acs", "profiles")

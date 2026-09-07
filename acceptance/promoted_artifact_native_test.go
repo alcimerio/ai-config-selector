@@ -275,10 +275,168 @@ func assertPromotedArtifactEffectiveExplanation(t *testing.T) {
 		t.Fatalf("bounded native readiness: %v; output=%s", err, output)
 	}
 	assertNoSessions(t, home)
+	writeVersionTwoProfile(t, home, "reviews-v2")
+	assertPromotedArtifactLegacyExplanations(t, binary, home, path, workspace, helper)
+	assertPromotedArtifactInactiveOverlayExplanations(t, binary, home, path, workspace)
+	assertPromotedArtifactExplanationFailuresArePlanless(t, binary, home, path, workspace)
+}
+
+func assertPromotedArtifactLegacyExplanations(t *testing.T, binary, home, path, workspace, helper string) {
+	t.Helper()
+	for _, profileName := range []string{"reviews", "reviews-v2"} {
+		for _, invocation := range [][]string{
+			{"explain", "sandbox", "--profile", profileName, "--json"},
+			{"explain", "devin", "--profile", profileName, "--json"},
+			{"explain", "run", "--profile", profileName, "--json", "--", helper},
+		} {
+			command := exec.Command(binary, invocation...)
+			command.Dir, command.Env = workspace, nativeCandidateEnvironment(home, path, nil)
+			output, err := command.CombinedOutput()
+			if err != nil {
+				t.Fatalf("legacy %s %q: %v; output=%s", profileName, invocation, err, output)
+			}
+			var result struct {
+				Profile struct{ Compatibility string } `json:"profile"`
+				Plan    struct {
+					Requested   []nativeExplanationFact `json:"requested"`
+					TargetAdded []nativeExplanationFact `json:"targetAdded"`
+				} `json:"plan"`
+			}
+			if err := json.Unmarshal(output, &result); err != nil {
+				t.Fatalf("decode legacy explanation: %v; output=%s", err, output)
+			}
+			workspaceFact, found := nativeExplanationFactByID(result.Plan.Requested, "common.workspace")
+			if result.Profile.Compatibility != "legacy" || !found || workspaceFact.Value.Access != "read-write" || workspaceFact.Reason != "legacy_compatibility_default" {
+				t.Fatalf("legacy compatibility authority is incomplete: %#v output=%s", result, output)
+			}
+			if !nativeExplanationHasFact(result.Plan.TargetAdded, "skills.target-projection") {
+				t.Fatalf("legacy target placement missing: %s", output)
+			}
+			assertNoSessions(t, home)
+		}
+		codex := exec.Command(binary, "explain", "codex", "--profile", profileName, "--auth", "PRIVATE-LEGACY-AUTH", "--json")
+		codex.Dir, codex.Env = workspace, nativeCandidateEnvironment(home, path, nil)
+		output, err := codex.CombinedOutput()
+		if err == nil || !bytes.Contains(output, []byte(`"plan":null`)) || !bytes.Contains(output, []byte(`"code":"profile_load_failed"`)) || bytes.Contains(output, []byte("PRIVATE-LEGACY-AUTH")) || bytes.Contains(output, []byte(home)) {
+			t.Fatalf("legacy Codex failure is unsafe or reinterpreted: err=%v output=%s", err, output)
+		}
+		assertNoSessions(t, home)
+	}
+}
+
+func assertPromotedArtifactInactiveOverlayExplanations(t *testing.T, binary, home, path, workspace string) {
+	t.Helper()
+	profiles := []struct {
+		name, overlays string
+	}{
+		{name: "inactive-none", overlays: `"devin":{"version":1}`},
+		{name: "inactive-known", overlays: `"devin":{"version":1},"codex":{"version":1,"authRef":"PRIVATE-INACTIVE-AUTH"}`},
+		{name: "inactive-unknown-a", overlays: `"devin":{"version":1},"codex":{"version":1,"authRef":"PRIVATE-INACTIVE-AUTH"},"PRIVATE-OVERLAY-B":{"version":41,"payload":"PRIVATE-PAYLOAD-B"},"PRIVATE-OVERLAY-A":{"version":99,"payload":"PRIVATE-PAYLOAD-A"}`},
+		{name: "inactive-unknown-b", overlays: `"PRIVATE-OVERLAY-A":{"version":99,"payload":"PRIVATE-PAYLOAD-A"},"PRIVATE-OVERLAY-B":{"version":41,"payload":"PRIVATE-PAYLOAD-B"},"codex":{"version":1,"authRef":"PRIVATE-INACTIVE-AUTH"},"devin":{"version":1}`},
+	}
+	type decoded struct {
+		Plan struct {
+			Digest      string                  `json:"authorityDigest"`
+			Unsupported []nativeExplanationFact `json:"unsupported"`
+		} `json:"plan"`
+	}
+	results := make(map[string]decoded, len(profiles))
+	for _, candidate := range profiles {
+		writeNativeExplanationProfile(t, home, candidate.name, candidate.overlays)
+		command := exec.Command(binary, "explain", "devin", "--profile", candidate.name, "--json")
+		command.Dir, command.Env = workspace, nativeCandidateEnvironment(home, path, nil)
+		output, err := command.CombinedOutput()
+		if err != nil {
+			t.Fatalf("inactive overlay explanation %s: %v; output=%s", candidate.name, err, output)
+		}
+		for _, private := range []string{"PRIVATE-INACTIVE-AUTH", "PRIVATE-OVERLAY-A", "PRIVATE-OVERLAY-B", "PRIVATE-PAYLOAD-A", "PRIVATE-PAYLOAD-B"} {
+			if bytes.Contains(output, []byte(private)) {
+				t.Fatalf("inactive overlay explanation exposed %q: %s", private, output)
+			}
+		}
+		var result decoded
+		if err := json.Unmarshal(output, &result); err != nil {
+			t.Fatalf("decode inactive overlay explanation: %v; output=%s", err, output)
+		}
+		results[candidate.name] = result
+		assertNoSessions(t, home)
+	}
+	baseline := results["inactive-none"].Plan.Digest
+	for name, result := range results {
+		if result.Plan.Digest != baseline {
+			t.Fatalf("inactive overlay %s changed semantic digest: %s != %s", name, result.Plan.Digest, baseline)
+		}
+	}
+	if !nativeExplanationHasFact(results["inactive-known"].Plan.Unsupported, "overlay.inactive.codex") {
+		t.Fatalf("known inactive overlay is not reported: %#v", results["inactive-known"].Plan.Unsupported)
+	}
+	first, second := results["inactive-unknown-a"].Plan.Unsupported, results["inactive-unknown-b"].Plan.Unsupported
+	if !reflect.DeepEqual(first, second) {
+		t.Fatalf("unknown inactive overlay order changed presentation: first=%#v second=%#v", first, second)
+	}
+	unknownCount := 0
+	for _, fact := range first {
+		if fact.Reason == "inactive_overlay_unknown_presentation_only_excluded_from_digest" {
+			unknownCount++
+			if fact.Source.ID != "unknown-overlay" || fact.Source.Version != 0 {
+				t.Fatalf("unknown inactive overlay leaked source metadata: %#v", fact)
+			}
+		}
+	}
+	if unknownCount != 2 {
+		t.Fatalf("unknown inactive limitations = %d, want one per overlay: %#v", unknownCount, first)
+	}
+}
+
+func writeNativeExplanationProfile(t *testing.T, home, name, overlays string) {
+	t.Helper()
+	directory := filepath.Join(home, ".acs", "profiles")
+	if err := os.MkdirAll(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	contents := fmt.Sprintf(`{"version":3,"name":%q,"common":{"skills":{"version":1,"selection":[{"source":"devin-config","relativePath":"review"}]},"workspace":{"version":1,"selection":{"access":"read-only"}}},"overlays":{%s}}`, name, overlays)
+	if err := os.WriteFile(filepath.Join(directory, name+".json"), []byte(contents), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func assertPromotedArtifactExplanationFailuresArePlanless(t *testing.T, binary, home, path, workspace string) {
+	t.Helper()
+	for _, test := range []struct {
+		name, selection, overlays, code string
+	}{
+		{name: "selected-overlay-missing", selection: `[{"source":"devin-config","relativePath":"review"}]`, overlays: `"codex":{"version":1}`, code: "profile_resolution_failed"},
+		{name: "selected-overlay-unsupported", selection: `[{"source":"devin-config","relativePath":"review"}]`, overlays: `"devin":{"version":9,"PRIVATE-PAYLOAD":true}`, code: "profile_resolution_failed"},
+		{name: "selected-overlay-malformed", selection: `[{"source":"devin-config","relativePath":"review"}]`, overlays: `"devin":[]`, code: "profile_load_failed"},
+		{name: "selected-skill-missing", selection: `[{"source":"shared-agents","relativePath":"PRIVATE-MISSING-SKILL"}]`, overlays: `"devin":{"version":1}`, code: "profile_resolution_failed"},
+	} {
+		directory := filepath.Join(home, ".acs", "profiles")
+		contents := fmt.Sprintf(`{"version":3,"name":%q,"common":{"skills":{"version":1,"selection":%s},"workspace":{"version":1,"selection":{"access":"read-only"}}},"overlays":{%s}}`, test.name, test.selection, test.overlays)
+		if err := os.WriteFile(filepath.Join(directory, test.name+".json"), []byte(contents), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		command := exec.Command(binary, "explain", "devin", "--profile", test.name, "--json")
+		command.Dir, command.Env = workspace, nativeCandidateEnvironment(home, path, nil)
+		output, err := command.CombinedOutput()
+		if err == nil || !bytes.Contains(output, []byte(`"plan":null`)) || !bytes.Contains(output, []byte(`"code":"`+test.code+`"`)) {
+			t.Fatalf("unsafe explanation failure %s: err=%v output=%s", test.name, err, output)
+		}
+		for _, private := range []string{home, "PRIVATE-PAYLOAD", "PRIVATE-MISSING-SKILL"} {
+			if bytes.Contains(output, []byte(private)) {
+				t.Fatalf("explanation failure %s exposed %q: %s", test.name, private, output)
+			}
+		}
+		assertNoSessions(t, home)
+	}
 }
 
 type nativeExplanationFact struct {
-	ID    string `json:"id"`
+	ID     string `json:"id"`
+	Reason string `json:"reason"`
+	Source struct {
+		ID      string `json:"id"`
+		Version int    `json:"version"`
+	} `json:"source"`
 	Value struct {
 		Access string   `json:"access"`
 		Mode   string   `json:"mode"`
