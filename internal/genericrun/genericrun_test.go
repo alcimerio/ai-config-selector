@@ -10,6 +10,7 @@ import (
 	"github.com/alcimerio/ai-config-selector/internal/authority"
 	"github.com/alcimerio/ai-config-selector/internal/executor"
 	"github.com/alcimerio/ai-config-selector/internal/launch"
+	"github.com/alcimerio/ai-config-selector/internal/runcommand"
 )
 
 type recordingExecutor struct {
@@ -41,7 +42,16 @@ func TestPlanLaunchValidatesButHidesExecutableArgumentsAndLegacyPaths(t *testing
 	resolved := authority.New([]authority.Contribution{{ID: "test", Value: pathContribution(privatePath)}}, launch.WorkspaceAccessReadOnly, 2, "")
 	fake := &recordingExecutor{}
 	target := &Target{executor: fake}
-	plan, err := target.PlanLaunch(context.Background(), t.TempDir(), resolved, []string{"/usr/bin/true", "private-value", ""})
+	workingDirectory := t.TempDir()
+	command, err := runcommand.Resolve(workingDirectory, []string{"/usr/bin/true", "private-value", ""})
+	if err != nil {
+		t.Fatal(err)
+	}
+	commandPlan, err := resolved.ForCommandIntent(string(command.Form()), command.ArgumentCount())
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := target.PlanLaunch(context.Background(), workingDirectory, commandPlan, command)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -67,10 +77,8 @@ func TestPlanLaunchValidatesButHidesExecutableArgumentsAndLegacyPaths(t *testing
 	}
 }
 
-func TestLaunchSanitizesResolverFailure(t *testing.T) {
-	target := &Target{executor: &recordingExecutor{}}
-	resolved := authority.New(nil, launch.WorkspaceAccessReadOnly, 3, "")
-	_, err := target.Launch(context.Background(), "sessions", t.TempDir(), resolved, []string{"./missing"}, launch.Terminal{})
+func TestSanitizeErrorHidesInternalFailure(t *testing.T) {
+	err := sanitizeError(errors.New("private resolver failure"))
 	var failure *launch.SandboxError
 	if !errors.As(err, &failure) || failure.Category != launch.SandboxSetupFailed {
 		t.Fatalf("error = %T %v", err, err)

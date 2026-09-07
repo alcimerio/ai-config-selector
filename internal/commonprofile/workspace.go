@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 
+	"github.com/alcimerio/ai-config-selector/internal/authority"
 	"github.com/alcimerio/ai-config-selector/internal/category"
 	"github.com/alcimerio/ai-config-selector/internal/launch"
 	"github.com/alcimerio/ai-config-selector/internal/profile"
@@ -29,6 +30,14 @@ func (contribution WorkspaceContribution) PlanResolved(ctx context.Context, work
 }
 func (WorkspaceContribution) Materialize(string) error                                 { return nil }
 func (WorkspaceContribution) Verify(context.Context, launch.VerificationContext) error { return nil }
+func (contribution WorkspaceContribution) SemanticFacts(_ int, _ string) authority.Facts {
+	source := authority.FactSource{Kind: "profile", ID: WorkspaceCapabilityID, Version: WorkspaceCapabilityVersion}
+	effective := []authority.Fact{{ID: "workspace.read", Kind: "filesystem", Value: authority.FactValue{Access: "read", LogicalLocation: "workspace"}, Reason: "common_workspace", Source: source}}
+	if contribution.access == launch.WorkspaceAccessReadWrite {
+		effective = append(effective, authority.Fact{ID: "workspace.write", Kind: "filesystem", Value: authority.FactValue{Access: "write", LogicalLocation: "workspace"}, Reason: "common_workspace", Source: source})
+	}
+	return authority.Facts{Effective: effective}
+}
 
 type WorkspaceBinding = category.Binding[launch.WorkspaceAccess, launch.WorkspaceAccess, WorkspaceContribution]
 

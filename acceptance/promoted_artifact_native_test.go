@@ -20,9 +20,12 @@ import (
 	"syscall"
 	"testing"
 	"time"
+	"unsafe"
 
 	"github.com/charmbracelet/x/term"
 	"github.com/creack/pty"
+	"github.com/ebitengine/purego"
+	"golang.org/x/sys/unix"
 )
 
 const (
@@ -129,12 +132,585 @@ func TestPromotedArtifactNativeContainmentContract(t *testing.T) {
 	}
 
 	t.Run("readiness is native and sanitized", assertPromotedArtifactNativeReadiness)
+	t.Run("effective explanation is linked and narrowly observed", assertPromotedArtifactEffectiveExplanation)
 	t.Run("sandbox shell is credential-free contained and cleaned", assertPromotedArtifactSandboxShell)
 	t.Run("v3 common material and workspace modes are enforced", assertPromotedArtifactV3WorkspaceModes)
 	t.Run("generic literal command uses candidate containment", assertPromotedArtifactGenericRun)
 	t.Run("filesystem environment descriptors sockets IP preflight and descendants", assertPromotedArtifactNativeContainment)
 	t.Run("preflight failure is categorized without target details", assertPromotedArtifactNativePreflightFailureIsSafe)
 	t.Run("missing backend OR invalid policy cannot start a marker", assertPromotedArtifactMissingBackendFailsClosed)
+}
+
+func assertPromotedArtifactEffectiveExplanation(t *testing.T) {
+	binary := promotedBinary(t)
+	home, path := prepareRuntimeHome(t)
+	sharedSkill := filepath.Join(home, ".agents", "skills", "delivery")
+	if err := os.MkdirAll(sharedSkill, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sharedSkill, "SKILL.md"), []byte("# delivery\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	writeSharedTargetProfile(t, home, "explanation", "read-write")
+	workspace := realTemporaryDirectory(t)
+	for _, directory := range []string{
+		filepath.Join(home, ".acs", "locks", "codex-auth"),
+		filepath.Join(home, ".acs", "quarantine", "codex-auth"),
+	} {
+		if err := os.MkdirAll(directory, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(directory, "state-sentinel"), []byte("unchanged\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	helper, err := filepath.Abs(os.Args[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name, recipe string
+		explain      []string
+		execute      []string
+	}{
+		{name: "sandbox", recipe: "shell", explain: []string{"explain", "sandbox", "--profile", "explanation", "--json"}, execute: []string{"sandbox", "--profile", "explanation", "--dry-run"}},
+		{name: "devin", recipe: "devin", explain: []string{"explain", "devin", "--profile", "explanation", "--json"}, execute: []string{"devin", "--profile", "explanation", "--dry-run"}},
+		{name: "codex", recipe: "codex", explain: []string{"explain", "codex", "--profile", "explanation", "--auth", explanationStoredAuthRef, "--json"}, execute: []string{"codex", "--profile", "explanation", "--auth", explanationStoredAuthRef, "--dry-run"}},
+		{name: "run", recipe: "command", explain: []string{"explain", "run", "--profile", "explanation", "--json", "--", helper, "--acs-generic-command-helper", "--tripwire", filepath.Join(workspace, "expected-digest-run-target")}, execute: []string{"run", "--profile", "explanation", "--dry-run", "--", helper, "--acs-generic-command-helper", "--tripwire", filepath.Join(workspace, "expected-digest-run-target")}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			command := exec.Command(binary, test.explain...)
+			command.Dir, command.Env = workspace, nativeCandidateEnvironment(home, path, nil)
+			output, err := command.CombinedOutput()
+			if err != nil {
+				t.Fatalf("explain: %v; output=%s", err, output)
+			}
+			if bytes.Contains(output, []byte("PRIVATE_NATIVE_ARGUMENT")) || bytes.Contains(output, []byte(home)) || bytes.Contains(output, []byte(workspace)) {
+				t.Fatalf("explanation exposed a private binding: %s", output)
+			}
+			var result struct {
+				FormatVersion int `json:"formatVersion"`
+				Intent        struct {
+					Recipe string `json:"recipe"`
+				} `json:"intent"`
+				Plan struct {
+					Digest      string                  `json:"authorityDigest"`
+					Requested   []nativeExplanationFact `json:"requested"`
+					TargetAdded []nativeExplanationFact `json:"targetAdded"`
+					Effective   []nativeExplanationFact `json:"effective"`
+					Unsupported []nativeExplanationFact `json:"unsupported"`
+				} `json:"plan"`
+				Checks []nativeExplanationCheck `json:"checks"`
+			}
+			if err := json.Unmarshal(output, &result); err != nil || result.FormatVersion != 1 || result.Intent.Recipe != test.recipe || !strings.HasPrefix(result.Plan.Digest, "sha256:") {
+				t.Fatalf("invalid explanation: %v; output=%s", err, output)
+			}
+			for _, id := range []string{"runtime.devices", "runtime.environment", "runtime.environment.fixed-path", "runtime.environment.synthetic", "runtime.mach-services", "runtime.metadata", "runtime.network", "runtime.session", "runtime.sysctls"} {
+				found := false
+				for _, fact := range result.Plan.Effective {
+					found = found || fact.ID == id
+				}
+				if !found {
+					t.Fatalf("explanation omitted %s: %s", id, output)
+				}
+			}
+			for _, id := range []string{"execution.recipe", "common.workspace"} {
+				if !nativeExplanationHasFact(result.Plan.Requested, id) {
+					t.Fatalf("requested facts omitted %s: %s", id, output)
+				}
+			}
+			for _, id := range []string{"skills.selected.devin-config:review", "skills.selected.shared-agents:delivery"} {
+				if !nativeExplanationHasFact(result.Plan.Requested, id) {
+					t.Fatalf("requested facts omitted exact selected identity %s: %s", id, output)
+				}
+			}
+			if bytes.Contains(output, []byte("unselected")) {
+				t.Fatalf("explanation rendered an unselected bundle: %s", output)
+			}
+			selectedOverlay, hasSelectedOverlay := nativeExplanationFactByID(result.Plan.Requested, "target.overlay")
+			switch test.name {
+			case "devin", "codex":
+				if !hasSelectedOverlay || selectedOverlay.Value.Mode != test.name {
+					t.Fatalf("selected overlay fact for %s is incomplete: %#v", test.name, selectedOverlay)
+				}
+			default:
+				if hasSelectedOverlay {
+					t.Fatalf("common intent %s selected a target overlay: %#v", test.name, selectedOverlay)
+				}
+			}
+			for _, inactive := range []string{"devin", "codex"} {
+				factID := "overlay.inactive." + inactive
+				shouldBeInactive := test.name != inactive
+				if nativeExplanationHasFact(result.Plan.Unsupported, factID) != shouldBeInactive {
+					t.Fatalf("inactive overlay presentation %s for %s is incorrect: %s", factID, test.name, output)
+				}
+			}
+			for _, id := range []string{"unsupported.arbitrary-executables", "unsupported.arbitrary-host-paths", "unsupported.host-environment", "unsupported.network-destinations", "unsupported.raw-policy", "unsupported.sandbox-bypass", "unsupported.target-pass-through"} {
+				if !nativeExplanationHasFact(result.Plan.Unsupported, id) {
+					t.Fatalf("unsupported facts omitted %s: %s", id, output)
+				}
+			}
+			if !nativeExplanationHasCheck(result.Checks, "native.platform", "unchecked", "not_probed") || !nativeExplanationHasCheck(result.Checks, "native.backend", "unchecked", "not_probed") {
+				t.Fatalf("default explanation performed or misreported native readiness: %s", output)
+			}
+			for _, id := range map[string][]string{
+				"sandbox": {"sandbox.shell"},
+				"devin":   {"devin.credentials", "devin.preflight.authentication", "devin.preflight.skills", "devin.project-skills", "target.executable"},
+				"codex":   {"codex.approval", "codex.auth-storage", "codex.credentials", "codex.mcp", "codex.plugins", "codex.sandbox", "target.executable"},
+				"run":     {"run.command"},
+			}[test.name] {
+				if !nativeExplanationHasFact(result.Plan.TargetAdded, id) {
+					t.Fatalf("target-added facts omitted %s: %s", id, output)
+				}
+			}
+			if !nativeExplanationHasFact(result.Plan.TargetAdded, "runtime.session-destinations") {
+				t.Fatalf("target-added facts omitted runtime.session-destinations: %s", output)
+			}
+			facts := map[string]struct {
+				Mode  string
+				Names []string
+			}{}
+			for _, fact := range result.Plan.Effective {
+				facts[fact.ID] = struct {
+					Mode  string
+					Names []string
+				}{fact.Value.Mode, fact.Value.Names}
+			}
+			if got := facts["runtime.network"].Mode; got != "local-ip-socket-bind-no-listen-coarse-outbound-ip-macos-dns" {
+				t.Fatalf("network declaration = %q", got)
+			}
+			if got := facts["runtime.sysctls"].Names; !reflect.DeepEqual(got, []string{"hw.ncpu", "hw.pagesize", "hw.pagesize_compat"}) {
+				t.Fatalf("sysctl declaration = %q", got)
+			}
+			if got := facts["runtime.mach-services"].Names; !reflect.DeepEqual(got, []string{"com.apple.SecurityServer", "com.apple.trustd.agent"}) {
+				t.Fatalf("Mach-service declaration = %q", got)
+			}
+			linked := append(append([]string(nil), test.execute...), "--expect-authority-digest", result.Plan.Digest)
+			// The run grammar requires the expectation before the literal boundary.
+			if test.name == "run" {
+				linked = []string{"run", "--profile", "explanation", "--dry-run", "--expect-authority-digest", result.Plan.Digest, "--", helper, "--acs-generic-command-helper", "--tripwire", filepath.Join(workspace, "expected-digest-run-target")}
+			}
+			linkedCommand := exec.Command(binary, linked...)
+			linkedCommand.Dir, linkedCommand.Env = workspace, nativeCandidateEnvironment(home, path, nil)
+			if linkedOutput, err := linkedCommand.CombinedOutput(); err != nil {
+				t.Fatalf("linked dry-run: %v; output=%s", err, linkedOutput)
+			}
+			assertNoSessions(t, home)
+			mismatch := "sha256:" + strings.Repeat("0", 64)
+			mismatchArguments := []string{test.name, "--profile", "explanation", "--expect-authority-digest", mismatch}
+			switch test.name {
+			case "codex":
+				mismatchArguments = append(mismatchArguments, "--auth", explanationStoredAuthRef)
+			case "run":
+				mismatchArguments = append(mismatchArguments, "--", helper, "--acs-generic-command-helper", "--tripwire", filepath.Join(workspace, "expected-digest-run-target"))
+			}
+			beforeHome, beforeWorkspace := snapshotInspectionHome(t, home), snapshotInspectionHome(t, workspace)
+			mismatchCommand := exec.Command(binary, mismatchArguments...)
+			mismatchCommand.Dir, mismatchCommand.Env = workspace, nativeCandidateEnvironment(home, path, nil)
+			mismatchOutput, mismatchErr := mismatchCommand.CombinedOutput()
+			if mismatchErr == nil || !bytes.Contains(mismatchOutput, []byte("authority_plan_changed")) {
+				t.Fatalf("mismatch did not fail at semantic guard: err=%v output=%s", mismatchErr, mismatchOutput)
+			}
+			if after := snapshotInspectionHome(t, home); !reflect.DeepEqual(after, beforeHome) {
+				t.Fatalf("%s digest mismatch changed durable Profile/auth/lock/quarantine/home state: before=%#v after=%#v", test.name, beforeHome, after)
+			}
+			if after := snapshotInspectionHome(t, workspace); !reflect.DeepEqual(after, beforeWorkspace) {
+				t.Fatalf("%s digest mismatch invoked a workspace-visible target/preflight or changed workspace state: before=%#v after=%#v", test.name, beforeWorkspace, after)
+			}
+			for _, marker := range []string{"preflight-skills", "preflight-authentication", "interactive-started", "expected-digest-run-target"} {
+				if _, err := os.Stat(filepath.Join(workspace, marker)); !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("%s digest mismatch reached target/provider tripwire %q: %v", test.name, marker, err)
+				}
+			}
+			assertNoSessions(t, home)
+		})
+	}
+	for _, test := range tests {
+		arguments := append([]string(nil), test.explain...)
+		insertAt := len(arguments)
+		for index, argument := range arguments {
+			if argument == "--" {
+				insertAt = index
+				break
+			}
+		}
+		arguments = append(arguments, "")
+		copy(arguments[insertAt+1:], arguments[insertAt:])
+		arguments[insertAt] = "--check-native-readiness"
+		beforeHome, beforeWorkspace := snapshotInspectionHome(t, home), snapshotInspectionHome(t, workspace)
+		readiness := exec.Command(binary, arguments...)
+		readiness.Dir, readiness.Env = workspace, nativeCandidateEnvironment(home, path, nil)
+		output, err := readiness.CombinedOutput()
+		if err != nil || !bytes.Contains(output, []byte(`"id":"native.backend","status":"pass","code":"backend_ready"`)) || !bytes.Contains(output, []byte(`"id":"native.platform","status":"pass","code":"supported_platform"`)) || !bytes.Contains(output, []byte(`"id":"runtime.enforcement","status":"unchecked"`)) {
+			t.Fatalf("bounded native readiness for %s: %v; output=%s", test.name, err, output)
+		}
+		if after := snapshotInspectionHome(t, home); !reflect.DeepEqual(after, beforeHome) {
+			t.Fatalf("bounded native readiness for %s changed durable home state: before=%#v after=%#v", test.name, beforeHome, after)
+		}
+		if after := snapshotInspectionHome(t, workspace); !reflect.DeepEqual(after, beforeWorkspace) {
+			t.Fatalf("bounded native readiness for %s changed workspace state: before=%#v after=%#v", test.name, beforeWorkspace, after)
+		}
+		assertNoSessions(t, home)
+	}
+	writeVersionTwoProfile(t, home, "reviews-v2")
+	assertPromotedArtifactLegacyExplanations(t, binary, home, path, workspace, helper)
+	assertPromotedArtifactInactiveOverlayExplanations(t, binary, home, path, workspace)
+	assertPromotedArtifactExplanationFailuresArePlanless(t, binary, home, path, workspace)
+	assertPromotedArtifactRunDigestMeaning(t, binary, home, path, workspace, helper)
+	assertPromotedArtifactCodexAuthDigestMeaning(t, binary, home, path, workspace)
+	assertPromotedArtifactV3ExplanationWorkspaceModes(t, binary, home, path, workspace, helper)
+}
+
+func assertPromotedArtifactV3ExplanationWorkspaceModes(t *testing.T, binary, home, path, workspace, helper string) {
+	t.Helper()
+	writeSharedTargetProfile(t, home, "explanation-readonly", "read-only")
+	type modeResult struct {
+		access, digest string
+	}
+	byIntent := map[string][]modeResult{}
+	for _, profileName := range []string{"explanation-readonly", "explanation"} {
+		for _, test := range []struct {
+			name      string
+			arguments []string
+		}{
+			{name: "sandbox", arguments: []string{"explain", "sandbox", "--profile", profileName, "--json"}},
+			{name: "devin", arguments: []string{"explain", "devin", "--profile", profileName, "--json"}},
+			{name: "codex", arguments: []string{"explain", "codex", "--profile", profileName, "--json"}},
+			{name: "run", arguments: []string{"explain", "run", "--profile", profileName, "--json", "--", helper}},
+		} {
+			command := exec.Command(binary, test.arguments...)
+			command.Dir, command.Env = workspace, nativeCandidateEnvironment(home, path, nil)
+			output, err := command.CombinedOutput()
+			if err != nil {
+				t.Fatalf("v3 %s %s explanation: %v; output=%s", profileName, test.name, err, output)
+			}
+			var result struct {
+				Plan struct {
+					Digest    string                  `json:"authorityDigest"`
+					Requested []nativeExplanationFact `json:"requested"`
+				} `json:"plan"`
+			}
+			if err := json.Unmarshal(output, &result); err != nil {
+				t.Fatalf("decode v3 mode explanation: %v; output=%s", err, output)
+			}
+			workspaceFact, found := nativeExplanationFactByID(result.Plan.Requested, "common.workspace")
+			if !found || workspaceFact.Value.Access == "" || workspaceFact.Reason != "stored_v3_intent" {
+				t.Fatalf("v3 workspace authority is incomplete: %#v output=%s", workspaceFact, output)
+			}
+			byIntent[test.name] = append(byIntent[test.name], modeResult{access: workspaceFact.Value.Access, digest: result.Plan.Digest})
+		}
+	}
+	for intent, results := range byIntent {
+		if len(results) != 2 || results[0].access != "read-only" || results[1].access != "read-write" || results[0].digest == results[1].digest {
+			t.Fatalf("v3 %s workspace declaration/digest matrix = %#v", intent, results)
+		}
+	}
+}
+
+func assertPromotedArtifactRunDigestMeaning(t *testing.T, binary, home, path, workspace, helper string) {
+	t.Helper()
+	workspaceHelper := filepath.Join(workspace, "candidate-helper")
+	contents, err := os.ReadFile(helper)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(workspaceHelper, contents, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	digest := func(arguments ...string) string {
+		invocation := []string{"explain", "run", "--profile", "explanation", "--json", "--"}
+		invocation = append(invocation, arguments...)
+		command := exec.Command(binary, invocation...)
+		command.Dir, command.Env = workspace, nativeCandidateEnvironment(home, path, nil)
+		output, err := command.CombinedOutput()
+		if err != nil {
+			t.Fatalf("run digest explanation: %v; output=%s", err, output)
+		}
+		for _, private := range arguments[1:] {
+			if private != "" && bytes.Contains(output, []byte(private)) {
+				t.Fatalf("run explanation exposed literal argument value %q: %s", private, output)
+			}
+		}
+		var result struct {
+			Plan struct {
+				Digest string `json:"authorityDigest"`
+			} `json:"plan"`
+		}
+		if err := json.Unmarshal(output, &result); err != nil || result.Plan.Digest == "" {
+			t.Fatalf("decode run digest: %v; output=%s", err, output)
+		}
+		return result.Plan.Digest
+	}
+	first := digest(helper, "PRIVATE-ARGV-ONE")
+	second := digest(helper, "PRIVATE-ARGV-TWO")
+	changedCount := digest(helper, "PRIVATE-ARGV-ONE", "PRIVATE-ARGV-TWO")
+	changedForm := digest("./candidate-helper", "PRIVATE-ARGV-ONE")
+	if first != second {
+		t.Fatal("literal argv values changed semantic authority digest")
+	}
+	if first == changedCount || first == changedForm {
+		t.Fatal("literal argument count or validated executable form was absent from semantic authority digest")
+	}
+}
+
+func assertPromotedArtifactCodexAuthDigestMeaning(t *testing.T, binary, home, path, workspace string) {
+	t.Helper()
+	writeNativeExplanationProfile(t, home, "auth-first", `"codex":{"version":1,"authRef":"`+explanationFirstAuthRef+`"}`)
+	writeNativeExplanationProfile(t, home, "auth-second", `"codex":{"version":1,"authRef":"`+explanationSecondAuthRef+`"}`)
+	explain := func(profileName string, override ...string) (string, []nativeExplanationFact) {
+		arguments := []string{"explain", "codex", "--profile", profileName, "--json"}
+		if len(override) != 0 {
+			arguments = append(arguments, "--auth", override[0])
+		}
+		command := exec.Command(binary, arguments...)
+		command.Dir, command.Env = workspace, nativeCandidateEnvironment(home, path, nil)
+		output, err := command.CombinedOutput()
+		if err != nil {
+			t.Fatalf("Codex auth explanation: %v; output=%s", err, output)
+		}
+		for _, private := range []string{explanationFirstAuthRef, explanationSecondAuthRef, explanationRunAuthRef} {
+			if bytes.Contains(output, []byte(private)) {
+				t.Fatalf("Codex explanation exposed auth reference %q: %s", private, output)
+			}
+		}
+		var result struct {
+			Plan struct {
+				Digest    string                  `json:"authorityDigest"`
+				Requested []nativeExplanationFact `json:"requested"`
+			} `json:"plan"`
+		}
+		if err := json.Unmarshal(output, &result); err != nil {
+			t.Fatalf("decode Codex auth explanation: %v; output=%s", err, output)
+		}
+		return result.Plan.Digest, result.Plan.Requested
+	}
+	first, firstFacts := explain("auth-first")
+	second, _ := explain("auth-second")
+	override, overrideFacts := explain("auth-first", explanationRunAuthRef)
+	if first != second {
+		t.Fatal("opaque Codex auth reference value changed semantic authority digest")
+	}
+	if first == override {
+		t.Fatal("overlay versus one-run auth binding origin was absent from semantic authority digest")
+	}
+	if fact, found := nativeExplanationFactByID(firstFacts, "codex.authentication"); !found || fact.Reason != "overlay" {
+		t.Fatalf("overlay auth binding origin missing: %#v", firstFacts)
+	}
+	if fact, found := nativeExplanationFactByID(overrideFacts, "codex.authentication"); !found || fact.Reason != "one_run_override" {
+		t.Fatalf("one-run auth binding origin missing: %#v", overrideFacts)
+	}
+}
+
+func assertPromotedArtifactLegacyExplanations(t *testing.T, binary, home, path, workspace, helper string) {
+	t.Helper()
+	for _, profileName := range []string{"reviews", "reviews-v2"} {
+		for _, invocation := range [][]string{
+			{"explain", "sandbox", "--profile", profileName, "--json"},
+			{"explain", "devin", "--profile", profileName, "--json"},
+			{"explain", "run", "--profile", profileName, "--json", "--", helper},
+		} {
+			command := exec.Command(binary, invocation...)
+			command.Dir, command.Env = workspace, nativeCandidateEnvironment(home, path, nil)
+			output, err := command.CombinedOutput()
+			if err != nil {
+				t.Fatalf("legacy %s %q: %v; output=%s", profileName, invocation, err, output)
+			}
+			var result struct {
+				Profile struct{ Compatibility string } `json:"profile"`
+				Plan    struct {
+					Requested   []nativeExplanationFact `json:"requested"`
+					TargetAdded []nativeExplanationFact `json:"targetAdded"`
+				} `json:"plan"`
+			}
+			if err := json.Unmarshal(output, &result); err != nil {
+				t.Fatalf("decode legacy explanation: %v; output=%s", err, output)
+			}
+			workspaceFact, found := nativeExplanationFactByID(result.Plan.Requested, "common.workspace")
+			if result.Profile.Compatibility != "legacy" || !found || workspaceFact.Value.Access != "read-write" || workspaceFact.Reason != "legacy_compatibility_default" {
+				t.Fatalf("legacy compatibility authority is incomplete: %#v output=%s", result, output)
+			}
+			if !nativeExplanationHasFact(result.Plan.TargetAdded, "skills.target-projection") {
+				t.Fatalf("legacy target placement missing: %s", output)
+			}
+			assertNoSessions(t, home)
+		}
+		codex := exec.Command(binary, "explain", "codex", "--profile", profileName, "--auth", explanationLegacyAuthRef, "--json")
+		codex.Dir, codex.Env = workspace, nativeCandidateEnvironment(home, path, nil)
+		output, err := codex.CombinedOutput()
+		if err == nil || !bytes.Contains(output, []byte(`"plan":null`)) || !bytes.Contains(output, []byte(`"code":"profile_load_failed"`)) || bytes.Contains(output, []byte(explanationLegacyAuthRef)) || bytes.Contains(output, []byte(home)) {
+			t.Fatalf("legacy Codex failure is unsafe or reinterpreted: err=%v output=%s", err, output)
+		}
+		assertNoSessions(t, home)
+	}
+}
+
+func assertPromotedArtifactInactiveOverlayExplanations(t *testing.T, binary, home, path, workspace string) {
+	t.Helper()
+	profiles := []struct {
+		name, overlays string
+	}{
+		{name: "inactive-none", overlays: `"devin":{"version":1}`},
+		{name: "inactive-known", overlays: `"devin":{"version":1},"codex":{"version":1,"authRef":"` + explanationInactiveAuthRef + `"}`},
+		{name: "inactive-unknown-a", overlays: `"devin":{"version":1},"codex":{"version":1,"authRef":"` + explanationInactiveAuthRef + `"},"PRIVATE-OVERLAY-B":{"version":41,"payload":"PRIVATE-PAYLOAD-B"},"PRIVATE-OVERLAY-A":{"version":99,"payload":"PRIVATE-PAYLOAD-A"}`},
+		{name: "inactive-unknown-b", overlays: `"PRIVATE-OVERLAY-A":{"version":99,"payload":"PRIVATE-PAYLOAD-A"},"PRIVATE-OVERLAY-B":{"version":41,"payload":"PRIVATE-PAYLOAD-B"},"codex":{"version":1,"authRef":"` + explanationInactiveAuthRef + `"},"devin":{"version":1}`},
+	}
+	type decoded struct {
+		Plan struct {
+			Digest      string                  `json:"authorityDigest"`
+			Unsupported []nativeExplanationFact `json:"unsupported"`
+		} `json:"plan"`
+		Limitations []struct {
+			Code, Detail string
+		} `json:"limitations"`
+	}
+	results := make(map[string]decoded, len(profiles))
+	for _, candidate := range profiles {
+		writeNativeExplanationProfile(t, home, candidate.name, candidate.overlays)
+		command := exec.Command(binary, "explain", "devin", "--profile", candidate.name, "--json")
+		command.Dir, command.Env = workspace, nativeCandidateEnvironment(home, path, nil)
+		output, err := command.CombinedOutput()
+		if err != nil {
+			t.Fatalf("inactive overlay explanation %s: %v; output=%s", candidate.name, err, output)
+		}
+		for _, private := range []string{explanationInactiveAuthRef, "PRIVATE-OVERLAY-A", "PRIVATE-OVERLAY-B", "PRIVATE-PAYLOAD-A", "PRIVATE-PAYLOAD-B"} {
+			if bytes.Contains(output, []byte(private)) {
+				t.Fatalf("inactive overlay explanation exposed %q: %s", private, output)
+			}
+		}
+		var result decoded
+		if err := json.Unmarshal(output, &result); err != nil {
+			t.Fatalf("decode inactive overlay explanation: %v; output=%s", err, output)
+		}
+		results[candidate.name] = result
+		assertNoSessions(t, home)
+	}
+	baseline := results["inactive-none"].Plan.Digest
+	for name, result := range results {
+		if result.Plan.Digest != baseline {
+			t.Fatalf("inactive overlay %s changed semantic digest: %s != %s", name, result.Plan.Digest, baseline)
+		}
+	}
+	if !nativeExplanationHasFact(results["inactive-known"].Plan.Unsupported, "overlay.inactive.codex") {
+		t.Fatalf("known inactive overlay is not reported: %#v", results["inactive-known"].Plan.Unsupported)
+	}
+	first, second := results["inactive-unknown-a"].Limitations, results["inactive-unknown-b"].Limitations
+	if !reflect.DeepEqual(first, second) {
+		t.Fatalf("unknown inactive overlay order changed presentation: first=%#v second=%#v", first, second)
+	}
+	unknownCount := 0
+	for _, limitation := range first {
+		if limitation.Code == "inactive_overlay_unknown" {
+			unknownCount++
+			if limitation.Detail == "" {
+				t.Fatalf("unknown inactive overlay limitation omitted detail: %#v", limitation)
+			}
+		}
+	}
+	if unknownCount != 2 {
+		t.Fatalf("unknown inactive limitations = %d, want one per overlay: %#v", unknownCount, first)
+	}
+	for _, fact := range results["inactive-unknown-a"].Plan.Unsupported {
+		if strings.HasPrefix(fact.ID, "overlay.inactive.unknown-") {
+			t.Fatalf("unknown inactive overlay fabricated a plan fact: %#v", fact)
+		}
+	}
+}
+
+func writeNativeExplanationProfile(t *testing.T, home, name, overlays string) {
+	t.Helper()
+	directory := filepath.Join(home, ".acs", "profiles")
+	if err := os.MkdirAll(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	contents := fmt.Sprintf(`{"version":3,"name":%q,"common":{"skills":{"version":1,"selection":[{"source":"devin-config","relativePath":"review"}]},"workspace":{"version":1,"selection":{"access":"read-only"}}},"overlays":{%s}}`, name, overlays)
+	if err := os.WriteFile(filepath.Join(directory, name+".json"), []byte(contents), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func assertPromotedArtifactExplanationFailuresArePlanless(t *testing.T, binary, home, path, workspace string) {
+	t.Helper()
+	for _, test := range []struct {
+		name, selection, overlays, code string
+	}{
+		{name: "selected-overlay-missing", selection: `[{"source":"devin-config","relativePath":"review"}]`, overlays: `"codex":{"version":1}`, code: "profile_resolution_failed"},
+		{name: "selected-overlay-unsupported", selection: `[{"source":"devin-config","relativePath":"review"}]`, overlays: `"devin":{"version":9,"PRIVATE-PAYLOAD":true}`, code: "profile_resolution_failed"},
+		{name: "selected-overlay-malformed", selection: `[{"source":"devin-config","relativePath":"review"}]`, overlays: `"devin":[]`, code: "profile_load_failed"},
+		{name: "selected-skill-missing", selection: `[{"source":"shared-agents","relativePath":"PRIVATE-MISSING-SKILL"}]`, overlays: `"devin":{"version":1}`, code: "profile_resolution_failed"},
+	} {
+		directory := filepath.Join(home, ".acs", "profiles")
+		contents := fmt.Sprintf(`{"version":3,"name":%q,"common":{"skills":{"version":1,"selection":%s},"workspace":{"version":1,"selection":{"access":"read-only"}}},"overlays":{%s}}`, test.name, test.selection, test.overlays)
+		if err := os.WriteFile(filepath.Join(directory, test.name+".json"), []byte(contents), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		command := exec.Command(binary, "explain", "devin", "--profile", test.name, "--json")
+		command.Dir, command.Env = workspace, nativeCandidateEnvironment(home, path, nil)
+		beforeHome, beforeWorkspace := snapshotInspectionHome(t, home), snapshotInspectionHome(t, workspace)
+		output, err := command.CombinedOutput()
+		if err == nil || !bytes.Contains(output, []byte(`"plan":null`)) || !bytes.Contains(output, []byte(`"code":"`+test.code+`"`)) {
+			t.Fatalf("unsafe explanation failure %s: err=%v output=%s", test.name, err, output)
+		}
+		for _, private := range []string{home, "PRIVATE-PAYLOAD", "PRIVATE-MISSING-SKILL"} {
+			if bytes.Contains(output, []byte(private)) {
+				t.Fatalf("explanation failure %s exposed %q: %s", test.name, private, output)
+			}
+		}
+		if after := snapshotInspectionHome(t, home); !reflect.DeepEqual(after, beforeHome) {
+			t.Fatalf("explanation failure %s changed durable home state: before=%#v after=%#v", test.name, beforeHome, after)
+		}
+		if after := snapshotInspectionHome(t, workspace); !reflect.DeepEqual(after, beforeWorkspace) {
+			t.Fatalf("explanation failure %s changed workspace state: before=%#v after=%#v", test.name, beforeWorkspace, after)
+		}
+		assertNoSessions(t, home)
+	}
+}
+
+type nativeExplanationFact struct {
+	ID     string `json:"id"`
+	Reason string `json:"reason"`
+	Source struct {
+		ID      string `json:"id"`
+		Version int    `json:"version"`
+	} `json:"source"`
+	Value struct {
+		Access string   `json:"access"`
+		Mode   string   `json:"mode"`
+		Names  []string `json:"names"`
+	} `json:"value"`
+}
+
+type nativeExplanationCheck struct {
+	ID     string `json:"id"`
+	Status string `json:"status"`
+	Code   string `json:"code"`
+}
+
+func nativeExplanationHasFact(facts []nativeExplanationFact, id string) bool {
+	for _, fact := range facts {
+		if fact.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
+func nativeExplanationFactByID(facts []nativeExplanationFact, id string) (nativeExplanationFact, bool) {
+	for _, fact := range facts {
+		if fact.ID == id {
+			return fact, true
+		}
+	}
+	return nativeExplanationFact{}, false
+}
+
+func nativeExplanationHasCheck(checks []nativeExplanationCheck, id, status, code string) bool {
+	for _, check := range checks {
+		if check.ID == id && check.Status == status && check.Code == code {
+			return true
+		}
+	}
+	return false
 }
 
 type genericHelperObservation struct {
@@ -191,6 +767,11 @@ func runPromotedArtifactGenericHelper(arguments []string) bool {
 			}
 			_, _ = fmt.Fprintf(os.Stdout, "generic-pty-size:%d:%d\n", width, height)
 			return true
+		case "--tripwire":
+			if len(arguments) != 3 || !writeFakeDevinMarker(arguments[2]) {
+				os.Exit(91)
+			}
+			return true
 		}
 	}
 	if len(arguments) < 3 {
@@ -235,6 +816,41 @@ func assertPromotedArtifactGenericRun(t *testing.T) {
 	if err := os.WriteFile(externalSecret, []byte("private\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	declarations := map[string]map[string]nativeExplanationFact{}
+	for access, profileName := range map[string]string{"read-write": "generic-readwrite", "read-only": "generic-readonly"} {
+		explain := exec.Command(binary, "explain", "run", "--profile", profileName, "--json", "--", helper,
+			"--acs-generic-command-helper", externalSecret, externalWrite)
+		explain.Dir, explain.Env = workspace, nativeCandidateEnvironment(home, path, map[string]string{"ACS_GENERIC_HOST_SECRET": "hidden"})
+		output, err := explain.CombinedOutput()
+		if err != nil {
+			t.Fatalf("generic %s explanation: %v; output=%s", access, err, output)
+		}
+		var result struct {
+			Plan struct {
+				Requested   []nativeExplanationFact `json:"requested"`
+				TargetAdded []nativeExplanationFact `json:"targetAdded"`
+				Effective   []nativeExplanationFact `json:"effective"`
+			} `json:"plan"`
+		}
+		if err := json.Unmarshal(output, &result); err != nil {
+			t.Fatalf("decode generic %s explanation: %v; output=%s", access, err, output)
+		}
+		facts := map[string]nativeExplanationFact{}
+		for _, list := range [][]nativeExplanationFact{result.Plan.Requested, result.Plan.TargetAdded, result.Plan.Effective} {
+			for _, fact := range list {
+				facts[fact.ID] = fact
+			}
+		}
+		if workspaceFact, found := facts["common.workspace"]; !found || workspaceFact.Value.Access != access {
+			t.Fatalf("generic %s explanation workspace fact = %#v", access, workspaceFact)
+		}
+		for _, id := range []string{"run.command", "run.literal-argv", "runtime.environment", "runtime.environment.fixed-path", "runtime.environment.synthetic", "runtime.process", "runtime.session", "runtime.terminal", "runtime.devices", "workspace.read"} {
+			if _, found := facts[id]; !found {
+				t.Fatalf("generic %s explanation omitted declaration %s", access, id)
+			}
+		}
+		declarations[access] = facts
+	}
 	privateArgument := "private-argument-must-not-appear"
 	dryRun := exec.Command(binary, "run", "--dry-run", "--profile", "generic-readwrite", "--", helper, privateArgument)
 	dryRun.Dir = workspace
@@ -275,6 +891,7 @@ func assertPromotedArtifactGenericRun(t *testing.T) {
 		!observation.WorkspaceWrite || observation.ExternalRead || observation.ExternalWrite {
 		t.Fatalf("generic observation = %#v", observation)
 	}
+	assertGenericObservationMatchesDeclaration(t, "read-write", declarations["read-write"], observation)
 	if stderr.String() != "generic-stderr-ok\n" {
 		t.Fatalf("stderr = %q", stderr.String())
 	}
@@ -295,6 +912,7 @@ func assertPromotedArtifactGenericRun(t *testing.T) {
 	if observation.WorkspaceWrite {
 		t.Fatal("read-only generic command wrote to workspace")
 	}
+	assertGenericObservationMatchesDeclaration(t, "read-only", declarations["read-only"], observation)
 	assertNoSessions(t, home)
 
 	nonzero := exec.Command(binary, "run", "--profile", "generic-readwrite", "--", helper, "--acs-generic-command-helper", "--exit-23")
@@ -387,6 +1005,21 @@ func assertPromotedArtifactGenericRun(t *testing.T) {
 	assertNoSessions(t, home)
 }
 
+func assertGenericObservationMatchesDeclaration(t *testing.T, access string, facts map[string]nativeExplanationFact, observation genericHelperObservation) {
+	t.Helper()
+	_, declaresWrite := facts["workspace.write"]
+	wantWrite := access == "read-write"
+	if declaresWrite != wantWrite || observation.WorkspaceWrite != wantWrite {
+		t.Fatalf("generic %s declaration/observation workspace write = (%v, %v), want %v", access, declaresWrite, observation.WorkspaceWrite, wantWrite)
+	}
+	if !observation.SafePath || !observation.HostSecretGone || !observation.HomeIsSynthetic {
+		t.Fatalf("generic %s environment observation did not corroborate fixed-path/synthetic/environment declarations: %#v", access, observation)
+	}
+	if observation.ExternalRead || observation.ExternalWrite {
+		t.Fatalf("generic %s behavior exceeded declared workspace/Session authority: %#v", access, observation)
+	}
+}
+
 func exitStatusIs(err error, status int) bool {
 	exitError, ok := err.(*exec.ExitError)
 	return ok && exitError.ExitCode() == status
@@ -452,10 +1085,11 @@ func TestPromotedArtifactSharedTargetConformance(t *testing.T) {
 		name := "shared-" + strings.ReplaceAll(access, "-", "")
 		writeSharedTargetProfile(t, home, name, access)
 		outputs := map[string]string{}
+		devinRequested, devinTargetAdded, devinEffective := map[string]nativeExplanationFact{}, map[string]nativeExplanationFact{}, map[string]nativeExplanationFact{}
 		for _, target := range []string{"devin", "codex"} {
 			arguments := []string{target, "--profile", name, "--dry-run"}
 			if target == "codex" && access == "read-write" {
-				arguments = append(arguments, "--auth", "override")
+				arguments = append(arguments, "--auth", explanationOverrideAuthRef)
 			}
 			command := exec.Command(binary, arguments...)
 			command.Env = nativeCandidateEnvironment(home, path, nil)
@@ -486,6 +1120,53 @@ func TestPromotedArtifactSharedTargetConformance(t *testing.T) {
 			if !strings.Contains(outputs[target], passiveBoundary) {
 				t.Fatalf("%s dry-run omitted passive boundary %q: %s", target, passiveBoundary, output)
 			}
+			explainArguments := []string{"explain", target, "--profile", name, "--json"}
+			if target == "codex" && access == "read-write" {
+				explainArguments = append(explainArguments, "--auth", explanationOverrideAuthRef)
+			}
+			explain := exec.Command(binary, explainArguments...)
+			explain.Env, explain.Dir = nativeCandidateEnvironment(home, path, nil), workspace
+			explanationOutput, err := explain.CombinedOutput()
+			if err != nil {
+				t.Fatalf("installed candidate %s explanation: %v; output=%s", target, err, explanationOutput)
+			}
+			privateReferenceLeaked := target == "codex" && (bytes.Contains(explanationOutput, []byte(explanationStoredAuthRef)) || bytes.Contains(explanationOutput, []byte(explanationOverrideAuthRef)))
+			if bytes.Contains(explanationOutput, []byte("unselected")) || bytes.Contains(explanationOutput, []byte(workspace)) || privateReferenceLeaked {
+				t.Fatalf("%s explanation exposed unselected/private binding: %s", target, explanationOutput)
+			}
+			var explanation struct {
+				Plan struct {
+					Requested   []nativeExplanationFact `json:"requested"`
+					TargetAdded []nativeExplanationFact `json:"targetAdded"`
+					Effective   []nativeExplanationFact `json:"effective"`
+				} `json:"plan"`
+			}
+			if err := json.Unmarshal(explanationOutput, &explanation); err != nil {
+				t.Fatalf("decode %s explanation: %v; output=%s", target, err, explanationOutput)
+			}
+			workspaceFact, found := nativeExplanationFactByID(explanation.Plan.Requested, "common.workspace")
+			if !found || workspaceFact.Value.Access != access {
+				t.Fatalf("%s explanation workspace = %#v, want %s", target, workspaceFact, access)
+			}
+			for _, id := range []string{"skills.selected.devin-config:review", "skills.selected.shared-agents:delivery"} {
+				if !nativeExplanationHasFact(explanation.Plan.Requested, id) {
+					t.Fatalf("%s explanation omitted exact selected identity %s", target, id)
+				}
+			}
+			if target == "devin" && !nativeExplanationHasFact(explanation.Plan.TargetAdded, "devin.project-skills") {
+				t.Fatalf("Devin explanation omitted project inheritance: %s", explanationOutput)
+			}
+			if target == "devin" {
+				for _, fact := range explanation.Plan.Requested {
+					devinRequested[fact.ID] = fact
+				}
+				for _, fact := range explanation.Plan.TargetAdded {
+					devinTargetAdded[fact.ID] = fact
+				}
+				for _, fact := range explanation.Plan.Effective {
+					devinEffective[fact.ID] = fact
+				}
+			}
 			assertNoSessions(t, home)
 		}
 		for _, marker := range []string{
@@ -498,9 +1179,9 @@ func TestPromotedArtifactSharedTargetConformance(t *testing.T) {
 				t.Fatalf("Devin shared dry-run omitted projection or project-local boundary %q", marker)
 			}
 		}
-		codexReference := "work"
+		codexReference := explanationStoredAuthRef
 		if access == "read-write" {
-			codexReference = "override"
+			codexReference = explanationOverrideAuthRef
 		}
 		for _, marker := range []string{
 			filepath.Join("<session>", "home", ".codex", "skills", "devin-config", "review"),
@@ -517,7 +1198,7 @@ func TestPromotedArtifactSharedTargetConformance(t *testing.T) {
 			}
 		}
 		profileBytes, err := os.ReadFile(filepath.Join(home, ".acs", "profiles", name+".json"))
-		if err != nil || !bytes.Contains(profileBytes, []byte(`"authRef":"work"`)) || bytes.Contains(profileBytes, []byte("override")) {
+		if err != nil || !bytes.Contains(profileBytes, []byte(`"authRef":"`+explanationStoredAuthRef+`"`)) || bytes.Contains(profileBytes, []byte("override")) {
 			t.Fatalf("Codex dry-run override changed the stored opaque reference: %q, %v", profileBytes, err)
 		}
 
@@ -538,6 +1219,19 @@ func TestPromotedArtifactSharedTargetConformance(t *testing.T) {
 		if err := json.Unmarshal(bytes.TrimSpace(output), &result); err != nil {
 			t.Fatalf("contained Devin fixture result is invalid: %v; output=%s", err, output)
 		}
+		if workspaceFact, found := devinRequested["common.workspace"]; !found || workspaceFact.Value.Access != access {
+			t.Fatalf("Devin behavioral result lacks matching declared workspace authority: %#v", workspaceFact)
+		}
+		for _, id := range []string{"devin.preflight.skills", "devin.preflight.authentication", "devin.credentials", "devin.project-skills", "skills.projection.devin-config:review", "skills.projection.shared-agents:delivery"} {
+			if _, found := devinTargetAdded[id]; !found {
+				t.Fatalf("Devin behavioral result lacks matching target declaration %s", id)
+			}
+		}
+		for _, id := range []string{"runtime.session", "skills.common.devin-config:review", "skills.common.shared-agents:delivery", "workspace.read"} {
+			if _, found := devinEffective[id]; !found {
+				t.Fatalf("Devin behavioral result lacks matching effective declaration %s", id)
+			}
+		}
 		for label, observed := range map[string]bool{
 			"both preflights":             result.PreflightSkills && result.PreflightAuthentication,
 			"selected common bytes":       result.SelectedCommonSkills,
@@ -552,6 +1246,10 @@ func TestPromotedArtifactSharedTargetConformance(t *testing.T) {
 			}
 		}
 		wantWorkspaceWrite := access == "read-write"
+		_, declaresWorkspaceWrite := devinEffective["workspace.write"]
+		if declaresWorkspaceWrite != wantWorkspaceWrite {
+			t.Fatalf("Devin declared workspace write=%v, want %v", declaresWorkspaceWrite, wantWorkspaceWrite)
+		}
 		if result.WorkspaceWritable != wantWorkspaceWrite {
 			t.Fatalf("Devin %s workspace write = %v, want %v", access, result.WorkspaceWritable, wantWorkspaceWrite)
 		}
@@ -562,7 +1260,7 @@ func TestPromotedArtifactSharedTargetConformance(t *testing.T) {
 		assertNoSessions(t, home)
 	}
 
-	legacy := exec.Command(binary, "codex", "--profile", "reviews", "--auth", "work", "--dry-run")
+	legacy := exec.Command(binary, "codex", "--profile", "reviews", "--auth", explanationStoredAuthRef, "--dry-run")
 	legacy.Env, legacy.Dir = nativeCandidateEnvironment(home, path, nil), workspace
 	if output, err := legacy.CombinedOutput(); err == nil || !strings.Contains(string(output), "unsupported schema version 1") {
 		t.Fatalf("installed Codex reinterpreted legacy Devin Profile: err=%v output=%s", err, output)
@@ -624,6 +1322,29 @@ func assertPromotedArtifactV3WorkspaceModes(t *testing.T) {
 		writable bool
 	}{{"readonly", false}, {"coding", true}} {
 		workspace := realTemporaryDirectory(t)
+		explain := exec.Command(binary, "explain", "sandbox", "--profile", test.profile, "--json")
+		explain.Env, explain.Dir = nativeCandidateEnvironment(home, path, nil), workspace
+		explanationOutput, err := explain.CombinedOutput()
+		if err != nil {
+			t.Fatalf("installed v3 %s explanation: %v; output=%s", test.profile, err, explanationOutput)
+		}
+		var explanation struct {
+			Plan struct {
+				Requested []nativeExplanationFact `json:"requested"`
+				Effective []nativeExplanationFact `json:"effective"`
+			} `json:"plan"`
+		}
+		if err := json.Unmarshal(explanationOutput, &explanation); err != nil {
+			t.Fatalf("decode v3 %s explanation: %v; output=%s", test.profile, err, explanationOutput)
+		}
+		workspaceFact, found := nativeExplanationFactByID(explanation.Plan.Requested, "common.workspace")
+		wantAccess := "read-only"
+		if test.writable {
+			wantAccess = "read-write"
+		}
+		if !found || workspaceFact.Value.Access != wantAccess || nativeExplanationHasFact(explanation.Plan.Effective, "workspace.write") != test.writable || !nativeExplanationHasFact(explanation.Plan.Effective, "runtime.session") {
+			t.Fatalf("v3 %s declared authority does not match expected behavioral case: %#v", test.profile, explanation.Plan)
+		}
 		commands := "set -u\n" +
 			"test \"$(cat \"$HOME/.acs/common/v1/skills/devin-config/review/SKILL.md\")\" != \"\" || exit 61\n" +
 			"test ! -e \"$HOME/.config/devin/skills/review/SKILL.md\" || exit 62\n" +
@@ -813,6 +1534,45 @@ func assertPromotedArtifactNativeContainment(t *testing.T) {
 	}
 	assertExternalWriteFixtureIsUnrelated(t, config.ExternalWritePath, workspace, home)
 	writeFakeDevinConfiguration(t, workspace, config)
+	explain := exec.Command(binary, "explain", "devin", "--profile", "reviews", "--json")
+	explain.Dir, explain.Env = workspace, nativeCandidateEnvironment(home, tools+string(os.PathListSeparator)+path, map[string]string{
+		"ACS_NATIVE_CANDIDATE_SECRET": privateEnvironmentValue,
+	})
+	explanationOutput, err := explain.CombinedOutput()
+	if err != nil {
+		t.Fatalf("native containment explanation: %v; output=%s", err, explanationOutput)
+	}
+	var explanation struct {
+		Plan struct {
+			Requested []nativeExplanationFact `json:"requested"`
+			Effective []nativeExplanationFact `json:"effective"`
+		} `json:"plan"`
+	}
+	if err := json.Unmarshal(explanationOutput, &explanation); err != nil {
+		t.Fatalf("decode native containment explanation: %v; output=%s", err, explanationOutput)
+	}
+	workspaceFact, found := nativeExplanationFactByID(explanation.Plan.Requested, "common.workspace")
+	if !found || workspaceFact.Value.Access != "read-write" {
+		t.Fatalf("native containment explanation workspace fact = %#v", workspaceFact)
+	}
+	declared := map[string]nativeExplanationFact{}
+	for _, fact := range explanation.Plan.Effective {
+		declared[fact.ID] = fact
+	}
+	for _, id := range []string{"runtime.environment", "runtime.environment.fixed-path", "runtime.environment.synthetic", "runtime.devices", "runtime.mach-services", "runtime.network", "runtime.process", "runtime.session", "runtime.sysctls", "runtime.terminal", "workspace.read", "workspace.write"} {
+		if _, found := declared[id]; !found {
+			t.Fatalf("native containment behavior lacks matching effective declaration %s", id)
+		}
+	}
+	if declared["runtime.network"].Value.Mode != "local-ip-socket-bind-no-listen-coarse-outbound-ip-macos-dns" {
+		t.Fatalf("native containment network declaration = %#v", declared["runtime.network"])
+	}
+	if got := declared["runtime.sysctls"].Value.Names; !reflect.DeepEqual(got, []string{"hw.ncpu", "hw.pagesize", "hw.pagesize_compat"}) {
+		t.Fatalf("native containment sysctl declaration = %q", got)
+	}
+	if got := declared["runtime.mach-services"].Value.Names; !reflect.DeepEqual(got, []string{"com.apple.SecurityServer", "com.apple.trustd.agent"}) {
+		t.Fatalf("native containment Mach-service declaration = %q", got)
+	}
 
 	descriptor, err := os.Open(hostSecret)
 	if err != nil {
@@ -839,12 +1599,16 @@ func assertPromotedArtifactNativeContainment(t *testing.T) {
 		t.Fatal("candidate did not run both preflight probes in the contained Session")
 	}
 	for name, actual := range map[string]bool{
-		"workspace write":     result.WorkspaceWritable,
-		"Session write":       result.SessionWritable,
-		"Session temporary":   result.TemporaryWritable,
-		"allowed environment": result.AllowedEnvironment,
-		"outbound IP":         result.OutboundIP,
-		"descendant start":    result.DescendantStarted,
+		"workspace write":      result.WorkspaceWritable,
+		"Session write":        result.SessionWritable,
+		"Session temporary":    result.TemporaryWritable,
+		"allowed environment":  result.AllowedEnvironment,
+		"outbound IP":          result.OutboundIP,
+		"local IP bind":        result.LocalIPBind,
+		"descendant start":     result.DescendantStarted,
+		"registered sysctls":   result.RegisteredSysctls,
+		"system trust read":    result.SystemTrustSettings,
+		"local trust evaluate": result.LocalSystemTrust,
 	} {
 		if !actual {
 			t.Fatalf("native containment did not preserve %s", name)
@@ -856,7 +1620,9 @@ func assertPromotedArtifactNativeContainment(t *testing.T) {
 		"secret environment":   result.BlockedEnvironmentVisible,
 		"inherited descriptor": result.DescriptorLeaked,
 		"host Unix socket":     result.HostSocketReachable,
+		"local Unix bind":      result.LocalUnixBind,
 		"unrelated host write": result.ExternalWriteSucceeded,
+		"unregistered sysctl":  !result.UnregisteredSysctlDenied,
 	} {
 		if actual {
 			t.Fatalf("native containment exposed %s", name)
@@ -968,8 +1734,14 @@ type fakeDevinResult struct {
 	DescriptorLeaked          bool `json:"descriptorLeaked"`
 	HostSocketReachable       bool `json:"hostSocketReachable"`
 	OutboundIP                bool `json:"outboundIP"`
+	LocalIPBind               bool `json:"localIPBind"`
+	LocalUnixBind             bool `json:"localUnixBind"`
 	ExternalWriteSucceeded    bool `json:"externalWriteSucceeded"`
 	DescendantStarted         bool `json:"descendantStarted"`
+	RegisteredSysctls         bool `json:"registeredSysctls"`
+	UnregisteredSysctlDenied  bool `json:"unregisteredSysctlDenied"`
+	SystemTrustSettings       bool `json:"systemTrustSettings"`
+	LocalSystemTrust          bool `json:"localSystemTrust"`
 	SelectedCommonSkills      bool `json:"selectedCommonSkills"`
 	SelectedProjectedSkills   bool `json:"selectedProjectedSkills"`
 	UnselectedGlobalAbsent    bool `json:"unselectedGlobalAbsent"`
@@ -1109,7 +1881,13 @@ func runFakeDevinInteractive() {
 		DescriptorLeaked:          fakeDevinDescriptorContains(configuration.DescriptorSentinel),
 		HostSocketReachable:       fakeDevinCanDial("unix", configuration.HostSocket),
 		OutboundIP:                fakeDevinCanDial("tcp", configuration.OutboundAddress),
+		LocalIPBind:               fakeDevinCanBind("tcp4", "127.0.0.1:0"),
+		LocalUnixBind:             fakeDevinCanBind("unix", filepath.Join(os.Getenv("HOME"), "denied-bind.sock")),
 		ExternalWriteSucceeded:    writeFakeDevinMarker(configuration.ExternalWritePath),
+		RegisteredSysctls:         fakeDevinRegisteredSysctls(),
+		UnregisteredSysctlDenied:  fakeDevinUnregisteredSysctlDenied(),
+		SystemTrustSettings:       fakeDevinCopySystemTrustSettings() == nil,
+		LocalSystemTrust:          fakeDevinEvaluateLocalSystemTrust() == nil,
 	}
 	result.DescendantStarted = startFakeDevinDescendant()
 	writeFakeDevinMarker(filepath.Join(workspace, "interactive-started"))
@@ -1230,6 +2008,108 @@ func fakeDevinAllowedEnvironment() bool {
 		os.Getenv("TERM") == "xterm-256color"
 }
 
+func fakeDevinRegisteredSysctls() bool {
+	for _, name := range []string{"hw.ncpu", "hw.pagesize", "hw.pagesize_compat"} {
+		if _, err := unix.SysctlUint32(name); err != nil {
+			return false
+		}
+	}
+	return true
+}
+
+func fakeDevinUnregisteredSysctlDenied() bool {
+	_, err := unix.Sysctl("kern.hostname")
+	return errors.Is(err, os.ErrPermission) || errors.Is(err, syscall.EPERM) || errors.Is(err, syscall.EACCES)
+}
+
+func fakeDevinCopySystemTrustSettings() error {
+	security, err := purego.Dlopen("/System/Library/Frameworks/Security.framework/Security", purego.RTLD_NOW|purego.RTLD_LOCAL)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = purego.Dlclose(security) }()
+	coreFoundation, err := purego.Dlopen("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation", purego.RTLD_NOW|purego.RTLD_LOCAL)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = purego.Dlclose(coreFoundation) }()
+	var copyCertificates func(uint32, *unsafe.Pointer) int32
+	var arrayCount func(unsafe.Pointer) int
+	var release func(unsafe.Pointer)
+	purego.RegisterLibFunc(&copyCertificates, security, "SecTrustSettingsCopyCertificates")
+	purego.RegisterLibFunc(&arrayCount, coreFoundation, "CFArrayGetCount")
+	purego.RegisterLibFunc(&release, coreFoundation, "CFRelease")
+	var certificates unsafe.Pointer
+	status := copyCertificates(2, &certificates)
+	if certificates != nil {
+		defer release(certificates)
+	}
+	if status != 0 || certificates == nil || arrayCount(certificates) <= 0 {
+		return errors.New("system trust settings unavailable")
+	}
+	return nil
+}
+
+func fakeDevinEvaluateLocalSystemTrust() error {
+	security, err := purego.Dlopen("/System/Library/Frameworks/Security.framework/Security", purego.RTLD_NOW|purego.RTLD_LOCAL)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = purego.Dlclose(security) }()
+	coreFoundation, err := purego.Dlopen("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation", purego.RTLD_NOW|purego.RTLD_LOCAL)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = purego.Dlclose(coreFoundation) }()
+	var copyCertificates func(uint32, *unsafe.Pointer) int32
+	var arrayCount func(unsafe.Pointer) int
+	var arrayValueAtIndex func(unsafe.Pointer, int) unsafe.Pointer
+	var createBasicX509 func() unsafe.Pointer
+	var createTrust func(unsafe.Pointer, unsafe.Pointer, *unsafe.Pointer) int32
+	var setNetworkFetchAllowed func(unsafe.Pointer, uint8) int32
+	var evaluateTrust func(unsafe.Pointer, *unsafe.Pointer) bool
+	var release func(unsafe.Pointer)
+	purego.RegisterLibFunc(&copyCertificates, security, "SecTrustSettingsCopyCertificates")
+	purego.RegisterLibFunc(&arrayCount, coreFoundation, "CFArrayGetCount")
+	purego.RegisterLibFunc(&arrayValueAtIndex, coreFoundation, "CFArrayGetValueAtIndex")
+	purego.RegisterLibFunc(&createBasicX509, security, "SecPolicyCreateBasicX509")
+	purego.RegisterLibFunc(&createTrust, security, "SecTrustCreateWithCertificates")
+	purego.RegisterLibFunc(&setNetworkFetchAllowed, security, "SecTrustSetNetworkFetchAllowed")
+	purego.RegisterLibFunc(&evaluateTrust, security, "SecTrustEvaluateWithError")
+	purego.RegisterLibFunc(&release, coreFoundation, "CFRelease")
+	var certificates unsafe.Pointer
+	if status := copyCertificates(2, &certificates); status != 0 || certificates == nil {
+		return errors.New("system trust certificates unavailable")
+	}
+	defer release(certificates)
+	if arrayCount(certificates) <= 0 {
+		return errors.New("system trust certificates empty")
+	}
+	certificate := arrayValueAtIndex(certificates, 0)
+	policy := createBasicX509()
+	if certificate == nil || policy == nil {
+		return errors.New("local trust inputs unavailable")
+	}
+	defer release(policy)
+	var trust unsafe.Pointer
+	if status := createTrust(certificate, policy, &trust); status != 0 || trust == nil {
+		return errors.New("local trust creation unavailable")
+	}
+	defer release(trust)
+	if setNetworkFetchAllowed(trust, 0) != 0 {
+		return errors.New("local trust network control unavailable")
+	}
+	var evaluationError unsafe.Pointer
+	trusted := evaluateTrust(trust, &evaluationError)
+	if evaluationError != nil {
+		defer release(evaluationError)
+	}
+	if !trusted {
+		return errors.New("local system trust unavailable")
+	}
+	return nil
+}
+
 func fakeDevinCanRead(path string) bool {
 	if path == "" {
 		return false
@@ -1259,6 +2139,32 @@ func fakeDevinCanDial(network, address string) bool {
 		return false
 	}
 	return connection.Close() == nil
+}
+
+func fakeDevinCanBind(network, address string) bool {
+	var family int
+	var socketAddress unix.Sockaddr
+	switch network {
+	case "tcp4":
+		family = unix.AF_INET
+		socketAddress = &unix.SockaddrInet4{Addr: [4]byte{127, 0, 0, 1}}
+	case "unix":
+		family = unix.AF_UNIX
+		socketAddress = &unix.SockaddrUnix{Name: address}
+	default:
+		return false
+	}
+	descriptor, err := unix.Socket(family, unix.SOCK_STREAM, 0)
+	if err != nil {
+		return false
+	}
+	unix.CloseOnExec(descriptor)
+	bindErr := unix.Bind(descriptor, socketAddress)
+	closeErr := unix.Close(descriptor)
+	if family == unix.AF_UNIX && bindErr == nil {
+		_ = os.Remove(address)
+	}
+	return bindErr == nil && closeErr == nil
 }
 
 func writeFakeDevinMarker(path string) bool {

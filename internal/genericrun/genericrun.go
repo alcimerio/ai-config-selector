@@ -22,15 +22,7 @@ type Target struct{ executor commandExecutor }
 
 func New() *Target { return &Target{executor: executor.New()} }
 
-func (target *Target) PlanLaunch(ctx context.Context, workingDirectory string, resolved category.ResolvedProfile, argv []string) (launch.Plan, error) {
-	command, err := runcommand.Resolve(workingDirectory, argv)
-	if err != nil {
-		return launch.Plan{}, err
-	}
-	commandPlan, err := resolved.ForCommand()
-	if err != nil {
-		return launch.Plan{}, err
-	}
+func (target *Target) PlanLaunch(ctx context.Context, workingDirectory string, commandPlan category.ResolvedProfile, command runcommand.Command) (launch.Plan, error) {
 	plan, err := commandPlan.Plan(ctx, workingDirectory)
 	if err != nil {
 		return launch.Plan{}, err
@@ -62,15 +54,7 @@ func sanitizePlanPaths(plan *launch.Plan) {
 	}
 }
 
-func (target *Target) Launch(ctx context.Context, sessionsDirectory, workingDirectory string, resolved category.ResolvedProfile, argv []string, terminal launch.Terminal) (int, error) {
-	command, err := runcommand.Resolve(workingDirectory, argv)
-	if err != nil {
-		return 1, sanitizeError(err)
-	}
-	commandPlan, err := resolved.ForCommand()
-	if err != nil {
-		return 1, sanitizeError(err)
-	}
+func (target *Target) Launch(ctx context.Context, sessionsDirectory, workingDirectory string, commandPlan category.ResolvedProfile, command runcommand.Command, terminal launch.Terminal) (int, error) {
 	code, err := target.executor.RunCommand(ctx, executor.CommandRequest{SessionsDirectory: sessionsDirectory,
 		WorkingDirectory: workingDirectory, ResolvedPlan: &commandPlan, Command: command, Terminal: terminal})
 	if err == nil {

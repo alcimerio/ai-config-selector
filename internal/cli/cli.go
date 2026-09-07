@@ -16,6 +16,7 @@ import (
 	"github.com/alcimerio/ai-config-selector/internal/launch"
 	"github.com/alcimerio/ai-config-selector/internal/profile"
 	"github.com/alcimerio/ai-config-selector/internal/profileinspect"
+	"github.com/alcimerio/ai-config-selector/internal/runcommand"
 	"github.com/charmbracelet/x/term"
 )
 
@@ -44,13 +45,18 @@ type ProfileLauncher interface {
 }
 
 type CodexTarget interface {
+	ResolveAuth(category.ResolvedProfile, string) (category.ResolvedProfile, error)
 	PlanLaunch(context.Context, string, category.ResolvedProfile, string) (launch.Plan, error)
 	Launch(context.Context, string, string, category.ResolvedProfile, string, launch.Terminal) (int, error)
 }
 
+type NativeReadiness interface {
+	Readiness(context.Context) (launch.SandboxReadiness, error)
+}
+
 type GenericTarget interface {
-	PlanLaunch(context.Context, string, category.ResolvedProfile, []string) (launch.Plan, error)
-	Launch(context.Context, string, string, category.ResolvedProfile, []string, launch.Terminal) (int, error)
+	PlanLaunch(context.Context, string, category.ResolvedProfile, runcommand.Command) (launch.Plan, error)
+	Launch(context.Context, string, string, category.ResolvedProfile, runcommand.Command, launch.Terminal) (int, error)
 }
 
 type CodexAuthRegistry interface {
@@ -90,6 +96,7 @@ type App struct {
 	CodexAuth         CodexAuthRegistry
 	CodexTarget       CodexTarget
 	GenericTarget     GenericTarget
+	NativeReadiness   NativeReadiness
 	CodexCategories   *category.Registry
 	CodexBuilder      ProfileBuilder
 	CodexProfiles     ProfileStore
@@ -130,6 +137,9 @@ func (app App) Run(ctx context.Context, args []string) int {
 	if handled, code := app.RunDiagnostics(args, os.UserHomeDir); handled {
 		return code
 	}
+	if handled, code := app.RunExplanation(ctx, args); handled {
+		return code
+	}
 	inv, _ := parseCommand(args)
 	switch inv.command.path {
 	case "profile create":
@@ -140,20 +150,20 @@ func (app App) Run(ctx context.Context, args []string) int {
 		return app.createProfile(ctx, inv.value)
 	case "devin":
 		if inv.enabled {
-			return app.dryRun(ctx, inv.value, "devin", app.Planner, "No Session was created and Devin was not started.")
+			return app.dryRun(ctx, inv.value, "devin", inv.thirdValue, app.Planner, "No Session was created and Devin was not started.")
 		}
-		return app.launchProfile(ctx, inv.value, "devin", app.Launcher, "launch")
+		return app.launchProfile(ctx, inv.value, "devin", inv.thirdValue, app.Launcher, "launch")
 	case "run":
-		return app.runGeneric(ctx, inv.value, inv.arguments, inv.enabled)
+		return app.runGeneric(ctx, inv.value, inv.arguments, inv.enabled, inv.thirdValue)
 	case "sandbox":
 		if inv.enabled {
-			return app.dryRun(ctx, inv.value, "", app.SandboxPlanner, "No Session was created and no sandbox shell was started.")
+			return app.dryRun(ctx, inv.value, "", inv.thirdValue, app.SandboxPlanner, "No Session was created and no sandbox shell was started.")
 		}
-		return app.launchProfile(ctx, inv.value, "", app.SandboxLauncher, "launch sandbox")
+		return app.launchProfile(ctx, inv.value, "", inv.thirdValue, app.SandboxLauncher, "launch sandbox")
 	case "codex create-profile":
 		return app.createCodexProfile(ctx, inv.value, inv.auxValue)
 	case "codex":
-		return app.runCodex(ctx, inv.value, inv.auxValue, inv.enabled)
+		return app.runCodex(ctx, inv.value, inv.auxValue, inv.enabled, inv.thirdValue)
 	case "codex auth login":
 		return app.loginCodexAuth(ctx, inv.value, inv.enabled)
 	case "codex auth list":
@@ -168,7 +178,7 @@ func (app App) Run(ctx context.Context, args []string) int {
 	return app.fail("unavailable command; try acs help")
 }
 
-func (app App) runGeneric(ctx context.Context, name string, arguments []string, dryRun bool) int {
+func (app App) runGeneric(ctx context.Context, name string, arguments []string, dryRun bool, expectedDigest string) int {
 	if app.GenericTarget == nil || app.Categories == nil || app.Profiles == nil {
 		return app.fail("generic command execution is unavailable")
 	}
@@ -184,8 +194,19 @@ func (app App) runGeneric(ctx context.Context, name string, arguments []string, 
 	if err != nil {
 		return app.fail("resolve Profile %q: %v", name, err)
 	}
+	command, err := runcommand.Resolve(app.WorkingDirectory, arguments)
+	if err != nil {
+		return app.fail("resolve command for Profile %q: %v", name, err)
+	}
+	commandPlan, err := resolved.ForCommandIntent(string(command.Form()), command.ArgumentCount())
+	if err != nil {
+		return app.fail("resolve command authority for Profile %q: %v", name, err)
+	}
+	if !matchesAuthorityDigest(commandPlan, expectedDigest) {
+		return app.fail("authority_plan_changed: semantic authority does not match --expect-authority-digest")
+	}
 	if dryRun {
-		plan, err := app.GenericTarget.PlanLaunch(ctx, app.WorkingDirectory, resolved, arguments)
+		plan, err := app.GenericTarget.PlanLaunch(ctx, app.WorkingDirectory, commandPlan, command)
 		if err != nil {
 			return app.fail("plan Profile %q command: %v", name, err)
 		}
@@ -202,7 +223,7 @@ func (app App) runGeneric(ctx context.Context, name string, arguments []string, 
 		fmt.Fprintln(app.Output, "\nThe executable was validated without exposing its path or arguments. No Session or process was created.")
 		return 0
 	}
-	code, err := app.GenericTarget.Launch(ctx, app.SessionsDirectory, app.WorkingDirectory, resolved, arguments,
+	code, err := app.GenericTarget.Launch(ctx, app.SessionsDirectory, app.WorkingDirectory, commandPlan, command,
 		launch.Terminal{Input: app.Input, Output: app.Output, ErrorOutput: app.ErrorOutput})
 	if err != nil {
 		var targetExit exitCodeError
@@ -214,7 +235,7 @@ func (app App) runGeneric(ctx context.Context, name string, arguments []string, 
 	return code
 }
 
-func (app App) runCodex(ctx context.Context, name, authOverride string, dryRun bool) int {
+func (app App) runCodex(ctx context.Context, name, authOverride string, dryRun bool, expectedDigest string) int {
 	if app.CodexTarget == nil || app.CodexCategories == nil || app.CodexProfiles == nil {
 		return app.fail("interactive Codex is unavailable")
 	}
@@ -233,6 +254,13 @@ func (app App) runCodex(ctx context.Context, name, authOverride string, dryRun b
 	}
 	if err != nil {
 		return app.fail("resolve Profile %q: %v", name, err)
+	}
+	selected, err := app.CodexTarget.ResolveAuth(resolved, authOverride)
+	if err != nil {
+		return app.fail("resolve Profile %q Codex authentication: %v", name, err)
+	}
+	if !matchesAuthorityDigest(selected, expectedDigest) {
+		return app.fail("authority_plan_changed: semantic authority does not match --expect-authority-digest")
 	}
 	if dryRun {
 		plan, err := app.CodexTarget.PlanLaunch(ctx, app.WorkingDirectory, resolved, authOverride)
@@ -476,10 +504,13 @@ func (app App) createProfile(ctx context.Context, name string) int {
 	return 0
 }
 
-func (app App) dryRun(ctx context.Context, name, overlay string, planner LaunchPlanner, closingMessage string) int {
+func (app App) dryRun(ctx context.Context, name, overlay, expectedDigest string, planner LaunchPlanner, closingMessage string) int {
 	resolved, err := app.resolveProfile(ctx, name, overlay)
 	if err != nil {
 		return app.fail("%v", err)
+	}
+	if !matchesAuthorityDigest(resolved, expectedDigest) {
+		return app.fail("authority_plan_changed: semantic authority does not match --expect-authority-digest")
 	}
 	plan, err := planner.PlanLaunch(ctx, app.WorkingDirectory, resolved)
 	if err != nil {
@@ -503,10 +534,13 @@ func (app App) dryRun(ctx context.Context, name, overlay string, planner LaunchP
 	return 0
 }
 
-func (app App) launchProfile(ctx context.Context, name, overlay string, launcher ProfileLauncher, action string) int {
+func (app App) launchProfile(ctx context.Context, name, overlay, expectedDigest string, launcher ProfileLauncher, action string) int {
 	resolved, err := app.resolveProfile(ctx, name, overlay)
 	if err != nil {
 		return app.fail("%v", err)
+	}
+	if !matchesAuthorityDigest(resolved, expectedDigest) {
+		return app.fail("authority_plan_changed: semantic authority does not match --expect-authority-digest")
 	}
 	exitCode, err := launcher.Launch(
 		ctx,
@@ -523,6 +557,10 @@ func (app App) launchProfile(ctx context.Context, name, overlay string, launcher
 		return app.fail("%s Profile %q: %v", action, name, err)
 	}
 	return exitCode
+}
+
+func matchesAuthorityDigest(resolved category.ResolvedProfile, expected string) bool {
+	return expected == "" || resolved.AuthorityDigest() == expected
 }
 
 func (app App) resolveProfile(ctx context.Context, name, overlay string) (category.ResolvedProfile, error) {

@@ -161,6 +161,12 @@ jobs:
           ACS_PROMOTED_SANDBOX_BACKEND: ${{ matrix.sandbox_backend }}
         run: go test ./acceptance -run '^TestPromotedArtifactNativeContainmentContract$/^generic_literal_command_uses_candidate_containment$' -count=1 -v
 
+      - name: Exercise effective explanation through supplied candidate
+        env:
+          ACS_PROMOTED_BINARY: ${{ runner.temp }}/acs-promoted-${{ matrix.os }}-${{ matrix.arch }}/bin/acs
+          ACS_PROMOTED_SANDBOX_BACKEND: ${{ matrix.sandbox_backend }}
+        run: go test ./acceptance -run '^TestPromotedArtifactNativeContainmentContract$/^effective_explanation_is_linked_and_narrowly_observed$' -count=1 -v
+
       - name: Run supported native race tests
         run: go test -race ./...
 

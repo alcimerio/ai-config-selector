@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"sort"
 	"strconv"
@@ -205,6 +206,7 @@ type SandboxCheck struct {
 	Executable        string
 	RuntimeInputs     []string
 	RuntimeProbePaths []string
+	RuntimeAuthority  RuntimeAuthority
 }
 
 // ProcessRequest describes one command that must run through the selected
@@ -219,9 +221,62 @@ type ProcessRequest struct {
 	Executable             string
 	RuntimeInputs          []string
 	RuntimeProbePaths      []string
+	RuntimeAuthority       RuntimeAuthority
 	RecoveryProofChallenge []byte
 	Arguments              []string
 	Terminal               Terminal
+}
+
+// RuntimeAuthority is the typed intrinsic grant set consumed by environment
+// construction and native policy compilation. The zero value selects the sole
+// shipped set for compatibility with internal callers.
+type RuntimeAuthority struct {
+	Version                   int
+	ProcessMode               string
+	SystemReadMode            string
+	MetadataMode              string
+	SessionAccess             string
+	NetworkMode               string
+	TerminalMode              string
+	DeviceMode                string
+	FixedPath                 string
+	SyntheticEnvironmentNames []string
+	InheritedEnvironmentNames []string
+	SysctlNames               []string
+	MachServices              []string
+}
+
+func DefaultRuntimeAuthority() RuntimeAuthority {
+	return RuntimeAuthority{Version: 1, ProcessMode: "same-sandbox-descendants", SystemReadMode: "bounded-macos-runtime",
+		MetadataMode: "executable-and-session-ancestors", SessionAccess: "private-read-write",
+		NetworkMode: "local-ip-socket-bind-no-listen-coarse-outbound-ip-macos-dns", TerminalMode: "attached-pty-signals-resize", DeviceMode: "bounded-tty-random-null-fd",
+		FixedPath:                 safeProcessPath,
+		SyntheticEnvironmentNames: []string{"HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME", "XDG_STATE_HOME", "TMPDIR"},
+		InheritedEnvironmentNames: []string{"TERM", "COLORTERM", "LANG", "LC_ALL", "LC_CTYPE"},
+		SysctlNames:               []string{"hw.pagesize", "hw.pagesize_compat", "hw.ncpu"},
+		MachServices:              []string{"com.apple.SecurityServer", "com.apple.trustd.agent"}}
+}
+
+func (value RuntimeAuthority) Clone() RuntimeAuthority {
+	value.SyntheticEnvironmentNames = append([]string(nil), value.SyntheticEnvironmentNames...)
+	value.InheritedEnvironmentNames = append([]string(nil), value.InheritedEnvironmentNames...)
+	value.SysctlNames = append([]string(nil), value.SysctlNames...)
+	value.MachServices = append([]string(nil), value.MachServices...)
+	return value
+}
+
+func normalizeRuntimeAuthority(value RuntimeAuthority) (RuntimeAuthority, error) {
+	if value.Version == 0 {
+		if !reflect.DeepEqual(value, RuntimeAuthority{}) {
+			return RuntimeAuthority{}, errors.New("unsupported runtime authority")
+		}
+		return DefaultRuntimeAuthority(), nil
+	}
+	want := DefaultRuntimeAuthority()
+	if !reflect.DeepEqual(value, want) {
+		return RuntimeAuthority{}, errors.New("unsupported runtime authority")
+	}
+	return value.Clone(), nil
 }
 
 // Process is a prepared sandboxed process tree.
@@ -422,7 +477,7 @@ func (sandbox *nativeProcessSandbox) Prepare(ctx context.Context, request Proces
 	if err := validateTerminal(request.Terminal); err != nil {
 		return nil, err
 	}
-	validated.environment, err = buildProcessEnvironment(validated.sessionHome, validated.temporaryDirectory, sandbox.environ())
+	validated.environment, err = buildProcessEnvironmentForAuthority(validated.sessionHome, validated.temporaryDirectory, sandbox.environ(), validated.runtimeAuthority)
 	if err != nil {
 		return nil, err
 	}
@@ -483,9 +538,14 @@ type validatedSandboxCheck struct {
 	runtimeInputs              []string
 	runtimeProbePaths          []string
 	runtimeProbeTraversalPaths []string
+	runtimeAuthority           RuntimeAuthority
 }
 
 func validateSandboxCheck(request SandboxCheck) (validatedSandboxCheck, error) {
+	runtimeAuthority, err := normalizeRuntimeAuthority(request.RuntimeAuthority)
+	if err != nil {
+		return validatedSandboxCheck{}, sandboxError(SandboxSetupFailed, err)
+	}
 	workspaceAccess, err := normalizeWorkspaceAccess(request.WorkspaceAccess)
 	if err != nil {
 		return validatedSandboxCheck{}, sandboxError(SandboxUnsafePath, err)
@@ -527,6 +587,7 @@ func validateSandboxCheck(request SandboxCheck) (validatedSandboxCheck, error) {
 		workspace: workspace, workspaceAccess: workspaceAccess, sessionsDirectory: sessionsDirectory, executable: executable,
 		runtimeInputs: runtimeInputs, runtimeProbePaths: runtimeProbePaths,
 		runtimeProbeTraversalPaths: runtimeProbeTraversalPaths,
+		runtimeAuthority:           runtimeAuthority,
 	}, nil
 }
 
@@ -548,6 +609,7 @@ type validatedProcessRequest struct {
 	runtimeInputs              []string
 	runtimeProbePaths          []string
 	runtimeProbeTraversalPaths []string
+	runtimeAuthority           RuntimeAuthority
 	recoveryProofChallenge     []byte
 	arguments                  []string
 	environment                []string
@@ -559,6 +621,7 @@ func validateProcessRequest(request ProcessRequest) (validatedProcessRequest, er
 		Workspace: request.Workspace, WorkspaceAccess: request.WorkspaceAccess, SessionsDirectory: request.SessionsDirectory,
 		Executable: request.Executable, RuntimeInputs: request.RuntimeInputs,
 		RuntimeProbePaths: request.RuntimeProbePaths,
+		RuntimeAuthority:  request.RuntimeAuthority,
 	})
 	if err != nil {
 		return validatedProcessRequest{}, err
@@ -584,6 +647,7 @@ func validateProcessRequest(request ProcessRequest) (validatedProcessRequest, er
 		temporaryDirectory: temporaryDirectory, executable: checked.executable,
 		runtimeInputs: checked.runtimeInputs, runtimeProbePaths: checked.runtimeProbePaths,
 		runtimeProbeTraversalPaths: checked.runtimeProbeTraversalPaths,
+		runtimeAuthority:           checked.runtimeAuthority,
 		recoveryProofChallenge:     append([]byte(nil), request.RecoveryProofChallenge...),
 		arguments:                  append([]string(nil), request.Arguments...),
 		terminal:                   request.Terminal,
@@ -797,30 +861,50 @@ func isTerminalFile(file *os.File) bool {
 }
 
 func buildProcessEnvironment(sessionHome, temporaryDirectory string, host []string) ([]string, error) {
+	return buildProcessEnvironmentForAuthority(sessionHome, temporaryDirectory, host, DefaultRuntimeAuthority())
+}
+
+func buildProcessEnvironmentForAuthority(sessionHome, temporaryDirectory string, host []string, authority RuntimeAuthority) ([]string, error) {
 	values := map[string]string{}
+	allowed := make(map[string]bool, len(authority.InheritedEnvironmentNames))
+	for _, name := range authority.InheritedEnvironmentNames {
+		allowed[name] = true
+	}
 	for _, entry := range host {
 		key, value, found := strings.Cut(entry, "=")
 		if !found {
 			continue
 		}
-		switch key {
-		case "TERM", "COLORTERM", "LANG", "LC_ALL", "LC_CTYPE":
+		if allowed[key] {
 			if !safeEnvironmentValue(value) {
 				return nil, sandboxError(SandboxInvalidEnvironment, nil)
 			}
 			values[key] = value
 		}
 	}
-	environment := []string{
-		"HOME=" + sessionHome,
-		"XDG_CONFIG_HOME=" + filepath.Join(sessionHome, ".config"),
-		"XDG_DATA_HOME=" + filepath.Join(sessionHome, ".local", "share"),
-		"XDG_CACHE_HOME=" + filepath.Join(sessionHome, ".cache"),
-		"XDG_STATE_HOME=" + filepath.Join(sessionHome, ".local", "state"),
-		"TMPDIR=" + temporaryDirectory,
-		"PATH=" + safeProcessPath,
+	environment := make([]string, 0, len(authority.SyntheticEnvironmentNames)+1+len(authority.InheritedEnvironmentNames))
+	for _, name := range authority.SyntheticEnvironmentNames {
+		var value string
+		switch name {
+		case "HOME":
+			value = sessionHome
+		case "XDG_CONFIG_HOME":
+			value = filepath.Join(sessionHome, ".config")
+		case "XDG_DATA_HOME":
+			value = filepath.Join(sessionHome, ".local", "share")
+		case "XDG_CACHE_HOME":
+			value = filepath.Join(sessionHome, ".cache")
+		case "XDG_STATE_HOME":
+			value = filepath.Join(sessionHome, ".local", "state")
+		case "TMPDIR":
+			value = temporaryDirectory
+		default:
+			return nil, sandboxError(SandboxInvalidEnvironment, nil)
+		}
+		environment = append(environment, name+"="+value)
 	}
-	for _, key := range []string{"TERM", "COLORTERM", "LANG", "LC_ALL", "LC_CTYPE"} {
+	environment = append(environment, "PATH="+authority.FixedPath)
+	for _, key := range authority.InheritedEnvironmentNames {
 		if value, exists := values[key]; exists {
 			environment = append(environment, key+"="+value)
 		}

@@ -49,6 +49,14 @@ migration, grants and projection contract](docs/common-profile-format.md) and
 the [shared Devin/Codex behavior, evidence boundaries and daily-use
 checklist](docs/shared-target-conformance.md).
 
+Explain the effective common and target authority without creating a Session or
+starting a target with `acs explain sandbox|devin|codex|run --profile NAME`.
+The versioned output separates requested, target-added, effective and
+unsupported facts and gives a semantic authority digest; equal digests do not
+claim equal local paths, contents, arguments, credentials or readiness. Native
+readiness is unchecked unless `--check-native-readiness` is explicitly supplied.
+See the [effective capability explanation contract](docs/effective-capability-explanation.md).
+
 ## Edit and repair Profiles (development source)
 
 Use the seeded Profile Builder to change stored selections or create a copy:

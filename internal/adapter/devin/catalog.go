@@ -33,6 +33,39 @@ func DiscoverSelectedSkillCatalog(ctx context.Context, home string, references [
 	return discoverSkillCatalog(ctx, home, selected)
 }
 
+// DiscoverExactSkillReferences resolves only the explicitly selected leaf
+// identities. Unlike catalog discovery it never enumerates sibling bundles.
+func DiscoverExactSkillReferences(ctx context.Context, home string, references []skills.SkillReference) ([]skills.SkillBundle, error) {
+	return discoverExactSkillReferences(ctx, home, references, os.Stat)
+}
+
+func discoverExactSkillReferences(ctx context.Context, home string, references []skills.SkillReference, stat func(string) (os.FileInfo, error)) ([]skills.SkillBundle, error) {
+	ordered := append([]skills.SkillReference(nil), references...)
+	devinruntime.SortSkillReferences(ordered)
+	result := make([]skills.SkillBundle, 0, len(ordered))
+	for _, reference := range ordered {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		rule, ok := devinruntime.SourceRuleFor(reference.Source)
+		clean, err := devinruntime.CleanBundleRelativePath(reference.RelativePath)
+		if !ok || err != nil {
+			return nil, fmt.Errorf("selected Skill Reference %s is unsupported", devinruntime.DiagnosticIdentity(reference))
+		}
+		bundlePath := filepath.Join(home, rule.RelativeDirectory, clean)
+		bundleInfo, err := stat(bundlePath)
+		if err != nil || !bundleInfo.IsDir() {
+			continue
+		}
+		manifest, err := stat(filepath.Join(bundlePath, "SKILL.md"))
+		if err != nil || !manifest.Mode().IsRegular() {
+			continue
+		}
+		result = append(result, skills.SkillBundle{Reference: skills.SkillReference{Source: reference.Source, RelativePath: clean}, DisplayName: clean, BundlePath: bundlePath})
+	}
+	return result, nil
+}
+
 func discoverSkillCatalog(ctx context.Context, home string, selected map[skills.Source]bool) ([]skills.SkillBundle, error) {
 	return discoverSkillCatalogReport(ctx, home, selected, nil)
 }

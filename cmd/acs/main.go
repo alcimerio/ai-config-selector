@@ -13,6 +13,7 @@ import (
 	"github.com/alcimerio/ai-config-selector/internal/adapter/devin"
 	"github.com/alcimerio/ai-config-selector/internal/cli"
 	"github.com/alcimerio/ai-config-selector/internal/codexauth"
+	"github.com/alcimerio/ai-config-selector/internal/executor"
 	"github.com/alcimerio/ai-config-selector/internal/genericrun"
 	"github.com/alcimerio/ai-config-selector/internal/launch"
 	"github.com/alcimerio/ai-config-selector/internal/profile"
@@ -111,6 +112,36 @@ func main() {
 		application := cli.App{Categories: adapter.Categories(), Profiles: profile.NewStore(acsHome, adapter.Categories()),
 			GenericTarget: genericrun.New(), SessionsDirectory: filepath.Join(acsHome, "sessions"), WorkingDirectory: workingDirectory,
 			Input: os.Stdin, Output: os.Stdout, ErrorOutput: os.Stderr}
+		os.Exit(application.Run(context.Background(), os.Args[1:]))
+	}
+	if cli.ExplanationRequested(os.Args[1:]) {
+		existingHome, err := os.UserHomeDir()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "acs: resolve user home for capability explanation")
+			os.Exit(1)
+		}
+		workingDirectory, err := os.Getwd()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "acs: resolve working directory for capability explanation")
+			os.Exit(1)
+		}
+		devinTarget, err := devin.New(devin.Config{BinaryPath: "devin", ExistingHomeDir: existingHome})
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "acs: configure Devin explanation")
+			os.Exit(1)
+		}
+		codexTarget, err := codexadapter.New(codexadapter.Config{BinaryPath: "codex", ExistingHomeDir: existingHome})
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "acs: configure Codex explanation")
+			os.Exit(1)
+		}
+		acsHome := filepath.Join(existingHome, ".acs")
+		application := cli.App{
+			Categories: devinTarget.Categories(), Profiles: profile.NewStore(acsHome, devinTarget.Categories()),
+			CodexTarget: codexTarget, CodexCategories: codexTarget.Categories(), CodexProfiles: profile.NewStore(acsHome, codexTarget.Categories()),
+			GenericTarget: genericrun.New(), NativeReadiness: executor.New(), WorkingDirectory: workingDirectory,
+			Input: os.Stdin, Output: os.Stdout, ErrorOutput: os.Stderr,
+		}
 		os.Exit(application.Run(context.Background(), os.Args[1:]))
 	}
 

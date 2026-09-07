@@ -8,7 +8,9 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/alcimerio/ai-config-selector/internal/authority"
 	"github.com/alcimerio/ai-config-selector/internal/category"
+	"github.com/alcimerio/ai-config-selector/internal/launch"
 	"github.com/alcimerio/ai-config-selector/internal/profile"
 	"github.com/alcimerio/ai-config-selector/internal/skills"
 )
@@ -17,10 +19,38 @@ type testProjection struct {
 	calls    int
 	original string
 	observed []byte
+	version  int
 }
 
-func (*testProjection) ID() string   { return "devin" }
-func (*testProjection) Version() int { return 1 }
+func TestSkillSemanticDigestUsesExactIdentityButNotBundlePath(t *testing.T) {
+	projection := &testProjection{}
+	planFor := func(reference skills.SkillReference, bundlePath string) authority.Plan {
+		contribution := SkillsContribution{selected: []skills.SkillBundle{{Reference: reference, BundlePath: bundlePath}}, projection: projection}
+		return authority.New([]authority.Contribution{{ID: SkillsCapabilityID, Value: contribution}}, launch.WorkspaceAccessReadOnly, 3, "devin", authority.TargetRequirements{Recipe: authority.RecipeDevin, ExecutableRequirementID: "devin-cli", Semantics: authority.DevinSemantics()})
+	}
+	identity := skills.SkillReference{Source: "shared-agents", RelativePath: "review"}
+	first := planFor(identity, "/private/source-one")
+	second := planFor(identity, "/different/private/source-two")
+	if first.AuthorityDigest() != second.AuthorityDigest() {
+		t.Fatal("private bundle path changed semantic digest")
+	}
+	changed := planFor(skills.SkillReference{Source: "devin-config", RelativePath: "review"}, "/private/source-one")
+	if first.AuthorityDigest() == changed.AuthorityDigest() {
+		t.Fatal("exact selected Skill source identity did not change semantic digest")
+	}
+	changed = planFor(skills.SkillReference{Source: "shared-agents", RelativePath: "different"}, "/private/source-one")
+	if first.AuthorityDigest() == changed.AuthorityDigest() {
+		t.Fatal("exact selected Skill relativePath did not change semantic digest")
+	}
+}
+
+func (*testProjection) ID() string { return "devin" }
+func (projection *testProjection) Version() int {
+	if projection.version == 0 {
+		return 1
+	}
+	return projection.version
+}
 func (*testProjection) Expected(selected []skills.SkillBundle) ([]skills.SkillReference, error) {
 	result := []skills.SkillReference{}
 	for _, bundle := range selected {
@@ -124,6 +154,33 @@ func TestResolvedCommonSkillsUseExactIdentityAndSelectedProjection(t *testing.T)
 	if !reflect.DeepEqual(target.DevinExpectedCatalog(), []skills.SkillReference{reference}) {
 		t.Fatalf("expected catalog = %#v", target.DevinExpectedCatalog())
 	}
+}
+
+func TestEmptySkillSelectionStillIdentifiesRegisteredCapabilityAndProjection(t *testing.T) {
+	planFor := func(version int) authority.Plan {
+		contribution := SkillsContribution{selected: []skills.SkillBundle{}, projection: &testProjection{version: version}}
+		return authority.New([]authority.Contribution{{ID: SkillsCapabilityID, Value: contribution}}, launch.WorkspaceAccessReadOnly, 3, "devin", authority.TargetRequirements{Recipe: authority.RecipeDevin, ExecutableRequirementID: "devin-cli", Semantics: authority.DevinSemantics()})
+	}
+	first, second := planFor(1), planFor(2)
+	if first.AuthorityDigest() == second.AuthorityDigest() {
+		t.Fatal("empty selected set omitted the registered target projection version from the digest")
+	}
+	explanation := first.Explanation()
+	if fact := findSemanticFact(explanation.Requested, "common.skills"); fact == nil || fact.Source.Version != SkillsCapabilityVersion {
+		t.Fatalf("registered common Skills capability fact missing: %#v", explanation.Requested)
+	}
+	if fact := findSemanticFact(explanation.TargetAdded, "skills.target-projection"); fact == nil || fact.Source.ID != "devin" || fact.Source.Version != 1 {
+		t.Fatalf("registered empty target projection fact missing: %#v", explanation.TargetAdded)
+	}
+}
+
+func findSemanticFact(facts []authority.Fact, id string) *authority.Fact {
+	for index := range facts {
+		if facts[index].ID == id {
+			return &facts[index]
+		}
+	}
+	return nil
 }
 
 func TestCommonDestinationRejectsCaseAndParentChildAliases(t *testing.T) {
