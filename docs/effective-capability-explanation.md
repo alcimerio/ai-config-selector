@@ -34,6 +34,10 @@ environment, and coarse network authority. Codex facts include the fixed
 generated configuration and state explicitly that target full-permission and
 no-approval settings remain subordinate to ACS containment.
 
+The local-IP network grant permits socket binding only; it does not grant
+`listen`, inbound service authority, or a destination allowlist. Outbound IP
+and the macOS DNS resolver remain coarse grants.
+
 Selected Skill logical identities are intentionally public. Canonical source,
 workspace, executable, runtime and Session paths; argument and environment
 values; auth references; credentials; project files; raw native policy; and

@@ -2507,18 +2507,38 @@ func TestSeatbeltHelperProcess(t *testing.T) {
 			fmt.Fprintf(os.Stderr, "unregistered sysctl was not denied: %v\n", err)
 			os.Exit(126)
 		}
-		listener, err := net.Listen("tcp4", "127.0.0.1:0")
+		descriptor, err := unix.Socket(unix.AF_INET, unix.SOCK_STREAM, 0)
 		if err != nil {
+			fmt.Fprintf(os.Stderr, "local-IP socket failed: %v\n", err)
+			os.Exit(127)
+		}
+		unix.CloseOnExec(descriptor)
+		if err := unix.Bind(descriptor, &unix.SockaddrInet4{Addr: [4]byte{127, 0, 0, 1}}); err != nil {
+			_ = unix.Close(descriptor)
 			fmt.Fprintf(os.Stderr, "local-IP bind failed: %v\n", err)
 			os.Exit(127)
 		}
-		_ = listener.Close()
+		if err := unix.Close(descriptor); err != nil {
+			fmt.Fprintf(os.Stderr, "local-IP descriptor close failed: %v\n", err)
+			os.Exit(127)
+		}
 		unixPath := filepath.Join(arguments[1], "denied-bind.sock")
-		unixListener, err := net.Listen("unix", unixPath)
+		descriptor, err = unix.Socket(unix.AF_UNIX, unix.SOCK_STREAM, 0)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Unix socket creation failed: %v\n", err)
+			os.Exit(129)
+		}
+		unix.CloseOnExec(descriptor)
+		err = unix.Bind(descriptor, &unix.SockaddrUnix{Name: unixPath})
+		closeErr := unix.Close(descriptor)
 		if err == nil {
-			_ = unixListener.Close()
+			_ = os.Remove(unixPath)
 			fmt.Fprintln(os.Stderr, "unregistered Unix bind succeeded")
 			os.Exit(128)
+		}
+		if closeErr != nil {
+			fmt.Fprintf(os.Stderr, "Unix descriptor close failed: %v\n", closeErr)
+			os.Exit(129)
 		}
 		if !isSeatbeltPermission(err) {
 			fmt.Fprintf(os.Stderr, "unregistered Unix bind had unexpected failure: %v\n", err)

@@ -247,7 +247,7 @@ type RuntimeAuthority struct {
 func DefaultRuntimeAuthority() RuntimeAuthority {
 	return RuntimeAuthority{Version: 1, ProcessMode: "same-sandbox-descendants", SystemReadMode: "bounded-macos-runtime",
 		MetadataMode: "executable-and-session-ancestors", SessionAccess: "private-read-write",
-		NetworkMode: "local-ip-bind-and-coarse-outbound-ip-macos-dns", TerminalMode: "attached-pty-signals-resize", DeviceMode: "bounded-tty-random-null-fd",
+		NetworkMode: "local-ip-socket-bind-no-listen-coarse-outbound-ip-macos-dns", TerminalMode: "attached-pty-signals-resize", DeviceMode: "bounded-tty-random-null-fd",
 		InheritedEnvironmentNames: []string{"TERM", "COLORTERM", "LANG", "LC_ALL", "LC_CTYPE"},
 		SysctlNames:               []string{"hw.pagesize", "hw.pagesize_compat", "hw.ncpu"},
 		MachServices:              []string{"com.apple.SecurityServer", "com.apple.trustd.agent"}}

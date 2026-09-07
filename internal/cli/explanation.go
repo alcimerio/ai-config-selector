@@ -205,13 +205,19 @@ func appendInactiveOverlays(explanation *authority.Explanation, loaded profile.P
 		}
 	}
 	sort.Strings(ids)
+	unknownIndex := 0
 	for _, id := range ids {
 		payload := loaded.Overlays[id]
+		factID := "overlay.inactive." + id
+		source := authority.FactSource{Kind: "profile", ID: id, Version: payload.Version}
 		mode, reason := "inactive", "supported_inactive_overlay"
 		if payload.Support != "supported" {
+			unknownIndex++
+			factID = fmt.Sprintf("overlay.inactive.unknown-%d", unknownIndex)
+			source = authority.FactSource{Kind: "profile", ID: "unknown-overlay"}
 			mode, reason = "opaque-inert", "inactive_overlay_unknown"
 		}
-		explanation.Unsupported = append(explanation.Unsupported, authority.Fact{ID: "overlay.inactive." + id, Kind: "overlay", Value: authority.FactValue{Mode: mode}, Reason: reason + "_presentation_only_excluded_from_digest", Source: authority.FactSource{Kind: "profile", ID: id, Version: payload.Version}})
+		explanation.Unsupported = append(explanation.Unsupported, authority.Fact{ID: factID, Kind: "overlay", Value: authority.FactValue{Mode: mode}, Reason: reason + "_presentation_only_excluded_from_digest", Source: source})
 	}
 	sort.Slice(explanation.Unsupported, func(i, j int) bool { return explanation.Unsupported[i].ID < explanation.Unsupported[j].ID })
 }
@@ -286,7 +292,7 @@ func renderExplanation(output *bytes.Buffer, result explanationResult) {
 	for _, limitation := range result.Limitations {
 		fmt.Fprintf(output, "  %s: %s\n", limitation.Code, safeTerminalText(limitation.Detail))
 	}
-	fmt.Fprintln(output, "\nCurrent network authority is coarse local-IP bind plus outbound IP and macOS DNS resolver access; no destination allowlist is enforced.")
+	fmt.Fprintln(output, "\nCurrent network authority is local-IP socket bind (not listen/inbound) plus coarse outbound IP and macOS DNS resolver access; no destination allowlist is enforced.")
 	if result.Intent.Recipe == "codex" {
 		fmt.Fprintln(output, "Codex danger-full-access and no-approval mode do not widen the outer ACS grants.")
 	}

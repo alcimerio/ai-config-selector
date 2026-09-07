@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -66,7 +67,7 @@ func TestExplainJSONUsesResolvedAuthorityWithoutNativeProbe(t *testing.T) {
 			t.Fatalf("private value %q escaped: %s", private, stdout.String())
 		}
 	}
-	if !strings.Contains(stdout.String(), `"id":"runtime.network"`) || !strings.Contains(stdout.String(), "local-ip-bind-and-coarse-outbound-ip-macos-dns") {
+	if !strings.Contains(stdout.String(), `"id":"runtime.network"`) || !strings.Contains(stdout.String(), "local-ip-socket-bind-no-listen-coarse-outbound-ip-macos-dns") {
 		t.Fatalf("network facts incomplete: %s", stdout.String())
 	}
 }
@@ -93,6 +94,48 @@ func TestExplainNativeReadinessIsExplicitAndNarrow(t *testing.T) {
 	}
 	if probe.calls != 1 || !strings.Contains(stdout.String(), "native.backend: pass (backend_ready)") || !strings.Contains(stdout.String(), "runtime.enforcement: unchecked") {
 		t.Fatalf("output=%s calls=%d", stdout.String(), probe.calls)
+	}
+}
+
+func TestExplainLegacyProfilesPreservesCompatibilityAuthority(t *testing.T) {
+	for _, fixture := range []struct {
+		name string
+		raw  string
+	}{
+		{name: "v1", raw: `{"version":1,"name":"example","target":"devin","skillReferences":[]}`},
+		{name: "v2", raw: `{"version":2,"name":"example","target":"devin","categories":{"skills":{"schemaVersion":1,"selection":[]}}}`},
+	} {
+		t.Run(fixture.name, func(t *testing.T) {
+			home := t.TempDir()
+			target, err := devin.New(devin.Config{BinaryPath: "devin", ExistingHomeDir: home})
+			if err != nil {
+				t.Fatal(err)
+			}
+			profilesDirectory := filepath.Join(home, ".acs", "profiles")
+			if err := os.MkdirAll(profilesDirectory, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(profilesDirectory, "example.json"), []byte(fixture.raw), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			store := profile.NewStore(filepath.Join(home, ".acs"), target.Categories())
+			for _, invocation := range [][]string{
+				{"explain", "sandbox", "--profile", "example", "--json"},
+				{"explain", "devin", "--profile", "example", "--json"},
+				{"explain", "run", "--profile", "example", "--json", "--", "/usr/bin/true"},
+			} {
+				var stdout, stderr bytes.Buffer
+				app := cli.App{Categories: target.Categories(), Profiles: store, WorkingDirectory: home, Output: &stdout, ErrorOutput: &stderr}
+				if code := app.Run(context.Background(), invocation); code != 0 {
+					t.Fatalf("%q code=%d stderr=%q", invocation, code, stderr.String())
+				}
+				for _, want := range []string{`"compatibility":"legacy"`, `"id":"common.workspace"`, `"access":"read-write"`, `"reason":"legacy_compatibility_default"`} {
+					if !strings.Contains(stdout.String(), want) {
+						t.Fatalf("%q lacks %q: %s", invocation, want, stdout.String())
+					}
+				}
+			}
+		})
 	}
 }
 

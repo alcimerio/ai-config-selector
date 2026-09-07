@@ -23,6 +23,7 @@ import (
 
 	"github.com/charmbracelet/x/term"
 	"github.com/creack/pty"
+	"golang.org/x/sys/unix"
 )
 
 const (
@@ -227,7 +228,7 @@ func assertPromotedArtifactEffectiveExplanation(t *testing.T) {
 					Names []string
 				}{fact.Value.Mode, fact.Value.Names}
 			}
-			if got := facts["runtime.network"].Mode; got != "local-ip-bind-and-coarse-outbound-ip-macos-dns" {
+			if got := facts["runtime.network"].Mode; got != "local-ip-socket-bind-no-listen-coarse-outbound-ip-macos-dns" {
 				t.Fatalf("network declaration = %q", got)
 			}
 			if got := facts["runtime.sysctls"].Names; !reflect.DeepEqual(got, []string{"hw.pagesize", "hw.pagesize_compat", "hw.ncpu"}) {
@@ -1481,11 +1482,29 @@ func fakeDevinCanDial(network, address string) bool {
 }
 
 func fakeDevinCanBind(network, address string) bool {
-	listener, err := net.Listen(network, address)
+	var family int
+	var socketAddress unix.Sockaddr
+	switch network {
+	case "tcp4":
+		family = unix.AF_INET
+		socketAddress = &unix.SockaddrInet4{Addr: [4]byte{127, 0, 0, 1}}
+	case "unix":
+		family = unix.AF_UNIX
+		socketAddress = &unix.SockaddrUnix{Name: address}
+	default:
+		return false
+	}
+	descriptor, err := unix.Socket(family, unix.SOCK_STREAM, 0)
 	if err != nil {
 		return false
 	}
-	return listener.Close() == nil
+	unix.CloseOnExec(descriptor)
+	bindErr := unix.Bind(descriptor, socketAddress)
+	closeErr := unix.Close(descriptor)
+	if family == unix.AF_UNIX && bindErr == nil {
+		_ = os.Remove(address)
+	}
+	return bindErr == nil && closeErr == nil
 }
 
 func writeFakeDevinMarker(path string) bool {
