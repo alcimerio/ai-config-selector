@@ -1346,6 +1346,15 @@ func restoreDeletedNativeCodexProfile(t *testing.T, candidate, home, tools, work
 	}
 	assertNoNativeSessions(t, filepath.Join(home, ".acs", "sessions"))
 	run("profile", "restore", "--lineage", created.LineageID, "--revision", deleted.Events[0].EventID, "--bindings", bindings, "--expect", preview.Digest, "--confirm", profileName, "--json")
+	var restored struct {
+		LineageID string `json:"lineageId"`
+		Events    []struct {
+			Operation string `json:"operation"`
+		} `json:"events"`
+	}
+	if output := run("profile", "history", profileName, "--json"); json.Unmarshal(output, &restored) != nil || restored.LineageID != created.LineageID || len(restored.Events) < 3 || restored.Events[0].Operation != "restore" {
+		t.Fatalf("restored Codex history is not readable and append-only: %q", output)
+	}
 	return profileName
 }
 

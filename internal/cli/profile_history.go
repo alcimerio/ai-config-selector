@@ -424,7 +424,7 @@ func semanticFacts(name string, data []byte) ([]string, error) {
 	if entry.Status != "valid" {
 		return nil, profilerepo.ErrUnsafe
 	}
-	facts := []string{fmt.Sprintf("profile.version=%d", *entry.StoredVersion)}
+	facts := []string{"profile.name=" + name, fmt.Sprintf("profile.version=%d", *entry.StoredVersion)}
 	if entry.Workspace != nil {
 		facts = append(facts, "common.workspace="+*entry.Workspace)
 	}
@@ -577,6 +577,8 @@ func (app App) profileRestore(ctx context.Context, r historyRepository, selector
 		return app.historyError(inv, 1, "conflict", "--as destination is occupied")
 	}
 	bindingDecision := "none"
+	cloneSourceName := ""
+	cloneSource := profilerepo.Snapshot{}
 	if current.Exists {
 		destinationHistory, historyErr := r.History(ctx, profilerepo.HistorySelector{Name: destination}, 1)
 		if historyErr != nil {
@@ -608,6 +610,36 @@ func (app App) profileRestore(ctx context.Context, r historyRepository, selector
 			return app.historyError(inv, 2, "invalid_invocation", "--bindings is unnecessary because the current destination supplies every binding decision")
 		} else {
 			bindingDecision = "current:" + current.Revision.String()
+		}
+	} else if inv.as != "" && len(lineageHead.Events) > 0 && lineageHead.Events[0].Profile.State == "live" {
+		cloneSourceName = lineageHead.Events[0].Profile.Name
+		cloneSource, err = r.Read(ctx, cloneSourceName)
+		if err != nil || !cloneSource.Exists {
+			return app.historyError(inv, 1, "conflict", "current lineage head could not be revalidated for derived restore")
+		}
+		existing, decodeErr := app.Categories.DecodeNamed(cloneSourceName, cloneSource.Bytes)
+		if decodeErr != nil {
+			return app.historyError(inv, 1, "incompatible", "current lineage head is corrupt or unsupported")
+		}
+		needsBindings, mergeErr := preserveCurrentRestoreBindings(&candidate, existing)
+		if mergeErr != nil {
+			return app.historyError(inv, 1, "incompatible", "current lineage bindings cannot be interpreted safely")
+		}
+		if needsBindings {
+			bound, rawBindings, bindErr := app.bindAbsentRestoreCandidate(candidate, destination, inv.bindings)
+			if bindErr != nil {
+				return app.restoreBindingError(inv, bindErr)
+			}
+			candidate = bound
+			if _, mergeErr = preserveCurrentRestoreBindings(&candidate, existing); mergeErr != nil {
+				return app.historyError(inv, 1, "incompatible", "current lineage bindings cannot be preserved safely")
+			}
+			sum := sha256.Sum256(rawBindings)
+			bindingDecision = "source-current+declarative:" + cloneSource.Revision.String() + ":" + hex.EncodeToString(sum[:])
+		} else if inv.bindings != "" {
+			return app.historyError(inv, 2, "invalid_invocation", "--bindings is unnecessary because the current lineage supplies every binding decision")
+		} else {
+			bindingDecision = "source-current:" + cloneSource.Revision.String()
 		}
 	} else {
 		bound, bindingData, bindErr := app.bindAbsentRestoreCandidate(candidate, destination, inv.bindings)
@@ -649,14 +681,24 @@ func (app App) profileRestore(ctx context.Context, r historyRepository, selector
 	var request profilerepo.Request
 	if current.Exists {
 		request = profilerepo.ReplaceRequest{Name: destination, Expected: current.Revision, Bytes: canonical}
+	} else if cloneSourceName != "" {
+		request = profilerepo.CloneRequest{Source: cloneSourceName, Destination: destination, ExpectedSource: cloneSource.Revision, ExpectedDestination: current.Revision, Bytes: canonical}
 	} else {
 		request = profilerepo.CreateRequest{Name: destination, Expected: current.Revision, Bytes: canonical}
 	}
-	out, err := r.Apply(ctx, profilerepo.HistoryRequest{Request: request, Operation: "restore", Lineage: selected.LineageID})
+	requestedLineage := selected.LineageID
+	if cloneSourceName != "" {
+		requestedLineage = ""
+	}
+	out, err := r.Apply(ctx, profilerepo.HistoryRequest{Request: request, Operation: "restore", Lineage: requestedLineage})
 	if err != nil || out.State != profilerepo.Committed || out.RecoveryRequired {
 		return app.restoreApplyError(inv, out, err)
 	}
-	return app.writeSimpleHistory(inv, map[string]any{"schemaVersion": 1, "operation": "profile.restore", "status": "committed", "lineageId": selected.LineageID, "eventId": selected.EventID, "destination": destination})
+	committed, inspectErr := r.History(ctx, profilerepo.HistorySelector{Name: destination}, 1)
+	if inspectErr != nil || len(committed.Events) != 1 || committed.Events[0].Operation != "restore" {
+		return app.historyError(inv, 1, "committed_inspection_failed", "restore committed, but its new history event could not be inspected; do not retry")
+	}
+	return app.writeSimpleHistory(inv, map[string]any{"schemaVersion": 1, "operation": "profile.restore", "status": "committed", "lineageId": committed.LineageID, "sourceLineageId": selected.LineageID, "eventId": committed.Events[0].EventID, "selectedEventId": selected.EventID, "destination": destination})
 }
 
 func bindingDecisionStatus(decision string) string {
@@ -665,6 +707,12 @@ func bindingDecisionStatus(decision string) string {
 	}
 	if strings.HasPrefix(decision, "current+declarative:") {
 		return "preserved_current_and_explicit_declarative"
+	}
+	if strings.HasPrefix(decision, "source-current+declarative:") {
+		return "preserved_source_current_and_explicit_declarative"
+	}
+	if strings.HasPrefix(decision, "source-current:") {
+		return "preserved_source_current"
 	}
 	if strings.HasPrefix(decision, "declarative:") {
 		return "explicit_declarative"

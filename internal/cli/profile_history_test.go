@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -223,7 +224,7 @@ func TestProfileRestoreOfDeletedLineageRequiresAndBindsDeclarativeBindings(t *te
 	if err != nil || len(history.Events) < 2 {
 		t.Fatalf("history=%+v err=%v", history, err)
 	}
-	args := []string{"profile", "restore", "--lineage", history.LineageID, "--revision", history.Events[0].EventID, "--dry-run", "--json"}
+	args := []string{"profile", "restore", "--lineage", history.LineageID, "--revision", history.Events[0].EventID, "--as", "restored", "--dry-run", "--json"}
 	var out, errOut bytes.Buffer
 	app.Output, app.ErrorOutput = &out, &errOut
 	if _, code := app.RunProfileHistory(context.Background(), args, func() (string, error) { return home, nil }); code != 1 || !strings.Contains(out.String(), `"code":"unresolved_binding"`) {
@@ -255,6 +256,21 @@ func TestProfileRestoreOfDeletedLineageRequiresAndBindsDeclarativeBindings(t *te
 	var second restorePreviewResult
 	if err := json.Unmarshal(out.Bytes(), &second); err != nil || first.Digest == second.Digest {
 		t.Fatalf("binding choice was not digest-bound: first=%+v second=%+v err=%v", first, second, err)
+	}
+	app.ReadProfileDocument = func(string) ([]byte, error) { return append([]byte(nil), bindingOne...), nil }
+	out.Reset()
+	applyArgs := []string{"profile", "restore", "--lineage", history.LineageID, "--revision", history.Events[0].EventID, "--as", "restored", "--bindings", "bindings.json", "--expect", first.Digest, "--confirm", "restored", "--json"}
+	if _, code := app.RunProfileHistory(context.Background(), applyArgs, func() (string, error) { return home, nil }); code != 0 {
+		t.Fatalf("apply code=%d out=%s err=%s", code, out.String(), errOut.String())
+	}
+	for i := 0; i < 2; i++ {
+		if recovery, err := repository.Recover(context.Background()); err != nil || recovery.RecoveryRequired {
+			t.Fatalf("recover %d=%+v err=%v", i, recovery, err)
+		}
+	}
+	restored, err := repository.History(context.Background(), profilerepo.HistorySelector{Name: "restored"}, 100)
+	if err != nil || restored.LineageID != history.LineageID || len(restored.Events) != 3 || restored.Events[0].Operation != "restore" {
+		t.Fatalf("restored=%+v err=%v", restored, err)
 	}
 }
 
@@ -308,6 +324,84 @@ type semanticDiffResult struct {
 	Added   []string `json:"added"`
 	Removed []string `json:"removed"`
 	Changed []string `json:"changed"`
+}
+
+func TestProfileDiffReportsRenameAndRestoreAsPreviewName(t *testing.T) {
+	app, repository, home := historyApp(t)
+	ctx := context.Background()
+	alpha := []byte(`{"version":3,"name":"alpha","common":{"skills":{"version":1,"selection":[]},"workspace":{"version":1,"selection":{"access":"read-only"}}},"overlays":{"devin":{"version":1}}}`)
+	beta := bytes.Replace(alpha, []byte(`"alpha"`), []byte(`"beta"`), 1)
+	applyHistory(t, repository, "alpha", alpha, nil)
+	source, _ := repository.Read(ctx, "alpha")
+	destination, _ := repository.Read(ctx, "beta")
+	if out, err := repository.Apply(ctx, profilerepo.HistoryRequest{Request: profilerepo.RenameRequest{Source: "alpha", Destination: "beta", ExpectedSource: source.Revision, ExpectedDestination: destination.Revision, Bytes: beta}, Operation: "rename"}); err != nil || out.State != profilerepo.Committed {
+		t.Fatalf("rename=%+v err=%v", out, err)
+	}
+	history, err := repository.History(ctx, profilerepo.HistorySelector{Name: "beta"}, 100)
+	if err != nil || len(history.Events) != 2 {
+		t.Fatalf("history=%+v err=%v", history, err)
+	}
+	createdEvent := history.Events[1].EventID
+	var out, errOut bytes.Buffer
+	app.Output, app.ErrorOutput = &out, &errOut
+	diffArgs := []string{"profile", "diff", "--lineage", history.LineageID, "--revision", createdEvent, "--to", history.Events[0].EventID, "--json"}
+	if _, code := app.RunProfileHistory(ctx, diffArgs, func() (string, error) { return home, nil }); code != 0 {
+		t.Fatalf("diff code=%d err=%s", code, errOut.String())
+	}
+	var diff semanticDiffResult
+	if err := json.Unmarshal(out.Bytes(), &diff); err != nil || !reflect.DeepEqual(diff.Changed, []string{"profile.name"}) {
+		t.Fatalf("rename diff=%s err=%v", out.String(), err)
+	}
+	out.Reset()
+	previewArgs := []string{"profile", "restore", "--lineage", history.LineageID, "--revision", createdEvent, "--as", "gamma", "--dry-run", "--json"}
+	if _, code := app.RunProfileHistory(ctx, previewArgs, func() (string, error) { return home, nil }); code != 0 {
+		t.Fatalf("preview code=%d out=%s err=%s", code, out.String(), errOut.String())
+	}
+	var preview struct {
+		Destination string             `json:"destination"`
+		Digest      string             `json:"digest"`
+		Bindings    string             `json:"bindings"`
+		Diff        semanticDiffResult `json:"diff"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &preview); err != nil || preview.Destination != "gamma" || preview.Digest == "" || preview.Bindings != "preserved_source_current" || !slices.Contains(preview.Diff.Added, "profile.name=gamma") {
+		t.Fatalf("preview=%s err=%v", out.String(), err)
+	}
+	changedBeta := bytes.Replace(beta, []byte(`"read-only"`), []byte(`"read-write"`), 1)
+	source, _ = repository.Read(ctx, "beta")
+	if changed, err := repository.Apply(ctx, profilerepo.HistoryRequest{Request: profilerepo.ReplaceRequest{Name: "beta", Expected: source.Revision, Bytes: changedBeta}, Operation: "edit"}); err != nil || changed.State != profilerepo.Committed {
+		t.Fatalf("concurrent source edit=%+v err=%v", changed, err)
+	}
+	out.Reset()
+	applyArgs := []string{"profile", "restore", "--lineage", history.LineageID, "--revision", createdEvent, "--as", "gamma", "--expect", preview.Digest, "--confirm", "gamma", "--json"}
+	if _, code := app.RunProfileHistory(ctx, applyArgs, func() (string, error) { return home, nil }); code != 1 || !strings.Contains(out.String(), `"code":"conflict"`) {
+		t.Fatalf("stale apply code=%d out=%s err=%s", code, out.String(), errOut.String())
+	}
+	out.Reset()
+	if _, code := app.RunProfileHistory(ctx, previewArgs, func() (string, error) { return home, nil }); code != 0 {
+		t.Fatalf("fresh preview code=%d out=%s err=%s", code, out.String(), errOut.String())
+	}
+	if err := json.Unmarshal(out.Bytes(), &preview); err != nil || preview.Digest == "" {
+		t.Fatalf("fresh preview=%s err=%v", out.String(), err)
+	}
+	applyArgs[9] = preview.Digest
+	out.Reset()
+	if _, code := app.RunProfileHistory(ctx, applyArgs, func() (string, error) { return home, nil }); code != 0 {
+		t.Fatalf("fresh apply code=%d out=%s err=%s", code, out.String(), errOut.String())
+	}
+	var applied struct {
+		LineageID       string `json:"lineageId"`
+		SourceLineageID string `json:"sourceLineageId"`
+		EventID         string `json:"eventId"`
+		SelectedEventID string `json:"selectedEventId"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &applied); err != nil || applied.LineageID == "" || applied.LineageID == history.LineageID || applied.SourceLineageID != history.LineageID || applied.EventID == "" || applied.EventID == createdEvent || applied.SelectedEventID != createdEvent {
+		t.Fatalf("applied identity=%s err=%v", out.String(), err)
+	}
+	betaState, betaErr := repository.Read(ctx, "beta")
+	gammaHistory, gammaErr := repository.History(ctx, profilerepo.HistorySelector{Name: "gamma"}, 100)
+	if betaErr != nil || !betaState.Exists || !bytes.Equal(betaState.Bytes, changedBeta) || gammaErr != nil || gammaHistory.LineageID != applied.LineageID || len(gammaHistory.Events) != 1 || gammaHistory.Events[0].Operation != "restore" || gammaHistory.Events[0].EventID != applied.EventID {
+		t.Fatalf("beta=%+v betaErr=%v gamma=%+v gammaErr=%v", betaState, betaErr, gammaHistory, gammaErr)
+	}
 }
 
 func TestProfileRestoreRejectsCorruptCurrentDestination(t *testing.T) {

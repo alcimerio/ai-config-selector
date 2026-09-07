@@ -45,7 +45,15 @@ or unsupported choices fail closed:
 }
 ```
 
-Dry-run reports the destination condition, the actual sanitized semantic change from current destination state to the final canonical candidate, and an `hg_` digest. Repeated Skill selections remain exact sorted set additions/removals rather than being collapsed to one value. The digest binds the lineage/event, destination name, current repository revision or absence, canonical intended document, and exact validated binding decision; it excludes time and the future random event ID. Apply rereads the binding file when present, requires the same digest and `--confirm NAME`, recompiles and rechecks under the repository mutation boundary, and never force-overwrites another lineage. `--as NAME` is a no-clobber destination.
+Dry-run reports the destination condition, the actual sanitized semantic change from current destination state to the final canonical candidate, and an `hg_` digest. Profile name changes are explicit semantic facts, and repeated Skill selections remain exact sorted set additions/removals rather than being collapsed to one value. The digest binds the lineage/event, destination name, current repository revision or absence, canonical intended document, and exact validated binding decision; it excludes time and the future random event ID. Apply rereads the binding file when present, requires the same digest and `--confirm NAME`, recompiles and rechecks under the repository mutation boundary, and never force-overwrites another lineage.
+
+`--as NAME` is a no-clobber destination. For a deleted lineage it appends the restore to that lineage under the new live name. For a renamed lineage whose current Profile remains live elsewhere, it preserves that live Profile and performs the restore as a conditional clone: the destination receives a distinct derived lineage whose immutable restore event records the selected lineage as its source relationship. Preview binds the live source revision, and apply revalidates both that source and the absent destination under the repository lock.
+
+A committed restore reports the new `eventId` and resulting `lineageId` separately
+from `selectedEventId` and `sourceLineageId`. For an in-line restore the source and
+result lineage IDs match. For a renamed-live `--as` restore they differ, making
+the derived lineage relationship explicit without claiming that the new event
+was appended to the still-live source lineage.
 
 ## Pins, retention, and pruning
 

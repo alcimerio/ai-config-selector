@@ -1823,7 +1823,7 @@ func assertPromotedArtifactRestoredProfile(t *testing.T) {
 	}
 	installPromotedArtifactFakeDevin(t, tools)
 	document := filepath.Join(root, "restored-profile.json")
-	if err := os.WriteFile(document, []byte(`{"version":3,"name":"native-history","common":{"skills":{"version":1,"selection":[]},"workspace":{"version":1,"selection":{"access":"read-write"}}},"overlays":{"devin":{"version":1}}}`), 0o600); err != nil {
+	if err := os.WriteFile(document, []byte(`{"version":3,"name":"native-history","common":{"skills":{"version":1,"selection":[{"source":"devin-config","relativePath":"review"}]},"workspace":{"version":1,"selection":{"access":"read-write"}}},"overlays":{"devin":{"version":1}}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	run := func(args ...string) []byte {
@@ -1868,15 +1868,28 @@ func assertPromotedArtifactRestoredProfile(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertNoSessions(t, home)
+	bindings := filepath.Join(root, "restore-bindings.json")
+	if err := os.WriteFile(bindings, []byte(`{"bindingVersion":1,"sources":{"source-1":"devin-config"},"authentications":{}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	var preview struct {
 		Digest      string `json:"digest"`
 		Destination string `json:"destination"`
 	}
-	if output := run("profile", "restore", "--lineage", created.LineageID, "--revision", deleted.Events[0].EventID, "--dry-run", "--json"); json.Unmarshal(output, &preview) != nil || preview.Digest == "" || preview.Destination != "native-history" {
+	if output := run("profile", "restore", "--lineage", created.LineageID, "--revision", deleted.Events[0].EventID, "--bindings", bindings, "--dry-run", "--json"); json.Unmarshal(output, &preview) != nil || preview.Digest == "" || preview.Destination != "native-history" {
 		t.Fatalf("restored-profile preview=%s", output)
 	}
 	assertNoSessions(t, home)
-	run("profile", "restore", "--lineage", created.LineageID, "--revision", deleted.Events[0].EventID, "--expect", preview.Digest, "--confirm", "native-history", "--json")
+	run("profile", "restore", "--lineage", created.LineageID, "--revision", deleted.Events[0].EventID, "--bindings", bindings, "--expect", preview.Digest, "--confirm", "native-history", "--json")
+	var restored struct {
+		LineageID string `json:"lineageId"`
+		Events    []struct {
+			Operation string `json:"operation"`
+		} `json:"events"`
+	}
+	if output := run("profile", "history", "native-history", "--json"); json.Unmarshal(output, &restored) != nil || restored.LineageID != created.LineageID || len(restored.Events) < 3 || restored.Events[0].Operation != "restore" {
+		t.Fatalf("restored Profile history is not readable and append-only: %s", output)
+	}
 
 	beforeShell := promotedSessionSnapshot(t, binary, home, path)
 	shell := exec.Command(binary, "sandbox", "--profile", "native-history")

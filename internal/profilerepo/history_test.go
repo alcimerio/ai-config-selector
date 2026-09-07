@@ -126,6 +126,88 @@ func TestEventSelectionMatchesAdvertisedPostRevisionAndAdoptsPriorBytes(t *testi
 	}
 }
 
+func TestExplicitDeletedLineageRestoreAppendsToBoundHead(t *testing.T) {
+	r := New(t.TempDir())
+	ctx := context.Background()
+	absent, _ := r.Read(ctx, "alpha")
+	if out, err := r.Apply(ctx, CreateRequest{"alpha", absent.Revision, []byte("created")}); err != nil || out.State != Committed {
+		t.Fatalf("create=%+v err=%v", out, err)
+	}
+	created, err := r.History(ctx, HistorySelector{Name: "alpha"}, 100)
+	if err != nil || len(created.Events) != 1 {
+		t.Fatalf("created=%+v err=%v", created, err)
+	}
+	current, _ := r.Read(ctx, "alpha")
+	if out, err := r.Apply(ctx, DeleteRequest{"alpha", current.Revision}); err != nil || out.State != Committed {
+		t.Fatalf("delete=%+v err=%v", out, err)
+	}
+	absent, _ = r.Read(ctx, "restored")
+	request := HistoryRequest{Request: CreateRequest{"restored", absent.Revision, []byte("created")}, Operation: "restore", Lineage: created.LineageID}
+	injected := errors.New("interrupt explicit-lineage history publication")
+	fired := false
+	r.hook = func(point string) error {
+		if point == "history.event-snapshot.publish.after" && !fired {
+			fired = true
+			return injected
+		}
+		return nil
+	}
+	if out, err := r.Apply(ctx, request); !errors.Is(err, injected) || out.State != Unknown || !out.RecoveryRequired {
+		t.Fatalf("interrupted restore=%+v err=%v", out, err)
+	}
+	r.hook = nil
+	for i := 0; i < 2; i++ {
+		if out, err := r.Recover(ctx); err != nil || out.RecoveryRequired {
+			t.Fatalf("recover %d=%+v err=%v", i, out, err)
+		} else if i == 0 && out.State != Committed {
+			t.Fatalf("first recovery did not complete the decided restore: %+v", out)
+		}
+	}
+	history, err := r.History(ctx, HistorySelector{Name: "restored"}, 100)
+	if err != nil || history.LineageID != created.LineageID || len(history.Events) != 3 || history.Events[0].Operation != "restore" {
+		t.Fatalf("restored=%+v err=%v", history, err)
+	}
+	d, err := r.open(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.close()
+	root, err := openHistoryRoot(d, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	lineage, err := readLineage(root, created.LineageID)
+	if err != nil || len(lineage.records) != 3 || lineage.records[2].Sequence != 3 {
+		t.Fatalf("lineage=%+v err=%v", lineage, err)
+	}
+	parent, _ := json.Marshal(lineage.records[1])
+	if lineage.records[2].ParentDigest != digestHex(parent) {
+		t.Fatal("restore record is not parent-bound to the deleted lineage head")
+	}
+}
+
+func TestExplicitLiveLineageCannotBranchToAbsentDestination(t *testing.T) {
+	r := New(t.TempDir())
+	ctx := context.Background()
+	alpha, _ := r.Read(ctx, "alpha")
+	if _, err := r.Apply(ctx, CreateRequest{"alpha", alpha.Revision, []byte("alpha")}); err != nil {
+		t.Fatal(err)
+	}
+	history, _ := r.History(ctx, HistorySelector{Name: "alpha"}, 1)
+	bravo, _ := r.Read(ctx, "bravo")
+	out, err := r.Apply(ctx, HistoryRequest{Request: CreateRequest{"bravo", bravo.Revision, []byte("alpha")}, Operation: "restore", Lineage: history.LineageID})
+	if !errors.Is(err, ErrConflict) || out.State != NotCommitted || out.RecoveryRequired {
+		t.Fatalf("out=%+v err=%v", out, err)
+	}
+	if bravo, err = r.Read(ctx, "bravo"); err != nil || bravo.Exists {
+		t.Fatalf("bravo=%+v err=%v", bravo, err)
+	}
+	if current, err := r.History(ctx, HistorySelector{Name: "alpha"}, 100); err != nil || len(current.Events) != 1 {
+		t.Fatalf("alpha history=%+v err=%v", current, err)
+	}
+}
+
 func TestHistoryCreationStaysBoundToValidatedRepositoryDescriptor(t *testing.T) {
 	parent := t.TempDir()
 	home := filepath.Join(parent, "acs")

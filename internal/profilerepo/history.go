@@ -453,6 +453,9 @@ func (d *directory) historyPrepare(c change, p *plan) (result error) {
 		return err
 	}
 	defer root.Close()
+	if c.lineage != "" && !lineagePattern.MatchString(c.lineage) {
+		return ErrConflict
+	}
 	var source historyLineage
 	if c.source != "" {
 		source, err = resolveLineage(root, HistorySelector{Name: c.source})
@@ -460,6 +463,18 @@ func (d *directory) historyPrepare(c change, p *plan) (result error) {
 			source = historyLineage{}
 		} else if err != nil {
 			return err
+		}
+	}
+	if c.lineage != "" && source.id == "" {
+		source, err = resolveLineage(root, HistorySelector{Lineage: c.lineage})
+		if err != nil {
+			return errors.Join(ErrConflict, err)
+		}
+		if len(source.records) == 0 {
+			return ErrUnsafe
+		}
+		if c.op == "create" && !source.records[len(source.records)-1].Tombstone {
+			return ErrConflict
 		}
 	}
 	lineage := source.id
@@ -470,9 +485,6 @@ func (d *directory) historyPrepare(c change, p *plan) (result error) {
 		}
 	}
 	if c.lineage != "" {
-		if !lineagePattern.MatchString(c.lineage) {
-			return ErrConflict
-		}
 		if source.id != "" && source.id != c.lineage {
 			return ErrConflict
 		}
@@ -493,7 +505,7 @@ func (d *directory) historyPrepare(c change, p *plan) (result error) {
 	}
 	seq := 1
 	parent := ""
-	if len(source.records) > 0 {
+	if source.id == lineage && len(source.records) > 0 {
 		prev := source.records[len(source.records)-1]
 		seq = prev.Sequence + 1
 		b, _ := json.Marshal(prev)
@@ -686,6 +698,49 @@ func (d *directory) historyValidate(p *plan) error {
 	if err = validateHistoryTransaction(p, txn, snapshot); err != nil {
 		return err
 	}
+	return validateHistoryAttachment(root, p, txn, false)
+}
+
+func validateHistoryAttachment(root *os.File, p *plan, txn historyTxn, allowPublished bool) error {
+	lineage, err := readLineage(root, txn.LineageID)
+	if errors.Is(err, unix.ENOENT) || allowPublished && err == nil && len(lineage.records) == 0 {
+		if txn.Adoption != nil && txn.Adoption.LineageID == txn.LineageID {
+			adoption, _ := json.Marshal(txn.Adoption)
+			if txn.Record.Sequence != 2 || txn.Record.ParentDigest != digestHex(adoption) {
+				return ErrUnsafe
+			}
+			return nil
+		}
+		if txn.Record.Sequence != 1 || txn.Record.ParentDigest != "" {
+			return ErrUnsafe
+		}
+		return nil
+	}
+	if err != nil {
+		return errors.Join(ErrUnsafe, err)
+	}
+	if len(lineage.records) == 0 {
+		return ErrUnsafe
+	}
+	head := lineage.records[len(lineage.records)-1]
+	if head.EventID == txn.Record.EventID {
+		if !allowPublished {
+			return ErrUnsafe
+		}
+		headBytes, _ := json.Marshal(head)
+		recordBytes, _ := json.Marshal(txn.Record)
+		if !bytes.Equal(headBytes, recordBytes) {
+			return ErrUnsafe
+		}
+		return nil
+	}
+	headBytes, _ := json.Marshal(head)
+	if txn.Record.Sequence != head.Sequence+1 || txn.Record.ParentDigest != digestHex(headBytes) {
+		return ErrUnsafe
+	}
+	if p.Operation == "create" && !head.Tombstone {
+		return ErrConflict
+	}
 	return nil
 }
 
@@ -791,6 +846,12 @@ func (d *directory) historyCommit(p *plan) error {
 	snapshot, err := historyRead(root, "txn_"+planID+".snapshot", MaxDocumentBytes)
 	if err != nil || digestHex(snapshot) != txn.SnapshotDigest {
 		return errors.Join(ErrUnsafe, err)
+	}
+	if err = validateHistoryTransaction(p, txn, snapshot); err != nil {
+		return err
+	}
+	if err = validateHistoryAttachment(root, p, txn, true); err != nil {
+		return err
 	}
 	dir, err := openLineage(root, txn.LineageID, true)
 	if err != nil {
