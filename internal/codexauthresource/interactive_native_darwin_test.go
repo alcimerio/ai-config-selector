@@ -626,6 +626,12 @@ func runInstalledCodexPTY(t *testing.T, candidate, home, tools, workspace, profi
 	if !crashAfterTool && (!waitNativeCaptureContainsAfter(&output, 0, "fixture-complete", 5*time.Second) || !waitNativeCaptureStable(&output, 5*time.Second)) {
 		t.Fatalf("real Codex did not finish rendering the completed turn; terminal=%q", output.String())
 	}
+	if !crashAfterTool && len(fixture.privateSentinels) > 0 {
+		observationErr := observeNativeSessionProjection(home, fixture.preexistingHomes, fixture.privateSentinels)
+		fixture.mu.Lock()
+		fixture.finalSessionObservationErr = observationErr
+		fixture.mu.Unlock()
+	}
 	fixture.assertLiveDescendant(t)
 	if crashAfterTool {
 		if err := command.Process.Kill(); err != nil {
@@ -888,22 +894,23 @@ func (capture *nativeSafeCapture) Len() int {
 }
 
 type nativeResponsesFixture struct {
-	server                *httptest.Server
-	completed             chan struct{}
-	mu                    sync.Mutex
-	requests              int
-	bodies                []string
-	headers               []http.Header
-	sessionObservationErr string
-	observations          []nativeRequestObservation
-	websocketFallbacks    int
-	modelRequests         int
-	protocolErr           string
-	preexistingHomes      map[string]struct{}
-	descendantReady       string
-	liveDescendantPID     int
-	coordination          *nativeCodexPhaseCoordination
-	privateSentinels      []string
+	server                     *httptest.Server
+	completed                  chan struct{}
+	mu                         sync.Mutex
+	requests                   int
+	bodies                     []string
+	headers                    []http.Header
+	sessionObservationErr      string
+	finalSessionObservationErr string
+	observations               []nativeRequestObservation
+	websocketFallbacks         int
+	modelRequests              int
+	protocolErr                string
+	preexistingHomes           map[string]struct{}
+	descendantReady            string
+	liveDescendantPID          int
+	coordination               *nativeCodexPhaseCoordination
+	privateSentinels           []string
 }
 
 // nativeCodexPhaseCoordination is intentionally fixture-only.  Its literal
@@ -1170,8 +1177,8 @@ func (fixture *nativeResponsesFixture) assert(t *testing.T, wantDescendant bool)
 	if fixture.modelRequests < 1 {
 		t.Fatalf("authenticated model requests=%d, want at least one; loopback=%s", fixture.modelRequests, fixture.summaryLocked())
 	}
-	if fixture.sessionObservationErr != "" {
-		t.Fatal(fixture.sessionObservationErr)
+	if fixture.sessionObservationErr != "" || fixture.finalSessionObservationErr != "" {
+		t.Fatalf("locked Codex retained Session scans: early=%q final=%q", fixture.sessionObservationErr, fixture.finalSessionObservationErr)
 	}
 	for _, headers := range fixture.headers {
 		if headers.Get("Authorization") != "Bearer synthetic-access" || headers.Get("ChatGPT-Account-ID") != "synthetic-workspace" {
@@ -1326,7 +1333,9 @@ func observeNativeSessionProjection(launcherHome string, preexisting map[string]
 		const maxSessionArtifactBytes = 16 << 20
 		const maxSessionArtifactTotal = 64 << 20
 		var total int64
-		err := filepath.WalkDir(filepath.Dir(sessionHome), func(path string, entry os.DirEntry, walkErr error) error {
+		sessionRoot := filepath.Dir(sessionHome)
+		artifactClass := ""
+		err := filepath.WalkDir(sessionRoot, func(path string, entry os.DirEntry, walkErr error) error {
 			if walkErr != nil {
 				return walkErr
 			}
@@ -1361,6 +1370,7 @@ func observeNativeSessionProjection(launcherHome string, preexisting map[string]
 			}
 			for _, sentinel := range privateSentinels {
 				if sentinel != "" && bytes.Contains(contents, []byte(sentinel)) {
+					artifactClass = nativeSessionArtifactClass(sessionRoot, path)
 					return errNativeSessionArtifactValue
 				}
 			}
@@ -1368,7 +1378,7 @@ func observeNativeSessionProjection(launcherHome string, preexisting map[string]
 		})
 		switch {
 		case errors.Is(err, errNativeSessionArtifactValue):
-			return "locked Codex private Session artifact exposed a selected environment value"
+			return "locked Codex private Session artifact class " + artifactClass + " exposed a selected environment value"
 		case errors.Is(err, errNativeSessionArtifactBounds):
 			return "locked Codex private Session artifacts exceeded inspection bounds"
 		case err != nil:
@@ -1376,6 +1386,26 @@ func observeNativeSessionProjection(launcherHome string, preexisting map[string]
 		}
 	}
 	return ""
+}
+
+func nativeSessionArtifactClass(sessionRoot, path string) string {
+	relative, err := filepath.Rel(sessionRoot, path)
+	if err != nil || relative == "." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return "other-regular"
+	}
+	parts := strings.Split(relative, string(filepath.Separator))
+	if len(parts) >= 4 && parts[0] == "home" && parts[1] == ".codex" {
+		switch parts[2] {
+		case "shell_snapshots":
+			return "codex-shell-snapshot"
+		case "sessions":
+			return "codex-rollout"
+		}
+	}
+	if len(parts) == 3 && parts[0] == "home" && parts[1] == ".codex" && parts[2] == "config.toml" {
+		return "codex-generated-config"
+	}
+	return "other-regular"
 }
 
 var (
@@ -1414,7 +1444,7 @@ func TestNativeSessionProjectionScansNonRolloutArtifacts(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(sessionRoot, "generated-state.json"), []byte("private-sentinel\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if got := observeNativeSessionProjection(launcherHome, map[string]struct{}{}, []string{"private-sentinel"}); got != "locked Codex private Session artifact exposed a selected environment value" {
+	if got := observeNativeSessionProjection(launcherHome, map[string]struct{}{}, []string{"private-sentinel"}); got != "locked Codex private Session artifact class other-regular exposed a selected environment value" {
 		t.Fatalf("non-rollout Session artifact scan = %q", got)
 	}
 }
