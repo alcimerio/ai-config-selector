@@ -60,29 +60,29 @@ func nativeCodexPathGrantCommand(fixture nativeCodexPathGrantFixture) string {
 	childDirectoryWrite := filepath.Join(fixture.readWriteDirectory, "child-write")
 	childChildWrite := filepath.Join(fixture.writableChild, "child-child-write")
 	childSibling := fixture.readWriteFile + "-child-sibling"
-	child := fmt.Sprintf(`if cat %s >/dev/null 2>&1; then printf 'child-exact-read-ok\n'; else printf 'child-exact-read-bad\n'; fi
+	child := fmt.Sprintf(`if IFS= read -r child_value < %s 2>/dev/null; then printf 'child-exact-read-ok\n'; else printf 'child-exact-read-bad\n'; fi
 if printf 'child-exact\n' > %s 2>/dev/null; then printf 'child-exact-write-ok\n'; else printf 'child-exact-write-bad\n'; fi
-if printf bad > %s 2>/dev/null; then printf 'child-exact-sibling-write-bad\n'; else printf 'child-exact-sibling-write-denied\n'; fi
-if cat %s >/dev/null 2>&1; then printf 'child-directory-read-ok\n'; else printf 'child-directory-read-bad\n'; fi
+if printf 'bad\n' > %s 2>/dev/null; then printf 'child-exact-sibling-write-bad\n'; else printf 'child-exact-sibling-write-denied\n'; fi
+if IFS= read -r child_value < %s 2>/dev/null; then printf 'child-directory-read-ok\n'; else printf 'child-directory-read-bad\n'; fi
 if printf 'child-directory\n' > %s 2>/dev/null; then printf 'child-directory-write-ok\n'; else printf 'child-directory-write-bad\n'; fi
-if cat %s >/dev/null 2>&1; then printf 'child-read-only-read-ok\n'; else printf 'child-read-only-read-bad\n'; fi
-if printf bad > %s 2>/dev/null; then printf 'child-read-only-write-bad\n'; else printf 'child-read-only-write-denied\n'; fi
-if cat %s >/dev/null 2>&1; then printf 'child-overlap-read-ok\n'; else printf 'child-overlap-read-bad\n'; fi
+if IFS= read -r child_value < %s 2>/dev/null; then printf 'child-read-only-read-ok\n'; else printf 'child-read-only-read-bad\n'; fi
+if printf 'bad\n' > %s 2>/dev/null; then printf 'child-read-only-write-bad\n'; else printf 'child-read-only-write-denied\n'; fi
+if IFS= read -r child_value < %s 2>/dev/null; then printf 'child-overlap-read-ok\n'; else printf 'child-overlap-read-bad\n'; fi
 if printf 'child-overlap\n' > %s 2>/dev/null; then printf 'child-overlap-write-ok\n'; else printf 'child-overlap-write-bad\n'; fi`,
 		q(fixture.readWriteFile), q(fixture.readWriteFile), q(childSibling),
 		q(filepath.Join(fixture.readWriteDirectory, "source")), q(childDirectoryWrite),
 		q(fixture.readOnlyFile), q(fixture.readOnlyFile),
 		q(filepath.Join(fixture.writableChild, "child-file")), q(childChildWrite))
 	return fmt.Sprintf(`printf 'codex-native-tool-output\n'
-if cat %s >/dev/null 2>&1; then printf 'parent-exact-read-ok\n'; else printf 'parent-exact-read-bad\n'; fi
+if IFS= read -r parent_value < %s 2>/dev/null; then printf 'parent-exact-read-ok\n'; else printf 'parent-exact-read-bad\n'; fi
 if printf 'parent-exact\n' > %s 2>/dev/null; then printf 'parent-exact-write-ok\n'; else printf 'parent-exact-write-bad\n'; fi
-if printf bad > %s 2>/dev/null; then printf 'parent-exact-sibling-write-bad\n'; else printf 'parent-exact-sibling-write-denied\n'; fi
-if cat %s >/dev/null 2>&1; then printf 'parent-directory-read-ok\n'; else printf 'parent-directory-read-bad\n'; fi
+if printf 'bad\n' > %s 2>/dev/null; then printf 'parent-exact-sibling-write-bad\n'; else printf 'parent-exact-sibling-write-denied\n'; fi
+if IFS= read -r parent_value < %s 2>/dev/null; then printf 'parent-directory-read-ok\n'; else printf 'parent-directory-read-bad\n'; fi
 if printf 'parent-directory\n' > %s 2>/dev/null; then printf 'parent-directory-write-ok\n'; else printf 'parent-directory-write-bad\n'; fi
-if cat %s >/dev/null 2>&1; then printf 'parent-read-only-read-ok\n'; else printf 'parent-read-only-read-bad\n'; fi
-if printf bad > %s 2>/dev/null; then printf 'parent-read-only-write-bad\n'; else printf 'parent-read-only-write-denied\n'; fi
-if cat %s >/dev/null 2>&1 && cat %s >/dev/null 2>&1; then printf 'parent-overlap-read-ok\n'; else printf 'parent-overlap-read-bad\n'; fi
-if printf bad > %s 2>/dev/null; then printf 'parent-overlap-parent-write-bad\n'; else printf 'parent-overlap-parent-write-denied\n'; fi
+if IFS= read -r parent_value < %s 2>/dev/null; then printf 'parent-read-only-read-ok\n'; else printf 'parent-read-only-read-bad\n'; fi
+if printf 'bad\n' > %s 2>/dev/null; then printf 'parent-read-only-write-bad\n'; else printf 'parent-read-only-write-denied\n'; fi
+if IFS= read -r parent_value < %s 2>/dev/null && IFS= read -r parent_value < %s 2>/dev/null; then printf 'parent-overlap-read-ok\n'; else printf 'parent-overlap-read-bad\n'; fi
+if printf 'bad\n' > %s 2>/dev/null; then printf 'parent-overlap-parent-write-bad\n'; else printf 'parent-overlap-parent-write-denied\n'; fi
 if printf 'parent-overlap\n' > %s 2>/dev/null; then printf 'parent-overlap-child-write-ok\n'; else printf 'parent-overlap-child-write-bad\n'; fi
 /bin/sh -c %s
 if mv %s %s 2>/dev/null; then printf 'parent-exact-rename-bad\n'; else printf 'parent-exact-rename-denied\n'; fi`,
