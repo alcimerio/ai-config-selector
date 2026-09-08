@@ -83,7 +83,7 @@ func TestReleaseArtifactContractIsExactlyOneAppleSiliconTarget(t *testing.T) {
 		}
 		for _, required := range []string{
 			"scripts/run-native-candidate-gates.sh",
-			"go test -race ./...",
+			"go test -count=1 -v -timeout=7m -race ./...",
 			"The candidate itself is never rebuilt in this job.",
 			"No credentials, account data, target output, Session contents, private paths, generated policy, environment values, or control characters are recorded.",
 		} {
