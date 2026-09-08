@@ -122,7 +122,7 @@ func TestPromotedProfileMutationReloadThenSignalReportsCurrentCancellation(t *te
 			}
 			result := runMutationCandidatePTY(t, binary, home, args, func(master *os.File, capture *safeCapture, process *os.Process) {
 				waitForOutput(t, capture, "Profile \"")
-				writePTY(t, master, "\x1b[B", "\x1b[B", "\r")
+				writePTY(t, master, "\x1b[B", "\x1b[B", "\x1b[B", "\r")
 				waitForOutput(t, capture, "Stored v1 -> v2")
 				executable, err := os.Executable()
 				if err != nil {
@@ -137,7 +137,7 @@ func TestPromotedProfileMutationReloadThenSignalReportsCurrentCancellation(t *te
 				waitForOutput(t, capture, "Storage changed. Your draft")
 				writePTY(t, master, "r", "\r", "l")
 				waitForOutput(t, capture, "Reload stored Profile?")
-				writePTY(t, master, "y", "\x1b[A", "\x1b[A", "\r")
+				writePTY(t, master, "y", "\x1b[A", "\x1b[A", "\x1b[A", "\r")
 				waitForOutput(t, capture, "[x] newer")
 				if err := process.Signal(syscall.SIGTERM); err != nil {
 					t.Fatal(err)
@@ -253,7 +253,7 @@ func TestPromotedProfileMutationSeedPreviewAndCommit(t *testing.T) {
 					waitForOutput(t, capture, strings.ToUpper(operation[:1])+operation[1:]+` Profile "`+destination+`"`)
 					writePTY(t, master, "\r")
 					waitForOutput(t, capture, "[x] lost [devin-config:lost] missing")
-					writePTY(t, master, "\x1b[D", "\x1b[B", "\x1b[B", "\r")
+					writePTY(t, master, "\x1b[D", "\x1b[B", "\x1b[B", "\x1b[B", "\r")
 				}
 				waitForOutput(t, capture, "Stored v1 -> v2")
 				writePTY(t, master, "\x1b[F")
@@ -297,7 +297,7 @@ func TestPromotedProfileExplicitMigrationPreservesWorkspaceWriteAndAdoptsCommonP
 	home, path, _ := mutationCandidateHome(t)
 	result := runMutationCandidatePTY(t, binary, home, []string{"profile", "migrate", "old"}, func(master *os.File, capture *safeCapture, _ *os.Process) {
 		waitForOutput(t, capture, `Migrate Profile "old"`)
-		writePTY(t, master, "\x1b[B", "\x1b[B", "\r")
+		writePTY(t, master, "\x1b[B", "\x1b[B", "\x1b[B", "\r")
 		waitForOutput(t, capture, "Stored v1 -> v3")
 		for _, marker := range []string{"workspace write is retained", ".acs/common/v1/skills", "Devin projection paths"} {
 			waitForOutput(t, capture, marker)
@@ -325,7 +325,7 @@ func TestPromotedProfileExplicitMigrationPreviewsSelectedWorkspaceReduction(t *t
 		waitForOutput(t, capture, `Migrate Profile "old"`)
 		writePTY(t, master, "\x1b[B", "\r")
 		waitForOutput(t, capture, "Workspace access")
-		writePTY(t, master, " ", "\x1b[D", "\x1b[B", "\r")
+		writePTY(t, master, " ", "\x1b[D", "\x1b[B", "\x1b[B", "\r")
 		waitForOutput(t, capture, "workspace authority is reduced")
 		writePTY(t, master, "\x1b[F", "a", "\r")
 	})

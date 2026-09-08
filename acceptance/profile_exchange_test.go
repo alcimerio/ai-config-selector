@@ -34,7 +34,7 @@ func TestPromotedProfileExchangeRoundTripNeedsNoTargetsOrCredentials(t *testing.
 			t.Fatalf("exchange disclosed %q: stdout=%q stderr=%q", forbidden, exported.String(), report.String())
 		}
 	}
-	if !strings.Contains(report.String(), "source availability, authentication, and runtime unchecked") {
+	if !strings.Contains(report.String(), "source availability, authentication, path identity, and runtime unchecked") {
 		t.Fatalf("report=%q", report.String())
 	}
 	directory := realTemporaryDirectory(t)

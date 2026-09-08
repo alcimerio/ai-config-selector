@@ -54,7 +54,7 @@ func TestPromotedArtifactReportsItsVersionAndCreatesAnEmptyProfileThroughAPTY(t 
 
 	result := runPromotedPTY(t, binary, home, "promoted-empty", func(t *testing.T, terminal io.Writer, capture *safeCapture) {
 		waitForOutput(t, capture, `Create Profile "promoted-empty"`)
-		writePTY(t, terminal, "\x1b[B", "\x1b[B", "\r")
+		writePTY(t, terminal, "\x1b[B", "\x1b[B", "\x1b[B", "\r")
 		waitForOutput(t, capture, "Create an empty Profile?")
 		writePTY(t, terminal, "y")
 	})
