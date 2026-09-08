@@ -133,6 +133,26 @@ func TestMacOSDiagnosticMatrixEnumeratesAndRunsEveryNativePackage(t *testing.T) 
 	}
 }
 
+func TestMacOSLaunchHandshakeDiagnosticsRunIndependentExactTests(t *testing.T) {
+	workflow := readRepositoryFile(t, "..", filepath.Join(".github", "workflows", "macos.yml"))
+	for _, required := range []string{
+		"Diagnose native launch (${{ matrix.test }})",
+		"TestSeatbeltSupervisorStartHandshake",
+		"TestSeatbeltSupervisorEnvironmentHandshakeAndBoundedStall",
+		"TestSeatbeltSupervisorCancellationUnblocksStartupAndPreservesPostStartSignal",
+		"TestSelectedEnvironmentStaysSeparateFromPolicyValidationAndStatusProxy",
+		"max-parallel: 4",
+		"listed=\"$(go test -list \"^${ACS_LAUNCH_TEST}$\" ./internal/launch)\"",
+		"grep -Fqx -- \"$ACS_LAUNCH_TEST\" <<<\"$listed\"",
+		"Selected launch test was not discovered.",
+		"go test -count=1 -v -timeout=2m ./internal/launch -run \"^${ACS_LAUNCH_TEST}$\"",
+	} {
+		if !strings.Contains(workflow, required) {
+			t.Errorf("macOS launch diagnostic omits %q", required)
+		}
+	}
+}
+
 func TestLinuxIsOnlyANonBlockingCompileObservation(t *testing.T) {
 	ci := readRepositoryFile(t, "..", filepath.Join(".github", "workflows", "ci.yml"))
 	for _, required := range []string{
