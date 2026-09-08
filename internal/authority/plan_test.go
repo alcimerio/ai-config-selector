@@ -163,7 +163,9 @@ func TestAuthorityDigestTracksEveryRuntimeAuthorityFieldAndIgnoresSetOrder(t *te
 }
 
 func TestCommandDigestIncludesSelectionFormAndCount(t *testing.T) {
-	base := New(nil, launch.WorkspaceAccessReadOnly, 3, "")
+	base := New(nil, launch.WorkspaceAccessReadOnly, 3, "", TargetRequirements{
+		Recipe: RecipeShell, ProtectedPaths: []string{"/private/profile-state"}, ProtectedPathIDs: []string{"profile-state"},
+	})
 	abs, err := base.ForCommandIntent("absolute path (hidden)", 2)
 	if err != nil {
 		t.Fatal(err)
@@ -176,6 +178,9 @@ func TestCommandDigestIncludesSelectionFormAndCount(t *testing.T) {
 	differentCount, _ := base.ForCommandIntent("absolute path (hidden)", 3)
 	if abs.AuthorityDigest() == relative.AuthorityDigest() || abs.AuthorityDigest() == differentCount.AuthorityDigest() {
 		t.Fatal("command executable form or literal argument count did not change digest")
+	}
+	if got := abs.Requirements(); got.Recipe != RecipeCommand || !reflect.DeepEqual(got.ProtectedPaths, []string{"/private/profile-state"}) || !reflect.DeepEqual(got.ProtectedPathIDs, []string{"profile-state"}) {
+		t.Fatalf("command conversion dropped trusted private roots: %#v", got)
 	}
 }
 

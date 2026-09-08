@@ -21,6 +21,10 @@ to use the established read, edit and explicit migration paths.
     "workspace": {
       "version": 1,
       "selection": {"access": "read-only"}
+    },
+    "paths": {
+      "version": 1,
+      "selection": {"entries": []}
     }
   },
   "overlays": {
@@ -50,6 +54,36 @@ workspace bind. Session writes remain allowed in both modes.
 Legacy v1/v2 Profiles retain writable-workspace authority and their established
 synthetic-home paths. An approved legacy edit/clone/rename produces canonical
 v2, preserving that authority and placement. It does not silently adopt v3.
+
+## Explicit filesystem paths
+
+`common.paths` version 1 grants existing regular files or directories in
+addition to the workspace. Entries have a stable lowercase ID, `read-only` or
+`read-write` access, `file` or `directory` type, and either a portable
+`workspace-relative` reference or a machine-local `local-absolute` reference.
+Local absolute roots are limited to descendants of the real user home or a
+mounted `/Volumes/<name>` filesystem; filesystem roots and broad system roots
+are not grantable.
+
+A directory grant covers descendants. An exact writable file permits in-place
+writes only, requires a single-link regular file, and does not authorize parent
+rename, replacement, or sibling creation. Grant the containing directory when
+the target requires atomic replacement. ACS rejects missing or special files,
+wrong types, escapes, unsafe symlinks, protected Profile/Session/authentication
+state, writable target/runtime inputs, and observed identity changes. The same
+captured grants are revalidated before Session creation and before every target
+process preparation.
+
+Seatbelt enforcement is pathname based. ACS detects identity and symlink drift
+at its validation seams, but cannot exclude a cooperating external same-user
+process replacing a pathname after the final check. Directory authority also
+covers every name and hard link reachable inside that directory. These are
+explicit proof limits, not stable-object enforcement claims.
+
+Older v3 Profiles without `paths` remain readable as an empty compatibility
+default without rewrite. New creation and confirmed mutation emit an explicit
+empty or populated `paths` selection. A legacy edit that selects a nonempty
+path grant is refused until the user performs explicit v3 migration.
 
 ## Common material and projections
 

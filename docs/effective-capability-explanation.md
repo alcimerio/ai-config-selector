@@ -58,6 +58,8 @@ requirements. It is not a hash of JSON or human prose. Workspace mode, exact
 Skill identities, recipe/overlay/projection, registered requirement IDs,
 generated configuration, inheritance, environment-name policy, Session/process/
 terminal/device/system/Mach/sysctl grants, and coarse network mode affect it.
+Explicit path IDs, access/type/reference class, and workspace-relative logical
+paths also affect it. Local absolute path values do not.
 
 Machine-local bindings are deliberately excluded: Profile name/revision,
 canonical paths and file contents, argument values, auth references/provider

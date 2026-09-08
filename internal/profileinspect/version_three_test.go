@@ -61,3 +61,20 @@ func TestVersionThreeSupportsCodexOverlayWithoutPersistedDefaultIdentity(t *test
 		t.Fatalf("entry = %#v", entry)
 	}
 }
+
+func TestVersionThreePassivelyValidatesPresentPathsWithoutOpeningThem(t *testing.T) {
+	valid := `{"version":3,"name":"example","common":{"skills":{"version":1,"selection":[]},"workspace":{"version":1,"selection":{"access":"read-only"}},"paths":{"version":1,"selection":{"entries":[{"id":"missing","access":"read-only","type":"file","reference":{"kind":"local-absolute","path":"/definitely/not/opened"}}]}}},"overlays":{"devin":{"version":1}}}`
+	entry := InspectBytes("example", []byte(valid))
+	if entry.Status != "valid" || len(entry.Categories) != 3 {
+		t.Fatalf("entry = %#v", entry)
+	}
+	for _, selection := range []string{
+		`null`, `{}`, `{"entries":null}`, `{"entries":[],"future":true}`,
+		`{"entries":[{"id":"escape","access":"read-only","type":"file","reference":{"kind":"workspace-relative","path":"../private"}}]}`,
+	} {
+		data := `{"version":3,"name":"example","common":{"skills":{"version":1,"selection":[]},"workspace":{"version":1,"selection":{"access":"read-only"}},"paths":{"version":1,"selection":` + selection + `}},"overlays":{"devin":{"version":1}}}`
+		if got := InspectBytes("example", []byte(data)); got.Status == "valid" {
+			t.Fatalf("accepted paths selection %s: %#v", selection, got)
+		}
+	}
+}

@@ -22,8 +22,9 @@ explicit local regular file; stdin and remote URLs are not supported.
 
 ## Export format and output
 
-Exchange version 1 supports common Skills v1, workspace v1, and exact maintained
-Devin v1 and Codex v1 overlays. A version-1 or version-2 local Profile must first
+Exchange version 2 supports common Skills v1, workspace v1, paths v1, and exact
+maintained Devin v1 and Codex v1 overlays. Exchange version 1 remains decodable
+and produces its original two-capability local Profile. A version-1 or version-2 local Profile must first
 use the existing explicit `acs profile migrate NAME` workflow. Export never
 migrates or rewrites its source.
 
@@ -46,7 +47,7 @@ project-relative paths and are never rebound by display name. For example:
 
 ```json
 {
-  "exchangeVersion": 1,
+  "exchangeVersion": 2,
   "profile": {
     "common": {
       "skills": {
@@ -58,6 +59,12 @@ project-relative paths and are never rebound by display name. For example:
       "workspace": {
         "version": 1,
         "selection": {"access": "read-only"}
+      },
+      "paths": {
+        "version": 1,
+        "selection": [
+          {"id":"cache","access":"read-write","type":"directory","reference":{"kind":"bound","pathBinding":"path-1"}}
+        ]
       }
     },
     "overlays": {
@@ -69,7 +76,8 @@ project-relative paths and are never rebound by display name. For example:
     "sources": [{"id": "source-1"}],
     "authentications": [
       {"id": "authentication-1", "kind": "codex-chatgpt"}
-    ]
+    ],
+    "paths": [{"id":"path-1","kind":"local-absolute"}]
   }
 }
 ```
@@ -84,9 +92,10 @@ Import uses a separate local binding document:
 
 ```json
 {
-  "bindingVersion": 1,
+  "bindingVersion": 2,
   "sources": {"source-1": "shared-agents"},
-  "authentications": {"authentication-1": "work"}
+  "authentications": {"authentication-1": "work"},
+  "paths": {"path-1": "/Users/example/cache"}
 }
 ```
 
@@ -98,6 +107,13 @@ values. Duplicate, case/Unicode-normalized alias, and parent/child Skill
 destinations are rejected both before and after binding. Two symbols mapped to
 one local source therefore cannot evade collision checks, while the same relative
 name under two distinct sources remains correctly namespaced.
+
+Workspace-relative path references remain portable. Export replaces each
+local-absolute path with a deterministic `path-N` symbol and never emits the
+local value. Import requires exactly one absolute local value for every path
+symbol, validates shape and completeness without opening it, and stores the
+resulting local-absolute reference. Existence, supported anchors, identity,
+type, and native enforcement are checked only by an actual launch.
 
 Complete bindings mean only that every symbolic requirement has a valid local
 mapping. Source availability, named-auth existence/status, target executables,
@@ -128,7 +144,7 @@ complete` or `unresolved`, and destination status from unchecked source
 availability/authentication/runtime. JSON format 1 contains exactly
 `formatVersion`, `operation`, `status`, `code`, `structure`, `semantics`,
 `bindings`, `destination`, `sourceAvailability`, `authentication`, `runtime`,
-`requiredSources`, and `requiredAuthentication`. Exit 0 is fully valid
+`requiredSources`, `requiredAuthentication`, and `requiredPaths`. Exit 0 is fully valid
 with complete bindings, exit 2 is supported intent with unresolved bindings, and
 exit 1 is invalid, unsafe, unsupported, or unreadable input.
 

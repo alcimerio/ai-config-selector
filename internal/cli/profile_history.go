@@ -16,6 +16,7 @@ import (
 
 	"github.com/alcimerio/ai-config-selector/internal/adapter/devin"
 	"github.com/alcimerio/ai-config-selector/internal/commonprofile"
+	"github.com/alcimerio/ai-config-selector/internal/launch"
 	"github.com/alcimerio/ai-config-selector/internal/profile"
 	"github.com/alcimerio/ai-config-selector/internal/profileexchange"
 	"github.com/alcimerio/ai-config-selector/internal/profileinspect"
@@ -767,6 +768,7 @@ func (app App) restoreBindingError(inv historyInvocation, err error) int {
 }
 
 func preserveCurrentRestoreBindings(candidate *profile.Profile, current profile.Profile) (bool, error) {
+	needs := false
 	selectedPayload, selectedOK := candidate.Common[commonprofile.SkillsCapabilityID]
 	currentPayload, currentOK := current.Common[commonprofile.SkillsCapabilityID]
 	if selectedOK {
@@ -790,7 +792,6 @@ func preserveCurrentRestoreBindings(candidate *profile.Profile, current profile.
 				}
 			}
 		}
-		needs := false
 		for index := range selected {
 			if source, ok := currentByPath[selected[index].RelativePath]; ok && !ambiguous[selected[index].RelativePath] {
 				selected[index].Source = skills.Source(source)
@@ -804,17 +805,56 @@ func preserveCurrentRestoreBindings(candidate *profile.Profile, current profile.
 		}
 		selectedPayload.Selection = encoded
 		candidate.Common[commonprofile.SkillsCapabilityID] = selectedPayload
-		for id, overlay := range candidate.Overlays {
-			if now, ok := current.Overlays[id]; ok {
-				overlay.AuthRef = now.AuthRef
-				candidate.Overlays[id] = overlay
-			} else if overlay.AuthRef != "" {
-				needs = true
+	}
+
+	// Absolute path references are private bindings, not portable profile
+	// intent. Preserve them only when the current profile has the same entry
+	// identity and compatible grant shape; never replay a historical path.
+	if selectedPayload, ok := candidate.Common[commonprofile.PathsCapabilityID]; ok {
+		selected, err := commonprofile.DecodePathSelection(selectedPayload.Selection)
+		if err != nil {
+			return false, err
+		}
+		currentByID := map[string]commonprofile.PathEntry{}
+		if payload, exists := current.Common[commonprofile.PathsCapabilityID]; exists {
+			currentSelection, err := commonprofile.DecodePathSelection(payload.Selection)
+			if err != nil {
+				return false, err
+			}
+			for _, entry := range currentSelection.Entries {
+				currentByID[entry.ID] = entry
 			}
 		}
-		return needs, nil
+		for index := range selected.Entries {
+			entry := &selected.Entries[index]
+			bound, exists := currentByID[entry.ID]
+			if !exists || bound.Access != entry.Access || bound.Type != entry.Type || bound.Reference.Kind != entry.Reference.Kind {
+				if entry.Reference.Kind == string(launch.PathReferenceLocalAbsolute) {
+					needs = true
+				}
+				continue
+			}
+			if entry.Reference.Kind == string(launch.PathReferenceLocalAbsolute) {
+				entry.Reference.Path = bound.Reference.Path
+			}
+		}
+		encoded, err := commonprofile.EncodePathSelection(selected)
+		if err != nil {
+			return false, err
+		}
+		selectedPayload.Selection = encoded
+		candidate.Common[commonprofile.PathsCapabilityID] = selectedPayload
 	}
-	return false, nil
+
+	for id, overlay := range candidate.Overlays {
+		if now, ok := current.Overlays[id]; ok {
+			overlay.AuthRef = now.AuthRef
+			candidate.Overlays[id] = overlay
+		} else if overlay.AuthRef != "" {
+			needs = true
+		}
+	}
+	return needs, nil
 }
 
 func (app App) restoreApplyError(inv historyInvocation, outcome profilerepo.Outcome, err error) int {

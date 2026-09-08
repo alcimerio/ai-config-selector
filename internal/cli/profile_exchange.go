@@ -29,6 +29,7 @@ type exchangeDiagnostic struct {
 	Runtime                string `json:"runtime"`
 	RequiredSources        int    `json:"requiredSources"`
 	RequiredAuthentication int    `json:"requiredAuthentication"`
+	RequiredPaths          int    `json:"requiredPaths"`
 }
 
 // RunProfileExchange is an early, non-runtime dispatch. It assembles only the
@@ -102,7 +103,7 @@ func (app App) exportProfile(ctx context.Context, inv invocation) int {
 		}
 	}
 	var classification bytes.Buffer
-	fmt.Fprintf(&classification, "Profile exchange exported: %d source binding(s), %d authentication binding(s); source availability, authentication, and runtime unchecked.\n", report.SourceBindings, report.AuthenticationBindings)
+	fmt.Fprintf(&classification, "Profile exchange exported: %d source binding(s), %d authentication binding(s), %d path binding(s); source availability, authentication, path identity, and runtime unchecked.\n", report.SourceBindings, report.AuthenticationBindings, report.PathBindings)
 	classification.WriteString("Classification: local name host-bound and omitted; envelope/common/overlay versions, workspace access, and source-relative Skill paths portable; Skill sources host-bound symbolic bindings; Codex authRef secret-reference symbolic binding.\n")
 	classification.WriteString("Unsupported and excluded: Skill assets, provider records, secret values, resolved host paths/plans, repository metadata, Sessions, and runtime state.\n")
 	if written, err := app.ErrorOutput.Write(classification.Bytes()); err != nil || written != classification.Len() {
@@ -162,7 +163,7 @@ func diagnosticFor(operation string, result profileexchange.Result) exchangeDiag
 	return exchangeDiagnostic{
 		FormatVersion: 1, Operation: operation, Status: status, Code: string(result.Code), Structure: structure, Semantics: semantics,
 		Bindings: result.Bindings, Destination: "unchecked", SourceAvailability: result.SourceAvailability, Authentication: result.Authentication,
-		Runtime: result.Runtime, RequiredSources: result.RequiredSources, RequiredAuthentication: result.RequiredAuthentication,
+		Runtime: result.Runtime, RequiredSources: result.RequiredSources, RequiredAuthentication: result.RequiredAuthentication, RequiredPaths: result.RequiredPaths,
 	}
 }
 

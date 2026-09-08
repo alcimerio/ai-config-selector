@@ -53,6 +53,7 @@ type DevinRequest struct {
 	ExpectedCatalog       []skills.SkillReference
 	ResolvedPlan          *authority.Plan
 	RuntimeAuthority      launch.RuntimeAuthority
+	FilesystemGrants      []launch.FilesystemGrant
 }
 
 // CommandRequest contains one already-resolved literal command and the common
@@ -151,6 +152,15 @@ func settleRetainedProcess(process launch.Process, mode retainedSignalMode, devi
 	return runErr, launch.AwaitRetainedSessionCleanup(process)
 }
 
+func hasWritableFilesystemGrant(grants []launch.FilesystemGrant) bool {
+	for _, grant := range grants {
+		if grant.Access == launch.PathAccessReadWrite {
+			return true
+		}
+	}
+	return false
+}
+
 // New returns the production executor using ACS's required native sandbox.
 func New() *Executor { return newExecutor(launch.NewProcessSandbox()) }
 
@@ -181,7 +191,8 @@ func (e *Executor) RunShell(ctx context.Context, request ShellRequest) (resultEr
 	resultErr, _ = e.runAttached(ctx, attachedRecipe{
 		sessionsDirectory: request.SessionsDirectory, workingDirectory: request.WorkingDirectory,
 		workspaceAccess: workspaceAccess, materializer: materializer, runtimeAuthority: runtimeAuthority,
-		executable: systemShell, arguments: []string{"-f"}, terminal: request.Terminal,
+		resolvedPlan: request.ResolvedPlan,
+		executable:   systemShell, arguments: []string{"-f"}, terminal: request.Terminal,
 	})
 	return resultErr
 }
@@ -196,6 +207,7 @@ type attachedRecipe struct {
 	command           *runcommand.Command
 	terminal          launch.Terminal
 	runtimeAuthority  launch.RuntimeAuthority
+	resolvedPlan      *authority.Plan
 }
 
 // runAttached is the one Session/process lifecycle for the fixed shell and an
@@ -210,9 +222,17 @@ func (e *Executor) runAttached(ctx context.Context, recipe attachedRecipe) (resu
 			return err, false
 		}
 	}
+	var filesystemGrants []launch.FilesystemGrant
+	if recipe.resolvedPlan != nil {
+		var err error
+		filesystemGrants, err = recipe.resolvedPlan.ResolveFilesystemGrantsForExecutable(recipe.workingDirectory, recipe.sessionsDirectory, executable)
+		if err != nil {
+			return &launch.SandboxError{Category: launch.SandboxUnsafePath}, false
+		}
+	}
 	if err := e.sandbox.Check(ctx, launch.SandboxCheck{Workspace: recipe.workingDirectory,
 		WorkspaceAccess: recipe.workspaceAccess, SessionsDirectory: recipe.sessionsDirectory,
-		Executable: executable, RuntimeAuthority: recipe.runtimeAuthority}); err != nil {
+		Executable: executable, RuntimeAuthority: recipe.runtimeAuthority, FilesystemGrants: filesystemGrants}); err != nil {
 		return err, false
 	}
 	target := "shell"
@@ -240,6 +260,7 @@ func (e *Executor) runAttached(ctx context.Context, recipe attachedRecipe) (resu
 		SessionsDirectory: created.SessionsDirectory(), SessionDirectory: created.RootDirectory(),
 		SessionHome: created.HomeDirectory(), TemporaryDirectory: created.TemporaryDirectory(),
 		Executable: executable, Arguments: arguments, Terminal: recipe.terminal, RuntimeAuthority: recipe.runtimeAuthority,
+		FilesystemGrants: filesystemGrants,
 	})
 	if err != nil {
 		return err, false
@@ -264,6 +285,7 @@ func (e *Executor) RunCommand(ctx context.Context, request CommandRequest) (exit
 		sessionsDirectory: request.SessionsDirectory, workingDirectory: request.WorkingDirectory,
 		workspaceAccess: request.ResolvedPlan.WorkspaceAccess(), materializer: *request.ResolvedPlan,
 		command: &request.Command, terminal: request.Terminal, runtimeAuthority: request.ResolvedPlan.RuntimeAuthority(),
+		resolvedPlan: request.ResolvedPlan,
 	})
 	if cleanupFailed {
 		return 1, runErr
@@ -302,12 +324,23 @@ func (e *Executor) RunDevin(ctx context.Context, request DevinRequest) (exitCode
 	request.Executable, request.RuntimeInputs, request.ExistingHomeDirectory = requirements.Executable, requirements.RuntimeInputs, requirements.ExistingHomeDirectory
 	if request.ResolvedPlan != nil {
 		request.RuntimeAuthority = request.ResolvedPlan.RuntimeAuthority()
+		var err error
+		request.FilesystemGrants, err = request.ResolvedPlan.ResolveFilesystemGrantsForPreflight(request.WorkingDirectory, request.SessionsDirectory)
+		if err == nil && hasWritableFilesystemGrant(request.FilesystemGrants) {
+			request.Executable, err = launch.ResolveExecutablePath(request.Executable)
+		}
+		if err == nil && hasWritableFilesystemGrant(request.FilesystemGrants) {
+			request.FilesystemGrants, err = request.ResolvedPlan.ResolveFilesystemGrantsForExecutable(request.WorkingDirectory, request.SessionsDirectory, request.Executable)
+		}
+		if err != nil {
+			return 1, &launch.SandboxError{Category: launch.SandboxUnsafePath}
+		}
 	}
 	preflightContext, cancelPreflight := context.WithCancel(ctx)
 	defer cancelPreflight()
 	supervisor := newDevinSignalSupervisor(cancelPreflight)
 	defer supervisor.stop()
-	if err := e.sandbox.Check(preflightContext, launch.SandboxCheck{Workspace: request.WorkingDirectory, WorkspaceAccess: request.WorkspaceAccess, SessionsDirectory: request.SessionsDirectory, Executable: request.Executable, RuntimeInputs: request.RuntimeInputs, RuntimeAuthority: request.RuntimeAuthority}); err != nil {
+	if err := e.sandbox.Check(preflightContext, launch.SandboxCheck{Workspace: request.WorkingDirectory, WorkspaceAccess: request.WorkspaceAccess, SessionsDirectory: request.SessionsDirectory, Executable: request.Executable, RuntimeInputs: request.RuntimeInputs, RuntimeAuthority: request.RuntimeAuthority, FilesystemGrants: request.FilesystemGrants}); err != nil {
 		return 1, err
 	}
 	created, err := session.CreateTracked(request.SessionsDirectory, request.WorkingDirectory, request.Materializer, "devin")
@@ -376,8 +409,19 @@ func (e *Executor) VerifyDevin(ctx context.Context, request DevinRequest) (resul
 	request.Executable, request.RuntimeInputs, request.ExistingHomeDirectory = requirements.Executable, requirements.RuntimeInputs, requirements.ExistingHomeDirectory
 	if request.ResolvedPlan != nil {
 		request.RuntimeAuthority = request.ResolvedPlan.RuntimeAuthority()
+		var err error
+		request.FilesystemGrants, err = request.ResolvedPlan.ResolveFilesystemGrantsForPreflight(request.WorkingDirectory, request.SessionsDirectory)
+		if err == nil && hasWritableFilesystemGrant(request.FilesystemGrants) {
+			request.Executable, err = launch.ResolveExecutablePath(request.Executable)
+		}
+		if err == nil && hasWritableFilesystemGrant(request.FilesystemGrants) {
+			request.FilesystemGrants, err = request.ResolvedPlan.ResolveFilesystemGrantsForExecutable(request.WorkingDirectory, request.SessionsDirectory, request.Executable)
+		}
+		if err != nil {
+			return &launch.SandboxError{Category: launch.SandboxUnsafePath}
+		}
 	}
-	if err := e.sandbox.Check(ctx, launch.SandboxCheck{Workspace: request.WorkingDirectory, WorkspaceAccess: request.WorkspaceAccess, SessionsDirectory: request.SessionsDirectory, Executable: request.Executable, RuntimeInputs: request.RuntimeInputs, RuntimeAuthority: request.RuntimeAuthority}); err != nil {
+	if err := e.sandbox.Check(ctx, launch.SandboxCheck{Workspace: request.WorkingDirectory, WorkspaceAccess: request.WorkspaceAccess, SessionsDirectory: request.SessionsDirectory, Executable: request.Executable, RuntimeInputs: request.RuntimeInputs, RuntimeAuthority: request.RuntimeAuthority, FilesystemGrants: request.FilesystemGrants}); err != nil {
 		return err
 	}
 	created, err := session.CreateTracked(request.SessionsDirectory, request.WorkingDirectory, request.Materializer, "devin")
@@ -492,7 +536,7 @@ func (e *Executor) runDevinProbe(ctx context.Context, created *session.Session, 
 }
 
 func (e *Executor) prepareDevin(ctx context.Context, created *session.Session, request DevinRequest, arguments []string, terminal launch.Terminal) (launch.Process, error) {
-	return e.prepareRetainedProcess(ctx, created, launch.ProcessRequest{Workspace: created.WorkingDirectory(), WorkspaceAccess: request.WorkspaceAccess, SessionsDirectory: created.SessionsDirectory(), SessionDirectory: created.RootDirectory(), SessionHome: created.HomeDirectory(), TemporaryDirectory: created.TemporaryDirectory(), Executable: request.Executable, RuntimeInputs: request.RuntimeInputs, Arguments: arguments, Terminal: terminal, RuntimeAuthority: request.RuntimeAuthority})
+	return e.prepareRetainedProcess(ctx, created, launch.ProcessRequest{Workspace: created.WorkingDirectory(), WorkspaceAccess: request.WorkspaceAccess, SessionsDirectory: created.SessionsDirectory(), SessionDirectory: created.RootDirectory(), SessionHome: created.HomeDirectory(), TemporaryDirectory: created.TemporaryDirectory(), Executable: request.Executable, RuntimeInputs: request.RuntimeInputs, Arguments: arguments, Terminal: terminal, RuntimeAuthority: request.RuntimeAuthority, FilesystemGrants: request.FilesystemGrants})
 }
 
 // prepareDevinInteractive commits the handoff before a process reference can

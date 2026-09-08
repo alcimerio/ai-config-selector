@@ -25,6 +25,15 @@ func (executionMaterializer) Materialize(home string) error {
 	return os.WriteFile(filepath.Join(home, "materialized"), []byte("yes"), 0o600)
 }
 
+type executionPathGrantMaterializer struct {
+	executionMaterializer
+	intents []launch.PathGrantIntent
+}
+
+func (materializer executionPathGrantMaterializer) PathGrantIntents() []launch.PathGrantIntent {
+	return append([]launch.PathGrantIntent(nil), materializer.intents...)
+}
+
 func TestCodexGeneratedConfigurationConsumesTypedTargetSemantics(t *testing.T) {
 	baseline := authority.CodexSemantics()
 	changed := authority.CodexSemantics()
@@ -448,7 +457,24 @@ func TestInteractiveCodexFailsBeforeExecutableAndSessionForMissingIdentity(t *te
 		t.Fatal(err)
 	}
 	registry.execution = newCodexExecutionRunner(codexLoginConfig{BinaryPath: "/missing/codex", SupportedVersion: SupportedCodexVersion, SessionsDirectory: sessionsDirectory, WorkingDirectory: registry.workingDirectory}, &fakeLoginSandbox{})
-	plan := authority.New(nil, launch.WorkspaceAccessReadOnly, 3, "codex", authority.TargetRequirements{Recipe: authority.RecipeCodex, Executable: "/missing/codex"}).WithAuthRef("work")
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, err := os.MkdirTemp(home, ".acs-codex-missing-identity-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(root)
+	selected := filepath.Join(root, "selected")
+	if err := os.WriteFile(selected, []byte("selected"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	materializer := executionPathGrantMaterializer{intents: []launch.PathGrantIntent{{
+		ID: "selected", Access: launch.PathAccessReadWrite, Type: launch.PathTypeFile,
+		ReferenceKind: launch.PathReferenceLocalAbsolute, Path: selected,
+	}}}
+	plan := authority.New([]authority.Contribution{{ID: "paths", Value: materializer}}, launch.WorkspaceAccessReadOnly, 3, "codex", authority.TargetRequirements{Recipe: authority.RecipeCodex, Executable: "missing-codex"}).WithAuthRef("work")
 	if _, err := registry.ExecuteCodex(context.Background(), CodexRequest{ResolvedPlan: &plan}); err == nil || !strings.Contains(err.Error(), ErrIdentityNotFound.Error()) {
 		t.Fatalf("missing identity error = %v", err)
 	}
@@ -489,6 +515,162 @@ func TestInteractiveCodexUsesResolvedAuthorityInsteadOfRunnerScalarInputs(t *tes
 		if observedExecutableContents[index] != "target" || request.Executable == "/stale/scalar/codex" || !reflect.DeepEqual(request.RuntimeInputs, []string{runtime}) {
 			t.Fatalf("process authority = executable %q runtime %#v", request.Executable, request.RuntimeInputs)
 		}
+	}
+}
+
+func TestInteractiveCodexResolvesBareExecutableBeforeProtectingWritableGrants(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, err := os.MkdirTemp(home, ".acs-codex-path-grant-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(root) })
+	tools := filepath.Join(root, "tools")
+	if err := os.MkdirAll(tools, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	binary := filepath.Join(tools, "codex")
+	if err := os.WriteFile(binary, []byte("target"), 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", tools+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	for _, test := range []struct {
+		name, selected string
+		pathType       launch.PathType
+		prepare        func(*testing.T)
+		wantSuccess    bool
+	}{
+		{name: "separate writable selection", selected: filepath.Join(root, "selected"), pathType: launch.PathTypeFile, wantSuccess: true},
+		{name: "executable selection", selected: binary, pathType: launch.PathTypeFile},
+		{name: "executable ancestor selection", selected: root, pathType: launch.PathTypeDirectory},
+		{name: "executable hard-link alias selection", selected: filepath.Join(root, "codex-alias"), pathType: launch.PathTypeFile, prepare: func(t *testing.T) {
+			if err := os.Link(binary, filepath.Join(root, "codex-alias")); err != nil {
+				t.Fatal(err)
+			}
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if test.prepare != nil {
+				test.prepare(t)
+			}
+			if test.selected != binary {
+				if _, err := os.Stat(test.selected); os.IsNotExist(err) {
+					err = os.WriteFile(test.selected, []byte("selected"), 0o600)
+					if err != nil {
+						t.Fatal(err)
+					}
+				} else if err != nil {
+					t.Fatal(err)
+				}
+			}
+			registry, _, _, sessionsDirectory := newBindingTestRegistry(t, "work", testChatGPTAuthJSON(t, "user", "workspace"))
+			preparedResolvedExecutable := false
+			var preparedExecutables []string
+			sandbox := &fakeLoginSandbox{version: SupportedCodexVersion, prepareHook: func(request launch.ProcessRequest) {
+				contents, readErr := os.ReadFile(request.Executable)
+				preparedResolvedExecutable = readErr == nil && string(contents) == "target" && filepath.IsAbs(request.Executable)
+				preparedExecutables = append(preparedExecutables, request.Executable)
+			}}
+			registry.execution = newCodexExecutionRunner(codexLoginConfig{
+				BinaryPath: "stale-runner-value", SupportedVersion: SupportedCodexVersion,
+				SessionsDirectory: sessionsDirectory, WorkingDirectory: registry.workingDirectory,
+			}, sandbox)
+			materializer := executionPathGrantMaterializer{intents: []launch.PathGrantIntent{{
+				ID: "selected", Access: launch.PathAccessReadWrite, Type: test.pathType,
+				ReferenceKind: launch.PathReferenceLocalAbsolute, Path: test.selected,
+			}}}
+			plan := authority.New([]authority.Contribution{{ID: "paths", Value: materializer}}, launch.WorkspaceAccessReadOnly, 3, "codex", authority.TargetRequirements{
+				Recipe: authority.RecipeCodex, Executable: "codex", Semantics: authority.CodexSemantics(),
+			}).WithAuthRef("work")
+			code, runErr := registry.ExecuteCodex(context.Background(), CodexRequest{ResolvedPlan: &plan})
+			if test.wantSuccess {
+				if code != 0 || runErr != nil || len(sandbox.requests) != 2 || !filepath.IsAbs(sandbox.check.Executable) || len(sandbox.check.FilesystemGrants) != 1 || !preparedResolvedExecutable {
+					t.Fatalf("bare executable with separate grant = code %d err %v check %#v requests %d", code, runErr, sandbox.check, len(sandbox.requests))
+				}
+				if entries, err := os.ReadDir(sessionsDirectory + ".executables"); err != nil || len(entries) != 0 {
+					t.Fatalf("operation executable snapshot cleanup = %v, %v", entries, err)
+				}
+				for _, executable := range preparedExecutables {
+					if _, err := os.Stat(executable); !os.IsNotExist(err) {
+						t.Fatalf("operation executable snapshot remains at %s: %v", filepath.Base(executable), err)
+					}
+				}
+				assertNoSessionDirectories(t, sessionsDirectory)
+				return
+			}
+			if code != 1 || !errors.Is(runErr, ErrCodexFailed) || len(sandbox.requests) != 0 {
+				t.Fatalf("writable executable grant = code %d err %v requests %d", code, runErr, len(sandbox.requests))
+			}
+		})
+	}
+
+	t.Run("configured executable retargeted after grant binding", func(t *testing.T) {
+		raceTools := filepath.Join(root, "race-tools")
+		if err := os.MkdirAll(raceTools, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		targetA := filepath.Join(root, "target-a")
+		targetB := filepath.Join(root, "target-b")
+		if err := os.WriteFile(targetA, []byte("target-a"), 0o500); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(targetB, []byte("target-b"), 0o500); err != nil {
+			t.Fatal(err)
+		}
+		configured := filepath.Join(raceTools, "codex")
+		if err := os.Symlink(targetA, configured); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("PATH", raceTools+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+		registry, _, _, sessionsDirectory := newBindingTestRegistry(t, "work", testChatGPTAuthJSON(t, "user", "workspace"))
+		sandbox := &fakeLoginSandbox{version: SupportedCodexVersion}
+		runner := newCodexExecutionRunner(codexLoginConfig{
+			SupportedVersion: SupportedCodexVersion, SessionsDirectory: sessionsDirectory, WorkingDirectory: registry.workingDirectory,
+		}, sandbox)
+		runner.beforeSnapshotHook = func() {
+			if err := os.Remove(targetA); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(targetB, targetA); err != nil {
+				t.Fatal(err)
+			}
+		}
+		registry.execution = runner
+		materializer := executionPathGrantMaterializer{intents: []launch.PathGrantIntent{{
+			ID: "selected", Access: launch.PathAccessReadWrite, Type: launch.PathTypeFile,
+			ReferenceKind: launch.PathReferenceLocalAbsolute, Path: targetB,
+		}}}
+		plan := authority.New([]authority.Contribution{{ID: "paths", Value: materializer}}, launch.WorkspaceAccessReadOnly, 3, "codex", authority.TargetRequirements{
+			Recipe: authority.RecipeCodex, Executable: "codex", Semantics: authority.CodexSemantics(),
+		}).WithAuthRef("work")
+		if code, err := registry.ExecuteCodex(context.Background(), CodexRequest{ResolvedPlan: &plan}); code != 1 || !errors.Is(err, ErrUnsupportedVersion) {
+			t.Fatalf("retargeted executable = code %d err %v", code, err)
+		}
+		if sandbox.check.Executable != "" || len(sandbox.requests) != 0 {
+			t.Fatalf("retargeted executable reached sandbox: check=%q requests=%d", sandbox.check.Executable, len(sandbox.requests))
+		}
+		if _, err := os.Stat(sessionsDirectory); !os.IsNotExist(err) {
+			t.Fatalf("retargeted executable touched Sessions: %v", err)
+		}
+	})
+
+	registry, _, _, sessionsDirectory := newBindingTestRegistry(t, "work", testChatGPTAuthJSON(t, "user", "workspace"))
+	sandbox := &fakeLoginSandbox{version: SupportedCodexVersion}
+	registry.execution = newCodexExecutionRunner(codexLoginConfig{SupportedVersion: SupportedCodexVersion, SessionsDirectory: sessionsDirectory, WorkingDirectory: registry.workingDirectory}, sandbox)
+	materializer := executionPathGrantMaterializer{intents: []launch.PathGrantIntent{{
+		ID: "selected", Access: launch.PathAccessReadWrite, Type: launch.PathTypeFile,
+		ReferenceKind: launch.PathReferenceLocalAbsolute, Path: filepath.Join(root, "selected"),
+	}}}
+	plan := authority.New([]authority.Contribution{{ID: "paths", Value: materializer}}, launch.WorkspaceAccessReadOnly, 3, "codex", authority.TargetRequirements{
+		Recipe: authority.RecipeCodex, Executable: "missing-codex", Semantics: authority.CodexSemantics(),
+	}).WithAuthRef("work")
+	if code, err := registry.ExecuteCodex(context.Background(), CodexRequest{ResolvedPlan: &plan}); code != 1 || !errors.Is(err, ErrUnsupportedVersion) || len(sandbox.requests) != 0 {
+		t.Fatalf("missing bare executable precedence = code %d err %v requests %d", code, err, len(sandbox.requests))
 	}
 }
 

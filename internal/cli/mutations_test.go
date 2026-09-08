@@ -9,6 +9,8 @@ import (
 	"github.com/alcimerio/ai-config-selector/internal/adapter/devin"
 	"github.com/alcimerio/ai-config-selector/internal/builder"
 	"github.com/alcimerio/ai-config-selector/internal/category"
+	"github.com/alcimerio/ai-config-selector/internal/commonprofile"
+	"github.com/alcimerio/ai-config-selector/internal/launch"
 	"github.com/alcimerio/ai-config-selector/internal/profile"
 	"github.com/alcimerio/ai-config-selector/internal/profileinspect"
 	"github.com/alcimerio/ai-config-selector/internal/profilerepo"
@@ -123,6 +125,11 @@ func (f mutationEditorFunc) MutateProfile(ctx context.Context, name string, draf
 }
 
 func mutationFixture(t *testing.T, raw []byte) (App, *profilerepo.Repository, string, *bytes.Buffer) {
+	app, repository, home, output, _ := mutationFixtureWithEditor(t, raw)
+	return app, repository, home, output
+}
+
+func mutationFixtureWithEditor(t *testing.T, raw []byte) (App, *profilerepo.Repository, string, *bytes.Buffer, *devin.Adapter) {
 	t.Helper()
 	home := t.TempDir()
 	directory := filepath.Join(home, ".acs", "profiles")
@@ -139,7 +146,7 @@ func mutationFixture(t *testing.T, raw []byte) (App, *profilerepo.Repository, st
 	repository := profilerepo.New(filepath.Join(home, ".acs"))
 	output := &bytes.Buffer{}
 	app := App{Repository: repository, Categories: editor.Categories(), MutationBuilder: editor, Input: strings.NewReader(""), Output: output, ErrorOutput: output, Interactive: func(io.Reader, io.Writer) bool { return true }}
-	return app, repository, home, output
+	return app, repository, home, output, editor
 }
 
 var legacyMutationDocument = []byte(`{"version":1,"name":"old","target":"devin","skillReferences":[{"source":"shared-agents","relativePath":"lost"},{"source":"devin-config","relativePath":"lost"}]}`)
@@ -199,6 +206,31 @@ func TestMutationPreviewCommitsExactCanonicalBytes(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestLegacyMutationRefusesNonemptyPathsWithoutExplicitMigration(t *testing.T) {
+	app, repository, _, _, editor := mutationFixtureWithEditor(t, legacyMutationDocument)
+	before, err := repository.Read(context.Background(), "old")
+	if err != nil {
+		t.Fatal(err)
+	}
+	app.MutationBuilder = mutationEditorFunc(func(ctx context.Context, name string, draft category.Draft, options builder.MutationOptions, _ io.Reader, _ io.Writer) (builder.Outcome, error) {
+		selection := commonprofile.PathSelection{Entries: []commonprofile.PathEntry{{ID: "data", Access: launch.PathAccessReadOnly, Type: launch.PathTypeDirectory, Reference: commonprofile.PathReference{Kind: string(launch.PathReferenceWorkspaceRelative), Path: "data"}}}}
+		if err := editor.SetPathSelection(&draft, selection); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := options.Prepare(draft); err == nil || !strings.Contains(err.Error(), "requires explicit Profile migration") {
+			t.Fatalf("legacy mutation did not refuse nonempty paths: %v", err)
+		}
+		return builder.Outcome{Cancelled: true}, nil
+	})
+	if code := app.Run(context.Background(), []string{"profile", "edit", "old"}); code != 130 {
+		t.Fatalf("cancelled mutation exit = %d", code)
+	}
+	after, err := repository.Read(context.Background(), "old")
+	if err != nil || !bytes.Equal(after.Bytes, before.Bytes) || after.Revision != before.Revision {
+		t.Fatalf("legacy bytes changed: %v", err)
 	}
 }
 

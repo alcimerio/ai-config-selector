@@ -3,10 +3,13 @@ package profileexchange
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
 
+	"github.com/alcimerio/ai-config-selector/internal/commonprofile"
+	"github.com/alcimerio/ai-config-selector/internal/launch"
 	"github.com/alcimerio/ai-config-selector/internal/profile"
 )
 
@@ -143,6 +146,58 @@ func TestExportRefusesOpaqueInactiveOverlayRatherThanDroppingIt(t *testing.T) {
 	candidate.Overlays["future"] = profile.OverlayPayload{Version: 9, Support: "inactive-unknown"}
 	if data, _, err := Export(candidate); err == nil || data != nil {
 		t.Fatalf("opaque overlay exported: %v\n%s", err, data)
+	}
+}
+
+func TestExportRefusesUnknownThirdCommonCapability(t *testing.T) {
+	candidate := fixtureProfile(t)
+	candidate.Common["future"] = profile.CommonPayload{Version: 1, Selection: json.RawMessage(`{}`)}
+	if data, _, err := Export(candidate); err == nil || data != nil {
+		t.Fatalf("unknown common capability exported: %v\n%s", err, data)
+	}
+}
+
+func TestVersionOneRejectsEveryPresentPathsField(t *testing.T) {
+	base := `{"exchangeVersion":1,"profile":{"common":{"skills":{"version":1,"selection":[]},"workspace":{"version":1,"selection":{"access":"read-only"}}%s},"overlays":{"devin":{"version":1}}},"requirements":{"sources":[],"authentications":[]}}`
+	for name, field := range map[string]string{
+		"null":  `,"paths":null`,
+		"zero":  `,"paths":{"version":0,"selection":null}`,
+		"empty": `,"paths":{"version":1,"selection":[]}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			result := Decode([]byte(fmt.Sprintf(base, field)), nil, "imported")
+			if result.Code != CodeUnsupportedContent || result.Candidate != nil {
+				t.Fatalf("present v1 paths accepted: %#v", result)
+			}
+		})
+	}
+}
+
+func TestVersionTwoPathBindingsDoNotLeakAndRoundTrip(t *testing.T) {
+	candidate := fixtureProfile(t)
+	paths, err := commonprofile.EncodePathSelection(commonprofile.PathSelection{Entries: []commonprofile.PathEntry{
+		{ID: "workspace-data", Access: launch.PathAccessReadOnly, Type: launch.PathTypeDirectory, Reference: commonprofile.PathReference{Kind: string(launch.PathReferenceWorkspaceRelative), Path: "fixtures/data"}},
+		{ID: "local-cache", Access: launch.PathAccessReadWrite, Type: launch.PathTypeDirectory, Reference: commonprofile.PathReference{Kind: string(launch.PathReferenceLocalAbsolute), Path: "/Users/private/cache"}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate.Common[commonprofile.PathsCapabilityID] = profile.CommonPayload{Version: 1, Selection: paths}
+	exported, report, err := Export(candidate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.PathBindings != 1 || bytes.Contains(exported, []byte("/Users/private")) || !bytes.Contains(exported, []byte(`"pathBinding": "path-1"`)) {
+		t.Fatalf("unsafe export (%#v): %s", report, exported)
+	}
+	bindings := []byte(`{"bindingVersion":2,"sources":{"source-1":"devin-config","source-2":"shared-agents"},"authentications":{"authentication-1":"personal"},"paths":{"path-1":"/Users/restored/cache"}}`)
+	result := Decode(exported, bindings, "imported")
+	if result.Code != CodeValid || result.Candidate == nil || result.RequiredPaths != 1 {
+		t.Fatalf("decode = %#v", result)
+	}
+	selection, err := commonprofile.DecodePathSelection(result.Candidate.Common[commonprofile.PathsCapabilityID].Selection)
+	if err != nil || selection.Entries[0].Reference.Path != "/Users/restored/cache" || selection.Entries[1].Reference.Path != "fixtures/data" {
+		t.Fatalf("paths = %#v, %v", selection, err)
 	}
 }
 
