@@ -140,6 +140,7 @@ func TestMacOSLaunchHandshakeDiagnosticsRunIndependentExactTests(t *testing.T) {
 		"TestSeatbeltSupervisorStartHandshake",
 		"TestSeatbeltSupervisorEnvironmentHandshakeAndBoundedStall",
 		"TestSeatbeltSupervisorCancellationUnblocksStartupAndPreservesPostStartSignal",
+		"TestSelectedEnvironmentPolicyValidationStage",
 		"TestSelectedEnvironmentStaysSeparateFromPolicyValidationAndStatusProxy",
 		"max-parallel: 4",
 		"listed=\"$(go test -list \"^${ACS_LAUNCH_TEST}$\" ./internal/launch)\"",

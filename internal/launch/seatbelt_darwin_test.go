@@ -1118,6 +1118,55 @@ func TestSeatbeltRecoveryProofControlNeverReachesTargetEnvironment(t *testing.T)
 	}
 }
 
+func TestSelectedEnvironmentPolicyValidationStage(t *testing.T) {
+	request := seatbeltTestRequest(t)
+	traceRoot, err := os.MkdirTemp("/private/tmp", "acs-selected-policy-stage-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(traceRoot) })
+	trace := filepath.Join(traceRoot, "environment-transport")
+	lease, err := environmentresource.Resolve([]environmentresource.Intent{{
+		ID: "token", Destination: "PROFILE_SELECTED_TOKEN", Scope: "attached-process-tree", SourceKind: "secret-reference",
+		Provider: "host-environment", Reference: "ACS_NATIVE_PROFILE_TOKEN", Required: true, Classification: "secret",
+	}}, func(name string) (string, bool) { return "selected-test-value", name == "ACS_NATIVE_PROFILE_TOKEN" })
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lease.Release()
+	request.environmentProjection = lease
+	request.arguments = []string{"-test.run=^TestSeatbeltHelperProcess$", "--", "environment-transport-target", trace + "-target"}
+	backend := &seatbeltBackend{
+		executable: os.Args[0],
+		policy: func(validatedProcessRequest) (string, []string, error) {
+			return "(version 1)", []string{"-DACS_ENV_TEST_TRACE=" + trace}, nil
+		},
+	}
+	fixtureContext, cancelFixture := context.WithTimeout(context.Background(), 4*time.Second)
+	defer cancelFixture()
+	process, err := backend.prepare(fixtureContext, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, ok := process.(*seatbeltProcess)
+	if !ok {
+		t.Fatalf("prepared process type = %T", process)
+	}
+	t.Cleanup(func() { closeUnstartedSeatbeltFixture(t, prepared) })
+	if prepared.command.Process != nil {
+		t.Fatal("policy-validation stage unexpectedly started the final process")
+	}
+	contents, err := os.ReadFile(trace + "-validation")
+	if err != nil || string(contents) != "true" {
+		t.Fatalf("selected environment validation observation=%q err=%v", contents, err)
+	}
+	for _, stage := range []string{"proxy", "target"} {
+		if _, err := os.Stat(trace + "-" + stage); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("selected environment policy stage unexpectedly reached %s: %v", stage, err)
+		}
+	}
+}
+
 func TestSelectedEnvironmentStaysSeparateFromPolicyValidationAndStatusProxy(t *testing.T) {
 	request := seatbeltTestRequest(t)
 	trace := filepath.Join(filepath.Dir(filepath.Dir(request.workspace)), "environment-transport")
@@ -1226,6 +1275,24 @@ func seatbeltEnvironmentTraceState(trace string) string {
 		states = append(states, stage+"="+state)
 	}
 	return strings.Join(states, ",")
+}
+
+func closeUnstartedSeatbeltFixture(t *testing.T, process *seatbeltProcess) {
+	t.Helper()
+	process.closeControl()
+	process.closeStatusControl()
+	if process.helperControl != nil {
+		if err := process.helperControl.Close(); err != nil {
+			t.Errorf("close prepared helper control: %v", err)
+		}
+		process.helperControl = nil
+	}
+	if process.proxyStatus != nil {
+		if err := process.proxyStatus.Close(); err != nil {
+			t.Errorf("close prepared proxy status: %v", err)
+		}
+		process.proxyStatus = nil
+	}
 }
 
 func TestSeatbeltSupervisorAuthenticatesDescriptorPreflightFailure(t *testing.T) {
