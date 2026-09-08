@@ -1167,6 +1167,151 @@ func TestSelectedEnvironmentPolicyValidationStage(t *testing.T) {
 	}
 }
 
+func TestSelectedEnvironmentSupervisorStartAndCancelStage(t *testing.T) {
+	request := seatbeltTestRequest(t)
+	traceRoot, err := os.MkdirTemp("/private/tmp", "acs-selected-start-stage-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(traceRoot) })
+	trace := filepath.Join(traceRoot, "environment-transport")
+	lease, err := environmentresource.Resolve([]environmentresource.Intent{{
+		ID: "token", Destination: "PROFILE_SELECTED_TOKEN", Scope: "attached-process-tree", SourceKind: "secret-reference",
+		Provider: "host-environment", Reference: "ACS_NATIVE_PROFILE_TOKEN", Required: true, Classification: "secret",
+	}}, func(name string) (string, bool) { return "selected-test-value", name == "ACS_NATIVE_PROFILE_TOKEN" })
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lease.Release()
+	request.environmentProjection = lease
+	request.arguments = []string{"-test.run=^TestSeatbeltHelperProcess$", "--", "environment-transport-blocked-target", trace + "-target"}
+	backend := &seatbeltBackend{
+		executable: os.Args[0],
+		policy: func(validatedProcessRequest) (string, []string, error) {
+			return "(version 1)", []string{"-DACS_ENV_TEST_TRACE=" + trace}, nil
+		},
+	}
+	fixtureContext, cancelFixture := context.WithTimeout(context.Background(), 12*time.Second)
+	defer cancelFixture()
+	process, err := backend.prepare(fixtureContext, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, ok := process.(*seatbeltProcess)
+	if !ok {
+		t.Fatalf("prepared process type = %T", process)
+	}
+	startResult := make(chan error, 1)
+	go func() { startResult <- process.Start() }()
+	select {
+	case err := <-startResult:
+		if err != nil {
+			t.Fatalf("selected environment start-and-cancel start: %v; trace=%s", err, seatbeltEnvironmentTraceState(trace))
+		}
+	case <-time.After(4 * time.Second):
+		cancelFixture()
+		prepared.closeControl()
+		prepared.closeStatusControl()
+		select {
+		case <-startResult:
+		case <-time.After(time.Second):
+		}
+		t.Fatalf("selected environment start-and-cancel did not start; trace=%s", seatbeltEnvironmentTraceState(trace))
+	}
+	waitResult := make(chan error, 1)
+	go func() { waitResult <- process.Wait() }()
+	readyDeadline := time.Now().Add(2 * time.Second)
+	for {
+		contents, readErr := os.ReadFile(trace + "-target")
+		if readErr == nil && string(contents) == "true" {
+			break
+		}
+		if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
+			cancelFixture()
+			prepared.closeControl()
+			prepared.closeStatusControl()
+			select {
+			case <-waitResult:
+			case <-time.After(time.Second):
+			}
+			t.Fatalf("selected environment start-and-cancel target marker: %v", readErr)
+		}
+		select {
+		case waitErr := <-waitResult:
+			t.Fatalf("selected environment target exited before ready: %v; trace=%s", waitErr, seatbeltEnvironmentTraceState(trace))
+		default:
+		}
+		if time.Now().After(readyDeadline) {
+			cancelFixture()
+			prepared.closeControl()
+			prepared.closeStatusControl()
+			select {
+			case <-waitResult:
+			case <-time.After(time.Second):
+			}
+			t.Fatalf("selected environment target did not become ready; trace=%s", seatbeltEnvironmentTraceState(trace))
+		}
+		time.Sleep(time.Millisecond)
+	}
+	signalResult := make(chan error, 1)
+	go func() { signalResult <- process.Signal(syscall.SIGKILL) }()
+	select {
+	case err := <-signalResult:
+		if err != nil {
+			cancelFixture()
+			prepared.closeControl()
+			prepared.closeStatusControl()
+			select {
+			case <-waitResult:
+			case <-time.After(time.Second):
+			}
+			t.Fatalf("selected environment target signal: %v; trace=%s", err, seatbeltEnvironmentTraceState(trace))
+		}
+	case <-time.After(time.Second):
+		cancelFixture()
+		prepared.closeControl()
+		prepared.closeStatusControl()
+		select {
+		case <-signalResult:
+		case <-time.After(time.Second):
+		}
+		t.Fatalf("selected environment target signal exceeded its test bound; trace=%s", seatbeltEnvironmentTraceState(trace))
+	}
+	select {
+	case waitErr := <-waitResult:
+		var exitError *exec.ExitError
+		if !errors.As(waitErr, &exitError) {
+			t.Fatalf("selected environment canceled Wait error = %v, want SIGKILL", waitErr)
+		}
+		status, ok := exitError.Sys().(syscall.WaitStatus)
+		if !ok || !status.Signaled() || status.Signal() != syscall.SIGKILL {
+			t.Fatalf("selected environment canceled Wait status = %v, want SIGKILL", exitError.Sys())
+		}
+	case <-time.After(4 * time.Second):
+		cancelFixture()
+		prepared.closeControl()
+		prepared.closeStatusControl()
+		settled := false
+		select {
+		case <-waitResult:
+			settled = true
+		case <-time.After(time.Second):
+		}
+		t.Fatalf("selected environment canceled Wait exceeded its test bound; settled-after-control-close=%t; trace=%s", settled, seatbeltEnvironmentTraceState(trace))
+	}
+	select {
+	case <-process.(ProcessCleanup).CleanupDone():
+	default:
+		t.Fatal("selected environment canceled target lacked authenticated cleanup completion")
+	}
+	for _, stage := range []string{"validation", "proxy", "target"} {
+		contents, err := os.ReadFile(trace + "-" + stage)
+		if err != nil || string(contents) != "true" {
+			t.Fatalf("selected environment start-and-cancel %s observation=%q err=%v", stage, contents, err)
+		}
+	}
+}
+
 func TestSelectedEnvironmentStaysSeparateFromPolicyValidationAndStatusProxy(t *testing.T) {
 	request := seatbeltTestRequest(t)
 	trace := filepath.Join(filepath.Dir(filepath.Dir(request.workspace)), "environment-transport")
@@ -3161,6 +3306,22 @@ func TestSeatbeltHelperProcess(t *testing.T) {
 			os.Exit(129)
 		}
 		os.Exit(0)
+	case "environment-transport-blocked-target":
+		if len(arguments) != 2 {
+			os.Exit(130)
+		}
+		if _, exists := os.LookupEnv("ACS_NATIVE_PROFILE_TOKEN"); exists {
+			os.Exit(131)
+		}
+		value, exists := os.LookupEnv("PROFILE_SELECTED_TOKEN")
+		if !exists || value != "selected-test-value" {
+			os.Exit(132)
+		}
+		if err := os.WriteFile(arguments[1], []byte("true"), 0o600); err != nil {
+			os.Exit(133)
+		}
+		time.Sleep(30 * time.Second)
+		os.Exit(134)
 	case "mark":
 		if err := os.WriteFile(arguments[1], []byte("started"), 0o600); err != nil {
 			os.Exit(71)

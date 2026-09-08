@@ -84,6 +84,7 @@ jobs:
           - TestSeatbeltSupervisorEnvironmentHandshakeAndBoundedStall
           - TestSeatbeltSupervisorCancellationUnblocksStartupAndPreservesPostStartSignal
           - TestSelectedEnvironmentPolicyValidationStage
+          - TestSelectedEnvironmentSupervisorStartAndCancelStage
           - TestSelectedEnvironmentStaysSeparateFromPolicyValidationAndStatusProxy
     runs-on: macos-26
     timeout-minutes: 4
