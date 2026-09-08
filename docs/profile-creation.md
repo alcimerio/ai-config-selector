@@ -6,8 +6,11 @@ machine-local Profile from an explicit JSON file. The document supplies its
 own name. Standard input and implicit file selection are not supported.
 
 Only the currently supported version-3 representation is accepted. The exact
-common `skills` and `workspace` capabilities and supported version-1 `devin`
-and `codex` overlays may be present. Future envelope versions, legacy v1/v2
+common `skills`, `workspace`, `paths`, `executables`, and `environment`
+capabilities and supported version-1 `devin` and `codex` overlays may be
+present. Environment source names and secret references are validated as
+logical local bindings; provider values are never read by creation or dry-run.
+Future envelope versions, legacy v1/v2
 documents, duplicate keys, unknown fields or common capabilities, unsupported
 or unknown overlays, invalid references and any representation that cannot be
 preserved losslessly are rejected. Existing legacy read, edit and migration

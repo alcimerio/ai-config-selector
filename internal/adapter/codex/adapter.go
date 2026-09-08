@@ -71,12 +71,16 @@ func New(config Config) (*Adapter, error) {
 	if err != nil {
 		return nil, err
 	}
+	environmentBinding, err := commonprofile.NewEnvironmentBinding()
+	if err != nil {
+		return nil, err
+	}
 	a.categories, err = category.NewRegistryWithRequirements("codex", authority.TargetRequirements{
 		Recipe: authority.RecipeCodex, Executable: config.BinaryPath, ExecutableRequirementID: "codex-cli-0.149.1",
 		RuntimeInputs: append([]string(nil), config.RuntimeInputs...), RuntimeInputIDs: append([]string(nil), config.RuntimeInputIDs...),
 		ProtectedPaths:   []string{filepath.Join(a.home, ".acs"), filepath.Join(a.home, ".codex"), filepath.Join(a.home, ".local", "share", "devin", "credentials.toml")},
 		ProtectedPathIDs: []string{"acs-private", "codex-private", "devin-credential"}, Semantics: authority.CodexSemantics(),
-	}, []category.Registration{skillsBinding.Registration(), workspaceBinding.Registration(), pathsBinding.Registration(), executablesBinding.Registration()})
+	}, []category.Registration{skillsBinding.Registration(), workspaceBinding.Registration(), pathsBinding.Registration(), executablesBinding.Registration(), environmentBinding.Registration()})
 	if err != nil {
 		return nil, err
 	}
@@ -98,7 +102,11 @@ func New(config Config) (*Adapter, error) {
 	if err != nil {
 		return nil, err
 	}
-	a.editors, err = builder.NewEditorRegistry(a.categories, skillsEditor, workspaceEditor, pathsEditor, executablesEditor)
+	environmentEditor, err := builder.RegisterEnvironmentEditor(environmentBinding)
+	if err != nil {
+		return nil, err
+	}
+	a.editors, err = builder.NewEditorRegistry(a.categories, skillsEditor, workspaceEditor, pathsEditor, executablesEditor, environmentEditor)
 	if err != nil {
 		return nil, err
 	}

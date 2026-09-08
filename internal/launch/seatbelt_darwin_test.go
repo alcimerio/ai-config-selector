@@ -26,10 +26,51 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/alcimerio/ai-config-selector/internal/environmentresource"
 	"github.com/creack/pty"
 	"github.com/ebitengine/purego"
 	"golang.org/x/sys/unix"
 )
+
+// This test-only sandbox-exec stand-in records boolean environment absence at
+// policy validation and proxy entry, then execs the normal in-binary
+// supervisor. Production code and the supervisor protocol remain unchanged.
+func init() {
+	trace := ""
+	separator := -1
+	for index, argument := range os.Args {
+		if strings.HasPrefix(argument, "-DACS_ENV_TEST_TRACE=") {
+			trace = strings.TrimPrefix(argument, "-DACS_ENV_TEST_TRACE=")
+		}
+		if argument == "--" {
+			separator = index
+			break
+		}
+	}
+	if trace == "" || separator < 0 || separator+1 >= len(os.Args) {
+		return
+	}
+	stage := "proxy"
+	if os.Args[separator+1] == "/usr/bin/true" {
+		stage = "validation"
+	}
+	_ = os.WriteFile(trace+"-"+stage, []byte(strconv.FormatBool(seatbeltSelectedEnvironmentAbsent())), 0o600)
+	if stage == "validation" {
+		os.Exit(0)
+	}
+	if err := syscall.Exec(os.Args[separator+1], os.Args[separator+1:], os.Environ()); err != nil {
+		os.Exit(125)
+	}
+}
+
+func seatbeltSelectedEnvironmentAbsent() bool {
+	for _, name := range []string{"ACS_NATIVE_PROFILE_TOKEN", "PROFILE_SELECTED_TOKEN"} {
+		if _, exists := os.LookupEnv(name); exists {
+			return false
+		}
+	}
+	return true
+}
 
 func TestSeatbeltWorkspaceWriteRuleFollowsResolvedAccess(t *testing.T) {
 	base := validatedProcessRequest{workspace: "/private/tmp/workspace", sessionDirectory: "/private/tmp/session", executable: "/bin/zsh"}
@@ -634,6 +675,135 @@ func TestSeatbeltSupervisorStartHandshake(t *testing.T) {
 	}
 }
 
+func TestSeatbeltSupervisorEnvironmentHandshakeAndBoundedStall(t *testing.T) {
+	intent := environmentresource.Intent{ID: "token", Destination: "TOOL_TOKEN", Scope: "attached-process-tree", SourceKind: "secret-reference", Provider: "host-environment", Reference: "PRIVATE_SOURCE", Required: true, Classification: "secret"}
+	lease, err := environmentresource.Resolve([]environmentresource.Intent{intent}, func(name string) (string, bool) {
+		return "private-value", name == "PRIVATE_SOURCE"
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(lease.Release)
+
+	t.Run("frame then start", func(t *testing.T) {
+		control, peer := net.Pipe()
+		defer control.Close()
+		defer peer.Close()
+		challenge := bytes.Repeat([]byte{0x73}, seatbeltChallengeSize)
+		process := &seatbeltProcess{control: control, challenge: challenge, environmentProjection: lease, startupDeadline: time.Second}
+		result := make(chan error, 1)
+		go func() {
+			got := make([]byte, len(challenge))
+			if _, err := io.ReadFull(peer, got); err != nil || !bytes.Equal(got, challenge) {
+				result <- errors.New("invalid challenge")
+				return
+			}
+			if _, err := peer.Write([]byte{seatbeltSupervisorReady}); err != nil {
+				result <- err
+				return
+			}
+			mode := []byte{0}
+			if _, err := io.ReadFull(peer, mode); err != nil || mode[0] != seatbeltSupervisorEnvironmentFrame {
+				result <- errors.New("missing environment frame mode")
+				return
+			}
+			projection, err := environmentresource.ReadFrame(peer, []string{"HOME=/private/session/home"})
+			if err != nil || !reflect.DeepEqual(projection, []string{"TOOL_TOKEN=private-value"}) {
+				result <- errors.New("invalid environment projection")
+				return
+			}
+			start := []byte{0}
+			_, err = io.ReadFull(peer, start)
+			if err == nil && start[0] != seatbeltSupervisorStart {
+				err = errors.New("invalid start marker")
+			}
+			result <- err
+		}()
+		if err := process.startSupervisor(); err != nil {
+			t.Fatal(err)
+		}
+		if err := <-result; err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	t.Run("ready then stalled reader", func(t *testing.T) {
+		control, peer := net.Pipe()
+		defer control.Close()
+		defer peer.Close()
+		process := &seatbeltProcess{control: control, challenge: bytes.Repeat([]byte{0x45}, seatbeltChallengeSize), environmentProjection: lease, startupDeadline: 25 * time.Millisecond}
+		go func() {
+			challenge := make([]byte, seatbeltChallengeSize)
+			_, _ = io.ReadFull(peer, challenge)
+			_, _ = peer.Write([]byte{seatbeltSupervisorReady})
+		}()
+		started := time.Now()
+		if err := process.startSupervisor(); err == nil {
+			t.Fatal("stalled environment transfer succeeded")
+		}
+		if elapsed := time.Since(started); elapsed > time.Second {
+			t.Fatalf("stalled transfer exceeded bound: %v", elapsed)
+		}
+	})
+}
+
+func TestSeatbeltSupervisorCancellationUnblocksStartupAndPreservesPostStartSignal(t *testing.T) {
+	t.Run("startup", func(t *testing.T) {
+		control, peer := net.Pipe()
+		defer peer.Close()
+		ready := make(chan struct{})
+		killed := make(chan syscall.Signal, 1)
+		process := &seatbeltProcess{control: control, challenge: bytes.Repeat([]byte{0x32}, seatbeltChallengeSize), processGroup: 731, supervised: true, startupDeadline: 5 * time.Second, killProcessGroup: func(_ int, signal syscall.Signal) error { killed <- signal; return nil }}
+		go func() {
+			challenge := make([]byte, seatbeltChallengeSize)
+			_, _ = io.ReadFull(peer, challenge)
+			_, _ = peer.Write([]byte{seatbeltSupervisorReady})
+			close(ready)
+		}()
+		result := make(chan error, 1)
+		go func() { result <- process.startSupervisor() }()
+		<-ready
+		canceledAt := time.Now()
+		if err := process.cancel(); err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case err := <-result:
+			if err == nil {
+				t.Fatal("canceled startup returned success")
+			}
+			if elapsed := time.Since(canceledAt); elapsed > time.Second {
+				t.Fatalf("canceled startup waited for deadline: %v", elapsed)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("cancellation did not unblock startup transfer")
+		}
+		if signal := <-killed; signal != syscall.SIGKILL {
+			t.Fatalf("startup cancellation signal = %v", signal)
+		}
+	})
+
+	t.Run("post start", func(t *testing.T) {
+		control, peer := net.Pipe()
+		defer control.Close()
+		defer peer.Close()
+		process := &seatbeltProcess{control: control, processGroup: 811, supervised: true, killProcessGroup: func(int, syscall.Signal) error { t.Fatal("post-start cancellation bypassed supervisor"); return nil }}
+		process.supervisorStarted.Store(true)
+		packet := make(chan []byte, 1)
+		go func() {
+			value := make([]byte, 2)
+			_, _ = io.ReadFull(peer, value)
+			packet <- value
+		}()
+		if err := process.cancel(); err != nil {
+			t.Fatal(err)
+		}
+		if got := <-packet; !bytes.Equal(got, []byte{'S', byte(syscall.SIGKILL)}) {
+			t.Fatalf("post-start signal packet = %v", got)
+		}
+	})
+}
+
 func TestSeatbeltWaitMapsAuthenticatedTargetStatusThroughProxy(t *testing.T) {
 	for _, test := range []struct {
 		name  string
@@ -882,6 +1052,44 @@ func TestSeatbeltRecoveryProofControlNeverReachesTargetEnvironment(t *testing.T)
 	}
 	if seatbeltRecoveryProofEnabled(seatbeltTargetEnvironment(supervisor)) {
 		t.Fatal("target inherited recovery-proof control")
+	}
+}
+
+func TestSelectedEnvironmentStaysSeparateFromPolicyValidationAndStatusProxy(t *testing.T) {
+	request := seatbeltTestRequest(t)
+	trace := filepath.Join(filepath.Dir(filepath.Dir(request.workspace)), "environment-transport")
+	target := trace + "-target"
+	lease, err := environmentresource.Resolve([]environmentresource.Intent{{
+		ID: "token", Destination: "PROFILE_SELECTED_TOKEN", Scope: "attached-process-tree", SourceKind: "secret-reference",
+		Provider: "host-environment", Reference: "ACS_NATIVE_PROFILE_TOKEN", Required: true, Classification: "secret",
+	}}, func(name string) (string, bool) { return "selected-test-value", name == "ACS_NATIVE_PROFILE_TOKEN" })
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lease.Release()
+	request.environmentProjection = lease
+	request.arguments = []string{"-test.run=^TestSeatbeltHelperProcess$", "--", "environment-transport-target", target}
+	backend := &seatbeltBackend{
+		executable: os.Args[0],
+		policy: func(validatedProcessRequest) (string, []string, error) {
+			return "(version 1)", []string{"-DACS_ENV_TEST_TRACE=" + trace}, nil
+		},
+	}
+	process, err := backend.prepare(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := process.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if err := process.Wait(); err != nil {
+		t.Fatal(err)
+	}
+	for _, stage := range []string{"validation", "proxy", "target"} {
+		contents, err := os.ReadFile(trace + "-" + stage)
+		if err != nil || string(contents) != "true" {
+			t.Fatalf("selected environment %s observation=%q err=%v", stage, contents, err)
+		}
 	}
 }
 
@@ -2736,6 +2944,21 @@ func TestSeatbeltHelperProcess(t *testing.T) {
 	}
 	arguments := os.Args[separator+1:]
 	switch arguments[0] {
+	case "environment-transport-target":
+		if len(arguments) != 2 {
+			os.Exit(126)
+		}
+		if _, exists := os.LookupEnv("ACS_NATIVE_PROFILE_TOKEN"); exists {
+			os.Exit(127)
+		}
+		value, exists := os.LookupEnv("PROFILE_SELECTED_TOKEN")
+		if !exists || value != "selected-test-value" {
+			os.Exit(128)
+		}
+		if err := os.WriteFile(arguments[1], []byte("true"), 0o600); err != nil {
+			os.Exit(129)
+		}
+		os.Exit(0)
 	case "mark":
 		if err := os.WriteFile(arguments[1], []byte("started"), 0o600); err != nil {
 			os.Exit(71)
@@ -3516,7 +3739,7 @@ func seatbeltTestStartTarget(t *testing.T, control *os.File, challenge []byte) {
 	if ready[0] != seatbeltSupervisorReady {
 		t.Fatalf("supervisor readiness = %q", ready)
 	}
-	if _, err := control.Write([]byte{seatbeltSupervisorStart}); err != nil {
+	if _, err := control.Write([]byte{seatbeltSupervisorNoEnvironment, seatbeltSupervisorStart}); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -3529,11 +3752,11 @@ func seatbeltTestAcceptTargetStart(control *os.File, challenge []byte) ([]byte, 
 	if _, err := control.Write([]byte{seatbeltSupervisorReady}); err != nil {
 		return nil, err
 	}
-	start := []byte{0}
+	start := make([]byte, 2)
 	if _, err := io.ReadFull(control, start); err != nil {
 		return nil, err
 	}
-	if start[0] != seatbeltSupervisorStart {
+	if start[0] != seatbeltSupervisorNoEnvironment || start[1] != seatbeltSupervisorStart {
 		return nil, errors.New("unexpected supervisor start signal")
 	}
 	return got, nil

@@ -405,9 +405,11 @@ func (registry *Registry) NewProfileWithOverlay(name string, draft Draft, overla
 }
 
 func (registry *Registry) supportsCommonV3() bool {
-	_, skills := registry.byID["skills"]
-	_, workspace := registry.byID["workspace"]
-	return skills && workspace
+	ids := make([]string, 0, len(registry.ordered))
+	for _, registration := range registry.ordered {
+		ids = append(ids, registration.id)
+	}
+	return profileinspect.SupportsCommonV3(ids)
 }
 
 func (registry *Registry) newVersionTwoProfile(name string, draft Draft, omitWorkspace bool) (profile.Profile, error) {

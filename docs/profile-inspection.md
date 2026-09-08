@@ -74,9 +74,12 @@ and terminal controls. Private absolute paths and arbitrary decoder errors are
 never printed.
 
 Supported structures are Devin Profile envelopes 1 and 2 plus common Profile
-envelope 3. Version 3 has independently versioned Skills/workspace capabilities
-and explicit overlays; unknown inactive overlays are reported without being
-selected or executed. Version 2 may have an empty categories object. Unknown fields, category
+envelope 3. Version 3 has independently versioned Skills, workspace, path,
+executable, and environment capabilities plus explicit overlays. Environment
+inspection validates logical shape without reading a source/provider and does
+not report local source names, secret references, or values. Unknown inactive
+overlays are reported without being selected or executed. Version 2 may have
+an empty categories object. Unknown fields, category
 IDs, targets, source aliases, and unsupported versions are explicitly unsupported;
 missing fields, wrong types, duplicate JSON keys, filename/body mismatch, and
 malformed references are invalid. Unpaired JSON UTF-16 surrogate escapes are

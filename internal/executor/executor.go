@@ -19,6 +19,7 @@ import (
 
 	"github.com/alcimerio/ai-config-selector/internal/authority"
 	"github.com/alcimerio/ai-config-selector/internal/devinruntime"
+	"github.com/alcimerio/ai-config-selector/internal/environmentresource"
 	"github.com/alcimerio/ai-config-selector/internal/launch"
 	"github.com/alcimerio/ai-config-selector/internal/runcommand"
 	"github.com/alcimerio/ai-config-selector/internal/session"
@@ -85,7 +86,10 @@ func (request DevinRequest) resolvedInputs() (launch.WorkspaceAccess, session.Ma
 
 // Executor owns the fixed shell's sandbox check, Session lifecycle, and
 // process settlement. Its backend is selected by ACS, never by an adapter.
-type Executor struct{ sandbox launch.ProcessSandbox }
+type Executor struct {
+	sandbox           launch.ProcessSandbox
+	environmentLookup environmentresource.Lookup
+}
 
 type retainedSignalMode uint8
 
@@ -167,7 +171,9 @@ func New() *Executor { return newExecutor(launch.NewProcessSandbox()) }
 
 // newExecutor exists only for executor package tests. Production callers must
 // use New so they cannot choose a sandbox backend.
-func newExecutor(sandbox launch.ProcessSandbox) *Executor { return &Executor{sandbox: sandbox} }
+func newExecutor(sandbox launch.ProcessSandbox) *Executor {
+	return &Executor{sandbox: sandbox, environmentLookup: hostEnvironmentLookup}
+}
 
 // Readiness reports the fixed shell backend's passive readiness. It neither
 // creates a Session nor prepares a process.
@@ -225,7 +231,9 @@ func (e *Executor) runAttached(ctx context.Context, recipe attachedRecipe) (resu
 	}
 	var filesystemGrants []launch.FilesystemGrant
 	var executableGrants []launch.ExecutableGrant
+	requiresEnvironment := false
 	if recipe.resolvedPlan != nil {
+		requiresEnvironment = len(recipe.resolvedPlan.EnvironmentIntents()) != 0
 		var err error
 		filesystemGrants, err = recipe.resolvedPlan.ResolveFilesystemGrantsForExecutable(recipe.workingDirectory, recipe.sessionsDirectory, executable)
 		if err != nil {
@@ -238,9 +246,19 @@ func (e *Executor) runAttached(ctx context.Context, recipe attachedRecipe) (resu
 	}
 	if err := e.sandbox.Check(ctx, launch.SandboxCheck{Workspace: recipe.workingDirectory,
 		WorkspaceAccess: recipe.workspaceAccess, SessionsDirectory: recipe.sessionsDirectory,
-		Executable: executable, RuntimeAuthority: recipe.runtimeAuthority, FilesystemGrants: filesystemGrants, ExecutableGrants: executableGrants}); err != nil {
+		Executable: executable, RuntimeAuthority: recipe.runtimeAuthority, FilesystemGrants: filesystemGrants, ExecutableGrants: executableGrants, RequiresEnvironment: requiresEnvironment}); err != nil {
 		return err, false
 	}
+	environment, err := resolvePlanEnvironment(recipe.resolvedPlan, e.environmentLookup)
+	if err != nil {
+		return err, false
+	}
+	releaseEnvironment := environment != nil
+	defer func() {
+		if releaseEnvironment {
+			environment.Release()
+		}
+	}()
 	target := "shell"
 	if recipe.command != nil {
 		target = "command"
@@ -268,9 +286,13 @@ func (e *Executor) runAttached(ctx context.Context, recipe attachedRecipe) (resu
 		Executable: executable, Arguments: arguments, Terminal: recipe.terminal, RuntimeAuthority: recipe.runtimeAuthority,
 		FilesystemGrants: filesystemGrants,
 		ExecutableGrants: executableGrants,
+		Environment:      environment,
 	})
 	if err != nil {
 		return err, false
+	}
+	if releaseEnvironmentAfterCleanup(process, environment) {
+		releaseEnvironment = false
 	}
 	runErr, cleanupErr := settleRetainedProcess(process, retainedAttached, nil)
 	if cleanupErr != nil {
@@ -350,9 +372,20 @@ func (e *Executor) RunDevin(ctx context.Context, request DevinRequest) (exitCode
 	defer cancelPreflight()
 	supervisor := newDevinSignalSupervisor(cancelPreflight)
 	defer supervisor.stop()
-	if err := e.sandbox.Check(preflightContext, launch.SandboxCheck{Workspace: request.WorkingDirectory, WorkspaceAccess: request.WorkspaceAccess, SessionsDirectory: request.SessionsDirectory, Executable: request.Executable, RuntimeInputs: request.RuntimeInputs, RuntimeAuthority: request.RuntimeAuthority, FilesystemGrants: request.FilesystemGrants, ExecutableGrants: request.ExecutableGrants}); err != nil {
+	requiresEnvironment := request.ResolvedPlan != nil && len(request.ResolvedPlan.EnvironmentIntents()) != 0
+	if err := e.sandbox.Check(preflightContext, launch.SandboxCheck{Workspace: request.WorkingDirectory, WorkspaceAccess: request.WorkspaceAccess, SessionsDirectory: request.SessionsDirectory, Executable: request.Executable, RuntimeInputs: request.RuntimeInputs, RuntimeAuthority: request.RuntimeAuthority, FilesystemGrants: request.FilesystemGrants, ExecutableGrants: request.ExecutableGrants, RequiresEnvironment: requiresEnvironment}); err != nil {
 		return 1, err
 	}
+	environment, err := resolvePlanEnvironment(request.ResolvedPlan, e.environmentLookup)
+	if err != nil {
+		return 1, err
+	}
+	releaseEnvironment := environment != nil
+	defer func() {
+		if releaseEnvironment {
+			environment.Release()
+		}
+	}()
 	created, err := session.CreateTracked(request.SessionsDirectory, request.WorkingDirectory, request.Materializer, "devin")
 	if err != nil {
 		return 1, err
@@ -375,9 +408,12 @@ func (e *Executor) RunDevin(ctx context.Context, request DevinRequest) (exitCode
 	if preflightContext.Err() != nil {
 		return 1, errors.New("Devin launch interrupted before the interactive process started")
 	}
-	process, err := e.prepareDevinInteractive(preflightContext, created, request, supervisor)
+	process, err := e.prepareDevinInteractive(preflightContext, created, request, supervisor, environment)
 	if err != nil {
 		return 1, err
+	}
+	if releaseEnvironmentAfterCleanup(process, environment) {
+		releaseEnvironment = false
 	}
 	runErr, cleanupErr := settleRetainedProcess(process, retainedDevinReserved, supervisor)
 	if cleanupErr != nil {
@@ -436,6 +472,16 @@ func (e *Executor) VerifyDevin(ctx context.Context, request DevinRequest) (resul
 	}
 	if err := e.sandbox.Check(ctx, launch.SandboxCheck{Workspace: request.WorkingDirectory, WorkspaceAccess: request.WorkspaceAccess, SessionsDirectory: request.SessionsDirectory, Executable: request.Executable, RuntimeInputs: request.RuntimeInputs, RuntimeAuthority: request.RuntimeAuthority, FilesystemGrants: request.FilesystemGrants, ExecutableGrants: request.ExecutableGrants}); err != nil {
 		return err
+	}
+	// Verify runs value-free target preflights, but a required selected source
+	// must still be available before the verification Session is created. The
+	// short-lived validation lease is never attached to a probe generation.
+	environment, err := resolvePlanEnvironment(request.ResolvedPlan, e.environmentLookup)
+	if err != nil {
+		return err
+	}
+	if environment != nil {
+		environment.Release()
 	}
 	created, err := session.CreateTracked(request.SessionsDirectory, request.WorkingDirectory, request.Materializer, "devin")
 	if err != nil {
@@ -548,19 +594,23 @@ func (e *Executor) runDevinProbe(ctx context.Context, created *session.Session, 
 	return output.Bytes(), runErr
 }
 
-func (e *Executor) prepareDevin(ctx context.Context, created *session.Session, request DevinRequest, arguments []string, terminal launch.Terminal) (launch.Process, error) {
-	return e.prepareRetainedProcess(ctx, created, launch.ProcessRequest{Workspace: created.WorkingDirectory(), WorkspaceAccess: request.WorkspaceAccess, SessionsDirectory: created.SessionsDirectory(), SessionDirectory: created.RootDirectory(), SessionHome: created.HomeDirectory(), TemporaryDirectory: created.TemporaryDirectory(), Executable: request.Executable, RuntimeInputs: request.RuntimeInputs, Arguments: arguments, Terminal: terminal, RuntimeAuthority: request.RuntimeAuthority, FilesystemGrants: request.FilesystemGrants, ExecutableGrants: request.ExecutableGrants})
+func (e *Executor) prepareDevin(ctx context.Context, created *session.Session, request DevinRequest, arguments []string, terminal launch.Terminal, selected ...*environmentresource.Lease) (launch.Process, error) {
+	var environment *environmentresource.Lease
+	if len(selected) != 0 {
+		environment = selected[0]
+	}
+	return e.prepareRetainedProcess(ctx, created, launch.ProcessRequest{Workspace: created.WorkingDirectory(), WorkspaceAccess: request.WorkspaceAccess, SessionsDirectory: created.SessionsDirectory(), SessionDirectory: created.RootDirectory(), SessionHome: created.HomeDirectory(), TemporaryDirectory: created.TemporaryDirectory(), Executable: request.Executable, RuntimeInputs: request.RuntimeInputs, Arguments: arguments, Terminal: terminal, RuntimeAuthority: request.RuntimeAuthority, FilesystemGrants: request.FilesystemGrants, ExecutableGrants: request.ExecutableGrants, Environment: environment})
 }
 
 // prepareDevinInteractive commits the handoff before a process reference can
 // retain its Session. Signals after that commitment are queued for replay once
 // the prepared target has started; a failed preparation ends the commitment
 // without starting a target.
-func (e *Executor) prepareDevinInteractive(ctx context.Context, created *session.Session, request DevinRequest, supervisor *devinSignalSupervisor) (launch.Process, error) {
+func (e *Executor) prepareDevinInteractive(ctx context.Context, created *session.Session, request DevinRequest, supervisor *devinSignalSupervisor, selected ...*environmentresource.Lease) (launch.Process, error) {
 	if err := supervisor.reserveInteractive(); err != nil {
 		return nil, err
 	}
-	process, err := e.prepareDevin(ctx, created, request, []string{"--respect-workspace-trust", "false"}, request.Terminal)
+	process, err := e.prepareDevin(ctx, created, request, []string{"--respect-workspace-trust", "false"}, request.Terminal, selected...)
 	if err != nil {
 		supervisor.cancelInteractiveReservation()
 		return nil, err

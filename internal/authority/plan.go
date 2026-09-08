@@ -141,6 +141,12 @@ type FactValue struct {
 	Identity         *SkillIdentity `json:"identity,omitempty"`
 	Names            []string       `json:"names,omitempty"`
 	Count            *int           `json:"count,omitempty"`
+	Destination      string         `json:"destination,omitempty"`
+	Scope            string         `json:"scope,omitempty"`
+	SourceKind       string         `json:"sourceKind,omitempty"`
+	Provider         string         `json:"provider,omitempty"`
+	Classification   string         `json:"classification,omitempty"`
+	Required         *bool          `json:"required,omitempty"`
 }
 
 type Fact struct {
@@ -185,6 +191,7 @@ type Plan struct {
 	explanation            Explanation
 	pathGrantIntents       []launch.PathGrantIntent
 	executableGrantIntents []launch.ExecutableGrantIntent
+	environmentIntents     []launch.EnvironmentIntent
 }
 
 type pathGrantContributor interface {
@@ -192,6 +199,9 @@ type pathGrantContributor interface {
 }
 type executableGrantContributor interface {
 	ExecutableGrantIntents() []launch.ExecutableGrantIntent
+}
+type environmentContributor interface {
+	EnvironmentIntents() []launch.EnvironmentIntent
 }
 
 func New(contributions []Contribution, workspaceAccess launch.WorkspaceAccess, sourceVersion int, overlay string, supplied ...TargetRequirements) Plan {
@@ -222,6 +232,9 @@ func New(contributions []Contribution, workspaceAccess launch.WorkspaceAccess, s
 		}
 		if executables, ok := contribution.Value.(executableGrantContributor); ok {
 			plan.executableGrantIntents = append(plan.executableGrantIntents, executables.ExecutableGrantIntents()...)
+		}
+		if environment, ok := contribution.Value.(environmentContributor); ok {
+			plan.environmentIntents = append(plan.environmentIntents, environment.EnvironmentIntents()...)
 		}
 	}
 	plan.explanation = buildExplanation(plan)
@@ -302,6 +315,12 @@ func (plan Plan) ResolveExecutableGrants(workingDirectory, sessionsDirectory str
 	return launch.ResolveExecutableGrants(append([]launch.ExecutableGrantIntent(nil), plan.executableGrantIntents...), workingDirectory, sessionsDirectory, append([]string(nil), plan.requirements.ProtectedPaths...))
 }
 
+// EnvironmentIntents returns the logical environment selections without
+// resolving their private host names or references.
+func (plan Plan) EnvironmentIntents() []launch.EnvironmentIntent {
+	return append([]launch.EnvironmentIntent(nil), plan.environmentIntents...)
+}
+
 // ResolveFilesystemGrantsForPreflight validates selected paths before an
 // operation has acquired or resolved its executable. An operation that finds
 // a writable grant must subsequently call ResolveFilesystemGrantsForExecutable
@@ -350,6 +369,10 @@ func cloneFacts(values []Fact) []Fact {
 			identity := *result[index].Value.Identity
 			result[index].Value.Identity = &identity
 		}
+		if result[index].Value.Required != nil {
+			required := *result[index].Value.Required
+			result[index].Value.Required = &required
+		}
 	}
 	if result == nil {
 		return []Fact{}
@@ -372,6 +395,7 @@ func buildExplanation(plan Plan) Explanation {
 	add(Facts{Requested: []Fact{{ID: "common.workspace", Kind: "workspace", Value: FactValue{Access: string(plan.WorkspaceAccess())}, Reason: workspaceReason, Source: FactSource{Kind: "profile", ID: "workspace", Version: 1}}}})
 	add(pathGrantFacts(plan.pathGrantIntents, plan.WorkspaceAccess()))
 	add(executableGrantFacts(plan.executableGrantIntents))
+	add(environmentFacts(plan.environmentIntents))
 	for _, contribution := range plan.contributions {
 		if semantic, ok := contribution.Value.(semanticContributor); ok {
 			add(semantic.SemanticFacts(plan.sourceVersion, plan.overlay))
@@ -394,6 +418,25 @@ func buildExplanation(plan Plan) Explanation {
 	encoded := canonicalManifest(plan.sourceVersion, plan.overlay, plan.requirements.Recipe, facts)
 	sum := sha256.Sum256(encoded)
 	return Explanation{AuthorityManifestVersion: AuthorityManifestVersion, AuthorityDigest: "sha256:" + hex.EncodeToString(sum[:]), Requested: facts.Requested, TargetAdded: facts.TargetAdded, Effective: facts.Effective, Unsupported: facts.Unsupported}
+}
+
+func environmentFacts(intents []launch.EnvironmentIntent) Facts {
+	result := Facts{}
+	for _, intent := range intents {
+		required := intent.Required
+		value := FactValue{
+			Destination: intent.Destination, Scope: intent.Scope,
+			SourceKind: intent.SourceKind, Classification: intent.Classification,
+			Required: &required,
+		}
+		if intent.SourceKind == "secret-reference" {
+			value.Provider = intent.Provider
+		}
+		source := FactSource{Kind: "profile", ID: "environment", Version: 1}
+		result.Requested = append(result.Requested, Fact{ID: "common.environment." + intent.ID, Kind: "environment", Value: value, Reason: "stored_v3_intent_value_omitted", Source: source})
+		result.Effective = append(result.Effective, Fact{ID: "environment." + intent.ID, Kind: "environment", Value: value, Reason: "attached_process_tree_binding_unresolved", Source: source})
+	}
+	return result
 }
 
 func executableGrantFacts(intents []launch.ExecutableGrantIntent) Facts {
@@ -563,6 +606,24 @@ func canonicalFactEncoding(fact Fact) []byte {
 	if fact.Value.LogicalReference != "" {
 		putString("logical-reference-v1")
 		putString(fact.Value.LogicalReference)
+	}
+	if fact.Value.Destination != "" || fact.Value.Scope != "" || fact.Value.SourceKind != "" || fact.Value.Provider != "" || fact.Value.Classification != "" || fact.Value.Required != nil {
+		putString("environment-fact-v1")
+		putString(fact.Value.Destination)
+		putString(fact.Value.Scope)
+		putString(fact.Value.SourceKind)
+		putString(fact.Value.Provider)
+		putString(fact.Value.Classification)
+		if fact.Value.Required == nil {
+			putUint(0)
+		} else {
+			putUint(1)
+			if *fact.Value.Required {
+				putUint(1)
+			} else {
+				putUint(0)
+			}
+		}
 	}
 	return encoded
 }
