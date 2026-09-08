@@ -1144,6 +1144,7 @@ func TestSelectedEnvironmentStaysSeparateFromPolicyValidationAndStatusProxy(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Log("selected environment fixture phase: prepared")
 	startResult := make(chan error, 1)
 	go func() { startResult <- process.Start() }()
 	select {
@@ -1151,6 +1152,7 @@ func TestSelectedEnvironmentStaysSeparateFromPolicyValidationAndStatusProxy(t *t
 		if err != nil {
 			t.Fatalf("selected environment composition start: %v; trace=%s", err, seatbeltEnvironmentTraceState(trace))
 		}
+		t.Log("selected environment fixture phase: started")
 	case <-time.After(6 * time.Second):
 		cancelFixture()
 		if prepared, ok := process.(*seatbeltProcess); ok {
@@ -1169,8 +1171,10 @@ func TestSelectedEnvironmentStaysSeparateFromPolicyValidationAndStatusProxy(t *t
 		if err != nil {
 			t.Fatalf("selected environment composition wait: %v; trace=%s", err, seatbeltEnvironmentTraceState(trace))
 		}
+		t.Log("selected environment fixture phase: waited")
 	case <-time.After(6 * time.Second):
 		cancelFixture()
+		waitAfterControlClose := "not-attempted"
 		signalResult := make(chan error, 1)
 		go func() { signalResult <- process.Signal(syscall.SIGKILL) }()
 		select {
@@ -1187,8 +1191,18 @@ func TestSelectedEnvironmentStaysSeparateFromPolicyValidationAndStatusProxy(t *t
 		select {
 		case <-waitResult:
 		case <-time.After(time.Second):
+			waitAfterControlClose = "unsettled"
+			if prepared, ok := process.(*seatbeltProcess); ok {
+				prepared.closeControl()
+				prepared.closeStatusControl()
+			}
+			select {
+			case <-waitResult:
+				waitAfterControlClose = "settled"
+			case <-time.After(time.Second):
+			}
 		}
-		t.Fatalf("selected environment composition cleanup exceeded its test bound; trace=%s", seatbeltEnvironmentTraceState(trace))
+		t.Fatalf("selected environment composition cleanup exceeded its test bound; wait-after-control-close=%s; trace=%s", waitAfterControlClose, seatbeltEnvironmentTraceState(trace))
 	}
 	for _, stage := range []string{"validation", "proxy", "target"} {
 		contents, err := os.ReadFile(trace + "-" + stage)
