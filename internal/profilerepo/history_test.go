@@ -407,6 +407,19 @@ func TestCloneRecordsExplicitSourceLineage(t *testing.T) {
 		t.Fatal(e)
 	}
 	copyHistory, _ := r.History(ctx, HistorySelector{Name: "copy"}, 100)
+	preservedSource, e := r.History(ctx, HistorySelector{Name: "source"}, 100)
+	if e != nil || preservedSource.LineageID != sourceHistory.LineageID {
+		t.Fatalf("clone changed source lineage binding: before=%s after=%+v err=%v", sourceHistory.LineageID, preservedSource, e)
+	}
+	src, _ = r.Read(ctx, "source")
+	deleted, e := r.Apply(ctx, HistoryRequest{Request: DeleteRequest{"source", src.Revision}, Operation: "delete"})
+	if e != nil || deleted.History == nil || deleted.History.LineageID != sourceHistory.LineageID {
+		t.Fatalf("source delete after clone=%+v err=%v", deleted, e)
+	}
+	deletedHistory, e := r.History(ctx, HistorySelector{Lineage: sourceHistory.LineageID}, 1)
+	if e != nil || len(deletedHistory.Events) != 1 || deletedHistory.Events[0].Profile.State != "deleted" {
+		t.Fatalf("source lineage was not tombstoned after clone: %+v err=%v", deletedHistory, e)
+	}
 	d, e := r.open(false)
 	if e != nil {
 		t.Fatal(e)

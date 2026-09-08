@@ -95,7 +95,8 @@ Import uses a separate local binding document:
   "bindingVersion": 2,
   "sources": {"source-1": "shared-agents"},
   "authentications": {"authentication-1": "work"},
-  "paths": {"path-1": "/Users/example/cache"}
+  "paths": {"path-1": "/Users/example/cache"},
+  "executables": {"executable-1": "/Users/example/bin/tool"}
 }
 ```
 
@@ -114,6 +115,15 @@ local value. Import requires exactly one absolute local value for every path
 symbol, validates shape and completeness without opening it, and stores the
 resulting local-absolute reference. Existence, supported anchors, identity,
 type, and native enforcement are checked only by an actual launch.
+
+Fixed-search executable names and workspace-relative executable paths remain
+portable. Export replaces each local-absolute executable with a deterministic
+`executable-N` symbol and omits the machine path; import accepts only a complete
+`local-absolute` executable binding for that symbol. Literal host paths and
+mixed symbolic/reference fields are rejected in the portable document. The
+optional version-2 executable requirement and binding members may be omitted or
+explicit empty arrays/maps, but explicit `null` and non-container values fail
+closed.
 
 Complete bindings mean only that every symbolic requirement has a valid local
 mapping. Source availability, named-auth existence/status, target executables,
@@ -144,7 +154,8 @@ complete` or `unresolved`, and destination status from unchecked source
 availability/authentication/runtime. JSON format 1 contains exactly
 `formatVersion`, `operation`, `status`, `code`, `structure`, `semantics`,
 `bindings`, `destination`, `sourceAvailability`, `authentication`, `runtime`,
-`requiredSources`, `requiredAuthentication`, and `requiredPaths`. Exit 0 is fully valid
+`requiredSources`, `requiredAuthentication`, `requiredPaths`, and
+`requiredExecutables`. Exit 0 is fully valid
 with complete bindings, exit 2 is supported intent with unresolved bindings, and
 exit 1 is invalid, unsafe, unsupported, or unreadable input.
 

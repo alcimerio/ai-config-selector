@@ -29,25 +29,43 @@ An existing Profile is adopted only on its first successful mutation. Passive hi
 
 A history event advertises the state produced by its successful operation, and selecting a live event restores that advertised supported state. First adoption records a protected predecessor so the bytes displaced by the first mutation remain selectable. A deletion tombstone selects its last live snapshot for recovery while reporting its resulting state as deleted.
 
-Restore decodes the selected snapshot through the current Profile codec, changes only the destination logical name, canonicalizes it, and preserves current machine-local binding choices where a valid live destination supplies them. If the destination is absent, or its current intent cannot supply every selected binding decision, pass `--bindings FILE` using the same bounded version-1 local binding document accepted by Profile import. Current choices still take precedence when only missing choices need the file. A corrupt or unsupported current destination is rejected; it is never treated as absent and never contributes guessed bindings.
+Restore decodes the selected snapshot through the current Profile codec, changes only the destination logical name, canonicalizes it, and preserves current machine-local binding choices where a valid live destination supplies them. If the destination is absent, or its current intent cannot supply every selected binding decision, pass `--bindings FILE` using the same bounded local binding document accepted by Profile import. Version 1 remains compatible for source/authentication-only intent; path or executable bindings require version 2. Current choices still take precedence when only missing choices need the file. A corrupt or unsupported current destination is rejected; it is never treated as absent and never contributes guessed bindings.
 
-Restore never reuses machine-local binding values solely because they occurred in an old private snapshot. It never restores credential values, Keychain items, external Skill files, target authentication state, Sessions, provider state, or generated policies. Unsupported or corrupt old schemas and unresolved, invalid or conflicting binding decisions fail before mutation. Reading and validating `--bindings` is local and provider-free; dry-run still does not access a provider or Keychain.
+Restore never reuses machine-local path or executable values solely because they
+occurred in an old private snapshot. A live destination supplies a local
+executable binding only when entry ID and reference kind still match; otherwise
+an explicit current exchange binding is required. It never restores credential
+values, Keychain items, external Skill files, target authentication state,
+Sessions, provider state, or generated policies. Unsupported or corrupt old
+schemas and unresolved, invalid or conflicting binding decisions fail before
+mutation. Reading and validating `--bindings` is local and provider-free;
+dry-run still does not access a provider or Keychain.
 
-A binding file uses the existing strict Profile-import shape. Its exact required
+A binding file uses the existing strict Profile-import shape. Version 1 remains
+compatible when only source/authentication bindings are required; version 2
+adds path and executable binding maps. Its exact required
 keys depend on the selected supported intent; omitted, extra, duplicate, unsafe,
 or unsupported choices fail closed:
 
 ```json
 {
-  "bindingVersion": 1,
+  "bindingVersion": 2,
   "sources": {"source-1": "shared-agents"},
-  "authentications": {"authentication-1": "work"}
+  "authentications": {"authentication-1": "work"},
+  "paths": {},
+  "executables": {"executable-1": "/Users/example/bin/tool"}
 }
 ```
 
 Dry-run reports the destination condition, the actual sanitized semantic change from current destination state to the final canonical candidate, and an `hg_` digest. Profile name changes are explicit semantic facts, and repeated Skill selections remain exact sorted set additions/removals rather than being collapsed to one value. The digest binds the lineage/event, destination name, current repository revision or absence, canonical intended document, and exact validated binding decision; it excludes time and the future random event ID. Apply rereads the binding file when present, requires the same digest and `--confirm NAME`, recompiles and rechecks under the repository mutation boundary, and never force-overwrites another lineage.
 
 `--as NAME` is a no-clobber destination. For a deleted lineage it appends the restore to that lineage under the new live name. For a renamed lineage whose current Profile remains live elsewhere, it preserves that live Profile and performs the restore as a conditional clone: the destination receives a distinct derived lineage whose immutable restore event records the selected lineage as its source relationship. Preview binds the live source revision, and apply revalidates both that source and the absent destination under the repository lock.
+
+A clone preserves the source name-to-lineage binding. A later source delete
+therefore appends its tombstone to that same lineage; it cannot silently adopt
+the still-present source bytes into a new lineage merely because a derived
+restore was created earlier. Recovery replay preserves the same clone versus
+rename/delete distinction.
 
 A committed restore reports the new `eventId` and resulting `lineageId` separately
 from `selectedEventId` and `sourceLineageId`. For an in-line restore the source and

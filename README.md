@@ -44,7 +44,12 @@ independent schema, explicit source/auth bindings, stdout/report separation,
 hostile-input limits, and unchecked readiness boundary.
 
 New development-source Profiles use independently versioned common Skills,
-workspace intent, and explicit target overlays. See the [common Profile format,
+workspace intent, explicit filesystem paths, additive executable visibility,
+and explicit target overlays. Executable entries support fixed ACS search names,
+workspace-relative paths, and private local bindings; they do not form an
+exclusive command allowlist. Scripts may need separately visible non-intrinsic
+interpreter symlinks or runtime files, and ACS never derives those grants from
+a script. See the [common Profile format,
 migration, grants and projection contract](docs/common-profile-format.md) and
 the [shared Devin/Codex behavior, evidence boundaries and daily-use
 checklist](docs/shared-target-conformance.md).

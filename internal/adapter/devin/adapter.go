@@ -57,16 +57,17 @@ type devinExecutor interface {
 }
 
 type Adapter struct {
-	binaryPath        string
-	existingHomeDir   string
-	categories        *category.Registry
-	editors           *builder.EditorRegistry
-	skillsCategory    commonprofile.SkillsBinding
-	workspaceCategory commonprofile.WorkspaceBinding
-	pathsCategory     commonprofile.PathsBinding
-	executor          devinExecutor
-	runtimeInputs     []string
-	runtimeInputIDs   []string
+	binaryPath          string
+	existingHomeDir     string
+	categories          *category.Registry
+	editors             *builder.EditorRegistry
+	skillsCategory      commonprofile.SkillsBinding
+	workspaceCategory   commonprofile.WorkspaceBinding
+	pathsCategory       commonprofile.PathsBinding
+	executablesCategory commonprofile.ExecutablesBinding
+	executor            devinExecutor
+	runtimeInputs       []string
+	runtimeInputIDs     []string
 }
 
 // SetPathSelection updates a draft through this adapter's registered paths
@@ -74,6 +75,12 @@ type Adapter struct {
 // exposing the binding token.
 func (adapter *Adapter) SetPathSelection(draft *category.Draft, selection commonprofile.PathSelection) error {
 	return category.SetSelection(draft, adapter.pathsCategory, selection)
+}
+
+// SetExecutableSelection updates executable visibility intent without changing
+// the selected primary Devin command.
+func (adapter *Adapter) SetExecutableSelection(draft *category.Draft, selection commonprofile.ExecutableSelection) error {
+	return category.SetSelection(draft, adapter.executablesCategory, selection)
 }
 
 type SkillBundle = skills.SkillBundle
@@ -119,7 +126,7 @@ func newAdapter(config Config) (*Adapter, error) {
 		runtimeInputIDs: append([]string(nil), config.RuntimeInputIDs...),
 	}
 	adapter.executor = executor.New()
-	registry, binding, workspaceBinding, pathsBinding, err := newCategoryRegistry(adapter)
+	registry, binding, workspaceBinding, pathsBinding, executablesBinding, err := newCategoryRegistry(adapter)
 	if err != nil {
 		return nil, fmt.Errorf("create Devin Adapter categories: %w", err)
 	}
@@ -127,6 +134,7 @@ func newAdapter(config Config) (*Adapter, error) {
 	adapter.skillsCategory = binding
 	adapter.workspaceCategory = workspaceBinding
 	adapter.pathsCategory = pathsBinding
+	adapter.executablesCategory = executablesBinding
 	editors, err := newEditorRegistry(adapter)
 	if err != nil {
 		return nil, fmt.Errorf("create Devin Adapter visual editors: %w", err)

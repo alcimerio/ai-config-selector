@@ -674,6 +674,39 @@ func TestInteractiveCodexResolvesBareExecutableBeforeProtectingWritableGrants(t 
 	}
 }
 
+func TestInteractiveCodexCarriesExecutableGrantThroughVersionAndAttachedGenerations(t *testing.T) {
+	auth := testChatGPTAuthJSON(t, "user", "workspace")
+	registry, _, _, sessionsDirectory := newBindingTestRegistry(t, "work", auth)
+	root := filepath.Dir(sessionsDirectory)
+	binary := filepath.Join(root, "codex")
+	if err := os.WriteFile(binary, []byte("codex"), 0o500); err != nil {
+		t.Fatal(err)
+	}
+	tool := filepath.Join(registry.workingDirectory, "bin", "helper")
+	if err := os.MkdirAll(filepath.Dir(tool), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(tool, []byte("helper-v1"), 0o500); err != nil {
+		t.Fatal(err)
+	}
+	sandbox := &fakeLoginSandbox{version: SupportedCodexVersion}
+	registry.execution = newCodexExecutionRunner(codexLoginConfig{BinaryPath: binary, SupportedVersion: SupportedCodexVersion, SessionsDirectory: sessionsDirectory, WorkingDirectory: registry.workingDirectory}, sandbox)
+	contribution := authorityTestExecutableContribution{intents: []launch.ExecutableGrantIntent{{ID: "helper", ReferenceKind: launch.ExecutableReferenceWorkspaceRelative, Path: "bin/helper"}}}
+	plan := authority.New([]authority.Contribution{{ID: "executables", Value: contribution}}, launch.WorkspaceAccessReadOnly, 3, "codex", authority.TargetRequirements{Recipe: authority.RecipeCodex, Executable: binary, Semantics: authority.CodexSemantics()}).WithAuthRef("work")
+	if code, err := registry.ExecuteCodex(context.Background(), CodexRequest{ResolvedPlan: &plan}); err != nil || code != 0 {
+		t.Fatalf("ExecuteCodex=(%d, %v)", code, err)
+	}
+	if len(sandbox.check.ExecutableGrants) != 1 || len(sandbox.requests) != 2 {
+		t.Fatalf("check grants=%d generations=%d", len(sandbox.check.ExecutableGrants), len(sandbox.requests))
+	}
+	for index, request := range sandbox.requests {
+		if len(request.ExecutableGrants) != 1 || request.ExecutableGrants[0].ID != "helper" {
+			t.Fatalf("generation %d grants=%+v", index, request.ExecutableGrants)
+		}
+	}
+	assertNoSessionDirectories(t, sessionsDirectory)
+}
+
 func TestInteractiveCodexRunsRegisteredVerificationBeforeAnyTargetProcess(t *testing.T) {
 	auth := testChatGPTAuthJSON(t, "user", "workspace")
 	registry, provider, _, sessionsDirectory := newBindingTestRegistry(t, "work", auth)

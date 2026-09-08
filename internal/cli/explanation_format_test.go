@@ -15,6 +15,8 @@ import (
 	codexadapter "github.com/alcimerio/ai-config-selector/internal/adapter/codex"
 	"github.com/alcimerio/ai-config-selector/internal/adapter/devin"
 	"github.com/alcimerio/ai-config-selector/internal/cli"
+	"github.com/alcimerio/ai-config-selector/internal/commonprofile"
+	"github.com/alcimerio/ai-config-selector/internal/executableintent"
 	"github.com/alcimerio/ai-config-selector/internal/profile"
 )
 
@@ -125,7 +127,8 @@ func explanationFormatFixture(t *testing.T) explanationFormatFixtureState {
 		t.Fatal(err)
 	}
 	devinStore := profile.NewStore(filepath.Join(home, ".acs-devin"), devinTarget.Categories())
-	if _, err := devinStore.Create(mustProfile(t, devinTarget, "format-profile")); err != nil {
+	devinProfile := withExecutableExplanationSelection(t, mustProfile(t, devinTarget, "format-profile"))
+	if _, err := devinStore.Create(devinProfile); err != nil {
 		t.Fatal(err)
 	}
 	codexTarget, err := codexadapter.New(codexadapter.Config{BinaryPath: "codex", ExistingHomeDir: home})
@@ -137,10 +140,24 @@ func explanationFormatFixture(t *testing.T) explanationFormatFixtureState {
 	if err != nil {
 		t.Fatal(err)
 	}
+	codexProfile = withExecutableExplanationSelection(t, codexProfile)
 	if _, err := codexStore.Create(codexProfile); err != nil {
 		t.Fatal(err)
 	}
 	return explanationFormatFixtureState{devin: devinTarget, devinStore: devinStore, app: cli.App{Categories: devinTarget.Categories(), Profiles: devinStore, CodexTarget: codexTarget, CodexCategories: codexTarget.Categories(), CodexProfiles: codexStore, WorkingDirectory: home}}
+}
+
+func withExecutableExplanationSelection(t *testing.T, candidate profile.Profile) profile.Profile {
+	t.Helper()
+	selection, err := commonprofile.EncodeExecutableSelection(commonprofile.ExecutableSelection{Entries: []commonprofile.ExecutableEntry{
+		{ID: "fixed-tool", Reference: executableintent.Reference{Kind: string(executableintent.ReferenceFixedSearchName), Name: "sh"}},
+		{ID: "workspace-tool", Reference: executableintent.Reference{Kind: string(executableintent.ReferenceWorkspaceRelative), Path: "bin/tool"}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate.Common[commonprofile.ExecutablesCapabilityID] = profile.CommonPayload{Version: commonprofile.ExecutablesCapabilityVersion, Selection: selection}
+	return candidate
 }
 
 func mustProfile(t *testing.T, target *devin.Adapter, name string) profile.Profile {
@@ -239,13 +256,14 @@ type strictExplanationFact struct {
 	Source strictExplanationSource `json:"source"`
 }
 type strictExplanationValue struct {
-	Access          string                     `json:"access,omitempty"`
-	Mode            string                     `json:"mode,omitempty"`
-	LogicalLocation string                     `json:"logicalLocation,omitempty"`
-	RequirementID   string                     `json:"requirementId,omitempty"`
-	Identity        *strictExplanationIdentity `json:"identity,omitempty"`
-	Names           []string                   `json:"names,omitempty"`
-	Count           *int                       `json:"count,omitempty"`
+	Access           string                     `json:"access,omitempty"`
+	Mode             string                     `json:"mode,omitempty"`
+	LogicalLocation  string                     `json:"logicalLocation,omitempty"`
+	LogicalReference string                     `json:"logicalReference,omitempty"`
+	RequirementID    string                     `json:"requirementId,omitempty"`
+	Identity         *strictExplanationIdentity `json:"identity,omitempty"`
+	Names            []string                   `json:"names,omitempty"`
+	Count            *int                       `json:"count,omitempty"`
 }
 type strictExplanationIdentity struct {
 	Source       string `json:"source"`
@@ -359,6 +377,15 @@ func assertFormat1Contract(t *testing.T, result strictExplanation, recipe string
 	}
 	if fact := formatFact(result.Plan.Effective, "runtime.network"); fact == nil || fact.Value.Mode != "local-ip-socket-bind-no-listen-coarse-outbound-ip-macos-dns" {
 		t.Fatalf("network fact violates the format contract: %#v", fact)
+	}
+	if fact := formatFact(result.Plan.Requested, "common.executables.workspace-tool"); fact == nil || fact.Reason != "stored_v3_intent_covered_by_workspace_read" || fact.Value.LogicalReference != "bin/tool" {
+		t.Fatalf("workspace-covered executable fact violates the format contract: %#v", fact)
+	}
+	if formatFact(result.Plan.Effective, "executable.workspace-tool") != nil {
+		t.Fatal("workspace-covered executable was repeated as independent effective authority")
+	}
+	if formatFact(result.Plan.Requested, "common.executables.fixed-tool") == nil || formatFact(result.Plan.Effective, "executable.fixed-tool") == nil || formatFact(result.Plan.Effective, "runtime.executable-visibility") == nil || formatFact(result.Plan.Unsupported, "unsupported.exclusive-execution-filtering") == nil {
+		t.Fatalf("executable requested/effective/intrinsic/non-exclusive facts are incomplete: %#v", result.Plan)
 	}
 	switch recipe {
 	case "devin":

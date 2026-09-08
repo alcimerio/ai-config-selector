@@ -38,6 +38,15 @@ The local-IP network grant permits socket binding only; it does not grant
 `listen`, inbound service authority, or a destination allowlist. Outbound IP
 and the macOS DNS resolver remain coarse grants.
 
+Executable selections appear as requested logical facts. A
+workspace-relative selection already covered by workspace read is marked
+`stored_v3_intent_covered_by_workspace_read` and is not repeated as an
+independent effective grant. Fixed-search and local selections produce effective
+visibility facts without passive host lookup; local absolute values remain
+omitted. `runtime.executable-visibility` records the intrinsic readable runtime,
+and `unsupported.exclusive-execution-filtering` states that executable
+visibility is additive and non-exclusive rather than a command allowlist.
+
 Selected Skill logical identities are intentionally public. Canonical source,
 workspace, executable, runtime and Session paths; argument and environment
 values; auth references; credentials; project files; raw native policy; and
@@ -59,7 +68,9 @@ Skill identities, recipe/overlay/projection, registered requirement IDs,
 generated configuration, inheritance, environment-name policy, Session/process/
 terminal/device/system/Mach/sysctl grants, and coarse network mode affect it.
 Explicit path IDs, access/type/reference class, and workspace-relative logical
-paths also affect it. Local absolute path values do not.
+paths also affect it. Executable IDs, reference class, fixed-search names, and
+workspace-relative logical paths affect it as well. Local absolute path and
+executable binding values do not.
 
 Machine-local bindings are deliberately excluded: Profile name/revision,
 canonical paths and file contents, argument values, auth references/provider

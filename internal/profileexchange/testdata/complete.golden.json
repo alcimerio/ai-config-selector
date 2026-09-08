@@ -24,6 +24,10 @@
       "paths": {
         "version": 1,
         "selection": []
+      },
+      "executables": {
+        "version": 1,
+        "selection": []
       }
     },
     "overlays": {

@@ -14,6 +14,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/alcimerio/ai-config-selector/internal/codexauthresource"
+	"github.com/alcimerio/ai-config-selector/internal/executableintent"
 	"github.com/alcimerio/ai-config-selector/internal/pathintent"
 	"github.com/alcimerio/ai-config-selector/internal/profile"
 	"github.com/alcimerio/ai-config-selector/internal/skills"
@@ -216,10 +217,10 @@ func decodeVersionThree(entry Entry, envelope map[string]json.RawMessage) Entry 
 		return entry.failed("identity_mismatch")
 	}
 	var common map[string]json.RawMessage
-	if !required(envelope, "common", &common) || common == nil || unknown(common, "skills", "workspace", "paths") {
+	if !required(envelope, "common", &common) || common == nil || unknown(common, "skills", "workspace", "paths", "executables") {
 		return entry.failed("unsupported_content")
 	}
-	if len(common) < 2 || len(common) > 3 {
+	if len(common) < 2 || len(common) > 4 {
 		return entry.failed("invalid_structure")
 	}
 	skillsPayload, ok := common["skills"]
@@ -271,6 +272,19 @@ func decodeVersionThree(entry Entry, envelope map[string]json.RawMessage) Entry 
 			return entry.failed("invalid_structure")
 		}
 		entry.Categories = append(entry.Categories, Category{ID: "paths", SchemaVersion: &pathsVersion})
+	}
+	if executablesPayload, exists := common["executables"]; exists {
+		executablesVersion, executableSelection, code := decodeCommonPayload(executablesPayload)
+		if code != "" || executablesVersion != 1 {
+			if code == "" {
+				code = "unsupported_content"
+			}
+			return entry.failed(code)
+		}
+		if _, err := executableintent.Decode(executableSelection); err != nil {
+			return entry.failed("invalid_structure")
+		}
+		entry.Categories = append(entry.Categories, Category{ID: "executables", SchemaVersion: &executablesVersion})
 	}
 	var overlays map[string]json.RawMessage
 	if !required(envelope, "overlays", &overlays) || overlays == nil {

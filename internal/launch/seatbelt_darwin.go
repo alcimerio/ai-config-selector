@@ -777,6 +777,28 @@ func buildSeatbeltPolicy(request validatedProcessRequest) (string, []string, err
 			fmt.Fprintf(&pathMetadataRules, "\n  (literal (param %q))", ancestorName)
 		}
 	}
+	var executableReadRules strings.Builder
+	var executableMetadataRules strings.Builder
+	for index, grant := range request.executableGrants {
+		name := "PROFILE_EXECUTABLE_" + strconv.Itoa(index)
+		definitions = append(definitions, "-D"+name+"="+grant.path)
+		fmt.Fprintf(&executableReadRules, "\n  (literal (param %q))", name)
+		for ancestorIndex, ancestor := range seatbeltPathAncestors(grant.path) {
+			ancestorName := name + "_ANCESTOR_" + strconv.Itoa(ancestorIndex)
+			definitions = append(definitions, "-D"+ancestorName+"="+ancestor)
+			fmt.Fprintf(&executableMetadataRules, "\n  (literal (param %q))", ancestorName)
+		}
+		if grant.logicalPath != grant.path {
+			logicalName := name + "_LOGICAL"
+			definitions = append(definitions, "-D"+logicalName+"="+grant.logicalPath)
+			fmt.Fprintf(&executableReadRules, "\n  (literal (param %q))", logicalName)
+			for ancestorIndex, ancestor := range seatbeltPathAncestors(grant.logicalPath) {
+				ancestorName := logicalName + "_ANCESTOR_" + strconv.Itoa(ancestorIndex)
+				definitions = append(definitions, "-D"+ancestorName+"="+ancestor)
+				fmt.Fprintf(&executableMetadataRules, "\n  (literal (param %q))", ancestorName)
+			}
+		}
+	}
 	for index, path := range request.runtimeProbeTraversalPaths {
 		name := "RUNTIME_PROBE_TRAVERSAL_" + strconv.Itoa(index)
 		definitions = append(definitions, "-D"+name+"="+path)
@@ -824,7 +846,7 @@ func buildSeatbeltPolicy(request validatedProcessRequest) (string, []string, err
   (literal (param "SUPERVISOR"))
   (literal (param "EXECUTABLE"))
   (literal (param "WORKSPACE")) (subpath (param "WORKSPACE"))
-  (literal (param "SESSION")) (subpath (param "SESSION"))` + runtimeRules.String() + runtimeProbeRules.String() + pathReadRules.String() + `)
+  (literal (param "SESSION")) (subpath (param "SESSION"))` + runtimeRules.String() + runtimeProbeRules.String() + pathReadRules.String() + executableReadRules.String() + `)
 
 ; Security.framework creates TLS policies by inspecting the running executable.
 ; Metadata access is restricted to ancestors of the already validated
@@ -834,7 +856,7 @@ func buildSeatbeltPolicy(request validatedProcessRequest) (string, []string, err
 ; SQLite canonicalizes its database path with lstat on every prefix. Literal
 ; metadata grants for validated Session ancestors do not permit directory
 ; contents.
-(allow file-read-metadata` + sessionAncestorRules.String() + pathMetadataRules.String() + `)
+(allow file-read-metadata` + sessionAncestorRules.String() + pathMetadataRules.String() + executableMetadataRules.String() + `)
 
 ; Writes are limited to the leased Session and, only when explicitly granted,
 ; the selected workspace.

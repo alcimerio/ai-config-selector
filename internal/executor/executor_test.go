@@ -28,6 +28,21 @@ func (authorityTestContribution) Verify(context.Context, launch.VerificationCont
 	return nil
 }
 
+type authorityTestExecutableContribution struct {
+	intents []launch.ExecutableGrantIntent
+}
+
+func (authorityTestExecutableContribution) Plan(context.Context, string, *launch.Plan) error {
+	return nil
+}
+func (authorityTestExecutableContribution) Materialize(string) error { return nil }
+func (authorityTestExecutableContribution) Verify(context.Context, launch.VerificationContext) error {
+	return nil
+}
+func (value authorityTestExecutableContribution) ExecutableGrantIntents() []launch.ExecutableGrantIntent {
+	return append([]launch.ExecutableGrantIntent(nil), value.intents...)
+}
+
 func TestRunShellUsesOneResolvedPlanForCheckAndProcess(t *testing.T) {
 	sandbox := &fakeSandbox{process: &fakeProcess{}}
 	plan := authority.New([]authority.Contribution{{ID: "test", Value: authorityTestContribution{}}}, launch.WorkspaceAccessReadOnly, 3, "")

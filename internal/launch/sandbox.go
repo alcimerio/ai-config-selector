@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/alcimerio/ai-config-selector/internal/executableintent"
 	"github.com/alcimerio/ai-config-selector/internal/pathintent"
 	"github.com/charmbracelet/x/term"
 )
@@ -35,14 +36,18 @@ const (
 type PathAccess = pathintent.Access
 type PathType = pathintent.Type
 type PathReferenceKind = pathintent.ReferenceKind
+type ExecutableReferenceKind = executableintent.ReferenceKind
 
 const (
-	PathAccessReadOnly             = pathintent.AccessReadOnly
-	PathAccessReadWrite            = pathintent.AccessReadWrite
-	PathTypeFile                   = pathintent.TypeFile
-	PathTypeDirectory              = pathintent.TypeDirectory
-	PathReferenceWorkspaceRelative = pathintent.ReferenceWorkspaceRelative
-	PathReferenceLocalAbsolute     = pathintent.ReferenceLocalAbsolute
+	PathAccessReadOnly                   = pathintent.AccessReadOnly
+	PathAccessReadWrite                  = pathintent.AccessReadWrite
+	PathTypeFile                         = pathintent.TypeFile
+	PathTypeDirectory                    = pathintent.TypeDirectory
+	PathReferenceWorkspaceRelative       = pathintent.ReferenceWorkspaceRelative
+	PathReferenceLocalAbsolute           = pathintent.ReferenceLocalAbsolute
+	ExecutableReferenceFixedSearchName   = executableintent.ReferenceFixedSearchName
+	ExecutableReferenceWorkspaceRelative = executableintent.ReferenceWorkspaceRelative
+	ExecutableReferenceLocalAbsolute     = executableintent.ReferenceLocalAbsolute
 )
 
 type PathGrantIntent struct {
@@ -69,6 +74,31 @@ type FilesystemGrant struct {
 	workspacePath           string
 	workspaceIdentity       pathIdentity
 	effective               bool
+}
+
+type ExecutableGrantIntent struct {
+	ID            string
+	ReferenceKind ExecutableReferenceKind
+	Name          string
+	Path          string
+}
+
+// ExecutableGrant is an operation-scoped private witness. Public explanations
+// use only its logical ID and reference form.
+type ExecutableGrant struct {
+	ID                      string
+	ReferenceKind           ExecutableReferenceKind
+	searchName              string
+	logicalPath             string
+	logicalWitness          []pathIdentity
+	path                    string
+	identity                pathIdentity
+	digest                  [32]byte
+	workspaceRelative       bool
+	workspaceLogicalPath    string
+	workspaceLogicalWitness []pathIdentity
+	workspacePath           string
+	workspaceIdentity       pathIdentity
 }
 
 func normalizeWorkspaceAccess(access WorkspaceAccess) (WorkspaceAccess, error) {
@@ -248,6 +278,7 @@ type SandboxCheck struct {
 	RuntimeProbePaths []string
 	RuntimeAuthority  RuntimeAuthority
 	FilesystemGrants  []FilesystemGrant
+	ExecutableGrants  []ExecutableGrant
 }
 
 // ProcessRequest describes one command that must run through the selected
@@ -264,6 +295,7 @@ type ProcessRequest struct {
 	RuntimeProbePaths      []string
 	RuntimeAuthority       RuntimeAuthority
 	FilesystemGrants       []FilesystemGrant
+	ExecutableGrants       []ExecutableGrant
 	RecoveryProofChallenge []byte
 	Arguments              []string
 	Terminal               Terminal
@@ -582,6 +614,7 @@ type validatedSandboxCheck struct {
 	runtimeProbeTraversalPaths []string
 	runtimeAuthority           RuntimeAuthority
 	filesystemGrants           []FilesystemGrant
+	executableGrants           []ExecutableGrant
 }
 
 func validateSandboxCheck(request SandboxCheck) (validatedSandboxCheck, error) {
@@ -631,12 +664,17 @@ func validateSandboxCheck(request SandboxCheck) (validatedSandboxCheck, error) {
 	if err != nil {
 		return validatedSandboxCheck{}, sandboxError(SandboxUnsafePath, err)
 	}
+	executableGrants, err := revalidateExecutableGrants(request.ExecutableGrants, request.Workspace, sessionsDirectory)
+	if err != nil {
+		return validatedSandboxCheck{}, sandboxError(SandboxUnsafePath, err)
+	}
 	return validatedSandboxCheck{
 		workspace: workspace, workspaceAccess: workspaceAccess, sessionsDirectory: sessionsDirectory, executable: executable,
 		runtimeInputs: runtimeInputs, runtimeProbePaths: runtimeProbePaths,
 		runtimeProbeTraversalPaths: runtimeProbeTraversalPaths,
 		runtimeAuthority:           runtimeAuthority,
 		filesystemGrants:           filesystemGrants,
+		executableGrants:           executableGrants,
 	}, nil
 }
 
@@ -671,6 +709,7 @@ type validatedProcessRequest struct {
 	runtimeProbeTraversalPaths []string
 	runtimeAuthority           RuntimeAuthority
 	filesystemGrants           []FilesystemGrant
+	executableGrants           []ExecutableGrant
 	recoveryProofChallenge     []byte
 	arguments                  []string
 	environment                []string
@@ -684,6 +723,7 @@ func validateProcessRequest(request ProcessRequest) (validatedProcessRequest, er
 		RuntimeProbePaths: request.RuntimeProbePaths,
 		RuntimeAuthority:  request.RuntimeAuthority,
 		FilesystemGrants:  request.FilesystemGrants,
+		ExecutableGrants:  request.ExecutableGrants,
 	})
 	if err != nil {
 		return validatedProcessRequest{}, err
@@ -711,6 +751,7 @@ func validateProcessRequest(request ProcessRequest) (validatedProcessRequest, er
 		runtimeProbeTraversalPaths: checked.runtimeProbeTraversalPaths,
 		runtimeAuthority:           checked.runtimeAuthority,
 		filesystemGrants:           checked.filesystemGrants,
+		executableGrants:           checked.executableGrants,
 		recoveryProofChallenge:     append([]byte(nil), request.RecoveryProofChallenge...),
 		arguments:                  append([]string(nil), request.Arguments...),
 		terminal:                   request.Terminal,

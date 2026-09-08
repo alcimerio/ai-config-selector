@@ -5,6 +5,7 @@ package acceptance_test
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -43,6 +44,9 @@ const (
 // installed ACS candidate resolves it like a normal target executable; no test
 // hook, build tag, or environment variable is available to the candidate.
 func TestMain(m *testing.M) {
+	if runPromotedArtifactPrivateInterpreter(os.Args[1:]) {
+		return
+	}
 	if runPromotedArtifactGenericHelper(os.Args[1:]) {
 		return
 	}
@@ -50,6 +54,46 @@ func TestMain(m *testing.M) {
 		return
 	}
 	os.Exit(m.Run())
+}
+
+func runPromotedArtifactPrivateInterpreter(arguments []string) bool {
+	if len(arguments) != 1 || filepath.Base(arguments[0]) != "controlled-interpreter-script" {
+		return false
+	}
+	observation := controlledInterpreterObservation{Started: true}
+	finish := func(code int) {
+		_ = json.NewEncoder(os.Stdout).Encode(observation)
+		if code != 0 {
+			os.Exit(code)
+		}
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		finish(78)
+	}
+	contents, err := os.ReadFile(executable)
+	if err != nil {
+		observation.SelfReadDenied = os.IsPermission(err)
+		finish(77)
+	}
+	observation.SelfRead = true
+	observation.SelfBytes = len(contents)
+	if len(contents) == 0 {
+		finish(77)
+	}
+	observation.SelfSHA256 = fmt.Sprintf("%x", sha256.Sum256(contents))
+	script, err := os.ReadFile(arguments[0])
+	if err != nil {
+		finish(76)
+	}
+	observation.ScriptRead = true
+	lines := strings.Split(string(script), "\n")
+	if len(lines) < 2 || lines[1] == "" || os.WriteFile(lines[1], []byte("controlled-interpreter-ran\n"), 0o600) != nil {
+		finish(75)
+	}
+	observation.Marker = true
+	finish(0)
+	return true
 }
 
 func TestFakeDevinDescendantWaitsForControlledRelease(t *testing.T) {
@@ -139,6 +183,7 @@ func TestPromotedArtifactNativeContainmentContract(t *testing.T) {
 	t.Run("restored deleted lineage executes contained shell and Devin", assertPromotedArtifactRestoredProfile)
 	t.Run("generic literal command uses candidate containment", assertPromotedArtifactGenericRun)
 	t.Run("explicit profile filesystem grants are enforced", assertPromotedArtifactFilesystemGrants)
+	t.Run("explicit executable visibility is enforced and revalidated", assertPromotedArtifactExecutableVisibility)
 	t.Run("filesystem grant identity changes stop later target generations", assertPromotedArtifactFilesystemGrantIdentityChange)
 	t.Run("filesystem environment descriptors sockets IP preflight and descendants", assertPromotedArtifactNativeContainment)
 	t.Run("Devin preflight and target generations are fresh while retained", assertPromotedArtifactDevinGenerations)
@@ -264,6 +309,7 @@ func assertPromotedArtifactEffectiveExplanation(t *testing.T) {
 		t.Fatal(err)
 	}
 	writeSharedTargetProfile(t, home, "explanation", "read-write")
+	addExecutableVisibilityExplanationFixture(t, home, "explanation")
 	workspace := realTemporaryDirectory(t)
 	for _, directory := range []string{
 		filepath.Join(home, ".acs", "locks", "codex-auth"),
@@ -358,10 +404,17 @@ func assertPromotedArtifactEffectiveExplanation(t *testing.T) {
 					t.Fatalf("inactive overlay presentation %s for %s is incorrect: %s", factID, test.name, output)
 				}
 			}
-			for _, id := range []string{"unsupported.arbitrary-executables", "unsupported.arbitrary-host-paths", "unsupported.host-environment", "unsupported.network-destinations", "unsupported.raw-policy", "unsupported.sandbox-bypass", "unsupported.target-pass-through"} {
+			for _, id := range []string{"unsupported.exclusive-execution-filtering", "unsupported.arbitrary-host-paths", "unsupported.host-environment", "unsupported.network-destinations", "unsupported.raw-policy", "unsupported.sandbox-bypass", "unsupported.target-pass-through"} {
 				if !nativeExplanationHasFact(result.Plan.Unsupported, id) {
 					t.Fatalf("unsupported facts omitted %s: %s", id, output)
 				}
+			}
+			workspaceExecutable, found := nativeExplanationFactByID(result.Plan.Requested, "common.executables.workspace-tool")
+			if !found || workspaceExecutable.Reason != "stored_v3_intent_covered_by_workspace_read" || nativeExplanationHasFact(result.Plan.Effective, "executable.workspace-tool") {
+				t.Fatalf("workspace-covered executable explanation is not minimal: requested=%#v output=%s", workspaceExecutable, output)
+			}
+			if !nativeExplanationHasFact(result.Plan.Requested, "common.executables.fixed-tool") || !nativeExplanationHasFact(result.Plan.Effective, "executable.fixed-tool") || !nativeExplanationHasFact(result.Plan.Effective, "runtime.executable-visibility") {
+				t.Fatalf("executable requested/effective/intrinsic facts are incomplete: %s", output)
 			}
 			if !nativeExplanationHasCheck(result.Checks, "native.platform", "unchecked", "not_probed") || !nativeExplanationHasCheck(result.Checks, "native.backend", "unchecked", "not_probed") {
 				t.Fatalf("default explanation performed or misreported native readiness: %s", output)
@@ -866,6 +919,21 @@ type filesystemGrantObservation struct {
 	Descendant                                                           *filesystemGrantObservation `json:"descendant,omitempty"`
 }
 
+type executableVisibilityObservation struct {
+	SelectedLogical bool `json:"selectedLogical"`
+	IntrinsicSystem bool `json:"intrinsicSystem"`
+}
+
+type controlledInterpreterObservation struct {
+	Started        bool   `json:"started"`
+	SelfRead       bool   `json:"selfRead"`
+	SelfReadDenied bool   `json:"selfReadDenied"`
+	SelfBytes      int    `json:"selfBytes"`
+	SelfSHA256     string `json:"selfSHA256,omitempty"`
+	ScriptRead     bool   `json:"scriptRead"`
+	Marker         bool   `json:"marker"`
+}
+
 func runPromotedArtifactGenericHelper(arguments []string) bool {
 	if len(arguments) == 0 || arguments[0] != "--acs-generic-command-helper" {
 		return false
@@ -940,6 +1008,26 @@ func runPromotedArtifactGenericHelper(arguments []string) bool {
 				}
 			}
 			_ = json.NewEncoder(os.Stdout).Encode(observation)
+			return true
+		case "--executable-visibility":
+			if len(arguments) != 4 {
+				os.Exit(81)
+			}
+			selected := exec.Command(arguments[2], "--acs-generic-command-helper", "--tripwire", arguments[3])
+			selected.Dir, selected.Env = mustGetwd(), os.Environ()
+			observation := executableVisibilityObservation{SelectedLogical: selected.Run() == nil && fakeDevinMarkerExists(arguments[3])}
+			observation.IntrinsicSystem = exec.Command("/usr/bin/true").Run() == nil
+			_ = json.NewEncoder(os.Stdout).Encode(observation)
+			return true
+		case "--execute-path":
+			if len(arguments) != 3 {
+				os.Exit(80)
+			}
+			command := exec.Command(arguments[2])
+			command.Dir, command.Env, command.Stdout, command.Stderr = mustGetwd(), os.Environ(), os.Stdout, os.Stderr
+			if err := command.Run(); err != nil {
+				os.Exit(79)
+			}
 			return true
 		case "--private-capability-live", "--private-capability-hold":
 			if len(arguments) != 4 {
@@ -1230,6 +1318,223 @@ func writeFilesystemGrantProfile(t *testing.T, home, name, workspaceAccess strin
 	if err := os.WriteFile(filepath.Join(directory, name+".json"), contents, 0o600); err != nil {
 		t.Fatal(err)
 	}
+}
+
+type nativeExecutableGrant struct{ ID, Kind, Name, Path string }
+
+func addExecutableVisibilityExplanationFixture(t *testing.T, home, name string) {
+	t.Helper()
+	profilePath := filepath.Join(home, ".acs", "profiles", name+".json")
+	contents, err := os.ReadFile(profilePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document map[string]any
+	if err := json.Unmarshal(contents, &document); err != nil {
+		t.Fatal(err)
+	}
+	common := document["common"].(map[string]any)
+	common["executables"] = map[string]any{"version": 1, "selection": map[string]any{"entries": []any{
+		map[string]any{"id": "fixed-tool", "reference": map[string]any{"kind": "fixed-search-name", "name": "sh"}},
+		map[string]any{"id": "workspace-tool", "reference": map[string]any{"kind": "workspace-relative", "path": "bin/tool"}},
+	}}}
+	updated, err := json.Marshal(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(profilePath, updated, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func writeExecutableVisibilityProfile(t *testing.T, home, name string, grants []nativeExecutableGrant) {
+	t.Helper()
+	entries := make([]map[string]any, 0, len(grants))
+	for _, grant := range grants {
+		reference := map[string]string{"kind": grant.Kind}
+		if grant.Name != "" {
+			reference["name"] = grant.Name
+		}
+		if grant.Path != "" {
+			reference["path"] = grant.Path
+		}
+		entries = append(entries, map[string]any{"id": grant.ID, "reference": reference})
+	}
+	profileDocument := map[string]any{
+		"version": 3, "name": name,
+		"common": map[string]any{
+			"skills":      map[string]any{"version": 1, "selection": []any{}},
+			"workspace":   map[string]any{"version": 1, "selection": map[string]string{"access": "read-write"}},
+			"executables": map[string]any{"version": 1, "selection": map[string]any{"entries": entries}},
+		},
+		"overlays": map[string]any{"devin": map[string]any{"version": 1}},
+	}
+	contents, err := json.Marshal(profileDocument)
+	if err != nil {
+		t.Fatal(err)
+	}
+	directory := filepath.Join(home, ".acs", "profiles")
+	if err := os.MkdirAll(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(directory, name+".json"), contents, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func copyNativeExecutable(t *testing.T, source, destination string) {
+	t.Helper()
+	contents, err := os.ReadFile(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(destination, contents, 0o500); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func assertPromotedArtifactExecutableVisibility(t *testing.T) {
+	binary := promotedBinary(t)
+	helper, err := filepath.Abs(os.Args[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	home, path := prepareRuntimeHome(t)
+	workspace := realTemporaryDirectory(t)
+	privateRoot := filepath.Join(home, "executable-visibility")
+	canonicalDirectory, logicalDirectory := filepath.Join(privateRoot, "cellar", "tool", "1.0", "bin"), filepath.Join(privateRoot, "bin")
+	for _, directory := range []string{canonicalDirectory, logicalDirectory} {
+		if err := os.MkdirAll(directory, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	canonicalTool := filepath.Join(canonicalDirectory, "tool")
+	logicalTool := filepath.Join(logicalDirectory, "tool")
+	copyNativeExecutable(t, helper, canonicalTool)
+	if err := os.Symlink(canonicalTool, logicalTool); err != nil {
+		t.Fatal(err)
+	}
+	writeExecutableVisibilityProfile(t, home, "executable-none", nil)
+	writeExecutableVisibilityProfile(t, home, "executable-selected", []nativeExecutableGrant{{ID: "brew-tool", Kind: "local-absolute", Path: logicalTool}})
+
+	deniedMarker := filepath.Join(workspace, "unselected-executable-ran")
+	denied := exec.Command(binary, "run", "--profile", "executable-none", "--", helper, "--acs-generic-command-helper", "--executable-visibility", logicalTool, deniedMarker)
+	denied.Dir, denied.Env = workspace, nativeCandidateEnvironment(home, path, nil)
+	deniedOutput, err := denied.CombinedOutput()
+	if err != nil {
+		t.Fatalf("unselected control helper failed: %v output=%s", err, deniedOutput)
+	}
+	var deniedObservation executableVisibilityObservation
+	if json.Unmarshal(deniedOutput, &deniedObservation) != nil || deniedObservation.SelectedLogical || !deniedObservation.IntrinsicSystem {
+		t.Fatalf("unselected executable observation=%+v output=%s", deniedObservation, deniedOutput)
+	}
+	if fakeDevinMarkerExists(deniedMarker) {
+		t.Fatal("unselected executable created its physical marker")
+	}
+
+	selectedMarker := filepath.Join(workspace, "selected-executable-ran")
+	selected := exec.Command(binary, "run", "--profile", "executable-selected", "--", helper, "--acs-generic-command-helper", "--executable-visibility", logicalTool, selectedMarker)
+	selected.Dir, selected.Env = workspace, nativeCandidateEnvironment(home, path, nil)
+	output, err := selected.CombinedOutput()
+	if err != nil {
+		t.Fatalf("selected symlink executable: %v output=%s", err, output)
+	}
+	var observation executableVisibilityObservation
+	if json.Unmarshal(output, &observation) != nil || !observation.SelectedLogical || !observation.IntrinsicSystem {
+		t.Fatalf("executable visibility observation=%+v output=%s", observation, output)
+	}
+
+	copiedShell := filepath.Join(privateRoot, "copied-system-sh")
+	copyNativeExecutable(t, "/bin/sh", copiedShell)
+	shellScript := filepath.Join(privateRoot, "copied-system-shell-script")
+	shellMarker := filepath.Join(workspace, "copied-system-shell-ran")
+	if err := os.WriteFile(shellScript, []byte("#!"+copiedShell+"\nprintf 'ok\\n' > "+shellMarker+"\n"), 0o500); err != nil {
+		t.Fatal(err)
+	}
+	writeExecutableVisibilityProfile(t, home, "executable-copied-shell", []nativeExecutableGrant{{ID: "script", Kind: "local-absolute", Path: shellScript}})
+	shellCommand := exec.Command(binary, "run", "--profile", "executable-copied-shell", "--", helper, "--acs-generic-command-helper", "--execute-path", shellScript)
+	shellCommand.Dir, shellCommand.Env = workspace, nativeCandidateEnvironment(home, path, nil)
+	shellOutput, shellErr := shellCommand.CombinedOutput()
+	shellRan := fakeDevinMarkerExists(shellMarker)
+	if (shellErr == nil) != shellRan {
+		t.Fatalf("copied system shell observation disagreed: %v output=%s marker=%v", shellErr, shellOutput, shellRan)
+	}
+	t.Logf("copied system shell non-exclusive observation: exit-success=%v marker=%v", shellErr == nil, shellRan)
+
+	interpreter := filepath.Join(privateRoot, "controlled-private-interpreter")
+	copyNativeExecutable(t, helper, interpreter)
+	helperContents, err := os.ReadFile(helper)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantInterpreterSHA256 := fmt.Sprintf("%x", sha256.Sum256(helperContents))
+	script := filepath.Join(privateRoot, "controlled-interpreter-script")
+	scriptMarker := filepath.Join(workspace, "selected-script-ran")
+	scriptContents := "#!" + interpreter + "\n" + scriptMarker + "\n"
+	if err := os.WriteFile(script, []byte(scriptContents), 0o500); err != nil {
+		t.Fatal(err)
+	}
+	writeExecutableVisibilityProfile(t, home, "executable-script-only", []nativeExecutableGrant{{ID: "script", Kind: "local-absolute", Path: script}})
+	scriptOnly := exec.Command(binary, "run", "--profile", "executable-script-only", "--", helper, "--acs-generic-command-helper", "--execute-path", script)
+	scriptOnly.Dir, scriptOnly.Env = workspace, nativeCandidateEnvironment(home, path, nil)
+	output, err = scriptOnly.CombinedOutput()
+	if err == nil {
+		t.Fatalf("script ran without its private interpreter visibility: %s", output)
+	}
+	var deniedInterpreter controlledInterpreterObservation
+	if json.Unmarshal(output, &deniedInterpreter) != nil || !deniedInterpreter.Started || deniedInterpreter.SelfRead || !deniedInterpreter.SelfReadDenied || deniedInterpreter.SelfBytes != 0 || deniedInterpreter.SelfSHA256 != "" || deniedInterpreter.ScriptRead || deniedInterpreter.Marker {
+		t.Fatalf("private interpreter denial observation=%+v output=%s", deniedInterpreter, output)
+	}
+	if fakeDevinMarkerExists(scriptMarker) {
+		t.Fatal("script without interpreter grant created its marker")
+	}
+	writeExecutableVisibilityProfile(t, home, "executable-script-complete", []nativeExecutableGrant{
+		{ID: "interpreter", Kind: "local-absolute", Path: interpreter},
+		{ID: "script", Kind: "local-absolute", Path: script},
+	})
+	complete := exec.Command(binary, "run", "--profile", "executable-script-complete", "--", helper, "--acs-generic-command-helper", "--execute-path", script)
+	complete.Dir, complete.Env = workspace, nativeCandidateEnvironment(home, path, nil)
+	output, err = complete.CombinedOutput()
+	var allowedInterpreter controlledInterpreterObservation
+	if err != nil || json.Unmarshal(output, &allowedInterpreter) != nil || !allowedInterpreter.Started || !allowedInterpreter.SelfRead || allowedInterpreter.SelfReadDenied || allowedInterpreter.SelfBytes != len(helperContents) || allowedInterpreter.SelfSHA256 != wantInterpreterSHA256 || !allowedInterpreter.ScriptRead || !allowedInterpreter.Marker || !fakeDevinMarkerExists(scriptMarker) {
+		t.Fatalf("script with interpreter visibility: %v observation=%+v want-sha256=%s output=%s marker=%v", err, allowedInterpreter, wantInterpreterSHA256, output, fakeDevinMarkerExists(scriptMarker))
+	}
+
+	tools := realTemporaryDirectory(t)
+	installPromotedArtifactFakeDevin(t, tools)
+	writeFakeDevinConfiguration(t, workspace, fakeDevinConfiguration{Mode: "session-generations-empty"})
+	writeExecutableVisibilityProfile(t, home, "executable-mutation", []nativeExecutableGrant{{ID: "mutable", Kind: "local-absolute", Path: canonicalTool}})
+	mutation := exec.Command(binary, "devin", "--profile", "executable-mutation")
+	mutation.Dir, mutation.Env = workspace, nativeCandidateEnvironment(home, tools+string(os.PathListSeparator)+path, nil)
+	var mutationOutput synchronizedNativeCapture
+	mutation.Stdout, mutation.Stderr = &mutationOutput, &mutationOutput
+	if err := mutation.Start(); err != nil {
+		t.Fatal(err)
+	}
+	done := startNativeCommand(mutation)
+	t.Cleanup(func() {
+		_ = writeFakeDevinMarker(filepath.Join(workspace, ".acs-phase-skills-release"))
+		settleNativeCommand(mutation, done)
+	})
+	if !waitForFakeDevinMarker(filepath.Join(workspace, ".acs-phase-skills-ready"), 10*time.Second) {
+		t.Fatal("executable mutation fixture did not reach the first generation")
+	}
+	replacement := filepath.Join(canonicalDirectory, "replacement")
+	copyNativeExecutable(t, helper, replacement)
+	if err := os.Rename(replacement, canonicalTool); err != nil {
+		t.Fatal(err)
+	}
+	if !writeFakeDevinMarker(filepath.Join(workspace, ".acs-phase-skills-release")) {
+		t.Fatal("release executable mutation generation")
+	}
+	if err := waitNativeCommand(done, 15*time.Second); err == nil {
+		t.Fatal("executable replacement did not stop the installed candidate")
+	}
+	if waitForFakeDevinMarker(filepath.Join(workspace, ".acs-phase-authentication-ready"), 250*time.Millisecond) {
+		t.Fatal("executable replacement reached the next process generation")
+	}
+	assertSafeCandidateFailure(t, []byte(mutationOutput.String()), "unsafe_path")
+	assertNoSessions(t, home)
 }
 
 func assertPromotedArtifactFilesystemGrantIdentityChange(t *testing.T) {

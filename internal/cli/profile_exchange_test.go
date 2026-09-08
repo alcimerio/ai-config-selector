@@ -15,7 +15,9 @@ import (
 
 	"github.com/alcimerio/ai-config-selector/internal/adapter/devin"
 	"github.com/alcimerio/ai-config-selector/internal/cli"
+	"github.com/alcimerio/ai-config-selector/internal/commonprofile"
 	"github.com/alcimerio/ai-config-selector/internal/exchangefile"
+	"github.com/alcimerio/ai-config-selector/internal/executableintent"
 	"github.com/alcimerio/ai-config-selector/internal/profile"
 	"github.com/alcimerio/ai-config-selector/internal/profileexchange"
 	"github.com/alcimerio/ai-config-selector/internal/profilerepo"
@@ -28,6 +30,19 @@ func exchangeProfile(t *testing.T, name string) profile.Profile {
 	return profile.Profile{Version: 3, SourceVersion: 3, Name: name, Common: map[string]profile.CommonPayload{
 		"skills": {Version: 1, Selection: references}, "workspace": {Version: 1, Selection: json.RawMessage(`{"access":"read-only"}`)},
 	}, Overlays: map[string]profile.OverlayPayload{"devin": {Version: 1}, "codex": {Version: 1, AuthRef: "work"}}}
+}
+
+func executableExchangeProfile(t *testing.T, name, executablePath string) profile.Profile {
+	t.Helper()
+	value := exchangeProfile(t, name)
+	selection, err := commonprofile.EncodeExecutableSelection(commonprofile.ExecutableSelection{Entries: []commonprofile.ExecutableEntry{{
+		ID: "private-tool", Reference: executableintent.Reference{Kind: string(executableintent.ReferenceLocalAbsolute), Path: executablePath},
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	value.Common[commonprofile.ExecutablesCapabilityID] = profile.CommonPayload{Version: commonprofile.ExecutablesCapabilityVersion, Selection: selection}
+	return value
 }
 
 func exchangeApp(t *testing.T, acsHome string) (cli.App, *bytes.Buffer, *bytes.Buffer) {
@@ -136,6 +151,60 @@ func TestProfileImportValidationUnresolvedIsPassive(t *testing.T) {
 	}
 	if _, err := os.Stat(acsHome); !os.IsNotExist(err) {
 		t.Fatalf("validation created storage: %v", err)
+	}
+}
+
+func TestProfileExchangeReportsAndRebindsExecutableRequirementThroughPublicCLI(t *testing.T) {
+	sourceHome := filepath.Join(t.TempDir(), ".acs")
+	app, stdout, stderr := exchangeApp(t, sourceHome)
+	if _, err := profile.NewStore(sourceHome, app.Categories).Create(executableExchangeProfile(t, "source", "/private/source/tool")); err != nil {
+		t.Fatal(err)
+	}
+	if code := app.Run(context.Background(), []string{"profile", "export", "source"}); code != 0 {
+		t.Fatalf("export=%d stderr=%q", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "1 executable binding(s)") || strings.Contains(stdout.String(), "/private/source/tool") {
+		t.Fatalf("export output=%q report=%q", stdout.String(), stderr.String())
+	}
+	directory := t.TempDir()
+	exchangePath := filepath.Join(directory, "exchange.json")
+	if err := os.WriteFile(exchangePath, append([]byte(nil), stdout.Bytes()...), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	destinationHome := filepath.Join(t.TempDir(), ".acs")
+	importApp, out, errOut := exchangeApp(t, destinationHome)
+	partialBindingPath := filepath.Join(directory, "partial-bindings.json")
+	partialBindings := `{"bindingVersion":2,"sources":{"source-1":"shared-agents"},"authentications":{"authentication-1":"personal"},"paths":{},"executables":{}}`
+	if err := os.WriteFile(partialBindingPath, []byte(partialBindings), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if code := importApp.Run(context.Background(), []string{"profile", "import", "validate", "--file", exchangePath, "--bindings", partialBindingPath, "--json"}); code != 2 {
+		t.Fatalf("unbound code=%d out=%q err=%q", code, out.String(), errOut.String())
+	}
+	var diagnostic struct {
+		Status              string `json:"status"`
+		RequiredExecutables int    `json:"requiredExecutables"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &diagnostic); err != nil || diagnostic.Status != "unresolved" || diagnostic.RequiredExecutables != 1 {
+		t.Fatalf("diagnostic=%q parsed=%+v err=%v", out.String(), diagnostic, err)
+	}
+	bindingPath := filepath.Join(directory, "bindings.json")
+	bindings := `{"bindingVersion":2,"sources":{"source-1":"shared-agents"},"authentications":{"authentication-1":"personal"},"executables":{"executable-1":"/private/destination/tool"}}`
+	if err := os.WriteFile(bindingPath, []byte(bindings), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	args := []string{"profile", "import", "--file", exchangePath, "--as", "imported", "--bindings", bindingPath}
+	if code := importApp.Run(context.Background(), args); code != 0 {
+		t.Fatalf("import=%d out=%q err=%q", code, out.String(), errOut.String())
+	}
+	stored, err := profile.NewStore(destinationHome, importApp.Categories).Load("imported")
+	if err != nil {
+		t.Fatal(err)
+	}
+	selection, err := commonprofile.DecodeExecutableSelection(stored.Common[commonprofile.ExecutablesCapabilityID].Selection)
+	if err != nil || len(selection.Entries) != 1 || selection.Entries[0].Reference.Path != "/private/destination/tool" {
+		t.Fatalf("stored executable selection=%+v err=%v", selection, err)
 	}
 }
 

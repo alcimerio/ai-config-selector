@@ -201,6 +201,75 @@ func TestVersionTwoPathBindingsDoNotLeakAndRoundTrip(t *testing.T) {
 	}
 }
 
+func TestVersionTwoExecutableBindingsDoNotLeakAndRoundTrip(t *testing.T) {
+	candidate := fixtureProfile(t)
+	executables, err := commonprofile.EncodeExecutableSelection(commonprofile.ExecutableSelection{Entries: []commonprofile.ExecutableEntry{
+		{ID: "fixed", Reference: commonprofile.ExecutableReference{Kind: string(launch.ExecutableReferenceFixedSearchName), Name: "git"}},
+		{ID: "repo", Reference: commonprofile.ExecutableReference{Kind: string(launch.ExecutableReferenceWorkspaceRelative), Path: "bin/tool"}},
+		{ID: "private", Reference: commonprofile.ExecutableReference{Kind: string(launch.ExecutableReferenceLocalAbsolute), Path: "/Users/private/bin/tool"}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate.Common[commonprofile.ExecutablesCapabilityID] = profile.CommonPayload{Version: 1, Selection: executables}
+	exported, report, err := Export(candidate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.ExecutableBindings != 1 || bytes.Contains(exported, []byte("/Users/private")) || !bytes.Contains(exported, []byte(`"executableBinding": "executable-1"`)) {
+		t.Fatalf("report=%#v exchange=%s", report, exported)
+	}
+	bindings := []byte(`{"bindingVersion":2,"sources":{"source-1":"devin-config","source-2":"shared-agents"},"authentications":{"authentication-1":"personal"},"paths":{},"executables":{"executable-1":"/Users/restored/bin/tool"}}`)
+	result := Decode(exported, bindings, "restored")
+	if result.Code != CodeValid || result.Candidate == nil || result.RequiredExecutables != 1 {
+		t.Fatalf("result = %#v", result)
+	}
+	selection, err := commonprofile.DecodeExecutableSelection(result.Candidate.Common[commonprofile.ExecutablesCapabilityID].Selection)
+	if err != nil || len(selection.Entries) != 3 || selection.Entries[1].ID != "private" || selection.Entries[1].Reference.Path != "/Users/restored/bin/tool" {
+		t.Fatalf("executables = %#v, %v", selection, err)
+	}
+	if got := Decode(exported, []byte(`{"bindingVersion":2,"sources":{"source-1":"devin-config","source-2":"shared-agents"},"authentications":{"authentication-1":"personal"},"paths":{},"executables":{}}`), "restored"); got.Code != CodeBindingRequired {
+		t.Fatalf("missing binding = %#v", got)
+	}
+}
+
+func TestVersionTwoExecutableOptionalFieldPresenceIsStrict(t *testing.T) {
+	candidate := fixtureProfile(t)
+	executables, err := commonprofile.EncodeExecutableSelection(commonprofile.ExecutableSelection{Entries: []commonprofile.ExecutableEntry{{
+		ID: "fixed", Reference: commonprofile.ExecutableReference{Kind: string(launch.ExecutableReferenceFixedSearchName), Name: "git"},
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate.Common[commonprofile.ExecutablesCapabilityID] = profile.CommonPayload{Version: 1, Selection: executables}
+	exported, _, err := Export(candidate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bindings := []byte(`{"bindingVersion":2,"sources":{"source-1":"devin-config","source-2":"shared-agents"},"authentications":{"authentication-1":"personal"},"paths":{},"executables":{}}`)
+	if got := Decode(exported, bindings, "restored"); got.Code != CodeValid {
+		t.Fatalf("omitted empty requirement rejected: %#v", got)
+	}
+	var envelope map[string]any
+	if err := json.Unmarshal(exported, &envelope); err != nil {
+		t.Fatal(err)
+	}
+	requirements := envelope["requirements"].(map[string]any)
+	requirements["executables"] = []any{}
+	explicitEmpty, _ := json.Marshal(envelope)
+	if got := Decode(explicitEmpty, bindings, "restored"); got.Code != CodeValid {
+		t.Fatalf("explicit empty requirement rejected: %#v", got)
+	}
+	requirements["executables"] = nil
+	explicitNull, _ := json.Marshal(envelope)
+	if got := Decode(explicitNull, bindings, "restored"); got.Code != CodeInvalidStructure {
+		t.Fatalf("null executable requirements accepted: %#v", got)
+	}
+	if got := Decode(explicitEmpty, []byte(`{"bindingVersion":2,"sources":{"source-1":"devin-config","source-2":"shared-agents"},"authentications":{"authentication-1":"personal"},"paths":{},"executables":null}`), "restored"); got.Code != CodeBindingInvalid {
+		t.Fatalf("null executable bindings accepted: %#v", got)
+	}
+}
+
 func TestEveryKnownFieldHasClassification(t *testing.T) {
 	fields := KnownFieldClassifications()
 	for _, name := range []string{"version", "name", "target", "categories", "common", "common.skills.version", "common.skills.selection", "common.skills.source", "common.skills.relativePath", "common.workspace.version", "common.workspace.selection", "common.workspace.access", "overlays", "overlays.devin.version", "overlays.codex.version", "overlays.codex.authRef", "skill-assets", "secret-values", "provider-records", "resolved-host-paths", "runtime-state", "repository-session-state", "unknown-fields"} {

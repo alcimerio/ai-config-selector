@@ -68,6 +68,12 @@ func TestContainedLoginPinsVersionUsesSyntheticHomeAndCleansSession(t *testing.T
 		if !reflect.DeepEqual(request.RuntimeProbePaths, []string{codexSystemRequirementsPath}) {
 			t.Fatalf("sandbox process runtime probes = %q", request.RuntimeProbePaths)
 		}
+		if len(request.ExecutableGrants) != 0 {
+			t.Fatalf("authentication-only process received Profile executable grants: %+v", request.ExecutableGrants)
+		}
+	}
+	if len(sandbox.check.ExecutableGrants) != 0 {
+		t.Fatalf("authentication-only check received Profile executable grants: %+v", sandbox.check.ExecutableGrants)
 	}
 	global, err := os.ReadFile(globalAuth)
 	if err != nil || string(global) != "global-sentinel" {
