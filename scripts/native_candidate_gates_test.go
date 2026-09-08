@@ -101,7 +101,7 @@ func TestNativeCandidateGatesPropagateFailureRecoverAndProtectIdentity(t *testin
 			!strings.Contains(calls, "TestNativeKeychainRecoveryEntrypoint") {
 			t.Fatalf("calls omit failing gate or recovery:\n%s", calls)
 		}
-		if strings.Contains(calls, "go test -count=1 -v -timeout=7m ./...") {
+		if strings.Contains(calls, "go test -count=1 -v -timeout=6m ./...") {
 			t.Fatalf("execution continued after the failing gate:\n%s", calls)
 		}
 	})
@@ -149,11 +149,11 @@ func TestNativeCandidateGatesPropagateFailureRecoverAndProtectIdentity(t *testin
 		fixture.run(t, "success", true, "")
 		calls := fixture.calls(t)
 		for _, required := range []string{
-			"go test -count=1 -v -timeout=7m ./...",
+			"go test -count=1 -v -timeout=6m ./...",
 			"TestPromotedArtifactSharedTargetConformance",
 			"generic_literal_command_uses_candidate_containment",
 			"effective_explanation_is_linked_and_narrowly_observed",
-			"go test -count=1 -v -timeout=7m -race ./...",
+			"go test -count=1 -v -timeout=6m -race ./...",
 			"TestNativeKeychainCredentialFreeContract",
 			"TestNativeRealStoreInstalledTargetComposition",
 			"TestNativeInstalledTargetContainedStatusWithoutCredentials",
@@ -166,7 +166,7 @@ func TestNativeCandidateGatesPropagateFailureRecoverAndProtectIdentity(t *testin
 			}
 		}
 		for _, scoped := range []string{
-			"auth= promoted= version= backend= recovery= go test -count=1 -v -timeout=7m ./...",
+			"auth= promoted= version= backend= recovery= go test -count=1 -v -timeout=6m ./...",
 			"auth=1 promoted=" + fixture.candidate + " version= backend= recovery= go test ./internal/codexauthresource -run ^TestNativeKeychainCredentialFreeContract$",
 			"auth= promoted=" + fixture.candidate + " version=v0.4.0 backend=available recovery= go test ./acceptance -count=1",
 			"auth= promoted= version= backend= recovery=1 go test ./internal/codexauthresource -run ^TestNativeKeychainRecoveryEntrypoint$",
@@ -202,6 +202,19 @@ func newNativeGateFixture(t *testing.T) nativeGateFixture {
 	}
 	if err := os.Mkdir(fixture.bin, 0o700); err != nil {
 		t.Fatal(err)
+	}
+	scriptsDirectory := filepath.Join(root, "scripts")
+	if err := os.Mkdir(scriptsDirectory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"run-native-candidate-gates.sh", "run-bounded-test-command.sh"} {
+		contents, err := os.ReadFile(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(scriptsDirectory, name), contents, 0o700); err != nil {
+			t.Fatal(err)
+		}
 	}
 	for _, path := range []string{fixture.candidate, fixture.target} {
 		if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
@@ -267,7 +280,8 @@ func (fixture nativeGateFixture) run(t *testing.T, mode string, wantSuccess bool
 }
 
 func (fixture nativeGateFixture) command(mode string) *exec.Cmd {
-	command := exec.Command("sh", "run-native-candidate-gates.sh", "v0.4.0", fixture.candidate, fixture.target, fixture.archive, filepath.Join(fixture.root, "recovery"), "available")
+	command := exec.Command("sh", "scripts/run-native-candidate-gates.sh", "v0.4.0", fixture.candidate, fixture.target, fixture.archive, filepath.Join(fixture.root, "recovery"), "available")
+	command.Dir = fixture.root
 	command.Env = append(os.Environ(),
 		"PATH="+fixture.bin+":"+os.Getenv("PATH"),
 		"ACS_TEST_CALLS="+fixture.callsPath,
