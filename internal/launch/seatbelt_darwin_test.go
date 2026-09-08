@@ -762,10 +762,33 @@ func TestSeatbeltSupervisorCancellationUnblocksStartupAndPreservesPostStartSigna
 		}()
 		result := make(chan error, 1)
 		go func() { result <- process.startSupervisor() }()
-		<-ready
+		select {
+		case <-ready:
+		case err := <-result:
+			t.Fatalf("startup environment rendezvous ended before READY: %v", err)
+		case <-time.After(time.Second):
+			process.closeControl()
+			select {
+			case <-result:
+			case <-time.After(time.Second):
+			}
+			t.Fatal("startup environment rendezvous did not reach READY within its test bound")
+		}
 		canceledAt := time.Now()
-		if err := process.cancel(); err != nil {
-			t.Fatal(err)
+		cancelResult := make(chan error, 1)
+		go func() { cancelResult <- process.cancel() }()
+		select {
+		case err := <-cancelResult:
+			if err != nil {
+				t.Fatal(err)
+			}
+		case <-time.After(time.Second):
+			process.closeControl()
+			select {
+			case <-cancelResult:
+			case <-time.After(time.Second):
+			}
+			t.Fatal("startup cancellation itself exceeded its test bound")
 		}
 		select {
 		case err := <-result:
@@ -778,8 +801,13 @@ func TestSeatbeltSupervisorCancellationUnblocksStartupAndPreservesPostStartSigna
 		case <-time.After(time.Second):
 			t.Fatal("cancellation did not unblock startup transfer")
 		}
-		if signal := <-killed; signal != syscall.SIGKILL {
-			t.Fatalf("startup cancellation signal = %v", signal)
+		select {
+		case signal := <-killed:
+			if signal != syscall.SIGKILL {
+				t.Fatalf("startup cancellation signal = %v", signal)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("startup cancellation did not reach the retained process group")
 		}
 	})
 
@@ -795,11 +823,33 @@ func TestSeatbeltSupervisorCancellationUnblocksStartupAndPreservesPostStartSigna
 			_, _ = io.ReadFull(peer, value)
 			packet <- value
 		}()
-		if err := process.cancel(); err != nil {
-			t.Fatal(err)
+		cancelResult := make(chan error, 1)
+		go func() { cancelResult <- process.cancel() }()
+		select {
+		case err := <-cancelResult:
+			if err != nil {
+				t.Fatal(err)
+			}
+		case <-time.After(time.Second):
+			process.closeControl()
+			select {
+			case <-cancelResult:
+			case <-time.After(time.Second):
+			}
+			t.Fatal("post-start cancellation itself exceeded its test bound")
 		}
-		if got := <-packet; !bytes.Equal(got, []byte{'S', byte(syscall.SIGKILL)}) {
-			t.Fatalf("post-start signal packet = %v", got)
+		select {
+		case got := <-packet:
+			if !bytes.Equal(got, []byte{'S', byte(syscall.SIGKILL)}) {
+				t.Fatalf("post-start signal packet = %v", got)
+			}
+		case <-time.After(time.Second):
+			process.closeControl()
+			select {
+			case <-packet:
+			case <-time.After(time.Second):
+			}
+			t.Fatal("post-start cancellation emitted no supervisor signal packet within its test bound")
 		}
 	})
 }
@@ -1075,15 +1125,57 @@ func TestSelectedEnvironmentStaysSeparateFromPolicyValidationAndStatusProxy(t *t
 			return "(version 1)", []string{"-DACS_ENV_TEST_TRACE=" + trace}, nil
 		},
 	}
-	process, err := backend.prepare(context.Background(), request)
+	fixtureContext, cancelFixture := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancelFixture()
+	process, err := backend.prepare(fixtureContext, request)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := process.Start(); err != nil {
-		t.Fatal(err)
+	startResult := make(chan error, 1)
+	go func() { startResult <- process.Start() }()
+	select {
+	case err := <-startResult:
+		if err != nil {
+			t.Fatalf("selected environment composition start: %v; trace=%s", err, seatbeltEnvironmentTraceState(trace))
+		}
+	case <-time.After(6 * time.Second):
+		cancelFixture()
+		if prepared, ok := process.(*seatbeltProcess); ok {
+			prepared.closeControl()
+		}
+		select {
+		case <-startResult:
+		case <-time.After(time.Second):
+		}
+		t.Fatalf("selected environment composition start exceeded its test bound; trace=%s", seatbeltEnvironmentTraceState(trace))
 	}
-	if err := process.Wait(); err != nil {
-		t.Fatal(err)
+	waitResult := make(chan error, 1)
+	go func() { waitResult <- process.Wait() }()
+	select {
+	case err := <-waitResult:
+		if err != nil {
+			t.Fatalf("selected environment composition wait: %v; trace=%s", err, seatbeltEnvironmentTraceState(trace))
+		}
+	case <-time.After(6 * time.Second):
+		cancelFixture()
+		signalResult := make(chan error, 1)
+		go func() { signalResult <- process.Signal(syscall.SIGKILL) }()
+		select {
+		case <-signalResult:
+		case <-time.After(time.Second):
+			if prepared, ok := process.(*seatbeltProcess); ok {
+				prepared.closeControl()
+			}
+			select {
+			case <-signalResult:
+			case <-time.After(time.Second):
+			}
+		}
+		select {
+		case <-waitResult:
+		case <-time.After(time.Second):
+		}
+		t.Fatalf("selected environment composition cleanup exceeded its test bound; trace=%s", seatbeltEnvironmentTraceState(trace))
 	}
 	for _, stage := range []string{"validation", "proxy", "target"} {
 		contents, err := os.ReadFile(trace + "-" + stage)
@@ -1091,6 +1183,22 @@ func TestSelectedEnvironmentStaysSeparateFromPolicyValidationAndStatusProxy(t *t
 			t.Fatalf("selected environment %s observation=%q err=%v", stage, contents, err)
 		}
 	}
+}
+
+func seatbeltEnvironmentTraceState(trace string) string {
+	states := make([]string, 0, 3)
+	for _, stage := range []string{"validation", "proxy", "target"} {
+		contents, err := os.ReadFile(trace + "-" + stage)
+		state := "missing"
+		if err == nil {
+			state = "invalid"
+			if string(contents) == "true" {
+				state = "true"
+			}
+		}
+		states = append(states, stage+"="+state)
+	}
+	return strings.Join(states, ",")
 }
 
 func TestSeatbeltSupervisorAuthenticatesDescriptorPreflightFailure(t *testing.T) {

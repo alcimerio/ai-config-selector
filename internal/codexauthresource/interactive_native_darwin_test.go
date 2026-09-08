@@ -1330,6 +1330,20 @@ func observeNativeSessionProjection(launcherHome string, preexisting map[string]
 		}
 	}
 	if len(privateSentinels) > 0 {
+		snapshots := filepath.Join(sessionHome, ".codex", "shell_snapshots")
+		entries, snapshotErr := os.ReadDir(snapshots)
+		if snapshotErr != nil && !os.IsNotExist(snapshotErr) {
+			return "locked Codex shell snapshot state could not be inspected"
+		}
+		for _, entry := range entries {
+			info, infoErr := entry.Info()
+			if infoErr != nil {
+				return "locked Codex shell snapshot state could not be inspected"
+			}
+			if info.Mode().IsRegular() {
+				return "locked Codex shell snapshot remained enabled for selected environment"
+			}
+		}
 		const maxSessionArtifactBytes = 16 << 20
 		const maxSessionArtifactTotal = 64 << 20
 		var total int64

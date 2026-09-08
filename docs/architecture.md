@@ -151,6 +151,9 @@ validation. The supervisor constructs the final target environment immediately
 before start; validation, status, Devin Skills/authentication, Codex version and
 auth/status processes remain value-free. The values necessarily transit
 trusted supervisor memory and remain readable by the target process tree.
+For selected-environment Codex launches, ACS disables the target's shell
+snapshot feature so exported values are not serialized into private Session
+files; the actual Codex tool process and descendants still receive them.
 Linux rejects selected environment transport before Session creation and never
 renders it as Bubblewrap `--setenv` argv.
 

@@ -177,11 +177,20 @@ func (runner *codexExecutionRunner) run(ctx context.Context, config codexLoginCo
 		return containedRunResult{err: ErrCodexFailed, cleanupProven: true}
 	}
 	executor := &Executor{sandbox: runner.sandbox}
+	targetArguments := codexExecutionArgumentsForSemantics(semantics, metadata.Workspace, created.WorkingDirectory(), arguments...)
+	if environment != nil && !environment.Empty() {
+		// Codex's stable shell-snapshot feature persists every exported target
+		// variable under CODEX_HOME. Selected Profile values must remain
+		// available to tool children without being written into Session files,
+		// so disable that target-owned snapshot only for selected-environment
+		// launches that resolved at least one value.
+		targetArguments = append([]string{"-c", "features.shell_snapshot=false"}, targetArguments...)
+	}
 	process, err := executor.prepareRetainedProcess(ctx, created, launch.ProcessRequest{
 		Workspace: created.WorkingDirectory(), WorkspaceAccess: access, SessionsDirectory: created.SessionsDirectory(),
 		SessionDirectory: created.RootDirectory(), SessionHome: created.HomeDirectory(), TemporaryDirectory: created.TemporaryDirectory(),
 		Executable: config.BinaryPath, RuntimeInputs: config.RuntimeInputs, RuntimeProbePaths: config.RuntimeProbePaths,
-		RecoveryProofChallenge: proof, Arguments: codexExecutionArgumentsForSemantics(semantics, metadata.Workspace, created.WorkingDirectory(), arguments...), Terminal: terminal, RuntimeAuthority: runtimeAuthority,
+		RecoveryProofChallenge: proof, Arguments: targetArguments, Terminal: terminal, RuntimeAuthority: runtimeAuthority,
 		FilesystemGrants: filesystemGrants,
 		ExecutableGrants: executableGrants,
 		Environment:      environment,

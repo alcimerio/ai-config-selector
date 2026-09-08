@@ -1,11 +1,13 @@
 package executor
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -256,7 +258,7 @@ func TestEnvironmentCodexMissingPrecedesSessionAndVersionStaysValueFree(t *testi
 		done := make(chan struct{})
 		sandbox := &environmentCodexSandbox{cleanup: done, prepared: make(chan launch.ProcessRequest, 2)}
 		registry, _, binary := environmentCodexRegistry(t, sandbox)
-		registry.environmentLookup = func(name string) (string, bool) { return "selected", name == "PRESENT_SOURCE" }
+		registry.environmentLookup = func(name string) (string, bool) { return "selected-private-value", name == "PRESENT_SOURCE" }
 		plan := environmentExecutionPlan(authority.RecipeCodex, binary, "PRESENT_SOURCE").WithAuthRef("work")
 		result := make(chan error, 1)
 		go func() {
@@ -278,6 +280,13 @@ func TestEnvironmentCodexMissingPrecedesSessionAndVersionStaysValueFree(t *testi
 		versionRequest, finalRequest := awaitPrepared("version"), awaitPrepared("final")
 		if versionRequest.Environment != nil || finalRequest.Environment == nil {
 			t.Fatalf("Codex version/final projections = (%v,%v)", versionRequest.Environment, finalRequest.Environment)
+		}
+		if strings.Contains(strings.Join(versionRequest.Arguments, "\n"), "features.shell_snapshot=false") || !strings.Contains(strings.Join(finalRequest.Arguments, "\n"), "features.shell_snapshot=false") {
+			t.Fatalf("Codex version/final shell-snapshot overrides = (%v,%v)", versionRequest.Arguments, finalRequest.Arguments)
+		}
+		configuration, err := os.ReadFile(filepath.Join(finalRequest.SessionHome, ".codex", "config.toml"))
+		if err != nil || bytes.Contains(configuration, []byte("selected-private-value")) {
+			t.Fatalf("Codex generated configuration retained a selected environment value: err=%v", err)
 		}
 		lease := finalRequest.Environment
 		if err := lease.WriteFrame(io.Discard); err != nil {

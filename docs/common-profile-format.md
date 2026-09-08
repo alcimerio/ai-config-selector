@@ -191,6 +191,9 @@ start. Values therefore transit trusted supervisor memory and then remain in
 the target process environment for its normal lifetime; the target and its
 descendants can intentionally read or print them. Devin Skills/authentication
 preflights and Codex version/authentication/status probes do not receive them.
+For a Codex launch with selected environment values, ACS disables Codex shell
+snapshots because that target feature serializes exported process variables;
+the selected values remain available to the real tool process and descendants.
 Cleanup retains the private resource lease until descendant settlement is
 proved; uncertain cleanup remains quarantined rather than claiming erasure.
 Selected environment transport is currently macOS-only. Linux fails closed
