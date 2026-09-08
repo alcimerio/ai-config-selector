@@ -123,7 +123,7 @@ func runNativeInstalledACSLockedCodexFixture(t *testing.T) {
 		t.Fatal(err)
 	}
 	isolationProbe := fmt.Sprintf(`; if cat %s >/dev/null 2>&1; then printf 'global-auth-read-bad\n'; else printf 'global-auth-read-denied\n'; fi; if cat %s >/dev/null 2>&1; then printf 'outside-read-bad\n'; else printf 'outside-read-denied\n'; fi; if printf bad > %s 2>/dev/null; then printf 'outside-write-bad\n'; else printf 'outside-write-denied\n'; fi`, strconv.Quote(globalAuth), strconv.Quote(outsideSecret), strconv.Quote(outsideWrite))
-	pathFixture := prepareNativeCodexPathGrantFixture(t, home)
+	pathFixture := prepareNativeCodexPathGrantFixture(t, home, workspace)
 	writeNativeCodexPathGrantProfile(t, home, identities["coding"], pathFixture)
 	t.Run("Codex filesystem grants govern matching parent and child operations", func(t *testing.T) {
 		before := installedSessionSnapshot(t, candidate, home, tools, workspace)
@@ -248,6 +248,7 @@ func assertNativeCodexPathGrantOutput(t *testing.T, fixture *nativeResponsesFixt
 	}
 	normalizedOutput := normalizeNativeFunctionCallOutput(toolOutput)
 	required := []string{
+		"parent-cat-regular-ok", "parent-cat-devnull-ok",
 		"parent-exact-read-ok", "parent-exact-write-ok", "parent-exact-sibling-write-denied", "parent-exact-rename-denied",
 		"parent-directory-read-ok", "parent-directory-write-ok", "parent-read-only-read-ok", "parent-read-only-write-denied",
 		"parent-overlap-read-ok", "parent-overlap-parent-write-denied", "parent-overlap-child-write-ok",
@@ -267,6 +268,11 @@ func assertNativeCodexPathGrantOutput(t *testing.T, fixture *nativeResponsesFixt
 				"child-overlap-read-bad", "child-overlap-write-bad") {
 				if strings.Contains(normalizedOutput, candidate) {
 					observed = append(observed, candidate)
+				}
+			}
+			for _, pattern := range []string{`parent-cat-regular-bad-status:[0-9]+`, `parent-cat-devnull-bad-status:[0-9]+:(?:eperm|eacces|other)`} {
+				if diagnostic := regexp.MustCompile(pattern).FindString(normalizedOutput); diagnostic != "" {
+					observed = append(observed, diagnostic)
 				}
 			}
 			t.Fatalf("matching function-call output omitted operation witness %q; observed known witnesses=%q", witness, observed)

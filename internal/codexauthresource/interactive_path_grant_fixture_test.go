@@ -13,10 +13,12 @@ type nativeCodexPathGrantFixture struct {
 	readWriteFile, readWriteSibling, renamedFile string
 	readWriteDirectory, readOnlyFile             string
 	readOnlyParent, writableChild                string
+	catControlSource, catControlOutput           string
+	catControlError                              string
 	descendantReady                              string
 }
 
-func prepareNativeCodexPathGrantFixture(t *testing.T, home string) nativeCodexPathGrantFixture {
+func prepareNativeCodexPathGrantFixture(t *testing.T, home, workspace string) nativeCodexPathGrantFixture {
 	t.Helper()
 	root := filepath.Join(home, "path-grant-fixture")
 	fixture := nativeCodexPathGrantFixture{
@@ -27,6 +29,9 @@ func prepareNativeCodexPathGrantFixture(t *testing.T, home string) nativeCodexPa
 		readOnlyFile:       filepath.Join(root, "read-only-file"),
 		readOnlyParent:     filepath.Join(root, "read-only-parent"),
 		writableChild:      filepath.Join(root, "read-only-parent", "writable-child"),
+		catControlSource:   filepath.Join(workspace, "cat-control-source"),
+		catControlOutput:   filepath.Join(root, "writable-directory", "cat-control-output"),
+		catControlError:    filepath.Join(root, "writable-directory", "cat-control-error"),
 	}
 	fixture.descendantReady = filepath.Join(fixture.readWriteDirectory, "descendant-ready")
 	for _, directory := range []string{root, fixture.readWriteDirectory, fixture.writableChild} {
@@ -40,6 +45,7 @@ func prepareNativeCodexPathGrantFixture(t *testing.T, home string) nativeCodexPa
 		fixture.readOnlyFile:                                 "read-only-original\n",
 		filepath.Join(fixture.readOnlyParent, "parent-file"): "parent-original\n",
 		filepath.Join(fixture.writableChild, "child-file"):   "child-original\n",
+		fixture.catControlSource:                             "workspace-cat-control\n",
 	} {
 		if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
 			t.Fatal(err)
@@ -74,6 +80,8 @@ if printf 'child-overlap\n' > %s 2>/dev/null; then printf 'child-overlap-write-o
 		q(fixture.readOnlyFile), q(fixture.readOnlyFile),
 		q(filepath.Join(fixture.writableChild, "child-file")), q(childChildWrite))
 	return fmt.Sprintf(`printf 'codex-native-tool-output\n'
+if /bin/cat %s > %s 2>&1; then printf 'parent-cat-regular-ok\n'; else cat_status=$?; printf 'parent-cat-regular-bad-status:%s\n' "$cat_status"; fi
+if /bin/cat %s > /dev/null 2> %s; then printf 'parent-cat-devnull-ok\n'; else cat_status=$?; cat_error=; IFS= read -r cat_error < %s || :; case "$cat_error" in *'Operation not permitted'*) cat_reason=eperm ;; *'Permission denied'*) cat_reason=eacces ;; *) cat_reason=other ;; esac; printf 'parent-cat-devnull-bad-status:%s:%s\n' "$cat_status" "$cat_reason"; fi
 if IFS= read -r parent_value < %s 2>/dev/null; then printf 'parent-exact-read-ok\n'; else printf 'parent-exact-read-bad\n'; fi
 if printf 'parent-exact\n' > %s 2>/dev/null; then printf 'parent-exact-write-ok\n'; else printf 'parent-exact-write-bad\n'; fi
 if printf 'bad\n' > %s 2>/dev/null; then printf 'parent-exact-sibling-write-bad\n'; else printf 'parent-exact-sibling-write-denied\n'; fi
@@ -86,6 +94,8 @@ if printf 'bad\n' > %s 2>/dev/null; then printf 'parent-overlap-parent-write-bad
 if printf 'parent-overlap\n' > %s 2>/dev/null; then printf 'parent-overlap-child-write-ok\n'; else printf 'parent-overlap-child-write-bad\n'; fi
 /bin/sh -c %s
 if mv %s %s 2>/dev/null; then printf 'parent-exact-rename-bad\n'; else printf 'parent-exact-rename-denied\n'; fi`,
+		q(fixture.catControlSource), q(fixture.catControlOutput), "%s",
+		q(fixture.catControlSource), q(fixture.catControlError), q(fixture.catControlError), "%s", "%s",
 		q(fixture.readWriteFile), q(fixture.readWriteFile), q(fixture.readWriteSibling),
 		q(filepath.Join(fixture.readWriteDirectory, "source")), q(parentDirectoryWrite),
 		q(fixture.readOnlyFile), q(fixture.readOnlyFile),
@@ -114,6 +124,7 @@ func assertNativeCodexPathGrantEffects(t *testing.T, fixture nativeCodexPathGran
 	assertMissing(fixture.renamedFile)
 	assertContents(filepath.Join(fixture.readWriteDirectory, "parent-write"), "parent-directory\n")
 	assertContents(filepath.Join(fixture.readWriteDirectory, "child-write"), "child-directory\n")
+	assertContents(fixture.catControlOutput, "workspace-cat-control\n")
 	assertContents(fixture.readOnlyFile, "read-only-original\n")
 	assertContents(filepath.Join(fixture.readOnlyParent, "parent-file"), "parent-original\n")
 	assertMissing(filepath.Join(fixture.readOnlyParent, "parent-denied"))
@@ -122,7 +133,12 @@ func assertNativeCodexPathGrantEffects(t *testing.T, fixture nativeCodexPathGran
 }
 
 func TestNativeCodexPathGrantCommandExecutesPositiveParentAndChildOperations(t *testing.T) {
-	fixture := prepareNativeCodexPathGrantFixture(t, t.TempDir())
+	home := t.TempDir()
+	workspace := filepath.Join(home, "workspace")
+	if err := os.MkdirAll(workspace, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	fixture := prepareNativeCodexPathGrantFixture(t, home, workspace)
 	command := nativeCodexPathGrantCommand(fixture)
 	if output, err := exec.Command("/bin/sh", "-n", "-c", command).CombinedOutput(); err != nil {
 		t.Fatalf("path-grant shell syntax: %v; output=%q", err, output)
@@ -132,7 +148,7 @@ func TestNativeCodexPathGrantCommandExecutesPositiveParentAndChildOperations(t *
 		t.Fatalf("uncontained path-grant diagnostic: %v; output=%q", err, output)
 	}
 	for _, witness := range []string{
-		"parent-exact-read-ok", "parent-exact-write-ok", "parent-directory-read-ok", "parent-directory-write-ok",
+		"parent-cat-regular-ok", "parent-cat-devnull-ok", "parent-exact-read-ok", "parent-exact-write-ok", "parent-directory-read-ok", "parent-directory-write-ok",
 		"parent-read-only-read-ok", "parent-overlap-read-ok", "parent-overlap-child-write-ok",
 		"child-exact-read-ok", "child-exact-write-ok", "child-directory-read-ok", "child-directory-write-ok",
 		"child-read-only-read-ok", "child-overlap-read-ok", "child-overlap-write-ok",
