@@ -628,7 +628,7 @@ func TestSeatbeltRejectsMalformedMissingAndSpoofedCleanupProof(t *testing.T) {
 		{name: "raw-status-125", command: exec.Command("/bin/sh", "-c", "exit 125")},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			parent, peer := seatbeltTestSocketPair(t)
+			parent, peer := seatbeltTestDeadlineSocketPair(t)
 			command := test.command
 			if command == nil {
 				command = exec.Command("/usr/bin/true")
@@ -659,19 +659,32 @@ func TestSeatbeltRejectsMalformedMissingAndSpoofedCleanupProof(t *testing.T) {
 }
 
 func TestSeatbeltSupervisorStartHandshake(t *testing.T) {
-	control, peer := seatbeltTestSocketPair(t)
+	control, peer := seatbeltTestDeadlineSocketPair(t)
 	challenge := bytes.Repeat([]byte{0x2a}, seatbeltChallengeSize)
-	process := &seatbeltProcess{control: control, challenge: challenge}
+	process := &seatbeltProcess{control: control, challenge: challenge, startupDeadline: time.Second}
 	result := make(chan error, 1)
 	go func() {
 		_, err := seatbeltTestAcceptTargetStart(peer, challenge)
 		result <- err
 	}()
 	if err := process.startSupervisor(); err != nil {
+		_ = control.Close()
+		_ = peer.Close()
+		select {
+		case <-result:
+		case <-time.After(time.Second):
+		}
 		t.Fatalf("start handshake: %T %v", err, err)
 	}
-	if err := <-result; err != nil {
-		t.Fatal(err)
+	select {
+	case err := <-result:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		_ = control.Close()
+		_ = peer.Close()
+		t.Fatal("start handshake peer did not finish within its test bound")
 	}
 }
 
@@ -892,7 +905,7 @@ func TestSeatbeltWaitMapsAuthenticatedTargetStatusThroughProxy(t *testing.T) {
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			proofControl, supervisorControl := seatbeltTestSocketPair(t)
+			proofControl, supervisorControl := seatbeltTestDeadlineSocketPair(t)
 			statusControl, proxyStatus := seatbeltTestSocketPair(t)
 			helperControl, helperPeer, err := os.Pipe()
 			if err != nil {
@@ -1350,7 +1363,7 @@ func TestSeatbeltControlWriteFailureReapsStartedSupervisorButKeepsSessionQuarant
 	if err != nil {
 		t.Fatal(err)
 	}
-	parent, peer := seatbeltTestSocketPair(t)
+	parent, peer := seatbeltTestDeadlineSocketPair(t)
 	if err := peer.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -1391,7 +1404,7 @@ func TestSeatbeltControlWriteFailureReapsStartedSupervisorButKeepsSessionQuarant
 }
 
 func TestSeatbeltCancellationCleanupProofTimeoutFailsClosed(t *testing.T) {
-	parent, peer := seatbeltTestSocketPair(t)
+	parent, peer := seatbeltTestDeadlineSocketPair(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	process := newSeatbeltLifecycleTestProcess(exec.Command("/usr/bin/true"))
@@ -1421,7 +1434,7 @@ func TestSeatbeltCancellationCleanupProofTimeoutFailsClosed(t *testing.T) {
 }
 
 func TestSeatbeltNormalWaitDoesNotApplyCancellationProofTimeout(t *testing.T) {
-	control, supervisorControl := seatbeltTestSocketPair(t)
+	control, supervisorControl := seatbeltTestDeadlineSocketPair(t)
 	statusControl, proxyStatus := seatbeltTestSocketPair(t)
 	challenge := bytes.Repeat([]byte{0xb6}, seatbeltChallengeSize)
 	process := newSeatbeltLifecycleTestProcess(exec.Command("/bin/sleep", "0.05"))
@@ -3835,6 +3848,44 @@ func seatbeltTestSocketPair(t *testing.T) (*os.File, *os.File) {
 	return parent, peer
 }
 
+func seatbeltTestDeadlineSocketPair(t *testing.T) (net.Conn, net.Conn) {
+	t.Helper()
+	descriptors, err := unix.Socketpair(unix.AF_UNIX, unix.SOCK_STREAM, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unix.CloseOnExec(descriptors[0])
+	unix.CloseOnExec(descriptors[1])
+	parentFile := os.NewFile(uintptr(descriptors[0]), "seatbelt-test-deadline-parent")
+	peerFile := os.NewFile(uintptr(descriptors[1]), "seatbelt-test-deadline-peer")
+	if parentFile == nil || peerFile == nil {
+		if parentFile != nil {
+			_ = parentFile.Close()
+		}
+		if peerFile != nil {
+			_ = peerFile.Close()
+		}
+		t.Fatal("could not construct deadline socket files")
+	}
+	parent, err := net.FileConn(parentFile)
+	_ = parentFile.Close()
+	if err != nil {
+		_ = peerFile.Close()
+		t.Fatal(err)
+	}
+	peer, err := net.FileConn(peerFile)
+	_ = peerFile.Close()
+	if err != nil {
+		_ = parent.Close()
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = parent.Close()
+		_ = peer.Close()
+	})
+	return parent, peer
+}
+
 func seatbeltTestStartTarget(t *testing.T, control *os.File, challenge []byte) {
 	t.Helper()
 	if _, err := control.Write(challenge); err != nil {
@@ -3852,7 +3903,7 @@ func seatbeltTestStartTarget(t *testing.T, control *os.File, challenge []byte) {
 	}
 }
 
-func seatbeltTestAcceptTargetStart(control *os.File, challenge []byte) ([]byte, error) {
+func seatbeltTestAcceptTargetStart(control io.ReadWriter, challenge []byte) ([]byte, error) {
 	got := make([]byte, len(challenge))
 	if _, err := io.ReadFull(control, got); err != nil {
 		return nil, err
