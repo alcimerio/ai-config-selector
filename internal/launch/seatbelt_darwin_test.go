@@ -1406,6 +1406,93 @@ func TestSelectedEnvironmentStaysSeparateFromPolicyValidationAndStatusProxy(t *t
 	}
 }
 
+const selectedEnvironmentChildDiagnosticGuard = "ACS_SELECTED_ENVIRONMENT_CHILD_DIAGNOSTIC"
+
+type selectedEnvironmentDiagnosticCapture struct {
+	mu        sync.Mutex
+	data      bytes.Buffer
+	limit     int
+	truncated bool
+}
+
+func (capture *selectedEnvironmentDiagnosticCapture) Write(data []byte) (int, error) {
+	capture.mu.Lock()
+	defer capture.mu.Unlock()
+	if capture.limit <= capture.data.Len() {
+		capture.truncated = true
+		return len(data), nil
+	}
+	remaining := capture.limit - capture.data.Len()
+	if len(data) > remaining {
+		_, _ = capture.data.Write(data[:remaining])
+		capture.truncated = true
+		return len(data), nil
+	}
+	_, _ = capture.data.Write(data)
+	return len(data), nil
+}
+
+func (capture *selectedEnvironmentDiagnosticCapture) snapshot() (string, bool) {
+	capture.mu.Lock()
+	defer capture.mu.Unlock()
+	return capture.data.String(), capture.truncated
+}
+
+func selectedEnvironmentChildDiagnosticEnvironment() []string {
+	const prefix = selectedEnvironmentChildDiagnosticGuard + "="
+	environment := make([]string, 0, len(os.Environ())+1)
+	for _, value := range os.Environ() {
+		if !strings.HasPrefix(value, prefix) {
+			environment = append(environment, value)
+		}
+	}
+	return append(environment, prefix+"child")
+}
+
+func TestSelectedEnvironmentChildDiagnostic(t *testing.T) {
+	if os.Getenv(selectedEnvironmentChildDiagnosticGuard) != "parent" {
+		t.Skip("diagnostic-only parent guard")
+	}
+
+	const fixture = "TestSelectedEnvironmentStaysSeparateFromPolicyValidationAndStatusProxy"
+	parentContext, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+	defer cancel()
+	command := exec.CommandContext(parentContext, os.Args[0],
+		"-test.run", "^"+fixture+"$", "-test.v", "-test.timeout=20s")
+	command.Env = selectedEnvironmentChildDiagnosticEnvironment()
+	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	command.WaitDelay = time.Second
+	command.Cancel = func() error {
+		if command.Process == nil {
+			return nil
+		}
+		return command.Process.Kill()
+	}
+	stdout := &selectedEnvironmentDiagnosticCapture{limit: 64 << 10}
+	stderr := &selectedEnvironmentDiagnosticCapture{limit: 64 << 10}
+	command.Stdout = stdout
+	command.Stderr = stderr
+
+	started := time.Now()
+	err := command.Run()
+	contextErr := parentContext.Err()
+	elapsed := time.Since(started)
+	stdoutText, stdoutTruncated := stdout.snapshot()
+	stderrText, stderrTruncated := stderr.snapshot()
+	contextState := "active"
+	if contextErr != nil {
+		contextState = contextErr.Error()
+	}
+	if err != nil || contextErr != nil {
+		t.Fatalf("selected environment child diagnostic failed: exit=%v context_error=%v context=%s elapsed=%s stdout_truncated=%t stderr_truncated=%t stdout=%q stderr=%q", err, contextErr, contextState, elapsed, stdoutTruncated, stderrTruncated, stdoutText, stderrText)
+	}
+	passReceipt := "--- PASS: TestSelectedEnvironmentStaysSeparateFromPolicyValidationAndStatusProxy"
+	if stdoutTruncated || stderrTruncated || !strings.Contains(stdoutText, passReceipt) || strings.Contains(stdoutText, "--- SKIP: "+fixture) {
+		t.Fatalf("selected environment child diagnostic lacked an untruncated exact pass receipt: exit=0 context=%s elapsed=%s stdout_truncated=%t stderr_truncated=%t stdout=%q stderr=%q", contextState, elapsed, stdoutTruncated, stderrTruncated, stdoutText, stderrText)
+	}
+	t.Logf("selected environment child diagnostic passed: exit=0 context=%s elapsed=%s stdout_truncated=%t stderr_truncated=%t stdout=%q stderr=%q", contextState, elapsed, stdoutTruncated, stderrTruncated, stdoutText, stderrText)
+}
+
 func seatbeltEnvironmentTraceState(trace string) string {
 	states := make([]string, 0, 3)
 	for _, stage := range []string{"validation", "proxy", "target"} {
