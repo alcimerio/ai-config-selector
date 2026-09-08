@@ -5,6 +5,7 @@ package acceptance_test
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -43,6 +44,9 @@ const (
 // installed ACS candidate resolves it like a normal target executable; no test
 // hook, build tag, or environment variable is available to the candidate.
 func TestMain(m *testing.M) {
+	if runPromotedArtifactPrivateInterpreter(os.Args[1:]) {
+		return
+	}
 	if runPromotedArtifactGenericHelper(os.Args[1:]) {
 		return
 	}
@@ -50,6 +54,46 @@ func TestMain(m *testing.M) {
 		return
 	}
 	os.Exit(m.Run())
+}
+
+func runPromotedArtifactPrivateInterpreter(arguments []string) bool {
+	if len(arguments) != 1 || filepath.Base(arguments[0]) != "controlled-interpreter-script" {
+		return false
+	}
+	observation := controlledInterpreterObservation{Started: true}
+	finish := func(code int) {
+		_ = json.NewEncoder(os.Stdout).Encode(observation)
+		if code != 0 {
+			os.Exit(code)
+		}
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		finish(78)
+	}
+	contents, err := os.ReadFile(executable)
+	if err != nil {
+		observation.SelfReadDenied = os.IsPermission(err)
+		finish(77)
+	}
+	observation.SelfRead = true
+	observation.SelfBytes = len(contents)
+	if len(contents) == 0 {
+		finish(77)
+	}
+	observation.SelfSHA256 = fmt.Sprintf("%x", sha256.Sum256(contents))
+	script, err := os.ReadFile(arguments[0])
+	if err != nil {
+		finish(76)
+	}
+	observation.ScriptRead = true
+	lines := strings.Split(string(script), "\n")
+	if len(lines) < 2 || lines[1] == "" || os.WriteFile(lines[1], []byte("controlled-interpreter-ran\n"), 0o600) != nil {
+		finish(75)
+	}
+	observation.Marker = true
+	finish(0)
+	return true
 }
 
 func TestFakeDevinDescendantWaitsForControlledRelease(t *testing.T) {
@@ -880,6 +924,16 @@ type executableVisibilityObservation struct {
 	IntrinsicSystem bool `json:"intrinsicSystem"`
 }
 
+type controlledInterpreterObservation struct {
+	Started        bool   `json:"started"`
+	SelfRead       bool   `json:"selfRead"`
+	SelfReadDenied bool   `json:"selfReadDenied"`
+	SelfBytes      int    `json:"selfBytes"`
+	SelfSHA256     string `json:"selfSHA256,omitempty"`
+	ScriptRead     bool   `json:"scriptRead"`
+	Marker         bool   `json:"marker"`
+}
+
 func runPromotedArtifactGenericHelper(arguments []string) bool {
 	if len(arguments) == 0 || arguments[0] != "--acs-generic-command-helper" {
 		return false
@@ -1390,19 +1444,46 @@ func assertPromotedArtifactExecutableVisibility(t *testing.T) {
 		t.Fatalf("executable visibility observation=%+v output=%s", observation, output)
 	}
 
-	interpreter := filepath.Join(privateRoot, "private-sh")
-	copyNativeExecutable(t, "/bin/sh", interpreter)
-	script := filepath.Join(privateRoot, "selected-script")
+	copiedShell := filepath.Join(privateRoot, "copied-system-sh")
+	copyNativeExecutable(t, "/bin/sh", copiedShell)
+	shellScript := filepath.Join(privateRoot, "copied-system-shell-script")
+	shellMarker := filepath.Join(workspace, "copied-system-shell-ran")
+	if err := os.WriteFile(shellScript, []byte("#!"+copiedShell+"\nprintf 'ok\\n' > "+shellMarker+"\n"), 0o500); err != nil {
+		t.Fatal(err)
+	}
+	writeExecutableVisibilityProfile(t, home, "executable-copied-shell", []nativeExecutableGrant{{ID: "script", Kind: "local-absolute", Path: shellScript}})
+	shellCommand := exec.Command(binary, "run", "--profile", "executable-copied-shell", "--", helper, "--acs-generic-command-helper", "--execute-path", shellScript)
+	shellCommand.Dir, shellCommand.Env = workspace, nativeCandidateEnvironment(home, path, nil)
+	shellOutput, shellErr := shellCommand.CombinedOutput()
+	shellRan := fakeDevinMarkerExists(shellMarker)
+	if (shellErr == nil) != shellRan {
+		t.Fatalf("copied system shell observation disagreed: %v output=%s marker=%v", shellErr, shellOutput, shellRan)
+	}
+	t.Logf("copied system shell non-exclusive observation: exit-success=%v marker=%v", shellErr == nil, shellRan)
+
+	interpreter := filepath.Join(privateRoot, "controlled-private-interpreter")
+	copyNativeExecutable(t, helper, interpreter)
+	helperContents, err := os.ReadFile(helper)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantInterpreterSHA256 := fmt.Sprintf("%x", sha256.Sum256(helperContents))
+	script := filepath.Join(privateRoot, "controlled-interpreter-script")
 	scriptMarker := filepath.Join(workspace, "selected-script-ran")
-	scriptContents := "#!" + interpreter + "\nprintf 'ok\\n' > " + scriptMarker + "\n"
+	scriptContents := "#!" + interpreter + "\n" + scriptMarker + "\n"
 	if err := os.WriteFile(script, []byte(scriptContents), 0o500); err != nil {
 		t.Fatal(err)
 	}
 	writeExecutableVisibilityProfile(t, home, "executable-script-only", []nativeExecutableGrant{{ID: "script", Kind: "local-absolute", Path: script}})
 	scriptOnly := exec.Command(binary, "run", "--profile", "executable-script-only", "--", helper, "--acs-generic-command-helper", "--execute-path", script)
 	scriptOnly.Dir, scriptOnly.Env = workspace, nativeCandidateEnvironment(home, path, nil)
-	if output, err := scriptOnly.CombinedOutput(); err == nil {
+	output, err = scriptOnly.CombinedOutput()
+	if err == nil {
 		t.Fatalf("script ran without its private interpreter visibility: %s", output)
+	}
+	var deniedInterpreter controlledInterpreterObservation
+	if json.Unmarshal(output, &deniedInterpreter) != nil || !deniedInterpreter.Started || deniedInterpreter.SelfRead || !deniedInterpreter.SelfReadDenied || deniedInterpreter.SelfBytes != 0 || deniedInterpreter.SelfSHA256 != "" || deniedInterpreter.ScriptRead || deniedInterpreter.Marker {
+		t.Fatalf("private interpreter denial observation=%+v output=%s", deniedInterpreter, output)
 	}
 	if fakeDevinMarkerExists(scriptMarker) {
 		t.Fatal("script without interpreter grant created its marker")
@@ -1413,8 +1494,10 @@ func assertPromotedArtifactExecutableVisibility(t *testing.T) {
 	})
 	complete := exec.Command(binary, "run", "--profile", "executable-script-complete", "--", helper, "--acs-generic-command-helper", "--execute-path", script)
 	complete.Dir, complete.Env = workspace, nativeCandidateEnvironment(home, path, nil)
-	if output, err := complete.CombinedOutput(); err != nil || !fakeDevinMarkerExists(scriptMarker) {
-		t.Fatalf("script with interpreter visibility: %v output=%s marker=%v", err, output, fakeDevinMarkerExists(scriptMarker))
+	output, err = complete.CombinedOutput()
+	var allowedInterpreter controlledInterpreterObservation
+	if err != nil || json.Unmarshal(output, &allowedInterpreter) != nil || !allowedInterpreter.Started || !allowedInterpreter.SelfRead || allowedInterpreter.SelfReadDenied || allowedInterpreter.SelfBytes != len(helperContents) || allowedInterpreter.SelfSHA256 != wantInterpreterSHA256 || !allowedInterpreter.ScriptRead || !allowedInterpreter.Marker || !fakeDevinMarkerExists(scriptMarker) {
+		t.Fatalf("script with interpreter visibility: %v observation=%+v want-sha256=%s output=%s marker=%v", err, allowedInterpreter, wantInterpreterSHA256, output, fakeDevinMarkerExists(scriptMarker))
 	}
 
 	tools := realTemporaryDirectory(t)

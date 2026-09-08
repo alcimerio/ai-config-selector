@@ -118,7 +118,12 @@ Visibility does not select or invoke a command and is deliberately
 non-exclusive: the native runtime already exposes bounded system files and
 permits process execution. A workspace-relative executable covered by workspace
 read remains requested intent but adds no redundant effective filesystem grant.
-Scripts need separate visibility for every non-intrinsic interpreter or runtime.
+Scripts may need separate visibility for non-intrinsic interpreter symlinks or
+runtime files; ACS never derives those grants from a shebang or command body.
+Because process execution is deliberately non-exclusive, a directly addressed
+Mach-O program that the native loader can start may still run without a
+standalone executable-read fact. This category controls added pathname
+visibility, not execution admission.
 Logical symlinks such as a Homebrew-style `bin/tool` are supported, with exact
 read access to both the validated logical link and canonical file and
 metadata-only access to their captured ancestors. Executable selection itself
