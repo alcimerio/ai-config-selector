@@ -21,8 +21,9 @@ import (
 // codexExecutionRunner owns the fixed target command, executable snapshot and
 // native sandbox. It has no configurable command/provider/plugin surface.
 type codexExecutionRunner struct {
-	config  codexLoginConfig
-	sandbox launch.ProcessSandbox
+	config             codexLoginConfig
+	sandbox            launch.ProcessSandbox
+	beforeSnapshotHook func()
 }
 
 func newCodexExecutionRunner(config codexLoginConfig, sandbox launch.ProcessSandbox) *codexExecutionRunner {
@@ -31,7 +32,7 @@ func newCodexExecutionRunner(config codexLoginConfig, sandbox launch.ProcessSand
 	return &codexExecutionRunner{config: config, sandbox: sandbox}
 }
 
-func (runner *codexExecutionRunner) prepare(ctx context.Context, access launch.WorkspaceAccess, requirements authority.TargetRequirements, runtimeAuthority launch.RuntimeAuthority, filesystemGrants []launch.FilesystemGrant) (*containedOperationPreparation, error) {
+func (runner *codexExecutionRunner) prepare(ctx context.Context, access launch.WorkspaceAccess, requirements authority.TargetRequirements, runtimeAuthority launch.RuntimeAuthority, filesystemGrants []launch.FilesystemGrant, pinned *pinnedExecutable) (*containedOperationPreparation, error) {
 	if runner == nil {
 		return nil, ErrCodexFailed
 	}
@@ -41,7 +42,10 @@ func (runner *codexExecutionRunner) prepare(ctx context.Context, access launch.W
 	config := runner.config
 	config.BinaryPath = requirements.Executable
 	config.RuntimeInputs = append([]string(nil), requirements.RuntimeInputs...)
-	preparation, err := prepareContainedOperationWithAccessAndGrants(ctx, config, runner.sandbox, access, filesystemGrants, ErrCodexFailed, runtimeAuthority)
+	if runner.beforeSnapshotHook != nil {
+		runner.beforeSnapshotHook()
+	}
+	preparation, err := prepareContainedOperationWithAccessAndGrantsUsingExecutable(ctx, config, runner.sandbox, access, filesystemGrants, pinned, ErrCodexFailed, runtimeAuthority)
 	return preparation, err
 }
 
@@ -235,8 +239,10 @@ func (service *CodexAuthService) ExecuteCodex(ctx context.Context, request Codex
 			resultErr, exitCode = ErrBindingQuarantined, 1
 		}
 	}()
+	var operationExecutable *pinnedExecutable
 	if hasWritableFilesystemGrant(filesystemGrants) {
-		resolvedExecutable, resolveErr := newPinnedExecutable(requirements.Executable).Resolve()
+		operationExecutable = newPinnedExecutable(requirements.Executable)
+		resolvedExecutable, resolveErr := operationExecutable.Resolve()
 		if resolveErr != nil {
 			return 1, ErrUnsupportedVersion
 		}
@@ -248,7 +254,7 @@ func (service *CodexAuthService) ExecuteCodex(ctx context.Context, request Codex
 	}
 	access := request.ResolvedPlan.WorkspaceAccess()
 	runtimeAuthority := request.ResolvedPlan.RuntimeAuthority()
-	preparation, err := service.execution.prepare(preflightContext, access, requirements, runtimeAuthority, filesystemGrants)
+	preparation, err := service.execution.prepare(preflightContext, access, requirements, runtimeAuthority, filesystemGrants, operationExecutable)
 	if err != nil {
 		if preflightContext.Err() != nil {
 			return 1, ErrCodexFailed

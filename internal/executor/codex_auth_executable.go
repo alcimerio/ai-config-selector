@@ -37,19 +37,7 @@ func (executable *pinnedExecutable) Resolve() (string, error) {
 	defer executable.mutex.Unlock()
 
 	if executable.canonical == "" {
-		resolved := executable.configured
-		if !strings.ContainsRune(resolved, filepath.Separator) {
-			path, err := exec.LookPath(resolved)
-			if err != nil {
-				return "", err
-			}
-			resolved = path
-		}
-		absolute, err := filepath.Abs(resolved)
-		if err != nil {
-			return "", err
-		}
-		canonical, err := filepath.EvalSymlinks(filepath.Clean(absolute))
+		canonical, err := resolveConfiguredExecutable(executable.configured)
 		if err != nil {
 			return "", err
 		}
@@ -63,6 +51,10 @@ func (executable *pinnedExecutable) Resolve() (string, error) {
 		return canonical, nil
 	}
 
+	canonical, err := resolveConfiguredExecutable(executable.configured)
+	if err != nil || canonical != executable.canonical {
+		return "", errors.New("Codex executable changed after preflight")
+	}
 	current, digest, err := inspectExecutable(executable.canonical)
 	if err != nil || !os.SameFile(executable.identity, current) ||
 		executable.identity.Mode() != current.Mode() ||
@@ -72,6 +64,22 @@ func (executable *pinnedExecutable) Resolve() (string, error) {
 		return "", errors.New("Codex executable changed after preflight")
 	}
 	return executable.canonical, nil
+}
+
+func resolveConfiguredExecutable(configured string) (string, error) {
+	resolved := configured
+	if !strings.ContainsRune(resolved, filepath.Separator) {
+		path, err := exec.LookPath(resolved)
+		if err != nil {
+			return "", err
+		}
+		resolved = path
+	}
+	absolute, err := filepath.Abs(resolved)
+	if err != nil {
+		return "", err
+	}
+	return filepath.EvalSymlinks(filepath.Clean(absolute))
 }
 
 // Snapshot copies the pinned bytes into a private directory outside the

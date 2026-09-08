@@ -608,6 +608,57 @@ func TestInteractiveCodexResolvesBareExecutableBeforeProtectingWritableGrants(t 
 		})
 	}
 
+	t.Run("configured executable retargeted after grant binding", func(t *testing.T) {
+		raceTools := filepath.Join(root, "race-tools")
+		if err := os.MkdirAll(raceTools, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		targetA := filepath.Join(root, "target-a")
+		targetB := filepath.Join(root, "target-b")
+		if err := os.WriteFile(targetA, []byte("target-a"), 0o500); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(targetB, []byte("target-b"), 0o500); err != nil {
+			t.Fatal(err)
+		}
+		configured := filepath.Join(raceTools, "codex")
+		if err := os.Symlink(targetA, configured); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("PATH", raceTools+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+		registry, _, _, sessionsDirectory := newBindingTestRegistry(t, "work", testChatGPTAuthJSON(t, "user", "workspace"))
+		sandbox := &fakeLoginSandbox{version: SupportedCodexVersion}
+		runner := newCodexExecutionRunner(codexLoginConfig{
+			SupportedVersion: SupportedCodexVersion, SessionsDirectory: sessionsDirectory, WorkingDirectory: registry.workingDirectory,
+		}, sandbox)
+		runner.beforeSnapshotHook = func() {
+			if err := os.Remove(targetA); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(targetB, targetA); err != nil {
+				t.Fatal(err)
+			}
+		}
+		registry.execution = runner
+		materializer := executionPathGrantMaterializer{intents: []launch.PathGrantIntent{{
+			ID: "selected", Access: launch.PathAccessReadWrite, Type: launch.PathTypeFile,
+			ReferenceKind: launch.PathReferenceLocalAbsolute, Path: targetB,
+		}}}
+		plan := authority.New([]authority.Contribution{{ID: "paths", Value: materializer}}, launch.WorkspaceAccessReadOnly, 3, "codex", authority.TargetRequirements{
+			Recipe: authority.RecipeCodex, Executable: "codex", Semantics: authority.CodexSemantics(),
+		}).WithAuthRef("work")
+		if code, err := registry.ExecuteCodex(context.Background(), CodexRequest{ResolvedPlan: &plan}); code != 1 || !errors.Is(err, ErrUnsupportedVersion) {
+			t.Fatalf("retargeted executable = code %d err %v", code, err)
+		}
+		if sandbox.check.Executable != "" || len(sandbox.requests) != 0 {
+			t.Fatalf("retargeted executable reached sandbox: check=%q requests=%d", sandbox.check.Executable, len(sandbox.requests))
+		}
+		if _, err := os.Stat(sessionsDirectory); !os.IsNotExist(err) {
+			t.Fatalf("retargeted executable touched Sessions: %v", err)
+		}
+	})
+
 	registry, _, _, sessionsDirectory := newBindingTestRegistry(t, "work", testChatGPTAuthJSON(t, "user", "workspace"))
 	sandbox := &fakeLoginSandbox{version: SupportedCodexVersion}
 	registry.execution = newCodexExecutionRunner(codexLoginConfig{SupportedVersion: SupportedCodexVersion, SessionsDirectory: sessionsDirectory, WorkingDirectory: registry.workingDirectory}, sandbox)

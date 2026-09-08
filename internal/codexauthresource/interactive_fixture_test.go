@@ -75,6 +75,10 @@ func nativeFunctionCallOutput(body, callID string) (string, error) {
 	return matched, nil
 }
 
+func normalizeNativeFunctionCallOutput(output string) string {
+	return strings.ReplaceAll(output, "\r\n", "\n")
+}
+
 func TestNativeFunctionCallOutputIgnoresEchoedCommandHistory(t *testing.T) {
 	body := `{"input":[` +
 		`{"type":"function_call","call_id":"acs-call-1","arguments":"outside-read-bad outside-write-bad"},` +
@@ -105,6 +109,17 @@ func TestNativeFunctionCallOutputRejectsMissingEmptyAndDuplicateMatches(t *testi
 		if _, err := nativeFunctionCallOutput(body, "acs-call-1"); err == nil {
 			t.Fatalf("accepted invalid matching output in %q", body)
 		}
+	}
+}
+
+func TestNormalizeNativeFunctionCallOutputAcceptsTerminalCRLFWithoutChangingWitnesses(t *testing.T) {
+	got := normalizeNativeFunctionCallOutput("parent-exact-read-ok\r\nchild-exact-write-ok\r\n")
+	if want := "parent-exact-read-ok\nchild-exact-write-ok\n"; got != want {
+		t.Fatalf("normalized function output = %q, want %q", got, want)
+	}
+	escaped := `parent-exact-read-ok\nchild-exact-write-ok\n`
+	if got := normalizeNativeFunctionCallOutput(escaped); got != escaped || strings.Contains(got, "parent-exact-read-ok\n") {
+		t.Fatalf("normalization decoded a serialized or non-line-delimited witness: %q", got)
 	}
 }
 

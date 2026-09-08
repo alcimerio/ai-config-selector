@@ -54,6 +54,19 @@ func prepareContainedOperationWithAccessAndGrants(
 	operationFailure error,
 	runtimeAuthorities ...launch.RuntimeAuthority,
 ) (*containedOperationPreparation, error) {
+	return prepareContainedOperationWithAccessAndGrantsUsingExecutable(ctx, config, sandbox, workspaceAccess, filesystemGrants, nil, operationFailure, runtimeAuthorities...)
+}
+
+func prepareContainedOperationWithAccessAndGrantsUsingExecutable(
+	ctx context.Context,
+	config codexLoginConfig,
+	sandbox launch.ProcessSandbox,
+	workspaceAccess launch.WorkspaceAccess,
+	filesystemGrants []launch.FilesystemGrant,
+	pinned *pinnedExecutable,
+	operationFailure error,
+	runtimeAuthorities ...launch.RuntimeAuthority,
+) (*containedOperationPreparation, error) {
 	if sandbox == nil {
 		return nil, operationFailure
 	}
@@ -64,7 +77,9 @@ func prepareContainedOperationWithAccessAndGrants(
 	if err != nil {
 		return nil, ErrUnsupportedVersion
 	}
-	pinned := newPinnedExecutable(config.BinaryPath)
+	if pinned == nil {
+		pinned = newPinnedExecutable(config.BinaryPath)
+	}
 	executable, cleanup, err := pinned.Snapshot(root)
 	if err != nil {
 		return nil, ErrUnsupportedVersion

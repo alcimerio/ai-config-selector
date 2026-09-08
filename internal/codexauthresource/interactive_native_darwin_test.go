@@ -246,6 +246,7 @@ func assertNativeCodexPathGrantOutput(t *testing.T, fixture *nativeResponsesFixt
 	if err != nil {
 		t.Fatalf("path-grant function-call output: %v", err)
 	}
+	normalizedOutput := normalizeNativeFunctionCallOutput(toolOutput)
 	required := []string{
 		"parent-exact-read-ok", "parent-exact-write-ok", "parent-exact-sibling-write-denied", "parent-exact-rename-denied",
 		"parent-directory-read-ok", "parent-directory-write-ok", "parent-read-only-read-ok", "parent-read-only-write-denied",
@@ -255,12 +256,24 @@ func assertNativeCodexPathGrantOutput(t *testing.T, fixture *nativeResponsesFixt
 		"child-overlap-read-ok", "child-overlap-write-ok",
 	}
 	for _, witness := range required {
-		if !strings.Contains(toolOutput, witness+"\n") {
-			t.Fatalf("matching function-call output omitted operation witness %q", witness)
+		if !strings.Contains(normalizedOutput, witness+"\n") {
+			observed := make([]string, 0, len(required))
+			for _, candidate := range append(append([]string(nil), required...),
+				"parent-exact-read-bad", "parent-exact-write-bad", "parent-exact-sibling-write-bad", "parent-exact-rename-bad",
+				"parent-directory-read-bad", "parent-directory-write-bad", "parent-read-only-read-bad", "parent-read-only-write-bad",
+				"parent-overlap-read-bad", "parent-overlap-parent-write-bad", "parent-overlap-child-write-bad",
+				"child-exact-read-bad", "child-exact-write-bad", "child-exact-sibling-write-bad",
+				"child-directory-read-bad", "child-directory-write-bad", "child-read-only-read-bad", "child-read-only-write-bad",
+				"child-overlap-read-bad", "child-overlap-write-bad") {
+				if strings.Contains(normalizedOutput, candidate) {
+					observed = append(observed, candidate)
+				}
+			}
+			t.Fatalf("matching function-call output omitted operation witness %q; observed known witnesses=%q", witness, observed)
 		}
 	}
-	if strings.Contains(toolOutput, "-bad\n") {
-		t.Fatalf("matching function-call output reported a path-grant violation: %q", toolOutput)
+	if strings.Contains(normalizedOutput, "-bad\n") {
+		t.Fatal("matching function-call output reported a path-grant violation")
 	}
 }
 
