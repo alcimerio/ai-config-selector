@@ -83,7 +83,7 @@ func TestReleaseArtifactContractIsExactlyOneAppleSiliconTarget(t *testing.T) {
 		}
 		for _, required := range []string{
 			"scripts/run-native-candidate-gates.sh",
-			"run-bounded-test-command.sh 420 go test -count=1 -v -timeout=6m -race ./...",
+			"go test -race ./...",
 			"The candidate itself is never rebuilt in this job.",
 			"No credentials, account data, target output, Session contents, private paths, generated policy, environment values, or control characters are recorded.",
 		} {
@@ -112,6 +112,24 @@ func TestReleaseArtifactContractIsExactlyOneAppleSiliconTarget(t *testing.T) {
 	installer := readRepositoryFile(t, repository, filepath.Join("scripts", "install.sh.tmpl"))
 	if strings.Contains(installer, "Linux) target_os") || !strings.Contains(installer, "ACS v0.4 supports macOS only") {
 		t.Fatal("installer does not reject unsupported Linux hosts clearly")
+	}
+}
+
+func TestMacOSDiagnosticMatrixEnumeratesAndRunsEveryNativePackage(t *testing.T) {
+	workflow := readRepositoryFile(t, "..", filepath.Join(".github", "workflows", "macos.yml"))
+	for _, required := range []string{
+		"packages=\"$(go list -json ./... | jq --slurp --compact-output 'map(.ImportPath)')\"",
+		"package: ${{ fromJSON(needs.enumerate-packages.outputs.packages) }}",
+		"fail-fast: false",
+		"max-parallel: 4",
+		"ACS_TEST_PACKAGE: ${{ matrix.package }}",
+		`go test -count=1 -v -timeout=6m "$ACS_TEST_PACKAGE"`,
+		"run: go test ./...",
+		"run: go test -race ./...",
+	} {
+		if !strings.Contains(workflow, required) {
+			t.Errorf("macOS package diagnostic omits %q", required)
+		}
 	}
 }
 

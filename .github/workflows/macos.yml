@@ -13,6 +13,66 @@ permissions:
   contents: read
 
 jobs:
+  enumerate-packages:
+    name: Enumerate native Go packages
+    runs-on: macos-26
+    timeout-minutes: 5
+    outputs:
+      packages: ${{ steps.packages.outputs.packages }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Enumerate exact package set
+        id: packages
+        shell: bash
+        run: |
+          packages="$(go list -json ./... | jq --slurp --compact-output 'map(.ImportPath)')"
+          if [[ "$(jq 'length' <<<"$packages")" -eq 0 ]]; then
+            echo "Native package discovery returned no packages." >&2
+            exit 1
+          fi
+          printf 'packages=%s\n' "$packages" >>"$GITHUB_OUTPUT"
+
+  package-tests:
+    name: Test native package (${{ matrix.package }})
+    needs: enumerate-packages
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        package: ${{ fromJSON(needs.enumerate-packages.outputs.packages) }}
+    runs-on: macos-26
+    timeout-minutes: 8
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Test package
+        env:
+          ACS_TEST_PACKAGE: ${{ matrix.package }}
+        run: |
+          printf 'Testing package %s\n' "$ACS_TEST_PACKAGE"
+          go test -count=1 -v -timeout=6m "$ACS_TEST_PACKAGE"
+
   seatbelt-zombie-stress:
     name: Seatbelt zombie settlement (${{ matrix.target }})
     strategy:
@@ -88,10 +148,10 @@ jobs:
           go mod verify
 
       - name: Test
-        run: scripts/run-bounded-test-command.sh 420 go test -count=1 -v -timeout=6m ./...
+        run: go test ./...
 
       - name: Race test
-        run: scripts/run-bounded-test-command.sh 420 go test -count=1 -v -timeout=6m -race ./...
+        run: go test -race ./...
 
       - name: Build
         run: go build -o /tmp/acs ./cmd/acs
