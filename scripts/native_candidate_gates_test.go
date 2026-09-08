@@ -101,7 +101,7 @@ func TestNativeCandidateGatesPropagateFailureRecoverAndProtectIdentity(t *testin
 			!strings.Contains(calls, "TestNativeKeychainRecoveryEntrypoint") {
 			t.Fatalf("calls omit failing gate or recovery:\n%s", calls)
 		}
-		if strings.Contains(calls, "go test ./...") {
+		if strings.Contains(calls, "go test -count=1 -v -timeout=7m ./...") {
 			t.Fatalf("execution continued after the failing gate:\n%s", calls)
 		}
 	})
@@ -149,11 +149,11 @@ func TestNativeCandidateGatesPropagateFailureRecoverAndProtectIdentity(t *testin
 		fixture.run(t, "success", true, "")
 		calls := fixture.calls(t)
 		for _, required := range []string{
-			"go test ./...",
+			"go test -count=1 -v -timeout=7m ./...",
 			"TestPromotedArtifactSharedTargetConformance",
 			"generic_literal_command_uses_candidate_containment",
 			"effective_explanation_is_linked_and_narrowly_observed",
-			"go test -race ./...",
+			"go test -count=1 -v -timeout=7m -race ./...",
 			"TestNativeKeychainCredentialFreeContract",
 			"TestNativeRealStoreInstalledTargetComposition",
 			"TestNativeInstalledTargetContainedStatusWithoutCredentials",
@@ -166,7 +166,7 @@ func TestNativeCandidateGatesPropagateFailureRecoverAndProtectIdentity(t *testin
 			}
 		}
 		for _, scoped := range []string{
-			"auth= promoted= version= backend= recovery= go test ./...",
+			"auth= promoted= version= backend= recovery= go test -count=1 -v -timeout=7m ./...",
 			"auth=1 promoted=" + fixture.candidate + " version= backend= recovery= go test ./internal/codexauthresource -run ^TestNativeKeychainCredentialFreeContract$",
 			"auth= promoted=" + fixture.candidate + " version=v0.4.0 backend=available recovery= go test ./acceptance -count=1",
 			"auth= promoted= version= backend= recovery=1 go test ./internal/codexauthresource -run ^TestNativeKeychainRecoveryEntrypoint$",
