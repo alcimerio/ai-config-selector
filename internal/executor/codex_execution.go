@@ -215,7 +215,7 @@ func (service *CodexAuthService) ExecuteCodex(ctx context.Context, request Codex
 	supervisor := newDevinSignalSupervisor(cancelPreflight)
 	defer supervisor.stop()
 	requirements := request.ResolvedPlan.Requirements()
-	filesystemGrants, err := request.ResolvedPlan.ResolveFilesystemGrants(service.workingDirectory, service.sessionsDirectory)
+	filesystemGrants, err := request.ResolvedPlan.ResolveFilesystemGrantsForPreflight(service.workingDirectory, service.sessionsDirectory)
 	if err != nil {
 		return 1, ErrCodexFailed
 	}
@@ -235,6 +235,17 @@ func (service *CodexAuthService) ExecuteCodex(ctx context.Context, request Codex
 			resultErr, exitCode = ErrBindingQuarantined, 1
 		}
 	}()
+	if hasWritableFilesystemGrant(filesystemGrants) {
+		resolvedExecutable, resolveErr := newPinnedExecutable(requirements.Executable).Resolve()
+		if resolveErr != nil {
+			return 1, ErrUnsupportedVersion
+		}
+		requirements.Executable = resolvedExecutable
+		filesystemGrants, err = request.ResolvedPlan.ResolveFilesystemGrantsForExecutable(service.workingDirectory, service.sessionsDirectory, resolvedExecutable)
+		if err != nil {
+			return 1, ErrCodexFailed
+		}
+	}
 	access := request.ResolvedPlan.WorkspaceAccess()
 	runtimeAuthority := request.ResolvedPlan.RuntimeAuthority()
 	preparation, err := service.execution.prepare(preflightContext, access, requirements, runtimeAuthority, filesystemGrants)

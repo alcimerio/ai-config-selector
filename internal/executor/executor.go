@@ -152,6 +152,15 @@ func settleRetainedProcess(process launch.Process, mode retainedSignalMode, devi
 	return runErr, launch.AwaitRetainedSessionCleanup(process)
 }
 
+func hasWritableFilesystemGrant(grants []launch.FilesystemGrant) bool {
+	for _, grant := range grants {
+		if grant.Access == launch.PathAccessReadWrite {
+			return true
+		}
+	}
+	return false
+}
+
 // New returns the production executor using ACS's required native sandbox.
 func New() *Executor { return newExecutor(launch.NewProcessSandbox()) }
 
@@ -176,22 +185,14 @@ func (e *Executor) RunShell(ctx context.Context, request ShellRequest) (resultEr
 		return errors.New("contained shell executor is unavailable")
 	}
 	workspaceAccess, materializer, runtimeAuthority := request.resolvedInputs()
-	var filesystemGrants []launch.FilesystemGrant
-	if request.ResolvedPlan != nil {
-		var err error
-		filesystemGrants, err = request.ResolvedPlan.ResolveFilesystemGrants(request.WorkingDirectory, request.SessionsDirectory)
-		if err != nil {
-			return &launch.SandboxError{Category: launch.SandboxUnsafePath}
-		}
-	}
 	if request.ResolvedPlan != nil && request.ResolvedPlan.Requirements().Recipe != authority.RecipeShell {
 		return errors.New("resolved authority does not select the shell execution recipe")
 	}
 	resultErr, _ = e.runAttached(ctx, attachedRecipe{
 		sessionsDirectory: request.SessionsDirectory, workingDirectory: request.WorkingDirectory,
 		workspaceAccess: workspaceAccess, materializer: materializer, runtimeAuthority: runtimeAuthority,
-		filesystemGrants: filesystemGrants,
-		executable:       systemShell, arguments: []string{"-f"}, terminal: request.Terminal,
+		resolvedPlan: request.ResolvedPlan,
+		executable:   systemShell, arguments: []string{"-f"}, terminal: request.Terminal,
 	})
 	return resultErr
 }
@@ -206,7 +207,7 @@ type attachedRecipe struct {
 	command           *runcommand.Command
 	terminal          launch.Terminal
 	runtimeAuthority  launch.RuntimeAuthority
-	filesystemGrants  []launch.FilesystemGrant
+	resolvedPlan      *authority.Plan
 }
 
 // runAttached is the one Session/process lifecycle for the fixed shell and an
@@ -221,9 +222,17 @@ func (e *Executor) runAttached(ctx context.Context, recipe attachedRecipe) (resu
 			return err, false
 		}
 	}
+	var filesystemGrants []launch.FilesystemGrant
+	if recipe.resolvedPlan != nil {
+		var err error
+		filesystemGrants, err = recipe.resolvedPlan.ResolveFilesystemGrantsForExecutable(recipe.workingDirectory, recipe.sessionsDirectory, executable)
+		if err != nil {
+			return &launch.SandboxError{Category: launch.SandboxUnsafePath}, false
+		}
+	}
 	if err := e.sandbox.Check(ctx, launch.SandboxCheck{Workspace: recipe.workingDirectory,
 		WorkspaceAccess: recipe.workspaceAccess, SessionsDirectory: recipe.sessionsDirectory,
-		Executable: executable, RuntimeAuthority: recipe.runtimeAuthority, FilesystemGrants: recipe.filesystemGrants}); err != nil {
+		Executable: executable, RuntimeAuthority: recipe.runtimeAuthority, FilesystemGrants: filesystemGrants}); err != nil {
 		return err, false
 	}
 	target := "shell"
@@ -251,7 +260,7 @@ func (e *Executor) runAttached(ctx context.Context, recipe attachedRecipe) (resu
 		SessionsDirectory: created.SessionsDirectory(), SessionDirectory: created.RootDirectory(),
 		SessionHome: created.HomeDirectory(), TemporaryDirectory: created.TemporaryDirectory(),
 		Executable: executable, Arguments: arguments, Terminal: recipe.terminal, RuntimeAuthority: recipe.runtimeAuthority,
-		FilesystemGrants: recipe.filesystemGrants,
+		FilesystemGrants: filesystemGrants,
 	})
 	if err != nil {
 		return err, false
@@ -272,15 +281,11 @@ func (e *Executor) RunCommand(ctx context.Context, request CommandRequest) (exit
 	if request.ResolvedPlan == nil || request.ResolvedPlan.Requirements().Recipe != authority.RecipeCommand {
 		return 1, errors.New("resolved authority does not select the command execution recipe")
 	}
-	filesystemGrants, err := request.ResolvedPlan.ResolveFilesystemGrants(request.WorkingDirectory, request.SessionsDirectory)
-	if err != nil {
-		return 1, &launch.SandboxError{Category: launch.SandboxUnsafePath}
-	}
 	runErr, cleanupFailed := e.runAttached(ctx, attachedRecipe{
 		sessionsDirectory: request.SessionsDirectory, workingDirectory: request.WorkingDirectory,
 		workspaceAccess: request.ResolvedPlan.WorkspaceAccess(), materializer: *request.ResolvedPlan,
 		command: &request.Command, terminal: request.Terminal, runtimeAuthority: request.ResolvedPlan.RuntimeAuthority(),
-		filesystemGrants: filesystemGrants,
+		resolvedPlan: request.ResolvedPlan,
 	})
 	if cleanupFailed {
 		return 1, runErr
@@ -320,7 +325,13 @@ func (e *Executor) RunDevin(ctx context.Context, request DevinRequest) (exitCode
 	if request.ResolvedPlan != nil {
 		request.RuntimeAuthority = request.ResolvedPlan.RuntimeAuthority()
 		var err error
-		request.FilesystemGrants, err = request.ResolvedPlan.ResolveFilesystemGrants(request.WorkingDirectory, request.SessionsDirectory)
+		request.FilesystemGrants, err = request.ResolvedPlan.ResolveFilesystemGrantsForPreflight(request.WorkingDirectory, request.SessionsDirectory)
+		if err == nil && hasWritableFilesystemGrant(request.FilesystemGrants) {
+			request.Executable, err = launch.ResolveExecutablePath(request.Executable)
+		}
+		if err == nil && hasWritableFilesystemGrant(request.FilesystemGrants) {
+			request.FilesystemGrants, err = request.ResolvedPlan.ResolveFilesystemGrantsForExecutable(request.WorkingDirectory, request.SessionsDirectory, request.Executable)
+		}
 		if err != nil {
 			return 1, &launch.SandboxError{Category: launch.SandboxUnsafePath}
 		}
@@ -399,7 +410,13 @@ func (e *Executor) VerifyDevin(ctx context.Context, request DevinRequest) (resul
 	if request.ResolvedPlan != nil {
 		request.RuntimeAuthority = request.ResolvedPlan.RuntimeAuthority()
 		var err error
-		request.FilesystemGrants, err = request.ResolvedPlan.ResolveFilesystemGrants(request.WorkingDirectory, request.SessionsDirectory)
+		request.FilesystemGrants, err = request.ResolvedPlan.ResolveFilesystemGrantsForPreflight(request.WorkingDirectory, request.SessionsDirectory)
+		if err == nil && hasWritableFilesystemGrant(request.FilesystemGrants) {
+			request.Executable, err = launch.ResolveExecutablePath(request.Executable)
+		}
+		if err == nil && hasWritableFilesystemGrant(request.FilesystemGrants) {
+			request.FilesystemGrants, err = request.ResolvedPlan.ResolveFilesystemGrantsForExecutable(request.WorkingDirectory, request.SessionsDirectory, request.Executable)
+		}
 		if err != nil {
 			return &launch.SandboxError{Category: launch.SandboxUnsafePath}
 		}

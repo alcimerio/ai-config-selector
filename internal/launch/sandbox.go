@@ -731,6 +731,11 @@ func resolveExecutable(path string) (string, error) {
 	return resolveExistingPath(path, false, true)
 }
 
+// ResolveExecutablePath resolves the executable selected for an active
+// operation. Callers use the canonical result to protect that target from
+// writable Profile grants before constructing native policy.
+func ResolveExecutablePath(path string) (string, error) { return resolveExecutable(path) }
+
 func resolveRuntimeInputs(inputs []string) ([]string, error) {
 	resolved := make([]string, 0, len(inputs))
 	seen := make(map[string]struct{}, len(inputs))

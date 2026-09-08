@@ -8,7 +8,9 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"path/filepath"
 	"reflect"
 	"sort"
 
@@ -286,9 +288,32 @@ func (value TargetSemantics) Clone() TargetSemantics {
 func (plan Plan) AuthorityDigest() string                   { return plan.explanation.AuthorityDigest }
 func (plan Plan) RuntimeAuthority() launch.RuntimeAuthority { return plan.runtimeAuthority.Clone() }
 func (plan Plan) ResolveFilesystemGrants(workingDirectory, sessionsDirectory string) ([]launch.FilesystemGrant, error) {
+	return plan.resolveFilesystemGrants(workingDirectory, sessionsDirectory, plan.requirements.Executable)
+}
+
+// ResolveFilesystemGrantsForPreflight validates selected paths before an
+// operation has acquired or resolved its executable. An operation that finds
+// a writable grant must subsequently call ResolveFilesystemGrantsForExecutable
+// before constructing native policy.
+func (plan Plan) ResolveFilesystemGrantsForPreflight(workingDirectory, sessionsDirectory string) ([]launch.FilesystemGrant, error) {
+	return plan.resolveFilesystemGrants(workingDirectory, sessionsDirectory, "")
+}
+
+// ResolveFilesystemGrantsForExecutable binds writable path authorization to
+// the canonical executable selected by an active execution operation. Passive
+// authority construction deliberately retains the semantic executable name
+// and never searches the host PATH.
+func (plan Plan) ResolveFilesystemGrantsForExecutable(workingDirectory, sessionsDirectory, executable string) ([]launch.FilesystemGrant, error) {
+	if !filepath.IsAbs(executable) {
+		return nil, errors.New("resolved executable path is invalid")
+	}
+	return plan.resolveFilesystemGrants(workingDirectory, sessionsDirectory, executable)
+}
+
+func (plan Plan) resolveFilesystemGrants(workingDirectory, sessionsDirectory, executable string) ([]launch.FilesystemGrant, error) {
 	protectedWritable := append([]string(nil), plan.requirements.RuntimeInputs...)
-	if plan.requirements.Executable != "" {
-		protectedWritable = append(protectedWritable, plan.requirements.Executable)
+	if executable != "" {
+		protectedWritable = append(protectedWritable, executable)
 	}
 	return launch.ResolveFilesystemGrants(append([]launch.PathGrantIntent(nil), plan.pathGrantIntents...), workingDirectory, sessionsDirectory, plan.workspaceAccess, append([]string(nil), plan.requirements.ProtectedPaths...), protectedWritable)
 }

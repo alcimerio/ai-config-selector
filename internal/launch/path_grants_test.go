@@ -11,7 +11,7 @@ import (
 )
 
 func TestFilesystemGrantResolutionReductionAndIdentityRevalidation(t *testing.T) {
-	root := t.TempDir()
+	root := filesystemGrantTestRoot(t)
 	workspace := filepath.Join(root, "workspace")
 	sessions := filepath.Join(root, "sessions")
 	if err := os.MkdirAll(filepath.Join(workspace, "data", "child"), 0o700); err != nil {
@@ -80,7 +80,7 @@ type workspaceAnchorFixture struct {
 
 func newWorkspaceAnchorFixture(t *testing.T, effective bool) workspaceAnchorFixture {
 	t.Helper()
-	root := t.TempDir()
+	root := filesystemGrantTestRoot(t)
 	fixture := workspaceAnchorFixture{
 		root: root, first: filepath.Join(root, "first"), second: filepath.Join(root, "second"),
 		link: filepath.Join(root, "workspace"), sessions: filepath.Join(root, "sessions"),
@@ -223,7 +223,7 @@ func TestFilesystemGrantWorkspaceAnchorRevalidatedAfterSessionAtPrepare(t *testi
 }
 
 func TestFilesystemGrantRejectsSpecialFilesEscapesHardlinksAndProtectedAliases(t *testing.T) {
-	root := t.TempDir()
+	root := filesystemGrantTestRoot(t)
 	workspace := filepath.Join(root, "workspace")
 	sessions := filepath.Join(root, "sessions")
 	outside := filepath.Join(root, "outside")
@@ -278,7 +278,7 @@ func TestFilesystemGrantRejectsSpecialFilesEscapesHardlinksAndProtectedAliases(t
 }
 
 func TestFilesystemGrantRejectsLogicalSymlinkRetarget(t *testing.T) {
-	root := t.TempDir()
+	root := filesystemGrantTestRoot(t)
 	workspace, sessions := filepath.Join(root, "workspace"), filepath.Join(root, "sessions")
 	if err := os.MkdirAll(workspace, 0o700); err != nil {
 		t.Fatal(err)
@@ -306,4 +306,22 @@ func TestFilesystemGrantRejectsLogicalSymlinkRetarget(t *testing.T) {
 	if _, err := revalidateFilesystemGrants(grants, workspace, sessions); err == nil {
 		t.Fatal("logical symlink retarget accepted")
 	}
+}
+
+func filesystemGrantTestRoot(t *testing.T) string {
+	t.Helper()
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal("user home is unavailable")
+	}
+	root, err := os.MkdirTemp(home, ".acs-path-grants-test-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.RemoveAll(root); err != nil {
+			t.Errorf("remove filesystem-grant test root: %v", err)
+		}
+	})
+	return root
 }
