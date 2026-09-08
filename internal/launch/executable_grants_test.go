@@ -112,11 +112,21 @@ func TestExecutableGrantRejectsSpecialFilesAndContentReplacement(t *testing.T) {
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
-			candidate := filepath.Join(workspace, name)
+			candidateWorkspace, candidateSessions := workspace, sessions
+			if name == "socket" {
+				shortWorkspace, err := os.MkdirTemp("/tmp", "acs-eg-")
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { _ = os.RemoveAll(shortWorkspace) })
+				candidateWorkspace = shortWorkspace
+				candidateSessions = filepath.Join(shortWorkspace, "sessions")
+			}
+			candidate := filepath.Join(candidateWorkspace, name)
 			if err := prepare(candidate); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := ResolveExecutableGrants([]ExecutableGrantIntent{{ID: name, ReferenceKind: ExecutableReferenceWorkspaceRelative, Path: name}}, workspace, sessions); err == nil {
+			if _, err := ResolveExecutableGrants([]ExecutableGrantIntent{{ID: name, ReferenceKind: ExecutableReferenceWorkspaceRelative, Path: name}}, candidateWorkspace, candidateSessions); err == nil {
 				t.Fatalf("accepted %s", name)
 			}
 		})
