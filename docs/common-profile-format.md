@@ -34,6 +34,33 @@ to use the established read, edit and explicit migration paths.
           {"id": "project-tool", "reference": {"kind": "workspace-relative", "path": "bin/tool"}}
         ]
       }
+    },
+    "environment": {
+      "version": 1,
+      "selection": {
+        "entries": [
+          {
+            "id": "mode",
+            "destination": "BUILD_MODE",
+            "scope": "attached-process-tree",
+            "source": {"kind": "host-environment", "name": "ACS_BUILD_MODE"},
+            "required": false,
+            "classification": "non-secret"
+          },
+          {
+            "id": "token",
+            "destination": "SERVICE_TOKEN",
+            "scope": "attached-process-tree",
+            "source": {
+              "kind": "secret-reference",
+              "provider": "host-environment",
+              "reference": "ACS_SERVICE_TOKEN"
+            },
+            "required": true,
+            "classification": "secret"
+          }
+        ]
+      }
     }
   },
   "overlays": {
@@ -135,6 +162,48 @@ same explicit Seatbelt limit described for path grants.
 Older v3 Profiles without `executables` read as an empty compatibility default.
 New creation and confirmed mutation emit the explicit selection; legacy Profiles
 must migrate before selecting a nonempty executable entry.
+
+## Scoped environment
+
+`common.environment` version 1 maps explicit host sources to new names in the
+final attached process tree. Each entry has a stable lowercase ID, an uppercase
+`destination`, the only supported scope `attached-process-tree`, a required
+flag, and a classification. A `non-secret` entry uses an exact
+`host-environment` source name and may be optional. A `secret` entry uses a
+`secret-reference` with the current `host-environment` provider and is always
+required. The host name or reference is a local lookup key, not a stored value.
+Present empty values are preserved; an absent optional non-secret source is
+omitted, while an absent required source fails before Session creation.
+
+Destinations and source names use the bounded uppercase environment-name
+grammar. ACS rejects duplicates, NUL bytes, oversized values and totals, and
+destinations that could replace its runtime controls, including `HOME`, `PATH`,
+XDG paths, locale/terminal controls, shell startup hooks, and `ACS_`, `DYLD_`,
+`LD_`, or `LC_` prefixes. Values are freshly resolved for every execution; they
+are excluded from Profiles, authority digests, explanations, exchange/history,
+Session metadata, generated policies, argv, status probes, and diagnostics.
+Passive inspection, validation, explanation, export, history, and restore
+preview never read the provider.
+
+On macOS, ACS transfers selected values over its private bounded supervisor
+control channel after policy validation and immediately before final target
+start. Values therefore transit trusted supervisor memory and then remain in
+the target process environment for its normal lifetime; the target and its
+descendants can intentionally read or print them. Devin Skills/authentication
+preflights and Codex version/authentication/status probes do not receive them.
+For a Codex launch with selected environment values, ACS disables Codex shell
+snapshots because that target feature serializes exported process variables;
+the selected values remain available to the real tool process and descendants.
+Cleanup retains the private resource lease until descendant settlement is
+proved; uncertain cleanup remains quarantined rather than claiming erasure.
+Selected environment transport is currently macOS-only. Linux fails closed
+before Session creation instead of placing values in Bubblewrap argv.
+
+Older v3 Profiles without `environment` read as an empty compatibility default.
+New creation and confirmed mutation emit the explicit selection. Durable
+Keychain-backed references are a later delivery; this version supports only
+host-environment references and must not be described as durable
+credential storage.
 
 ## Common material and projections
 

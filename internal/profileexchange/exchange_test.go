@@ -69,6 +69,28 @@ func TestDecodeRequiresBindingsAndPreservesIntent(t *testing.T) {
 	}
 }
 
+func TestLegacyBindingVersionsRejectEnvironmentFieldPresence(t *testing.T) {
+	for _, version := range []int{1, 2} {
+		t.Run(fmt.Sprint(version), func(t *testing.T) {
+			common := `"skills":{"version":1,"selection":[]},"workspace":{"version":1,"selection":{"access":"read-only"}}`
+			if version == 2 {
+				common += `,"paths":{"version":1,"selection":[]},"executables":{"version":1,"selection":[]}`
+			}
+			document := []byte(fmt.Sprintf(`{"exchangeVersion":%d,"profile":{"common":{%s},"overlays":{"devin":{"version":1}}},"requirements":{"sources":[],"authentications":[]}}`, version, common))
+			control := []byte(fmt.Sprintf(`{"bindingVersion":%d,"sources":{},"authentications":{}}`, version))
+			if result := Decode(document, control, "imported"); result.Code != CodeValid {
+				t.Fatalf("legacy binding control = %#v", result)
+			}
+			for _, environment := range []string{`{}`, `null`} {
+				bindings := []byte(fmt.Sprintf(`{"bindingVersion":%d,"sources":{},"authentications":{},"environment":%s}`, version, environment))
+				if result := Decode(document, bindings, "imported"); result.Code != CodeBindingInvalid || result.Candidate != nil {
+					t.Fatalf("legacy binding environment=%s result=%#v", environment, result)
+				}
+			}
+		})
+	}
+}
+
 func TestDecodeRejectsPostBindingAliasCollision(t *testing.T) {
 	document := []byte(`{"exchangeVersion":1,"profile":{"common":{"skills":{"version":1,"selection":[{"sourceBinding":"source-1","relativePath":"Review"},{"sourceBinding":"source-2","relativePath":"review"}]},"workspace":{"version":1,"selection":{"access":"read-only"}}},"overlays":{"devin":{"version":1}}},"requirements":{"sources":[{"id":"source-1"},{"id":"source-2"}],"authentications":[]}}`)
 	bindings := []byte(`{"bindingVersion":1,"sources":{"source-1":"shared-agents","source-2":"shared-agents"},"authentications":{}}`)
@@ -267,6 +289,55 @@ func TestVersionTwoExecutableOptionalFieldPresenceIsStrict(t *testing.T) {
 	}
 	if got := Decode(explicitEmpty, []byte(`{"bindingVersion":2,"sources":{"source-1":"devin-config","source-2":"shared-agents"},"authentications":{"authentication-1":"personal"},"paths":{},"executables":null}`), "restored"); got.Code != CodeBindingInvalid {
 		t.Fatalf("null executable bindings accepted: %#v", got)
+	}
+}
+
+func TestVersionThreeEnvironmentReferencesArePortableOrExplicitlyBound(t *testing.T) {
+	candidate := fixtureProfile(t)
+	selection, err := commonprofile.EncodeEnvironmentSelection(commonprofile.EnvironmentSelection{Entries: []commonprofile.EnvironmentEntry{
+		{ID: "plain", Destination: "TOOL_MODE", Scope: "attached-process-tree", Source: commonprofile.EnvironmentSource{Kind: "host-environment", Name: "SOURCE_MODE"}, Required: false, Classification: "non-secret"},
+		{ID: "token", Destination: "TOOL_TOKEN", Scope: "attached-process-tree", Source: commonprofile.EnvironmentSource{Kind: "secret-reference", Provider: "host-environment", Reference: "PRIVATE_TOKEN_SOURCE"}, Required: true, Classification: "secret"},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate.Common[commonprofile.EnvironmentCapabilityID] = profile.CommonPayload{Version: 1, Selection: selection}
+	document, report, err := Export(candidate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.EnvironmentBindings != 1 || bytes.Contains(document, []byte("PRIVATE_TOKEN_SOURCE")) || !bytes.Contains(document, []byte(`"name": "SOURCE_MODE"`)) || !bytes.Contains(document, []byte(`"referenceBinding": "environment-1"`)) {
+		t.Fatalf("unsafe environment exchange report=%#v document=%s", report, document)
+	}
+	missing := []byte(`{"bindingVersion":3,"sources":{"source-1":"devin-config","source-2":"shared-agents"},"authentications":{"authentication-1":"personal"},"paths":{},"executables":{},"environment":{}}`)
+	if result := Decode(document, missing, "restored"); result.Code != CodeBindingRequired || result.RequiredEnvironment != 1 {
+		t.Fatalf("missing environment binding = %#v", result)
+	}
+	bindings := []byte(`{"bindingVersion":3,"sources":{"source-1":"devin-config","source-2":"shared-agents"},"authentications":{"authentication-1":"personal"},"paths":{},"executables":{},"environment":{"environment-1":"RESTORED_TOKEN_SOURCE"}}`)
+	result := Decode(document, bindings, "restored")
+	if result.Code != CodeValid || result.Candidate == nil {
+		t.Fatalf("bound environment exchange = %#v", result)
+	}
+	got, err := commonprofile.DecodeEnvironmentSelection(result.Candidate.Common[commonprofile.EnvironmentCapabilityID].Selection)
+	if err != nil || len(got.Entries) != 2 || got.Entries[1].Source.Reference != "RESTORED_TOKEN_SOURCE" {
+		t.Fatalf("restored environment = %#v err=%v", got, err)
+	}
+}
+
+func TestVersionThreeEnvironmentSourcePresenceIsStrict(t *testing.T) {
+	base := `{"exchangeVersion":3,"profile":{"common":{"skills":{"version":1,"selection":[]},"workspace":{"version":1,"selection":{"access":"read-only"}},"paths":{"version":1,"selection":[]},"executables":{"version":1,"selection":[]},"environment":{"version":1,"selection":[{"id":"plain","destination":"TOOL_MODE","scope":"attached-process-tree","source":{"kind":"host-environment","name":"SOURCE_MODE"%s},"required":false,"classification":"non-secret"}]}},"overlays":{"devin":{"version":1}}},"requirements":{"sources":[],"authentications":[],"paths":[],"executables":[],"environment":[]}}`
+	if got := Decode([]byte(fmt.Sprintf(base, "")), nil, "restored"); got.Code != CodeValid {
+		t.Fatalf("valid host source rejected: %#v", got)
+	}
+	for _, mixed := range []string{`,"provider":null`, `,"provider":""`, `,"referenceBinding":null`, `,"referenceBinding":""`} {
+		if got := Decode([]byte(fmt.Sprintf(base, mixed)), nil, "restored"); got.Code != CodeInvalidStructure {
+			t.Fatalf("mixed source %s accepted: %#v", mixed, got)
+		}
+	}
+	secret := strings.Replace(fmt.Sprintf(base, ""), `"kind":"host-environment","name":"SOURCE_MODE"`, `"kind":"secret-reference","provider":"host-environment","referenceBinding":"environment-1","name":null`, 1)
+	secret = strings.Replace(secret, `"environment":[]`, `"environment":[{"id":"environment-1","kind":"host-environment-secret-reference"}]`, 1)
+	if got := Decode([]byte(secret), []byte(`{"bindingVersion":3,"sources":{},"authentications":{},"paths":{},"executables":{},"environment":{"environment-1":"TOKEN_SOURCE"}}`), "restored"); got.Code != CodeInvalidStructure {
+		t.Fatalf("secret source with present name accepted: %#v", got)
 	}
 }
 

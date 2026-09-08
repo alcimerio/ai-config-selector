@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/alcimerio/ai-config-selector/internal/environmentresource"
 	"github.com/alcimerio/ai-config-selector/internal/executableintent"
 	"github.com/alcimerio/ai-config-selector/internal/pathintent"
 	"github.com/charmbracelet/x/term"
@@ -270,15 +271,16 @@ func CurrentPlatform() (Platform, error) {
 // leasing a Session. RuntimeProbePaths are exact optional file paths; unlike
 // RuntimeInputs, they need not exist.
 type SandboxCheck struct {
-	Workspace         string
-	WorkspaceAccess   WorkspaceAccess
-	SessionsDirectory string
-	Executable        string
-	RuntimeInputs     []string
-	RuntimeProbePaths []string
-	RuntimeAuthority  RuntimeAuthority
-	FilesystemGrants  []FilesystemGrant
-	ExecutableGrants  []ExecutableGrant
+	Workspace           string
+	WorkspaceAccess     WorkspaceAccess
+	SessionsDirectory   string
+	Executable          string
+	RuntimeInputs       []string
+	RuntimeProbePaths   []string
+	RuntimeAuthority    RuntimeAuthority
+	FilesystemGrants    []FilesystemGrant
+	ExecutableGrants    []ExecutableGrant
+	RequiresEnvironment bool
 }
 
 // ProcessRequest describes one command that must run through the selected
@@ -296,6 +298,7 @@ type ProcessRequest struct {
 	RuntimeAuthority       RuntimeAuthority
 	FilesystemGrants       []FilesystemGrant
 	ExecutableGrants       []ExecutableGrant
+	Environment            *environmentresource.Lease
 	RecoveryProofChallenge []byte
 	Arguments              []string
 	Terminal               Terminal
@@ -532,6 +535,11 @@ func safePlatformToken(value string) string {
 }
 
 func (sandbox *nativeProcessSandbox) Check(ctx context.Context, request SandboxCheck) error {
+	if request.RequiresEnvironment {
+		if err := sandbox.checkEnvironmentTransport(); err != nil {
+			return err
+		}
+	}
 	if _, err := sandbox.selectedBackend(ctx); err != nil {
 		return err
 	}
@@ -540,6 +548,11 @@ func (sandbox *nativeProcessSandbox) Check(ctx context.Context, request SandboxC
 }
 
 func (sandbox *nativeProcessSandbox) Prepare(ctx context.Context, request ProcessRequest) (Process, error) {
+	if request.Environment != nil && !request.Environment.Empty() {
+		if err := sandbox.checkEnvironmentTransport(); err != nil {
+			return nil, err
+		}
+	}
 	backend, err := sandbox.selectedBackend(ctx)
 	if err != nil {
 		return nil, err
@@ -567,6 +580,20 @@ func (sandbox *nativeProcessSandbox) Prepare(ctx context.Context, request Proces
 		return nil, sandboxError(SandboxSetupFailed, nil)
 	}
 	return sanitizedProcess{process: process}, nil
+}
+
+func (sandbox *nativeProcessSandbox) checkEnvironmentTransport() error {
+	platform, err := sandbox.platform()
+	if err != nil {
+		return sandboxError(SandboxUnsupportedPlatform, err)
+	}
+	if err := ValidatePlatform(platform); err != nil {
+		return err
+	}
+	if platform.OS != "darwin" {
+		return sandboxError(SandboxBackendUnavailable, errors.New("selected environment transport is unsupported"))
+	}
+	return nil
 }
 
 type sanitizedProcess struct {
@@ -615,6 +642,7 @@ type validatedSandboxCheck struct {
 	runtimeAuthority           RuntimeAuthority
 	filesystemGrants           []FilesystemGrant
 	executableGrants           []ExecutableGrant
+	requiresEnvironment        bool
 }
 
 func validateSandboxCheck(request SandboxCheck) (validatedSandboxCheck, error) {
@@ -675,6 +703,7 @@ func validateSandboxCheck(request SandboxCheck) (validatedSandboxCheck, error) {
 		runtimeAuthority:           runtimeAuthority,
 		filesystemGrants:           filesystemGrants,
 		executableGrants:           executableGrants,
+		requiresEnvironment:        request.RequiresEnvironment,
 	}, nil
 }
 
@@ -710,6 +739,7 @@ type validatedProcessRequest struct {
 	runtimeAuthority           RuntimeAuthority
 	filesystemGrants           []FilesystemGrant
 	executableGrants           []ExecutableGrant
+	environmentProjection      *environmentresource.Lease
 	recoveryProofChallenge     []byte
 	arguments                  []string
 	environment                []string
@@ -720,10 +750,11 @@ func validateProcessRequest(request ProcessRequest) (validatedProcessRequest, er
 	checked, err := validateSandboxCheck(SandboxCheck{
 		Workspace: request.Workspace, WorkspaceAccess: request.WorkspaceAccess, SessionsDirectory: request.SessionsDirectory,
 		Executable: request.Executable, RuntimeInputs: request.RuntimeInputs,
-		RuntimeProbePaths: request.RuntimeProbePaths,
-		RuntimeAuthority:  request.RuntimeAuthority,
-		FilesystemGrants:  request.FilesystemGrants,
-		ExecutableGrants:  request.ExecutableGrants,
+		RuntimeProbePaths:   request.RuntimeProbePaths,
+		RuntimeAuthority:    request.RuntimeAuthority,
+		FilesystemGrants:    request.FilesystemGrants,
+		ExecutableGrants:    request.ExecutableGrants,
+		RequiresEnvironment: request.Environment != nil && !request.Environment.Empty(),
 	})
 	if err != nil {
 		return validatedProcessRequest{}, err
@@ -752,6 +783,7 @@ func validateProcessRequest(request ProcessRequest) (validatedProcessRequest, er
 		runtimeAuthority:           checked.runtimeAuthority,
 		filesystemGrants:           checked.filesystemGrants,
 		executableGrants:           checked.executableGrants,
+		environmentProjection:      request.Environment,
 		recoveryProofChallenge:     append([]byte(nil), request.RecoveryProofChallenge...),
 		arguments:                  append([]string(nil), request.Arguments...),
 		terminal:                   request.Terminal,

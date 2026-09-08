@@ -55,9 +55,13 @@ private writable Session, and intrinsic access needed to execute the selected
 file. It does not infer a filesystem or network grant catalog from child
 arguments. Target full-permission or YOLO flags cannot weaken the outer ACS
 sandbox. The child receives synthetic `HOME`, XDG and temporary directories;
-the fixed PATH above; and only validated terminal/locale variables. Arbitrary
-host configuration, credentials, environment variables, descriptors, and
-named target authentication are not inherited.
+the fixed PATH above; validated terminal/locale variables; and any explicitly
+selected v3 `common.environment` destinations. Those values are freshly
+resolved before Session creation and apply to the attached command and its
+descendants only. Unselected host configuration, credentials, environment
+variables, descriptors, and named target authentication are not inherited.
+Selected environment transport is currently macOS-only; Linux fails closed
+without placing values in command or Bubblewrap argv.
 
 Standard descriptors 0, 1, and 2 preserve terminal, pipe, and shell-level
 redirection connections. Alternate supplied files must be actual PTYs under

@@ -20,26 +20,29 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/alcimerio/ai-config-selector/internal/environmentresource"
 	"golang.org/x/sys/unix"
 )
 
 const (
-	seatbeltHelperArgument            = "--acs-internal-seatbelt-supervisor-v1"
-	seatbeltHelperEnvironment         = "ACS_INTERNAL_SEATBELT_SUPERVISOR_FD"
-	seatbeltStatusProxyArgument       = "--acs-internal-seatbelt-status-proxy-v1"
-	seatbeltStatusProxyEnvironmentKey = "ACS_INTERNAL_SEATBELT_STATUS_PROXY_FD"
-	seatbeltRecoveryProofEnvironment  = "ACS_INTERNAL_SEATBELT_RECOVERY_PROOF"
-	seatbeltStatusProxyControlFD      = 4
-	seatbeltProofMagic                = "ACS-SEATBELT-CLEANUP"
-	seatbeltProofVersion              = 1
-	seatbeltChallengeSize             = 32
-	seatbeltCleanupDeadline           = 2 * time.Second
-	seatbeltDescriptorSealAttempts    = 8
-	seatbeltStatusPacketSize          = 2
-	seatbeltStatusExit                = 'E'
-	seatbeltStatusSignal              = 'S'
-	seatbeltSupervisorReady           = 'R'
-	seatbeltSupervisorStart           = 'G'
+	seatbeltHelperArgument             = "--acs-internal-seatbelt-supervisor-v1"
+	seatbeltHelperEnvironment          = "ACS_INTERNAL_SEATBELT_SUPERVISOR_FD"
+	seatbeltStatusProxyArgument        = "--acs-internal-seatbelt-status-proxy-v1"
+	seatbeltStatusProxyEnvironmentKey  = "ACS_INTERNAL_SEATBELT_STATUS_PROXY_FD"
+	seatbeltRecoveryProofEnvironment   = "ACS_INTERNAL_SEATBELT_RECOVERY_PROOF"
+	seatbeltStatusProxyControlFD       = 4
+	seatbeltProofMagic                 = "ACS-SEATBELT-CLEANUP"
+	seatbeltProofVersion               = 1
+	seatbeltChallengeSize              = 32
+	seatbeltCleanupDeadline            = 2 * time.Second
+	seatbeltDescriptorSealAttempts     = 8
+	seatbeltStatusPacketSize           = 2
+	seatbeltStatusExit                 = 'E'
+	seatbeltStatusSignal               = 'S'
+	seatbeltSupervisorReady            = 'R'
+	seatbeltSupervisorStart            = 'G'
+	seatbeltSupervisorEnvironmentFrame = 'E'
+	seatbeltSupervisorNoEnvironment    = 'N'
 )
 
 type seatbeltCleanupProof struct {
@@ -163,6 +166,22 @@ func runSeatbeltSupervisorWithDescriptorSealer(controlFD int, target string, arg
 	if _, err := control.Write([]byte{seatbeltSupervisorReady}); err != nil {
 		return seatbeltNoTargetFailure(control, challenge, recoveryRoot)
 	}
+	intrinsicEnvironment := seatbeltTargetEnvironment(os.Environ())
+	environmentMode := []byte{0}
+	if _, err := io.ReadFull(control, environmentMode); err != nil {
+		return seatbeltNoTargetFailure(control, challenge, recoveryRoot)
+	}
+	selectedEnvironment := []string{}
+	switch environmentMode[0] {
+	case seatbeltSupervisorNoEnvironment:
+	case seatbeltSupervisorEnvironmentFrame:
+		selectedEnvironment, err = environmentresource.ReadFrame(control, intrinsicEnvironment)
+		if err != nil {
+			return seatbeltNoTargetFailure(control, challenge, recoveryRoot)
+		}
+	default:
+		return seatbeltNoTargetFailure(control, challenge, recoveryRoot)
+	}
 	start := []byte{0}
 	if _, err := io.ReadFull(control, start); err != nil || start[0] != seatbeltSupervisorStart {
 		return seatbeltNoTargetFailure(control, challenge, recoveryRoot)
@@ -176,7 +195,7 @@ func runSeatbeltSupervisorWithDescriptorSealer(controlFD int, target string, arg
 	}
 
 	command := exec.Command(target, arguments...)
-	command.Env = seatbeltTargetEnvironment(os.Environ())
+	command.Env = append(intrinsicEnvironment, selectedEnvironment...)
 	command.Stdin = os.Stdin
 	command.Stdout = os.Stdout
 	command.Stderr = os.Stderr

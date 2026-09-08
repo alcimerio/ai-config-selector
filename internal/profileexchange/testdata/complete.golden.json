@@ -1,5 +1,5 @@
 {
-  "exchangeVersion": 2,
+  "exchangeVersion": 3,
   "profile": {
     "common": {
       "skills": {
@@ -26,6 +26,10 @@
         "selection": []
       },
       "executables": {
+        "version": 1,
+        "selection": []
+      },
+      "environment": {
         "version": 1,
         "selection": []
       }

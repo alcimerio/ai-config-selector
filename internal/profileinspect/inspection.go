@@ -14,6 +14,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/alcimerio/ai-config-selector/internal/codexauthresource"
+	"github.com/alcimerio/ai-config-selector/internal/environmentintent"
 	"github.com/alcimerio/ai-config-selector/internal/executableintent"
 	"github.com/alcimerio/ai-config-selector/internal/pathintent"
 	"github.com/alcimerio/ai-config-selector/internal/profile"
@@ -217,10 +218,16 @@ func decodeVersionThree(entry Entry, envelope map[string]json.RawMessage) Entry 
 		return entry.failed("identity_mismatch")
 	}
 	var common map[string]json.RawMessage
-	if !required(envelope, "common", &common) || common == nil || unknown(common, "skills", "workspace", "paths", "executables") {
+	if !required(envelope, "common", &common) || common == nil {
 		return entry.failed("unsupported_content")
 	}
-	if len(common) < 2 || len(common) > 4 {
+	for id := range common {
+		if _, supported := commonCapability(id); !supported {
+			return entry.failed("unsupported_content")
+		}
+	}
+	capabilities := CommonCapabilities()
+	if len(common) < 2 || len(common) > len(capabilities) {
 		return entry.failed("invalid_structure")
 	}
 	skillsPayload, ok := common["skills"]
@@ -285,6 +292,19 @@ func decodeVersionThree(entry Entry, envelope map[string]json.RawMessage) Entry 
 			return entry.failed("invalid_structure")
 		}
 		entry.Categories = append(entry.Categories, Category{ID: "executables", SchemaVersion: &executablesVersion})
+	}
+	if environmentPayload, exists := common["environment"]; exists {
+		environmentVersion, environmentSelection, code := decodeCommonPayload(environmentPayload)
+		if code != "" || environmentVersion != 1 {
+			if code == "" {
+				code = "unsupported_content"
+			}
+			return entry.failed(code)
+		}
+		if _, err := environmentintent.Decode(environmentSelection); err != nil {
+			return entry.failed("invalid_structure")
+		}
+		entry.Categories = append(entry.Categories, Category{ID: "environment", SchemaVersion: &environmentVersion})
 	}
 	var overlays map[string]json.RawMessage
 	if !required(envelope, "overlays", &overlays) || overlays == nil {

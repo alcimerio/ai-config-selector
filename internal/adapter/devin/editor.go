@@ -21,11 +21,11 @@ func NewProfileEditor(home string) (*Adapter, error) {
 		return nil, errors.New("Profile editor home is required")
 	}
 	a := &Adapter{existingHomeDir: home}
-	registry, binding, workspaceBinding, pathsBinding, executablesBinding, err := newCategoryRegistry(a)
+	registry, binding, workspaceBinding, pathsBinding, executablesBinding, environmentBinding, err := newCategoryRegistry(a)
 	if err != nil {
 		return nil, err
 	}
-	a.categories, a.skillsCategory, a.workspaceCategory, a.pathsCategory, a.executablesCategory = registry, binding, workspaceBinding, pathsBinding, executablesBinding
+	a.categories, a.skillsCategory, a.workspaceCategory, a.pathsCategory, a.executablesCategory, a.environmentCategory = registry, binding, workspaceBinding, pathsBinding, executablesBinding, environmentBinding
 	skillsRegistration, err := builder.RegisterSkillsRepairEditor(a.skillsCategory, a.discoverProfileSkills)
 	if err != nil {
 		return nil, err
@@ -42,7 +42,11 @@ func NewProfileEditor(home string) (*Adapter, error) {
 	if err != nil {
 		return nil, err
 	}
-	a.editors, err = builder.NewEditorRegistry(a.categories, skillsRegistration, workspaceRegistration, pathsRegistration, executablesRegistration)
+	environmentRegistration, err := builder.RegisterEnvironmentEditor(a.environmentCategory)
+	if err != nil {
+		return nil, err
+	}
+	a.editors, err = builder.NewEditorRegistry(a.categories, skillsRegistration, workspaceRegistration, pathsRegistration, executablesRegistration, environmentRegistration)
 	return a, err
 }
 
@@ -73,7 +77,11 @@ func newEditorRegistry(adapter *Adapter) (*builder.EditorRegistry, error) {
 	if err != nil {
 		return nil, err
 	}
-	return builder.NewEditorRegistry(adapter.categories, skillsRegistration, workspaceRegistration, pathsRegistration, executablesRegistration)
+	environmentRegistration, err := builder.RegisterEnvironmentEditor(adapter.environmentCategory)
+	if err != nil {
+		return nil, err
+	}
+	return builder.NewEditorRegistry(adapter.categories, skillsRegistration, workspaceRegistration, pathsRegistration, executablesRegistration, environmentRegistration)
 }
 
 // EditProfileDraft presents the current line-oriented Skills editor. The

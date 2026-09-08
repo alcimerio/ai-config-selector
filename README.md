@@ -45,7 +45,9 @@ hostile-input limits, and unchecked readiness boundary.
 
 New development-source Profiles use independently versioned common Skills,
 workspace intent, explicit filesystem paths, additive executable visibility,
-and explicit target overlays. Executable entries support fixed ACS search names,
+scoped environment mappings, and explicit target overlays. Environment entries
+map exact host names or host-backed secret references into the final attached
+process tree without persisting values. Executable entries support fixed ACS search names,
 workspace-relative paths, and private local bindings; they do not form an
 exclusive command allowlist. Scripts may need separately visible non-intrinsic
 interpreter symlinks or runtime files, and ACS never derives those grants from
@@ -448,7 +450,11 @@ It cannot read unrelated host files through tested direct or symlink paths,
 write outside the workspace or Session, inherit arbitrary host environment
 variables or file descriptors, or use unrelated host Unix sockets. ACS uses a
 clean environment with synthetic `HOME`, XDG paths, temporary paths, and a
-fixed `PATH`.
+fixed `PATH`. A v3 Profile may explicitly map bounded host-environment names or
+host-backed secret references to non-reserved names in the final attached
+process tree; preflights and passive commands do not receive or resolve them.
+This selected transport is currently macOS-only and Linux fails closed rather
+than exposing values through Bubblewrap arguments.
 
 ACS waits for the contained process tree to settle before deleting the Session.
 If cleanup cannot prove that descendants are gone, the Session remains leased

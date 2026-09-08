@@ -433,6 +433,9 @@ func TestInteractiveCodexBindsOneIdentityBeforeSessionAndUsesFixedRecipe(t *test
 			t.Fatalf("workspace access = %q", request.WorkspaceAccess)
 		}
 		joined := strings.Join(request.Arguments, " ")
+		if strings.Contains(joined, "features.shell_snapshot=false") {
+			t.Fatal("Codex without selected environment unexpectedly disabled shell snapshots")
+		}
 		for _, required := range []string{`cli_auth_credentials_store="file"`, `forced_login_method="chatgpt"`, `forced_chatgpt_workspace_id="workspace"`, `model_provider="openai"`, `chatgpt_base_url="https://chatgpt.com/backend-api/"`, `sandbox_mode="danger-full-access"`, `approval_policy="never"`, `trust_level="untrusted"`, `features.plugins=false`, `features.apps=false`, `mcp_servers={}`} {
 			if !strings.Contains(joined, required) {
 				t.Fatalf("arguments omit %q: %#v", required, request.Arguments)
