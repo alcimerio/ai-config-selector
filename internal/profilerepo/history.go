@@ -897,7 +897,7 @@ func (d *directory) historyCommit(p *plan) error {
 		return err
 	}
 	e := error(nil)
-	if txn.Record.PreName != "" && (txn.Record.Tombstone || txn.Record.PreName != txn.Record.PostName) {
+	if txn.Record.PreName != "" && (txn.Record.Tombstone || (txn.Record.SourceLineage == "" && txn.Record.PreName != txn.Record.PostName)) {
 		if e = unix.Unlinkat(int(root.Fd()), historyNameLeaf(txn.Record.PreName), 0); e != nil && !errors.Is(e, unix.ENOENT) {
 			return e
 		}

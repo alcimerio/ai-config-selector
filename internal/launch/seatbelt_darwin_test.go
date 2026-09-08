@@ -207,6 +207,37 @@ func TestSeatbeltPolicyCompilesTypedProfilePathGrants(t *testing.T) {
 	}
 }
 
+func TestSeatbeltPolicyKeepsValidatedExecutableSymlinkTraversalNarrow(t *testing.T) {
+	request := validatedProcessRequest{
+		workspace: "/private/tmp/workspace", sessionDirectory: "/private/tmp/session", executable: "/usr/bin/true",
+		executableGrants: []ExecutableGrant{{
+			ID: "brew-tool", logicalPath: "/Users/example/homebrew/bin/tool", path: "/Users/example/cellar/tool/1.0/bin/tool",
+		}},
+	}
+	policy, definitions, err := buildSeatbeltPolicy(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(definitions, "\n")
+	for _, want := range []string{
+		"-DPROFILE_EXECUTABLE_0=/Users/example/cellar/tool/1.0/bin/tool",
+		"-DPROFILE_EXECUTABLE_0_LOGICAL=/Users/example/homebrew/bin/tool",
+		"-DPROFILE_EXECUTABLE_0_LOGICAL_ANCESTOR_0=/Users/example/homebrew/bin",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("definitions omit %q: %s", want, joined)
+		}
+	}
+	for _, parameter := range []string{"PROFILE_EXECUTABLE_0", "PROFILE_EXECUTABLE_0_LOGICAL"} {
+		if !strings.Contains(policy, `(literal (param "`+parameter+`"))`) || strings.Contains(policy, `(subpath (param "`+parameter+`"))`) {
+			t.Fatalf("executable %s visibility is not exact: %s", parameter, policy)
+		}
+	}
+	if !strings.Contains(policy, `(literal (param "PROFILE_EXECUTABLE_0_LOGICAL_ANCESTOR_0"))`) || strings.Contains(policy, `(subpath (param "PROFILE_EXECUTABLE_0_LOGICAL_ANCESTOR_0"))`) {
+		t.Fatalf("logical symlink ancestor metadata is not literal-only: %s", policy)
+	}
+}
+
 func TestSeatbeltCheckRejectsUnsafeSystemExecutable(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "sandbox-exec")
 	if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0o777); err != nil {

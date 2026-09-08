@@ -172,22 +172,26 @@ type Explanation struct {
 type semanticContributor interface{ SemanticFacts(int, string) Facts }
 
 type Plan struct {
-	contributions    []Contribution
-	workspaceAccess  launch.WorkspaceAccess
-	sourceVersion    int
-	overlay          string
-	requirements     TargetRequirements
-	authRef          string
-	authSource       string
-	runtimeAuthority launch.RuntimeAuthority
-	commandForm      string
-	commandArguments int
-	explanation      Explanation
-	pathGrantIntents []launch.PathGrantIntent
+	contributions          []Contribution
+	workspaceAccess        launch.WorkspaceAccess
+	sourceVersion          int
+	overlay                string
+	requirements           TargetRequirements
+	authRef                string
+	authSource             string
+	runtimeAuthority       launch.RuntimeAuthority
+	commandForm            string
+	commandArguments       int
+	explanation            Explanation
+	pathGrantIntents       []launch.PathGrantIntent
+	executableGrantIntents []launch.ExecutableGrantIntent
 }
 
 type pathGrantContributor interface {
 	PathGrantIntents() []launch.PathGrantIntent
+}
+type executableGrantContributor interface {
+	ExecutableGrantIntents() []launch.ExecutableGrantIntent
 }
 
 func New(contributions []Contribution, workspaceAccess launch.WorkspaceAccess, sourceVersion int, overlay string, supplied ...TargetRequirements) Plan {
@@ -215,6 +219,9 @@ func New(contributions []Contribution, workspaceAccess launch.WorkspaceAccess, s
 	for _, contribution := range plan.contributions {
 		if paths, ok := contribution.Value.(pathGrantContributor); ok {
 			plan.pathGrantIntents = append(plan.pathGrantIntents, paths.PathGrantIntents()...)
+		}
+		if executables, ok := contribution.Value.(executableGrantContributor); ok {
+			plan.executableGrantIntents = append(plan.executableGrantIntents, executables.ExecutableGrantIntents()...)
 		}
 	}
 	plan.explanation = buildExplanation(plan)
@@ -291,6 +298,10 @@ func (plan Plan) ResolveFilesystemGrants(workingDirectory, sessionsDirectory str
 	return plan.resolveFilesystemGrants(workingDirectory, sessionsDirectory, plan.requirements.Executable)
 }
 
+func (plan Plan) ResolveExecutableGrants(workingDirectory, sessionsDirectory string) ([]launch.ExecutableGrant, error) {
+	return launch.ResolveExecutableGrants(append([]launch.ExecutableGrantIntent(nil), plan.executableGrantIntents...), workingDirectory, sessionsDirectory, append([]string(nil), plan.requirements.ProtectedPaths...))
+}
+
 // ResolveFilesystemGrantsForPreflight validates selected paths before an
 // operation has acquired or resolved its executable. An operation that finds
 // a writable grant must subsequently call ResolveFilesystemGrantsForExecutable
@@ -360,6 +371,7 @@ func buildExplanation(plan Plan) Explanation {
 	}
 	add(Facts{Requested: []Fact{{ID: "common.workspace", Kind: "workspace", Value: FactValue{Access: string(plan.WorkspaceAccess())}, Reason: workspaceReason, Source: FactSource{Kind: "profile", ID: "workspace", Version: 1}}}})
 	add(pathGrantFacts(plan.pathGrantIntents, plan.WorkspaceAccess()))
+	add(executableGrantFacts(plan.executableGrantIntents))
 	for _, contribution := range plan.contributions {
 		if semantic, ok := contribution.Value.(semanticContributor); ok {
 			add(semantic.SemanticFacts(plan.sourceVersion, plan.overlay))
@@ -382,6 +394,30 @@ func buildExplanation(plan Plan) Explanation {
 	encoded := canonicalManifest(plan.sourceVersion, plan.overlay, plan.requirements.Recipe, facts)
 	sum := sha256.Sum256(encoded)
 	return Explanation{AuthorityManifestVersion: AuthorityManifestVersion, AuthorityDigest: "sha256:" + hex.EncodeToString(sum[:]), Requested: facts.Requested, TargetAdded: facts.TargetAdded, Effective: facts.Effective, Unsupported: facts.Unsupported}
+}
+
+func executableGrantFacts(intents []launch.ExecutableGrantIntent) Facts {
+	result := Facts{}
+	for _, intent := range intents {
+		value := FactValue{Access: "read-execute", LogicalLocation: intent.ID, Names: []string{string(intent.ReferenceKind)}}
+		if intent.ReferenceKind == launch.ExecutableReferenceFixedSearchName {
+			value.LogicalReference = intent.Name
+		}
+		if intent.ReferenceKind == launch.ExecutableReferenceWorkspaceRelative {
+			value.LogicalReference = intent.Path
+		}
+		reason := "stored_v3_intent"
+		if intent.ReferenceKind == launch.ExecutableReferenceWorkspaceRelative {
+			reason = "stored_v3_intent_covered_by_workspace_read"
+		}
+		requested := Fact{ID: "common.executables." + intent.ID, Kind: "executable-visibility", Value: value, Reason: reason, Source: FactSource{Kind: "profile", ID: "executables", Version: 1}}
+		result.Requested = append(result.Requested, requested)
+		if intent.ReferenceKind == launch.ExecutableReferenceWorkspaceRelative {
+			continue
+		}
+		result.Effective = append(result.Effective, Fact{ID: "executable." + intent.ID, Kind: "filesystem", Value: value, Reason: "profile_visibility_identity_unchecked", Source: requested.Source})
+	}
+	return result
 }
 
 func pathGrantFacts(intents []launch.PathGrantIntent, workspace launch.WorkspaceAccess) Facts {
@@ -456,6 +492,7 @@ func recipeFacts(plan Plan) Facts {
 
 func runtimeFacts(runtime launch.RuntimeAuthority) Facts {
 	effective := []Fact{
+		{ID: "runtime.executable-visibility", Kind: "executable-visibility", Value: FactValue{Mode: "non-exclusive-intrinsic-readable"}, Reason: "acs_runtime", Source: FactSource{Kind: "acs", ID: "native-sandbox", Version: runtime.Version}},
 		{ID: "runtime.devices", Kind: "device", Value: FactValue{Mode: runtime.DeviceMode}, Reason: "acs_runtime", Source: FactSource{Kind: "acs", ID: "native-sandbox", Version: runtime.Version}},
 		{ID: "runtime.environment", Kind: "environment", Value: FactValue{Mode: "conditional-inheritance-values-omitted", Names: sortedStrings(runtime.InheritedEnvironmentNames)}, Reason: "acs_runtime", Source: FactSource{Kind: "acs", ID: "native-sandbox", Version: runtime.Version}},
 		{ID: "runtime.environment.fixed-path", Kind: "environment", Value: FactValue{Mode: runtime.FixedPath, Names: []string{"PATH"}}, Reason: "acs_runtime", Source: FactSource{Kind: "acs", ID: "native-sandbox", Version: runtime.Version}},
@@ -470,7 +507,7 @@ func runtimeFacts(runtime launch.RuntimeAuthority) Facts {
 		{ID: "runtime.terminal", Kind: "terminal", Value: FactValue{Mode: runtime.TerminalMode}, Reason: "acs_runtime", Source: FactSource{Kind: "acs", ID: "native-sandbox", Version: runtime.Version}},
 	}
 	unsupported := []Fact{
-		{ID: "unsupported.arbitrary-executables", Kind: "executable", Value: FactValue{Mode: "arbitrary-grants"}, Reason: "not_supported", Source: FactSource{Kind: "acs", ID: "native-sandbox"}},
+		{ID: "unsupported.exclusive-execution-filtering", Kind: "executable", Value: FactValue{Mode: "non-exclusive-visibility-only"}, Reason: "not_supported", Source: FactSource{Kind: "acs", ID: "native-sandbox"}},
 		{ID: "unsupported.arbitrary-host-paths", Kind: "filesystem", Value: FactValue{Mode: "arbitrary-grants"}, Reason: "not_supported", Source: FactSource{Kind: "acs", ID: "native-sandbox"}},
 		{ID: "unsupported.host-environment", Kind: "environment", Value: FactValue{Mode: "arbitrary-values"}, Reason: "not_supported", Source: FactSource{Kind: "acs", ID: "native-sandbox"}},
 		{ID: "unsupported.network-destinations", Kind: "network", Value: FactValue{Mode: "destination-filtering"}, Reason: "not_supported", Source: FactSource{Kind: "acs", ID: "native-sandbox"}},

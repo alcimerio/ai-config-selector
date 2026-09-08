@@ -846,6 +846,44 @@ func preserveCurrentRestoreBindings(candidate *profile.Profile, current profile.
 		candidate.Common[commonprofile.PathsCapabilityID] = selectedPayload
 	}
 
+	// Executable local-absolute references follow the same conservative
+	// current-binding rule. Historical machine paths are never reactivated.
+	if selectedPayload, ok := candidate.Common[commonprofile.ExecutablesCapabilityID]; ok {
+		selected, err := commonprofile.DecodeExecutableSelection(selectedPayload.Selection)
+		if err != nil {
+			return false, err
+		}
+		currentByID := map[string]commonprofile.ExecutableEntry{}
+		if payload, exists := current.Common[commonprofile.ExecutablesCapabilityID]; exists {
+			currentSelection, err := commonprofile.DecodeExecutableSelection(payload.Selection)
+			if err != nil {
+				return false, err
+			}
+			for _, entry := range currentSelection.Entries {
+				currentByID[entry.ID] = entry
+			}
+		}
+		for index := range selected.Entries {
+			entry := &selected.Entries[index]
+			bound, exists := currentByID[entry.ID]
+			if !exists || bound.Reference.Kind != entry.Reference.Kind {
+				if entry.Reference.Kind == string(launch.ExecutableReferenceLocalAbsolute) {
+					needs = true
+				}
+				continue
+			}
+			if entry.Reference.Kind == string(launch.ExecutableReferenceLocalAbsolute) {
+				entry.Reference.Path = bound.Reference.Path
+			}
+		}
+		encoded, err := commonprofile.EncodeExecutableSelection(selected)
+		if err != nil {
+			return false, err
+		}
+		selectedPayload.Selection = encoded
+		candidate.Common[commonprofile.ExecutablesCapabilityID] = selectedPayload
+	}
+
 	for id, overlay := range candidate.Overlays {
 		if now, ok := current.Overlays[id]; ok {
 			overlay.AuthRef = now.AuthRef

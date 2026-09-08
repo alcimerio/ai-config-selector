@@ -58,6 +58,7 @@ type Report struct {
 	SourceBindings         int
 	AuthenticationBindings int
 	PathBindings           int
+	ExecutableBindings     int
 }
 
 type Result struct {
@@ -69,6 +70,7 @@ type Result struct {
 	RequiredSources        int
 	RequiredAuthentication int
 	RequiredPaths          int
+	RequiredExecutables    int
 	Candidate              *profile.Profile
 }
 
@@ -82,9 +84,25 @@ type exchangeProfile struct {
 	Overlays map[string]exchangeOverlay `json:"overlays"`
 }
 type commonIntent struct {
-	Skills    exchangeSkills    `json:"skills"`
-	Workspace exchangeWorkspace `json:"workspace"`
-	Paths     exchangePaths     `json:"paths,omitempty"`
+	Skills      exchangeSkills      `json:"skills"`
+	Workspace   exchangeWorkspace   `json:"workspace"`
+	Paths       exchangePaths       `json:"paths,omitempty"`
+	Executables exchangeExecutables `json:"executables,omitempty"`
+}
+
+type exchangeExecutables struct {
+	Version   int                       `json:"version"`
+	Selection []exchangeExecutableEntry `json:"selection"`
+}
+type exchangeExecutableEntry struct {
+	ID        string                      `json:"id"`
+	Reference exchangeExecutableReference `json:"reference"`
+}
+type exchangeExecutableReference struct {
+	Kind              string `json:"kind"`
+	Name              string `json:"name,omitempty"`
+	Path              string `json:"path,omitempty"`
+	ExecutableBinding string `json:"executableBinding,omitempty"`
 }
 
 type exchangePaths struct {
@@ -128,6 +146,7 @@ type requirements struct {
 	Sources         []requirement `json:"sources"`
 	Authentications []requirement `json:"authentications"`
 	Paths           []requirement `json:"paths,omitempty"`
+	Executables     []requirement `json:"executables,omitempty"`
 }
 type requirement struct {
 	ID   string `json:"id"`
@@ -138,9 +157,10 @@ type bindingDocument struct {
 	Sources         map[string]string `json:"sources"`
 	Authentications map[string]string `json:"authentications"`
 	Paths           map[string]string `json:"paths,omitempty"`
+	Executables     map[string]string `json:"executables,omitempty"`
 }
 
-var bindingIDPattern = regexp.MustCompile(`^(source|authentication|path)-[1-9][0-9]{0,2}$`)
+var bindingIDPattern = regexp.MustCompile(`^(source|authentication|path|executable)-[1-9][0-9]{0,2}$`)
 
 // Export encodes only understood version-3 stored intent. The caller must have
 // strictly admitted the source bytes before calling Export.
@@ -148,11 +168,11 @@ func Export(candidate profile.Profile) ([]byte, Report, error) {
 	if candidate.Version != profile.CurrentVersion || candidate.SourceVersion != profile.CurrentVersion {
 		return nil, Report{}, errors.New("legacy Profile requires explicit migration before export")
 	}
-	if candidate.Target != "" || candidate.Categories != nil || (len(candidate.Common) != 2 && len(candidate.Common) != 3) {
+	if candidate.Target != "" || candidate.Categories != nil || len(candidate.Common) < 2 || len(candidate.Common) > 4 {
 		return nil, Report{}, errors.New("unsupported Profile content")
 	}
 	for id := range candidate.Common {
-		if id != commonprofile.SkillsCapabilityID && id != commonprofile.WorkspaceCapabilityID && id != commonprofile.PathsCapabilityID {
+		if id != commonprofile.SkillsCapabilityID && id != commonprofile.WorkspaceCapabilityID && id != commonprofile.PathsCapabilityID && id != commonprofile.ExecutablesCapabilityID {
 			return nil, Report{}, errors.New("unsupported common capability")
 		}
 	}
@@ -172,6 +192,17 @@ func Export(candidate profile.Profile) ([]byte, Report, error) {
 		}
 		pathSelection = decodedPaths
 	}
+	executableSelection := commonprofile.ExecutableSelection{Entries: []commonprofile.ExecutableEntry{}}
+	if payload, ok := candidate.Common[commonprofile.ExecutablesCapabilityID]; ok {
+		if payload.Version != commonprofile.ExecutablesCapabilityVersion {
+			return nil, Report{}, errors.New("unsupported executables capability")
+		}
+		decoded, decodeErr := commonprofile.DecodeExecutableSelection(payload.Selection)
+		if decodeErr != nil {
+			return nil, Report{}, errors.New("invalid executables intent")
+		}
+		executableSelection = decoded
+	}
 	references, err := commonprofile.DecodeSkillSelection(skillsPayload.Selection)
 	if err != nil || len(references) > maxArray {
 		return nil, Report{}, errors.New("invalid Skills intent")
@@ -190,7 +221,7 @@ func Export(candidate profile.Profile) ([]byte, Report, error) {
 	}
 	sort.Strings(sources)
 	sourceSymbols := make(map[string]string, len(sources))
-	reqs := requirements{Sources: []requirement{}, Authentications: []requirement{}, Paths: []requirement{}}
+	reqs := requirements{Sources: []requirement{}, Authentications: []requirement{}, Paths: []requirement{}, Executables: []requirement{}}
 	for index, source := range sources {
 		symbol := fmt.Sprintf("source-%d", index+1)
 		sourceSymbols[source] = symbol
@@ -226,6 +257,18 @@ func Export(candidate profile.Profile) ([]byte, Report, error) {
 		}
 		exchangePathEntries = append(exchangePathEntries, exchangePathEntry{ID: entry.ID, Access: entry.Access, Type: entry.Type, Reference: reference})
 	}
+	exchangeExecutableEntries := make([]exchangeExecutableEntry, 0, len(executableSelection.Entries))
+	executableBindingCount := 0
+	for _, entry := range executableSelection.Entries {
+		reference := exchangeExecutableReference{Kind: entry.Reference.Kind, Name: entry.Reference.Name, Path: entry.Reference.Path}
+		if entry.Reference.Kind == string(launch.ExecutableReferenceLocalAbsolute) {
+			executableBindingCount++
+			symbol := fmt.Sprintf("executable-%d", executableBindingCount)
+			reference = exchangeExecutableReference{Kind: "bound", ExecutableBinding: symbol}
+			reqs.Executables = append(reqs.Executables, requirement{ID: symbol, Kind: "local-absolute"})
+		}
+		exchangeExecutableEntries = append(exchangeExecutableEntries, exchangeExecutableEntry{ID: entry.ID, Reference: reference})
+	}
 	overlays := make(map[string]exchangeOverlay, len(candidate.Overlays))
 	for id, payload := range candidate.Overlays {
 		if payload.Support != "" && payload.Support != "supported" {
@@ -259,7 +302,8 @@ func Export(candidate profile.Profile) ([]byte, Report, error) {
 	}
 	doc := document{ExchangeVersion: ExchangeVersion, Profile: exchangeProfile{Common: commonIntent{
 		Skills: exchangeSkills{Version: 1, Selection: exchangeReferences}, Workspace: exchangeWorkspace{Version: 1, Selection: workspace},
-		Paths: exchangePaths{Version: commonprofile.PathsCapabilityVersion, Selection: exchangePathEntries},
+		Paths:       exchangePaths{Version: commonprofile.PathsCapabilityVersion, Selection: exchangePathEntries},
+		Executables: exchangeExecutables{Version: commonprofile.ExecutablesCapabilityVersion, Selection: exchangeExecutableEntries},
 	}, Overlays: overlays}, Requirements: reqs}
 	encoded, err := json.MarshalIndent(doc, "", "  ")
 	if err != nil {
@@ -269,7 +313,7 @@ func Export(candidate profile.Profile) ([]byte, Report, error) {
 	if len(encoded) > MaxBytes {
 		return nil, Report{}, errors.New("exchange document exceeds limit")
 	}
-	return encoded, Report{SourceBindings: len(reqs.Sources), AuthenticationBindings: len(reqs.Authentications), PathBindings: len(reqs.Paths)}, nil
+	return encoded, Report{SourceBindings: len(reqs.Sources), AuthenticationBindings: len(reqs.Authentications), PathBindings: len(reqs.Paths), ExecutableBindings: len(reqs.Executables)}, nil
 }
 
 // Decode validates exchange and optional local binding bytes and constructs a
@@ -290,6 +334,12 @@ func Decode(data, bindingData []byte, name string) Result {
 		return result
 	}
 	pathsPresent := exchangeCommonFieldPresent(data, "paths")
+	executablesPresent := exchangeCommonFieldPresent(data, "executables")
+	executableRequirementsPresent := exchangeRequirementsFieldPresent(data, "executables")
+	if executableRequirementsPresent && exchangeRequirementsFieldNull(data, "executables") {
+		result.Code = CodeInvalidStructure
+		return result
+	}
 	if doc.ExchangeVersion != 1 && doc.ExchangeVersion != ExchangeVersion {
 		result.Code = CodeUnsupportedVersion
 		return result
@@ -303,11 +353,15 @@ func Decode(data, bindingData []byte, name string) Result {
 		return result
 	}
 	if doc.ExchangeVersion == 1 {
-		if pathsPresent || doc.Requirements.Paths != nil {
+		if pathsPresent || executablesPresent || executableRequirementsPresent || doc.Requirements.Paths != nil || doc.Requirements.Executables != nil {
 			result.Code = CodeUnsupportedContent
 			return result
 		}
 	} else if doc.Profile.Common.Paths.Version != commonprofile.PathsCapabilityVersion || doc.Profile.Common.Paths.Selection == nil || len(doc.Profile.Common.Paths.Selection) > maximumPortablePathEntries {
+		result.Code = CodeUnsupportedContent
+		return result
+	}
+	if doc.ExchangeVersion == ExchangeVersion && executablesPresent && (doc.Profile.Common.Executables.Version != commonprofile.ExecutablesCapabilityVersion || doc.Profile.Common.Executables.Selection == nil || len(doc.Profile.Common.Executables.Selection) > 128) {
 		result.Code = CodeUnsupportedContent
 		return result
 	}
@@ -323,9 +377,9 @@ func Decode(data, bindingData []byte, name string) Result {
 		result.Code = code
 		return result
 	}
-	result.RequiredSources, result.RequiredAuthentication, result.RequiredPaths = len(doc.Requirements.Sources), len(doc.Requirements.Authentications), len(doc.Requirements.Paths)
+	result.RequiredSources, result.RequiredAuthentication, result.RequiredPaths, result.RequiredExecutables = len(doc.Requirements.Sources), len(doc.Requirements.Authentications), len(doc.Requirements.Paths), len(doc.Requirements.Executables)
 	if bindingData == nil {
-		if result.RequiredSources+result.RequiredAuthentication+result.RequiredPaths != 0 {
+		if result.RequiredSources+result.RequiredAuthentication+result.RequiredPaths+result.RequiredExecutables != 0 {
 			result.Code = CodeBindingRequired
 			result.Bindings = "unresolved"
 			return result
@@ -333,7 +387,7 @@ func Decode(data, bindingData []byte, name string) Result {
 		if doc.ExchangeVersion == 1 {
 			bindingData = []byte(`{"bindingVersion":1,"sources":{},"authentications":{}}`)
 		} else {
-			bindingData = []byte(`{"bindingVersion":2,"sources":{},"authentications":{},"paths":{}}`)
+			bindingData = []byte(`{"bindingVersion":2,"sources":{},"authentications":{},"paths":{},"executables":{}}`)
 		}
 	}
 	if len(bindingData) > MaxBytes {
@@ -344,21 +398,29 @@ func Decode(data, bindingData []byte, name string) Result {
 		result.Code = code
 		return result
 	}
+	if doc.ExchangeVersion == 1 && jsonObjectFieldPresent(bindingData, "executables") {
+		result.Code = CodeUnsupportedContent
+		return result
+	}
+	if jsonObjectFieldNull(bindingData, "executables") {
+		result.Code = CodeBindingInvalid
+		return result
+	}
 	var bindings bindingDocument
 	if err := decodeStrict(bindingData, &bindings); err != nil {
 		result.Code = CodeBindingInvalid
 		return result
 	}
-	bindingVersionCompatible := bindings.BindingVersion == doc.ExchangeVersion || (doc.ExchangeVersion == 2 && len(doc.Requirements.Paths) == 0 && bindings.BindingVersion == 1)
-	if !bindingVersionCompatible || bindings.Sources == nil || bindings.Authentications == nil || (doc.ExchangeVersion == 2 && len(doc.Requirements.Paths) != 0 && bindings.Paths == nil) {
+	bindingVersionCompatible := bindings.BindingVersion == doc.ExchangeVersion || (doc.ExchangeVersion == 2 && len(doc.Requirements.Paths) == 0 && len(doc.Requirements.Executables) == 0 && bindings.BindingVersion == 1)
+	if !bindingVersionCompatible || bindings.Sources == nil || bindings.Authentications == nil || (doc.ExchangeVersion == 2 && len(doc.Requirements.Paths) != 0 && bindings.Paths == nil) || (doc.ExchangeVersion == 2 && len(doc.Requirements.Executables) != 0 && bindings.Executables == nil) {
 		result.Code = CodeBindingInvalid
 		return result
 	}
-	if len(bindings.Sources) > maxBindings || len(bindings.Authentications) > maxBindings || len(bindings.Paths) > maxBindings {
+	if len(bindings.Sources) > maxBindings || len(bindings.Authentications) > maxBindings || len(bindings.Paths) > maxBindings || len(bindings.Executables) > maxBindings {
 		result.Code = CodeLimitExceeded
 		return result
 	}
-	if !exactBindingKeys(doc.Requirements.Sources, bindings.Sources) || !exactBindingKeys(doc.Requirements.Authentications, bindings.Authentications) || !exactBindingKeys(doc.Requirements.Paths, bindings.Paths) {
+	if !exactBindingKeys(doc.Requirements.Sources, bindings.Sources) || !exactBindingKeys(doc.Requirements.Authentications, bindings.Authentications) || !exactBindingKeys(doc.Requirements.Paths, bindings.Paths) || !exactBindingKeys(doc.Requirements.Executables, bindings.Executables) {
 		result.Code = CodeBindingRequired
 		result.Bindings = "unresolved"
 		return result
@@ -399,6 +461,39 @@ func Decode(data, bindingData []byte, name string) Result {
 		localPathEntries = append(localPathEntries, commonprofile.PathEntry{ID: entry.ID, Access: entry.Access, Type: entry.Type, Reference: localReference})
 	}
 	encodedPaths, err := commonprofile.EncodePathSelection(commonprofile.PathSelection{Entries: localPathEntries})
+	if err != nil {
+		result.Code = CodeBindingInvalid
+		return result
+	}
+	localExecutableEntries := make([]commonprofile.ExecutableEntry, 0, len(doc.Profile.Common.Executables.Selection))
+	for _, entry := range doc.Profile.Common.Executables.Selection {
+		var reference commonprofile.ExecutableReference
+		switch entry.Reference.Kind {
+		case string(launch.ExecutableReferenceFixedSearchName):
+			if entry.Reference.Name == "" || entry.Reference.Path != "" || entry.Reference.ExecutableBinding != "" {
+				result.Code = CodeInvalidStructure
+				return result
+			}
+			reference = commonprofile.ExecutableReference{Kind: entry.Reference.Kind, Name: entry.Reference.Name}
+		case string(launch.ExecutableReferenceWorkspaceRelative):
+			if entry.Reference.Name != "" || entry.Reference.Path == "" || entry.Reference.ExecutableBinding != "" {
+				result.Code = CodeInvalidStructure
+				return result
+			}
+			reference = commonprofile.ExecutableReference{Kind: entry.Reference.Kind, Path: entry.Reference.Path}
+		case "bound":
+			if entry.Reference.Name != "" || entry.Reference.Path != "" || entry.Reference.ExecutableBinding == "" {
+				result.Code = CodeInvalidStructure
+				return result
+			}
+			reference = commonprofile.ExecutableReference{Kind: string(launch.ExecutableReferenceLocalAbsolute), Path: bindings.Executables[entry.Reference.ExecutableBinding]}
+		default:
+			result.Code = CodeInvalidStructure
+			return result
+		}
+		localExecutableEntries = append(localExecutableEntries, commonprofile.ExecutableEntry{ID: entry.ID, Reference: reference})
+	}
+	encodedExecutables, err := commonprofile.EncodeExecutableSelection(commonprofile.ExecutableSelection{Entries: localExecutableEntries})
 	if err != nil {
 		result.Code = CodeBindingInvalid
 		return result
@@ -446,6 +541,7 @@ func Decode(data, bindingData []byte, name string) Result {
 	}, Overlays: overlays}
 	if doc.ExchangeVersion == 2 {
 		candidate.Common[commonprofile.PathsCapabilityID] = profile.CommonPayload{Version: commonprofile.PathsCapabilityVersion, Selection: encodedPaths}
+		candidate.Common[commonprofile.ExecutablesCapabilityID] = profile.CommonPayload{Version: commonprofile.ExecutablesCapabilityVersion, Selection: encodedExecutables}
 	}
 	result.Code, result.Bindings, result.Candidate = CodeValid, "complete", &candidate
 	return result
@@ -464,11 +560,53 @@ func exchangeCommonFieldPresent(data []byte, field string) bool {
 	return present
 }
 
+func exchangeRequirementsFieldPresent(data []byte, field string) bool {
+	var envelope struct {
+		Requirements map[string]json.RawMessage `json:"requirements"`
+	}
+	if json.Unmarshal(data, &envelope) != nil {
+		return false
+	}
+	_, present := envelope.Requirements[field]
+	return present
+}
+
+func exchangeRequirementsFieldNull(data []byte, field string) bool {
+	var envelope struct {
+		Requirements map[string]json.RawMessage `json:"requirements"`
+	}
+	if json.Unmarshal(data, &envelope) != nil {
+		return false
+	}
+	return rawJSONNull(envelope.Requirements[field])
+}
+
+func jsonObjectFieldPresent(data []byte, field string) bool {
+	var object map[string]json.RawMessage
+	if json.Unmarshal(data, &object) != nil {
+		return false
+	}
+	_, present := object[field]
+	return present
+}
+
+func jsonObjectFieldNull(data []byte, field string) bool {
+	var object map[string]json.RawMessage
+	if json.Unmarshal(data, &object) != nil {
+		return false
+	}
+	return rawJSONNull(object[field])
+}
+
+func rawJSONNull(value json.RawMessage) bool {
+	return bytes.Equal(bytes.TrimSpace(value), []byte("null"))
+}
+
 func validateDocumentRelations(doc *document) Code {
-	if doc.Requirements.Sources == nil || doc.Requirements.Authentications == nil || len(doc.Requirements.Sources) > maxBindings || len(doc.Requirements.Authentications) > maxBindings || len(doc.Requirements.Paths) > maxBindings {
+	if doc.Requirements.Sources == nil || doc.Requirements.Authentications == nil || len(doc.Requirements.Sources) > maxBindings || len(doc.Requirements.Authentications) > maxBindings || len(doc.Requirements.Paths) > maxBindings || len(doc.Requirements.Executables) > maxBindings {
 		return CodeInvalidStructure
 	}
-	sources, auth, paths := map[string]bool{}, map[string]bool{}, map[string]bool{}
+	sources, auth, paths, executables := map[string]bool{}, map[string]bool{}, map[string]bool{}, map[string]bool{}
 	for _, req := range doc.Requirements.Sources {
 		if !bindingIDPattern.MatchString(req.ID) || !strings.HasPrefix(req.ID, "source-") || req.Kind != "" || sources[req.ID] {
 			return CodeInvalidStructure
@@ -487,7 +625,13 @@ func validateDocumentRelations(doc *document) Code {
 		}
 		paths[req.ID] = true
 	}
-	usedSources, usedAuth, usedPaths := map[string]bool{}, map[string]bool{}, map[string]bool{}
+	for _, req := range doc.Requirements.Executables {
+		if !bindingIDPattern.MatchString(req.ID) || !strings.HasPrefix(req.ID, "executable-") || req.Kind != "local-absolute" || executables[req.ID] {
+			return CodeInvalidStructure
+		}
+		executables[req.ID] = true
+	}
+	usedSources, usedAuth, usedPaths, usedExecutables := map[string]bool{}, map[string]bool{}, map[string]bool{}, map[string]bool{}
 	for _, reference := range doc.Profile.Common.Skills.Selection {
 		if !sources[reference.SourceBinding] {
 			return CodeBindingInvalid
@@ -510,7 +654,26 @@ func validateDocumentRelations(doc *document) Code {
 			usedPaths[entry.Reference.PathBinding] = true
 		}
 	}
-	if len(usedSources) != len(sources) || len(usedAuth) != len(auth) || len(usedPaths) != len(paths) {
+	for _, entry := range doc.Profile.Common.Executables.Selection {
+		switch entry.Reference.Kind {
+		case string(launch.ExecutableReferenceFixedSearchName):
+			if entry.Reference.Name == "" || entry.Reference.Path != "" || entry.Reference.ExecutableBinding != "" {
+				return CodeInvalidStructure
+			}
+		case string(launch.ExecutableReferenceWorkspaceRelative):
+			if entry.Reference.Name != "" || entry.Reference.Path == "" || entry.Reference.ExecutableBinding != "" {
+				return CodeInvalidStructure
+			}
+		case "bound":
+			if !executables[entry.Reference.ExecutableBinding] {
+				return CodeBindingInvalid
+			}
+			usedExecutables[entry.Reference.ExecutableBinding] = true
+		default:
+			return CodeInvalidStructure
+		}
+	}
+	if len(usedSources) != len(sources) || len(usedAuth) != len(auth) || len(usedPaths) != len(paths) || len(usedExecutables) != len(executables) {
 		return CodeBindingInvalid
 	}
 	return CodeValid
@@ -721,6 +884,7 @@ func KnownFieldClassifications() map[string]string {
 		"common.skills.version": "portable", "common.skills.selection": "portable", "common.skills.source": "host-bound", "common.skills.relativePath": "portable",
 		"common.workspace.version": "portable", "common.workspace.selection": "portable", "common.workspace.access": "portable", "overlays": "portable",
 		"common.paths.version": "portable", "common.paths.selection": "portable", "common.paths.id": "portable", "common.paths.access": "portable", "common.paths.type": "portable", "common.paths.reference.kind": "portable", "common.paths.reference.path": "portable-or-symbolic",
+		"common.executables.version": "portable", "common.executables.selection": "portable", "common.executables.id": "portable", "common.executables.reference.kind": "portable", "common.executables.reference.name": "portable", "common.executables.reference.path": "portable-or-symbolic",
 		"overlays.devin.version": "portable", "overlays.codex.version": "portable", "overlays.codex.authRef": "secret-reference",
 		"skill-assets": "unsupported", "secret-values": "unsupported", "provider-records": "unsupported", "resolved-host-paths": "unsupported",
 		"runtime-state": "unsupported", "repository-session-state": "unsupported", "unknown-fields": "unsupported",

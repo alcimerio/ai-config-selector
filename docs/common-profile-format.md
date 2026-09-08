@@ -25,6 +25,15 @@ to use the established read, edit and explicit migration paths.
     "paths": {
       "version": 1,
       "selection": {"entries": []}
+    },
+    "executables": {
+      "version": 1,
+      "selection": {
+        "entries": [
+          {"id": "git", "reference": {"kind": "fixed-search-name", "name": "git"}},
+          {"id": "project-tool", "reference": {"kind": "workspace-relative", "path": "bin/tool"}}
+        ]
+      }
     }
   },
   "overlays": {
@@ -84,6 +93,43 @@ Older v3 Profiles without `paths` remain readable as an empty compatibility
 default without rewrite. New creation and confirmed mutation emit an explicit
 empty or populated `paths` selection. A legacy edit that selects a nonempty
 path grant is refused until the user performs explicit v3 migration.
+
+## Executable visibility
+
+`common.executables` version 1 makes selected existing regular executable files
+readable to contained processes. Entries have a stable lowercase ID and one of
+three references: `fixed-search-name` searches only
+`/usr/local/bin:/usr/bin:/bin`; `workspace-relative` is anchored to the captured
+workspace identity; and `local-absolute` is a private binding under the user
+home, a mounted `/Volumes/<name>` filesystem, or ACS's fixed executable roots
+`/usr/local/bin`, `/usr/bin`, and `/bin`. This fixed-root exception applies only
+to executable visibility and does not broaden ordinary data-path grants.
+The supported-root rule applies to the supplied logical local path. An accepted
+logical symlink may resolve to a package-manager target outside that anchor;
+ACS binds, protects, grants, and repeatedly revalidates the canonical target as
+well as the captured logical chain. ACS never consults inherited `PATH` for a
+fixed-search selection. It validates the logical chain, opens the canonical file without
+following another final symlink, records identity and a content digest from the
+same descriptor, and
+revalidates the original search choice, logical symlink chain, workspace anchor,
+identity, executable mode, and bytes at Check and every process Prepare.
+
+Visibility does not select or invoke a command and is deliberately
+non-exclusive: the native runtime already exposes bounded system files and
+permits process execution. A workspace-relative executable covered by workspace
+read remains requested intent but adds no redundant effective filesystem grant.
+Scripts need separate visibility for every non-intrinsic interpreter or runtime.
+Logical symlinks such as a Homebrew-style `bin/tool` are supported, with exact
+read access to both the validated logical link and canonical file and
+metadata-only access to their captured ancestors. Executable selection itself
+adds no write authority; an existing writable workspace or `common.paths` grant
+may still authorize edits to a selected tool it already covers. The pathname
+race after the final validation fence remains the
+same explicit Seatbelt limit described for path grants.
+
+Older v3 Profiles without `executables` read as an empty compatibility default.
+New creation and confirmed mutation emit the explicit selection; legacy Profiles
+must migrate before selecting a nonempty executable entry.
 
 ## Common material and projections
 

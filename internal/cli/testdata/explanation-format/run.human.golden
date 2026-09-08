@@ -1,9 +1,11 @@
 Effective capability explanation for Profile "format-profile" (stored version 3)
 Intent: command
-Semantic authority digest: sha256:259f62f4469535b613d3e8a28a9b95bc7928da2c30dfe96cb9af7148d1cc1b88
+Semantic authority digest: sha256:a2aec83b429d7ebfe2be5f3c96d8f5821d0d4d9fd048119dee631011ca6cfc54
 Digest scope: semantic ACS authority and recipe requirements only; excluded local bindings are rechecked separately where execution requires it.
 
 Requested:
+  common.executables.fixed-tool [executable-visibility]: access=read-execute; location=fixed-tool; names=fixed-search-name (reason=stored_v3_intent; source=profile:executables@v1)
+  common.executables.workspace-tool [executable-visibility]: access=read-execute; location=workspace-tool; names=workspace-relative (reason=stored_v3_intent_covered_by_workspace_read; source=profile:executables@v1)
   common.skills [capability]: mode=selected-exact-identities (reason=stored_selection; source=profile:skills@v1)
   common.workspace [workspace]: access=read-only (reason=stored_v3_intent; source=profile:workspace@v1)
   execution.recipe [recipe]: mode=command (reason=selected_intent; source=command:command)
@@ -14,10 +16,12 @@ Target-added:
   runtime.session-destinations [session-destination]: names=session-home,session-temporary,session-home/.config,session-home/.local/share,session-home/.cache,session-home/.local/state (reason=intrinsic_session; source=acs:session@v1)
 
 Effective:
+  executable.fixed-tool [filesystem]: access=read-execute; location=fixed-tool; names=fixed-search-name (reason=profile_visibility_identity_unchecked; source=profile:executables@v1)
   runtime.devices [device]: mode=bounded-tty-random-null-fd (reason=acs_runtime; source=acs:native-sandbox@v1)
   runtime.environment [environment]: mode=conditional-inheritance-values-omitted; names=COLORTERM,LANG,LC_ALL,LC_CTYPE,TERM (reason=acs_runtime; source=acs:native-sandbox@v1)
   runtime.environment.fixed-path [environment]: mode=/usr/local/bin:/usr/bin:/bin; names=PATH (reason=acs_runtime; source=acs:native-sandbox@v1)
   runtime.environment.synthetic [environment]: mode=session-relative-values-omitted; names=HOME,TMPDIR,XDG_CACHE_HOME,XDG_CONFIG_HOME,XDG_DATA_HOME,XDG_STATE_HOME (reason=acs_runtime; source=acs:native-sandbox@v1)
+  runtime.executable-visibility [executable-visibility]: mode=non-exclusive-intrinsic-readable (reason=acs_runtime; source=acs:native-sandbox@v1)
   runtime.mach-services [mach-service]: names=com.apple.SecurityServer,com.apple.trustd.agent (reason=acs_runtime; source=acs:native-sandbox@v1)
   runtime.metadata [filesystem-metadata]: mode=executable-and-session-ancestors (reason=acs_runtime; source=acs:native-sandbox@v1)
   runtime.network [network]: mode=local-ip-socket-bind-no-listen-coarse-outbound-ip-macos-dns (reason=acs_runtime; source=acs:native-sandbox@v1)
@@ -30,8 +34,8 @@ Effective:
 
 Unsupported or inert:
   overlay.inactive.devin [overlay]: mode=inactive (reason=supported_inactive_overlay_presentation_only_excluded_from_digest; source=profile:devin@v1)
-  unsupported.arbitrary-executables [executable]: mode=arbitrary-grants (reason=not_supported; source=acs:native-sandbox)
   unsupported.arbitrary-host-paths [filesystem]: mode=arbitrary-grants (reason=not_supported; source=acs:native-sandbox)
+  unsupported.exclusive-execution-filtering [executable]: mode=non-exclusive-visibility-only (reason=not_supported; source=acs:native-sandbox)
   unsupported.host-environment [environment]: mode=arbitrary-values (reason=not_supported; source=acs:native-sandbox)
   unsupported.network-destinations [network]: mode=destination-filtering (reason=not_supported; source=acs:native-sandbox)
   unsupported.raw-policy [isolation]: mode=caller-supplied (reason=not_supported; source=acs:native-sandbox)

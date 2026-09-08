@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/alcimerio/ai-config-selector/internal/authority"
 	"github.com/alcimerio/ai-config-selector/internal/devinruntime"
 	"github.com/alcimerio/ai-config-selector/internal/launch"
 	"github.com/alcimerio/ai-config-selector/internal/skills"
@@ -122,6 +123,36 @@ func TestRunDevinEarlyPhaseMatrixAtAuthentication(t *testing.T) {
 			phaseMatrixAssertEmpty(t, sessions)
 		})
 	}
+}
+
+func TestRunDevinCarriesExecutableGrantThroughEveryGeneration(t *testing.T) {
+	workspace := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(workspace, "bin"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, "bin", "helper"), []byte("helper-v1"), 0o500); err != nil {
+		t.Fatal(err)
+	}
+	sessions := filepath.Join(t.TempDir(), "sessions")
+	contribution := authorityTestExecutableContribution{intents: []launch.ExecutableGrantIntent{{ID: "helper", ReferenceKind: launch.ExecutableReferenceWorkspaceRelative, Path: "bin/helper"}}}
+	plan := authority.New([]authority.Contribution{{ID: "executables", Value: contribution}}, launch.WorkspaceAccessReadOnly, 3, "devin", authority.TargetRequirements{Recipe: authority.RecipeDevin, Executable: "devin", Semantics: authority.DevinSemantics()})
+	sandbox := &phaseMatrixSandbox{}
+	code, err := newExecutor(sandbox).RunDevin(context.Background(), DevinRequest{
+		SessionsDirectory: sessions, WorkingDirectory: workspace, ResolvedPlan: &plan,
+		ExpectedCatalog: []skills.SkillReference{}, Terminal: launch.Terminal{Output: io.Discard, ErrorOutput: io.Discard},
+	})
+	if err != nil || code != 0 {
+		t.Fatalf("RunDevin=(%d, %v)", code, err)
+	}
+	if len(sandbox.check.ExecutableGrants) != 1 || len(sandbox.requests) != 3 {
+		t.Fatalf("check grants=%d process generations=%d", len(sandbox.check.ExecutableGrants), len(sandbox.requests))
+	}
+	for index, request := range sandbox.requests {
+		if len(request.ExecutableGrants) != 1 || request.ExecutableGrants[0].ID != "helper" {
+			t.Fatalf("generation %d executable grants=%+v", index, request.ExecutableGrants)
+		}
+	}
+	phaseMatrixAssertEmpty(t, sessions)
 }
 
 func runPhaseMatrixEntrypoint(t *testing.T, ctx context.Context, target string, sandbox *phaseMatrixSandbox, sessions string, materializer materializerFunc) (int, error) {
@@ -243,6 +274,7 @@ type phaseMatrixSandbox struct {
 	prepareErr          error
 	prepareErrAt        int
 	checks              int
+	check               launch.SandboxCheck
 	requests            []launch.ProcessRequest
 	processes           []*phaseMatrixProcess
 }
@@ -251,8 +283,9 @@ func (*phaseMatrixSandbox) Readiness(context.Context) (launch.SandboxReadiness, 
 	return launch.SandboxReadiness{}, nil
 }
 
-func (sandbox *phaseMatrixSandbox) Check(ctx context.Context, _ launch.SandboxCheck) error {
+func (sandbox *phaseMatrixSandbox) Check(ctx context.Context, request launch.SandboxCheck) error {
 	sandbox.checks++
+	sandbox.check = request
 	if sandbox.cancelCheck != nil {
 		if ctx.Err() != nil {
 			sandbox.canceledBeforePhase = true

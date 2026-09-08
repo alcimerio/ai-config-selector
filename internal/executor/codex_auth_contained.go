@@ -54,7 +54,7 @@ func prepareContainedOperationWithAccessAndGrants(
 	operationFailure error,
 	runtimeAuthorities ...launch.RuntimeAuthority,
 ) (*containedOperationPreparation, error) {
-	return prepareContainedOperationWithAccessAndGrantsUsingExecutable(ctx, config, sandbox, workspaceAccess, filesystemGrants, nil, operationFailure, runtimeAuthorities...)
+	return prepareContainedOperationWithAccessAndGrantsUsingExecutable(ctx, config, sandbox, workspaceAccess, filesystemGrants, nil, nil, operationFailure, runtimeAuthorities...)
 }
 
 func prepareContainedOperationWithAccessAndGrantsUsingExecutable(
@@ -63,6 +63,7 @@ func prepareContainedOperationWithAccessAndGrantsUsingExecutable(
 	sandbox launch.ProcessSandbox,
 	workspaceAccess launch.WorkspaceAccess,
 	filesystemGrants []launch.FilesystemGrant,
+	executableGrants []launch.ExecutableGrant,
 	pinned *pinnedExecutable,
 	operationFailure error,
 	runtimeAuthorities ...launch.RuntimeAuthority,
@@ -94,7 +95,7 @@ func prepareContainedOperationWithAccessAndGrantsUsingExecutable(
 	if err := sandbox.Check(ctx, launch.SandboxCheck{
 		Workspace: config.WorkingDirectory, WorkspaceAccess: workspaceAccess, SessionsDirectory: config.SessionsDirectory,
 		Executable: executable, RuntimeInputs: config.RuntimeInputs,
-		RuntimeProbePaths: config.RuntimeProbePaths, RuntimeAuthority: runtimeAuthority, FilesystemGrants: filesystemGrants,
+		RuntimeProbePaths: config.RuntimeProbePaths, RuntimeAuthority: runtimeAuthority, FilesystemGrants: filesystemGrants, ExecutableGrants: executableGrants,
 	}); err != nil {
 		preparation.Close()
 		return nil, err

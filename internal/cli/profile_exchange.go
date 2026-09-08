@@ -30,6 +30,7 @@ type exchangeDiagnostic struct {
 	RequiredSources        int    `json:"requiredSources"`
 	RequiredAuthentication int    `json:"requiredAuthentication"`
 	RequiredPaths          int    `json:"requiredPaths"`
+	RequiredExecutables    int    `json:"requiredExecutables"`
 }
 
 // RunProfileExchange is an early, non-runtime dispatch. It assembles only the
@@ -103,7 +104,7 @@ func (app App) exportProfile(ctx context.Context, inv invocation) int {
 		}
 	}
 	var classification bytes.Buffer
-	fmt.Fprintf(&classification, "Profile exchange exported: %d source binding(s), %d authentication binding(s), %d path binding(s); source availability, authentication, path identity, and runtime unchecked.\n", report.SourceBindings, report.AuthenticationBindings, report.PathBindings)
+	fmt.Fprintf(&classification, "Profile exchange exported: %d source binding(s), %d authentication binding(s), %d path binding(s), %d executable binding(s); source availability, authentication, path and executable identity, and runtime unchecked.\n", report.SourceBindings, report.AuthenticationBindings, report.PathBindings, report.ExecutableBindings)
 	classification.WriteString("Classification: local name host-bound and omitted; envelope/common/overlay versions, workspace access, and source-relative Skill paths portable; Skill sources host-bound symbolic bindings; Codex authRef secret-reference symbolic binding.\n")
 	classification.WriteString("Unsupported and excluded: Skill assets, provider records, secret values, resolved host paths/plans, repository metadata, Sessions, and runtime state.\n")
 	if written, err := app.ErrorOutput.Write(classification.Bytes()); err != nil || written != classification.Len() {
@@ -163,7 +164,7 @@ func diagnosticFor(operation string, result profileexchange.Result) exchangeDiag
 	return exchangeDiagnostic{
 		FormatVersion: 1, Operation: operation, Status: status, Code: string(result.Code), Structure: structure, Semantics: semantics,
 		Bindings: result.Bindings, Destination: "unchecked", SourceAvailability: result.SourceAvailability, Authentication: result.Authentication,
-		Runtime: result.Runtime, RequiredSources: result.RequiredSources, RequiredAuthentication: result.RequiredAuthentication, RequiredPaths: result.RequiredPaths,
+		Runtime: result.Runtime, RequiredSources: result.RequiredSources, RequiredAuthentication: result.RequiredAuthentication, RequiredPaths: result.RequiredPaths, RequiredExecutables: result.RequiredExecutables,
 	}
 }
 
@@ -178,7 +179,7 @@ func (app App) validateImport(inv invocation) int {
 		}
 	} else {
 		var output bytes.Buffer
-		fmt.Fprintf(&output, "Profile import validation: %s (%s)\nBindings: %s; source availability, authentication, and runtime: unchecked.\n", diagnostic.Status, diagnostic.Code, diagnostic.Bindings)
+		fmt.Fprintf(&output, "Profile import validation: %s (%s)\nBindings: %s; required sources %d, authentications %d, paths %d, executables %d; source availability, authentication, path and executable identity, and runtime: unchecked.\n", diagnostic.Status, diagnostic.Code, diagnostic.Bindings, diagnostic.RequiredSources, diagnostic.RequiredAuthentication, diagnostic.RequiredPaths, diagnostic.RequiredExecutables)
 		if written, err := app.Output.Write(output.Bytes()); err != nil || written != output.Len() {
 			return 1
 		}
@@ -195,7 +196,7 @@ func (app App) validateImport(inv invocation) int {
 func (app App) importProfile(ctx context.Context, inv invocation) int {
 	result := app.decodeImport(inv, inv.auxValue)
 	if result.Code == profileexchange.CodeBindingRequired {
-		fmt.Fprintln(app.Output, "Profile import preview: supported exchange intent; required symbolic bindings remain unresolved. Source availability, authentication, and runtime are unchecked. Nothing was published.")
+		fmt.Fprintf(app.Output, "Profile import preview: supported exchange intent; %d executable binding(s) and other required symbolic bindings remain unresolved. Source availability, authentication, path and executable identity, and runtime are unchecked. Nothing was published.\n", result.RequiredExecutables)
 		return 2
 	}
 	if result.Code != profileexchange.CodeValid || result.Candidate == nil {

@@ -16,11 +16,16 @@ import (
 	"github.com/alcimerio/ai-config-selector/internal/adapter/devin"
 	"github.com/alcimerio/ai-config-selector/internal/cli"
 	"github.com/alcimerio/ai-config-selector/internal/commonprofile"
+	"github.com/alcimerio/ai-config-selector/internal/profile"
 	"github.com/alcimerio/ai-config-selector/internal/profilerepo"
 )
 
 func historyDocument(name, auth string) []byte {
 	return []byte(`{"version":3,"name":"` + name + `","common":{"skills":{"version":1,"selection":[{"source":"shared-agents","relativePath":"review"}]},"workspace":{"version":1,"selection":{"access":"read-only"}}},"overlays":{"codex":{"version":1,"authRef":"` + auth + `"},"devin":{"version":1}}}`)
+}
+
+func executableHistoryDocument(name, id, path string) []byte {
+	return []byte(`{"version":3,"name":"` + name + `","common":{"skills":{"version":1,"selection":[]},"workspace":{"version":1,"selection":{"access":"read-only"}},"executables":{"version":1,"selection":{"entries":[{"id":"` + id + `","reference":{"kind":"local-absolute","path":"` + path + `"}}]}}},"overlays":{"devin":{"version":1}}}`)
 }
 
 func historyApp(t *testing.T) (cli.App, *profilerepo.Repository, string) {
@@ -415,6 +420,135 @@ func TestProfileRestoreOfDeletedLineageRequiresAndBindsDeclarativeBindings(t *te
 	if err != nil || restored.LineageID != history.LineageID || len(restored.Events) != 3 || restored.Events[0].Operation != "restore" {
 		t.Fatalf("restored=%+v err=%v", restored, err)
 	}
+}
+
+func TestProfileRestoreExecutableBindingsUseCurrentOrExplicitTransactionInputs(t *testing.T) {
+	t.Run("existing current-compatible", func(t *testing.T) {
+		app, repository, home := historyApp(t)
+		applyHistory(t, repository, "alpha", executableHistoryDocument("alpha", "tool", "/historical/tool"), executableHistoryDocument("alpha", "tool", "/current/tool"))
+		history, err := repository.History(context.Background(), profilerepo.HistorySelector{Name: "alpha"}, 100)
+		if err != nil || len(history.Events) < 2 {
+			t.Fatalf("history=%+v err=%v", history, err)
+		}
+		var out, errOut bytes.Buffer
+		app.Output, app.ErrorOutput = &out, &errOut
+		args := []string{"profile", "restore", "alpha", "--revision", history.Events[1].EventID, "--dry-run", "--json"}
+		if _, code := app.RunProfileHistory(context.Background(), args, func() (string, error) { return home, nil }); code != 0 {
+			t.Fatalf("preview code=%d out=%s err=%s", code, out.String(), errOut.String())
+		}
+		var preview restorePreviewResult
+		if err := json.Unmarshal(out.Bytes(), &preview); err != nil || preview.Bindings != "preserved_current" || preview.Digest == "" {
+			t.Fatalf("preview=%s err=%v", out.String(), err)
+		}
+		current, err := repository.Read(context.Background(), "alpha")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := repository.Apply(context.Background(), profilerepo.HistoryRequest{Request: profilerepo.ReplaceRequest{Name: "alpha", Expected: current.Revision, Bytes: executableHistoryDocument("alpha", "tool", "/changed/tool")}, Operation: "edit"}); err != nil {
+			t.Fatal(err)
+		}
+		out.Reset()
+		apply := []string{"profile", "restore", "alpha", "--revision", history.Events[1].EventID, "--expect", preview.Digest, "--confirm", "alpha", "--json"}
+		if _, code := app.RunProfileHistory(context.Background(), apply, func() (string, error) { return home, nil }); code != 1 || !strings.Contains(out.String(), `"code":"conflict"`) {
+			t.Fatalf("stale apply code=%d out=%s err=%s", code, out.String(), errOut.String())
+		}
+		out.Reset()
+		if _, code := app.RunProfileHistory(context.Background(), args, func() (string, error) { return home, nil }); code != 0 {
+			t.Fatalf("second preview code=%d out=%s err=%s", code, out.String(), errOut.String())
+		}
+		if err := json.Unmarshal(out.Bytes(), &preview); err != nil || preview.Digest == "" {
+			t.Fatalf("second preview=%s err=%v", out.String(), err)
+		}
+		out.Reset()
+		apply[6] = preview.Digest
+		if _, code := app.RunProfileHistory(context.Background(), apply, func() (string, error) { return home, nil }); code != 0 {
+			t.Fatalf("fresh apply code=%d out=%s err=%s", code, out.String(), errOut.String())
+		}
+		stored, err := profile.NewStore(filepath.Join(home, ".acs"), app.Categories).Load("alpha")
+		if err != nil {
+			t.Fatal(err)
+		}
+		selection, err := commonprofile.DecodeExecutableSelection(stored.Common[commonprofile.ExecutablesCapabilityID].Selection)
+		if err != nil || selection.Entries[0].Reference.Path != "/changed/tool" || selection.Entries[0].Reference.Path == "/historical/tool" {
+			t.Fatalf("selection=%+v err=%v", selection, err)
+		}
+	})
+
+	t.Run("derived and deleted require explicit binding", func(t *testing.T) {
+		app, repository, home := historyApp(t)
+		applyHistory(t, repository, "alpha", executableHistoryDocument("alpha", "tool", "/historical/tool"), executableHistoryDocument("alpha", "other", "/current/other"))
+		history, err := repository.History(context.Background(), profilerepo.HistorySelector{Name: "alpha"}, 100)
+		if err != nil || len(history.Events) < 2 {
+			t.Fatalf("history=%+v err=%v", history, err)
+		}
+		var out, errOut bytes.Buffer
+		app.Output, app.ErrorOutput = &out, &errOut
+		args := []string{"profile", "restore", "alpha", "--revision", history.Events[1].EventID, "--as", "derived", "--dry-run", "--json"}
+		if _, code := app.RunProfileHistory(context.Background(), args, func() (string, error) { return home, nil }); code != 1 || !strings.Contains(out.String(), `"code":"unresolved_binding"`) {
+			t.Fatalf("unbound derived code=%d out=%s err=%s", code, out.String(), errOut.String())
+		}
+		app.ReadProfileDocument = func(string) ([]byte, error) {
+			return []byte(`{"bindingVersion":2,"sources":{},"authentications":{},"paths":{},"executables":{"executable-1":"/rebound/tool"}}`), nil
+		}
+		out.Reset()
+		args = append(args[:len(args)-2], "--bindings", "bindings.json", "--dry-run", "--json")
+		if _, code := app.RunProfileHistory(context.Background(), args, func() (string, error) { return home, nil }); code != 0 {
+			t.Fatalf("bound derived code=%d out=%s err=%s", code, out.String(), errOut.String())
+		}
+		var preview restorePreviewResult
+		if err := json.Unmarshal(out.Bytes(), &preview); err != nil || preview.Bindings != "preserved_source_current_and_explicit_declarative" {
+			t.Fatalf("preview=%s err=%v", out.String(), err)
+		}
+		out.Reset()
+		applyDerived := []string{"profile", "restore", "alpha", "--revision", history.Events[1].EventID, "--as", "derived", "--bindings", "bindings.json", "--expect", preview.Digest, "--confirm", "derived", "--json"}
+		if _, code := app.RunProfileHistory(context.Background(), applyDerived, func() (string, error) { return home, nil }); code != 0 {
+			t.Fatalf("derived apply code=%d out=%s err=%s", code, out.String(), errOut.String())
+		}
+		derived, err := profile.NewStore(filepath.Join(home, ".acs"), app.Categories).Load("derived")
+		if err != nil {
+			t.Fatal(err)
+		}
+		derivedSelection, err := commonprofile.DecodeExecutableSelection(derived.Common[commonprofile.ExecutablesCapabilityID].Selection)
+		if err != nil || len(derivedSelection.Entries) != 1 || derivedSelection.Entries[0].Reference.Path != "/rebound/tool" {
+			t.Fatalf("derived selection=%+v err=%v", derivedSelection, err)
+		}
+		// A derived restore has its own lineage and does not advance the source
+		// lineage. Deleting the source must therefore leave the original lineage
+		// tombstoned rather than pointing at the derived destination.
+		sourceCurrent, err := repository.Read(context.Background(), "alpha")
+		if err != nil {
+			t.Fatal(err)
+		}
+		deleteOutcome, err := repository.Apply(context.Background(), profilerepo.HistoryRequest{Request: profilerepo.DeleteRequest{Name: "alpha", Expected: sourceCurrent.Revision}, Operation: "delete"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		sourceAfterDelete, err := repository.History(context.Background(), profilerepo.HistorySelector{Lineage: history.LineageID}, 1)
+		if err != nil || len(sourceAfterDelete.Events) != 1 || sourceAfterDelete.Events[0].Profile.State != "deleted" {
+			t.Fatalf("source lineage after derived restore and delete=%+v outcome=%+v identity=%+v err=%v", sourceAfterDelete, deleteOutcome, deleteOutcome.History, err)
+		}
+		out.Reset()
+		deletedArgs := []string{"profile", "restore", "--lineage", history.LineageID, "--revision", history.Events[1].EventID, "--as", "deleted-copy", "--bindings", "bindings.json", "--dry-run", "--json"}
+		if _, code := app.RunProfileHistory(context.Background(), deletedArgs, func() (string, error) { return home, nil }); code != 0 {
+			t.Fatalf("deleted preview code=%d out=%s err=%s", code, out.String(), errOut.String())
+		}
+		if err := json.Unmarshal(out.Bytes(), &preview); err != nil || preview.Bindings != "explicit_declarative" {
+			t.Fatalf("deleted preview=%s err=%v", out.String(), err)
+		}
+		out.Reset()
+		deletedApply := []string{"profile", "restore", "--lineage", history.LineageID, "--revision", history.Events[1].EventID, "--as", "deleted-copy", "--bindings", "bindings.json", "--expect", preview.Digest, "--confirm", "deleted-copy", "--json"}
+		if _, code := app.RunProfileHistory(context.Background(), deletedApply, func() (string, error) { return home, nil }); code != 0 {
+			t.Fatalf("deleted apply code=%d out=%s err=%s", code, out.String(), errOut.String())
+		}
+		deleted, err := profile.NewStore(filepath.Join(home, ".acs"), app.Categories).Load("deleted-copy")
+		if err != nil {
+			t.Fatal(err)
+		}
+		deletedSelection, err := commonprofile.DecodeExecutableSelection(deleted.Common[commonprofile.ExecutablesCapabilityID].Selection)
+		if err != nil || len(deletedSelection.Entries) != 1 || deletedSelection.Entries[0].Reference.Path != "/rebound/tool" {
+			t.Fatalf("deleted selection=%+v err=%v", deletedSelection, err)
+		}
+	})
 }
 
 type restorePreviewResult struct {
