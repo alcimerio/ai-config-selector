@@ -83,6 +83,7 @@ func TestSeatbeltPolicyIsDefaultDenyAndUsesParametersForValidatedPaths(t *testin
 		`(literal "/private/var/select/sh")`,
 		`(literal "/usr/share") (subpath "/usr/share/terminfo")`,
 		`(literal "/dev/tty")`, `(target same-sandbox)`,
+		"(allow file-read-metadata\n  (literal \"/dev/null\"))",
 		"(allow mach-lookup\n  (global-name \"com.apple.SecurityServer\"))",
 		"(allow mach-lookup\n  (global-name \"com.apple.trustd.agent\"))",
 		"(allow file-read-metadata\n  (literal (param \"EXECUTABLE_ANCESTOR_0\"))\n  (literal (param \"EXECUTABLE_ANCESTOR_1\"))\n  (literal (param \"EXECUTABLE_ANCESTOR_2\"))\n  (literal (param \"EXECUTABLE_ANCESTOR_3\")))",

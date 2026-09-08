@@ -855,6 +855,8 @@ func buildSeatbeltPolicy(request validatedProcessRequest) (string, []string, err
 
 ; Preserve the invoking terminal, raw mode, and resize operations.
 (allow pseudo-tty)
+(allow file-read-metadata
+  (literal "/dev/null"))
 (allow file-ioctl file-read-data file-write-data
   (literal "/dev/null")
   (literal "/dev/zero")
