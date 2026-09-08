@@ -31,7 +31,7 @@ func newCodexExecutionRunner(config codexLoginConfig, sandbox launch.ProcessSand
 	return &codexExecutionRunner{config: config, sandbox: sandbox}
 }
 
-func (runner *codexExecutionRunner) prepare(ctx context.Context, access launch.WorkspaceAccess, requirements authority.TargetRequirements, runtimeAuthority launch.RuntimeAuthority) (*containedOperationPreparation, error) {
+func (runner *codexExecutionRunner) prepare(ctx context.Context, access launch.WorkspaceAccess, requirements authority.TargetRequirements, runtimeAuthority launch.RuntimeAuthority, filesystemGrants []launch.FilesystemGrant) (*containedOperationPreparation, error) {
 	if runner == nil {
 		return nil, ErrCodexFailed
 	}
@@ -41,7 +41,7 @@ func (runner *codexExecutionRunner) prepare(ctx context.Context, access launch.W
 	config := runner.config
 	config.BinaryPath = requirements.Executable
 	config.RuntimeInputs = append([]string(nil), requirements.RuntimeInputs...)
-	preparation, err := prepareContainedOperationWithAccess(ctx, config, runner.sandbox, access, ErrCodexFailed, runtimeAuthority)
+	preparation, err := prepareContainedOperationWithAccessAndGrants(ctx, config, runner.sandbox, access, filesystemGrants, ErrCodexFailed, runtimeAuthority)
 	return preparation, err
 }
 
@@ -139,7 +139,7 @@ func disabledMap(mode string) string {
 	return "{unsupported=true}"
 }
 
-func (runner *codexExecutionRunner) run(ctx context.Context, config codexLoginConfig, created *session.Session, metadata IdentityMetadata, access launch.WorkspaceAccess, challenge string, binding loginResourceBinding, arguments []string, terminal launch.Terminal, supervisor *devinSignalSupervisor, semantics authority.TargetSemantics, runtimeAuthority launch.RuntimeAuthority) containedRunResult {
+func (runner *codexExecutionRunner) run(ctx context.Context, config codexLoginConfig, created *session.Session, metadata IdentityMetadata, access launch.WorkspaceAccess, challenge string, binding loginResourceBinding, arguments []string, terminal launch.Terminal, supervisor *devinSignalSupervisor, semantics authority.TargetSemantics, runtimeAuthority launch.RuntimeAuthority, filesystemGrants []launch.FilesystemGrant) containedRunResult {
 	mode := retainedProbe
 	reserved := false
 	if supervisor != nil {
@@ -177,6 +177,7 @@ func (runner *codexExecutionRunner) run(ctx context.Context, config codexLoginCo
 		SessionDirectory: created.RootDirectory(), SessionHome: created.HomeDirectory(), TemporaryDirectory: created.TemporaryDirectory(),
 		Executable: config.BinaryPath, RuntimeInputs: config.RuntimeInputs, RuntimeProbePaths: config.RuntimeProbePaths,
 		RecoveryProofChallenge: proof, Arguments: codexExecutionArgumentsForSemantics(semantics, metadata.Workspace, created.WorkingDirectory(), arguments...), Terminal: terminal, RuntimeAuthority: runtimeAuthority,
+		FilesystemGrants: filesystemGrants,
 	})
 	if err != nil {
 		cancelReservation()
@@ -214,6 +215,10 @@ func (service *CodexAuthService) ExecuteCodex(ctx context.Context, request Codex
 	supervisor := newDevinSignalSupervisor(cancelPreflight)
 	defer supervisor.stop()
 	requirements := request.ResolvedPlan.Requirements()
+	filesystemGrants, err := request.ResolvedPlan.ResolveFilesystemGrants(service.workingDirectory, service.sessionsDirectory)
+	if err != nil {
+		return 1, ErrCodexFailed
+	}
 	authRef, err := ParseCredentialRef(request.ResolvedPlan.AuthRef())
 	if err != nil {
 		return 1, err
@@ -232,7 +237,7 @@ func (service *CodexAuthService) ExecuteCodex(ctx context.Context, request Codex
 	}()
 	access := request.ResolvedPlan.WorkspaceAccess()
 	runtimeAuthority := request.ResolvedPlan.RuntimeAuthority()
-	preparation, err := service.execution.prepare(preflightContext, access, requirements, runtimeAuthority)
+	preparation, err := service.execution.prepare(preflightContext, access, requirements, runtimeAuthority, filesystemGrants)
 	if err != nil {
 		if preflightContext.Err() != nil {
 			return 1, ErrCodexFailed
@@ -309,7 +314,7 @@ func (service *CodexAuthService) ExecuteCodex(ctx context.Context, request Codex
 		return 1, ErrCodexFailed
 	}
 	versionOutput := boundedBuffer{limit: maximumVersionOutputSize}
-	version := service.execution.run(preflightContext, preparation.config, created, metadata, access, challenge, binding, []string{"--version"}, launch.Terminal{Output: &versionOutput, ErrorOutput: io.Discard}, nil, requirements.Semantics, runtimeAuthority)
+	version := service.execution.run(preflightContext, preparation.config, created, metadata, access, challenge, binding, []string{"--version"}, launch.Terminal{Output: &versionOutput, ErrorOutput: io.Discard}, nil, requirements.Semantics, runtimeAuthority, filesystemGrants)
 	if preflightContext.Err() != nil && version.cleanupProven {
 		version.err = ErrCodexFailed
 	} else if version.err == nil && (versionOutput.overflow || strings.TrimSpace(versionOutput.String()) != "codex-cli "+service.execution.config.SupportedVersion) {
@@ -317,7 +322,7 @@ func (service *CodexAuthService) ExecuteCodex(ctx context.Context, request Codex
 	}
 	run := version
 	if version.err == nil && version.cleanupProven && preflightContext.Err() == nil {
-		run = service.execution.run(preflightContext, preparation.config, created, metadata, access, challenge, binding, nil, request.Terminal, supervisor, requirements.Semantics, runtimeAuthority)
+		run = service.execution.run(preflightContext, preparation.config, created, metadata, access, challenge, binding, nil, request.Terminal, supervisor, requirements.Semantics, runtimeAuthority, filesystemGrants)
 	} else if version.err == nil && preflightContext.Err() != nil {
 		run.err = ErrCodexFailed
 	}

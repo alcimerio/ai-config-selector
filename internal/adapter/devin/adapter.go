@@ -63,9 +63,17 @@ type Adapter struct {
 	editors           *builder.EditorRegistry
 	skillsCategory    commonprofile.SkillsBinding
 	workspaceCategory commonprofile.WorkspaceBinding
+	pathsCategory     commonprofile.PathsBinding
 	executor          devinExecutor
 	runtimeInputs     []string
 	runtimeInputIDs   []string
+}
+
+// SetPathSelection updates a draft through this adapter's registered paths
+// binding. It is used by non-TUI composition and mutation tests without
+// exposing the binding token.
+func (adapter *Adapter) SetPathSelection(draft *category.Draft, selection commonprofile.PathSelection) error {
+	return category.SetSelection(draft, adapter.pathsCategory, selection)
 }
 
 type SkillBundle = skills.SkillBundle
@@ -111,13 +119,14 @@ func newAdapter(config Config) (*Adapter, error) {
 		runtimeInputIDs: append([]string(nil), config.RuntimeInputIDs...),
 	}
 	adapter.executor = executor.New()
-	registry, binding, workspaceBinding, err := newCategoryRegistry(adapter)
+	registry, binding, workspaceBinding, pathsBinding, err := newCategoryRegistry(adapter)
 	if err != nil {
 		return nil, fmt.Errorf("create Devin Adapter categories: %w", err)
 	}
 	adapter.categories = registry
 	adapter.skillsCategory = binding
 	adapter.workspaceCategory = workspaceBinding
+	adapter.pathsCategory = pathsBinding
 	editors, err := newEditorRegistry(adapter)
 	if err != nil {
 		return nil, fmt.Errorf("create Devin Adapter visual editors: %w", err)

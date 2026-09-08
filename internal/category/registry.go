@@ -213,7 +213,7 @@ func NewRegistryWithRequirements(target string, requirements authority.TargetReq
 	if requirements.Recipe != authority.RecipeDevin && requirements.Recipe != authority.RecipeCodex {
 		return nil, fmt.Errorf("category Registry target %q requires an unsupported execution recipe %q", target, requirements.Recipe)
 	}
-	if requirements.ExecutableRequirementID == "" || len(requirements.RuntimeInputIDs) != len(requirements.RuntimeInputs) {
+	if requirements.ExecutableRequirementID == "" || len(requirements.RuntimeInputIDs) != len(requirements.RuntimeInputs) || len(requirements.ProtectedPathIDs) != len(requirements.ProtectedPaths) {
 		return nil, fmt.Errorf("category Registry target %q has incomplete semantic requirement identities", target)
 	}
 	if !requirements.Semantics.Supports(requirements.Recipe) {
@@ -407,7 +407,7 @@ func (registry *Registry) NewProfileWithOverlay(name string, draft Draft, overla
 func (registry *Registry) supportsCommonV3() bool {
 	_, skills := registry.byID["skills"]
 	_, workspace := registry.byID["workspace"]
-	return skills && workspace && len(registry.byID) == 2
+	return skills && workspace
 }
 
 func (registry *Registry) newVersionTwoProfile(name string, draft Draft, omitWorkspace bool) (profile.Profile, error) {
@@ -450,6 +450,12 @@ func (registry *Registry) NewLegacyProfile(name string, draft Draft) (profile.Pr
 			}
 			if json.Unmarshal(selection, &intent) != nil || intent.Access != launch.WorkspaceAccessReadWrite {
 				return profile.Profile{}, errors.New("legacy workspace authority can change only through explicit migration")
+			}
+			continue
+		}
+		if registration.legacyEmpty != nil {
+			if registration.count(draft.selections[registration.id]) != 0 {
+				return profile.Profile{}, fmt.Errorf("common capability %q requires explicit Profile migration", registration.id)
 			}
 			continue
 		}
@@ -503,7 +509,16 @@ func (registry *Registry) Normalize(candidate profile.Profile) (profile.Profile,
 		payload, exists := known[registration.id]
 		if !exists {
 			if candidate.Version == profile.CurrentVersion {
-				return profile.Profile{}, fmt.Errorf("missing common capability %q", registration.id)
+				if registration.legacyEmpty == nil {
+					return profile.Profile{}, fmt.Errorf("missing common capability %q", registration.id)
+				}
+				empty := registration.empty()
+				encoded, err := registration.encode(empty)
+				if err != nil {
+					return profile.Profile{}, fmt.Errorf("encode empty %s category selection: %w", registration.id, err)
+				}
+				known[registration.id] = profile.CategoryPayload{SchemaVersion: registration.schemaVersion, Selection: encoded}
+				continue
 			}
 			// A LegacyEmpty registration is common-only. Its legacy value is
 			// synthesized for drafts and resolution, never serialized into the
@@ -694,7 +709,14 @@ func (registry *Registry) resolveFor(ctx context.Context, candidate profile.Prof
 	}
 	requirements := registry.requirements
 	if overlay == "" {
-		requirements = authority.TargetRequirements{Recipe: authority.RecipeShell}
+		// Common shell authority still has to exclude every private root known
+		// by the trusted application composition. The executable/runtime inputs
+		// are target-only and therefore do not carry into the shell recipe.
+		requirements = authority.TargetRequirements{
+			Recipe:           authority.RecipeShell,
+			ProtectedPaths:   append([]string(nil), registry.requirements.ProtectedPaths...),
+			ProtectedPathIDs: append([]string(nil), registry.requirements.ProtectedPathIDs...),
+		}
 	}
 	resolved := authority.New(contributions, workspaceAccess, normalized.SourceVersion, overlay, requirements)
 	if overlay == "codex" {

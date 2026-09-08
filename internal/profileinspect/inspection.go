@@ -14,6 +14,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/alcimerio/ai-config-selector/internal/codexauthresource"
+	"github.com/alcimerio/ai-config-selector/internal/pathintent"
 	"github.com/alcimerio/ai-config-selector/internal/profile"
 	"github.com/alcimerio/ai-config-selector/internal/skills"
 )
@@ -215,10 +216,10 @@ func decodeVersionThree(entry Entry, envelope map[string]json.RawMessage) Entry 
 		return entry.failed("identity_mismatch")
 	}
 	var common map[string]json.RawMessage
-	if !required(envelope, "common", &common) || common == nil || unknown(common, "skills", "workspace") {
+	if !required(envelope, "common", &common) || common == nil || unknown(common, "skills", "workspace", "paths") {
 		return entry.failed("unsupported_content")
 	}
-	if len(common) != 2 {
+	if len(common) < 2 || len(common) > 3 {
 		return entry.failed("invalid_structure")
 	}
 	skillsPayload, ok := common["skills"]
@@ -258,6 +259,19 @@ func decodeVersionThree(entry Entry, envelope map[string]json.RawMessage) Entry 
 	}
 	entry.Workspace = &access
 	entry.Categories = append(entry.Categories, Category{ID: "workspace", SchemaVersion: &workspaceVersion, Selection: []skills.SkillReference{}})
+	if pathsPayload, exists := common["paths"]; exists {
+		pathsVersion, pathsSelection, code := decodeCommonPayload(pathsPayload)
+		if code != "" || pathsVersion != 1 {
+			if code == "" {
+				code = "unsupported_content"
+			}
+			return entry.failed(code)
+		}
+		if _, err := pathintent.Decode(pathsSelection); err != nil {
+			return entry.failed("invalid_structure")
+		}
+		entry.Categories = append(entry.Categories, Category{ID: "paths", SchemaVersion: &pathsVersion})
+	}
 	var overlays map[string]json.RawMessage
 	if !required(envelope, "overlays", &overlays) || overlays == nil {
 		return entry.failed("invalid_structure")

@@ -10,10 +10,40 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/alcimerio/ai-config-selector/internal/authority"
 	"github.com/alcimerio/ai-config-selector/internal/category"
 	"github.com/alcimerio/ai-config-selector/internal/launch"
 	"github.com/alcimerio/ai-config-selector/internal/profile"
 )
+
+func TestCommonShellResolutionRetainsTrustedProtectedRoots(t *testing.T) {
+	binding := mustBind(t, category.Definition[textSelection, textResolved, textContribution]{
+		ID: "texts", SchemaVersion: 3,
+		Empty:      func() textSelection { return textSelection{Values: []string{}} },
+		Resolve:    func(context.Context, textSelection) (textResolved, error) { return textResolved{}, nil },
+		Contribute: func(textResolved) (textContribution, error) { return textContribution{}, nil },
+		Count:      func(textSelection) int { return 0 },
+	})
+	registry, err := category.NewRegistryWithRequirements("devin", authority.TargetRequirements{
+		Recipe: authority.RecipeDevin, ExecutableRequirementID: "devin-cli", Semantics: authority.DevinSemantics(),
+		ProtectedPaths: []string{"/private/profile-state"}, ProtectedPathIDs: []string{"profile-state"},
+	}, []category.Registration{binding.Registration()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate, err := registry.NewProfile("protected-common", registry.NewDraft())
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := registry.ResolveSyntaxFor(context.Background(), candidate, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := resolved.Requirements()
+	if got.Recipe != authority.RecipeShell || !reflect.DeepEqual(got.ProtectedPaths, []string{"/private/profile-state"}) || !reflect.DeepEqual(got.ProtectedPathIDs, []string{"profile-state"}) {
+		t.Fatalf("common shell dropped trusted protected roots: %#v", got)
+	}
+}
 
 type textSelection struct {
 	Values []string `json:"values"`

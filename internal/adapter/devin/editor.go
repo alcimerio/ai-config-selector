@@ -21,11 +21,11 @@ func NewProfileEditor(home string) (*Adapter, error) {
 		return nil, errors.New("Profile editor home is required")
 	}
 	a := &Adapter{existingHomeDir: home}
-	registry, binding, workspaceBinding, err := newCategoryRegistry(a)
+	registry, binding, workspaceBinding, pathsBinding, err := newCategoryRegistry(a)
 	if err != nil {
 		return nil, err
 	}
-	a.categories, a.skillsCategory, a.workspaceCategory = registry, binding, workspaceBinding
+	a.categories, a.skillsCategory, a.workspaceCategory, a.pathsCategory = registry, binding, workspaceBinding, pathsBinding
 	skillsRegistration, err := builder.RegisterSkillsRepairEditor(a.skillsCategory, a.discoverProfileSkills)
 	if err != nil {
 		return nil, err
@@ -34,7 +34,11 @@ func NewProfileEditor(home string) (*Adapter, error) {
 	if err != nil {
 		return nil, err
 	}
-	a.editors, err = builder.NewEditorRegistry(a.categories, skillsRegistration, workspaceRegistration)
+	pathsRegistration, err := builder.RegisterPathsEditor(a.pathsCategory)
+	if err != nil {
+		return nil, err
+	}
+	a.editors, err = builder.NewEditorRegistry(a.categories, skillsRegistration, workspaceRegistration, pathsRegistration)
 	return a, err
 }
 
@@ -57,7 +61,11 @@ func newEditorRegistry(adapter *Adapter) (*builder.EditorRegistry, error) {
 	if err != nil {
 		return nil, err
 	}
-	return builder.NewEditorRegistry(adapter.categories, skillsRegistration, workspaceRegistration)
+	pathsRegistration, err := builder.RegisterPathsEditor(adapter.pathsCategory)
+	if err != nil {
+		return nil, err
+	}
+	return builder.NewEditorRegistry(adapter.categories, skillsRegistration, workspaceRegistration, pathsRegistration)
 }
 
 // EditProfileDraft presents the current line-oriented Skills editor. The

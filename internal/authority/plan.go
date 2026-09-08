@@ -40,6 +40,8 @@ type TargetRequirements struct {
 	RuntimeInputs           []string
 	RuntimeInputIDs         []string
 	ExistingHomeDirectory   string
+	ProtectedPaths          []string
+	ProtectedPathIDs        []string
 	Semantics               TargetSemantics
 }
 
@@ -129,13 +131,14 @@ type SkillIdentity struct {
 }
 
 type FactValue struct {
-	Access          string         `json:"access,omitempty"`
-	Mode            string         `json:"mode,omitempty"`
-	LogicalLocation string         `json:"logicalLocation,omitempty"`
-	RequirementID   string         `json:"requirementId,omitempty"`
-	Identity        *SkillIdentity `json:"identity,omitempty"`
-	Names           []string       `json:"names,omitempty"`
-	Count           *int           `json:"count,omitempty"`
+	Access           string         `json:"access,omitempty"`
+	Mode             string         `json:"mode,omitempty"`
+	LogicalLocation  string         `json:"logicalLocation,omitempty"`
+	LogicalReference string         `json:"logicalReference,omitempty"`
+	RequirementID    string         `json:"requirementId,omitempty"`
+	Identity         *SkillIdentity `json:"identity,omitempty"`
+	Names            []string       `json:"names,omitempty"`
+	Count            *int           `json:"count,omitempty"`
 }
 
 type Fact struct {
@@ -178,6 +181,11 @@ type Plan struct {
 	commandForm      string
 	commandArguments int
 	explanation      Explanation
+	pathGrantIntents []launch.PathGrantIntent
+}
+
+type pathGrantContributor interface {
+	PathGrantIntents() []launch.PathGrantIntent
 }
 
 func New(contributions []Contribution, workspaceAccess launch.WorkspaceAccess, sourceVersion int, overlay string, supplied ...TargetRequirements) Plan {
@@ -189,6 +197,8 @@ func New(contributions []Contribution, workspaceAccess launch.WorkspaceAccess, s
 		requirements = supplied[0]
 		requirements.RuntimeInputs = append([]string(nil), requirements.RuntimeInputs...)
 		requirements.RuntimeInputIDs = append([]string(nil), requirements.RuntimeInputIDs...)
+		requirements.ProtectedPaths = append([]string(nil), requirements.ProtectedPaths...)
+		requirements.ProtectedPathIDs = append([]string(nil), requirements.ProtectedPathIDs...)
 		requirements.Semantics = requirements.Semantics.Clone()
 	}
 	if reflect.DeepEqual(requirements.Semantics, TargetSemantics{}) {
@@ -200,6 +210,11 @@ func New(contributions []Contribution, workspaceAccess launch.WorkspaceAccess, s
 		}
 	}
 	plan := Plan{contributions: append([]Contribution(nil), contributions...), workspaceAccess: workspaceAccess, sourceVersion: sourceVersion, overlay: overlay, requirements: requirements, runtimeAuthority: launch.DefaultRuntimeAuthority()}
+	for _, contribution := range plan.contributions {
+		if paths, ok := contribution.Value.(pathGrantContributor); ok {
+			plan.pathGrantIntents = append(plan.pathGrantIntents, paths.PathGrantIntents()...)
+		}
+	}
 	plan.explanation = buildExplanation(plan)
 	return plan
 }
@@ -240,7 +255,9 @@ func (plan Plan) ForCommandIntent(form string, argumentCount int) (Plan, error) 
 	if plan.requirements.Recipe != RecipeShell || plan.overlay != "" {
 		return Plan{}, fmt.Errorf("generic command requires common Profile authority")
 	}
-	plan.requirements = TargetRequirements{Recipe: RecipeCommand}
+	// A command changes only the execution recipe. Private roots captured by
+	// trusted common-profile composition remain protected.
+	plan.requirements.Recipe = RecipeCommand
 	plan.commandForm, plan.commandArguments = form, argumentCount
 	plan.explanation = buildExplanation(plan)
 	return plan, nil
@@ -249,6 +266,8 @@ func (plan Plan) Requirements() TargetRequirements {
 	result := plan.requirements
 	result.RuntimeInputs = append([]string(nil), result.RuntimeInputs...)
 	result.RuntimeInputIDs = append([]string(nil), result.RuntimeInputIDs...)
+	result.ProtectedPaths = append([]string(nil), result.ProtectedPaths...)
+	result.ProtectedPathIDs = append([]string(nil), result.ProtectedPathIDs...)
 	result.Semantics = result.Semantics.Clone()
 	return result
 }
@@ -266,6 +285,13 @@ func (value TargetSemantics) Clone() TargetSemantics {
 
 func (plan Plan) AuthorityDigest() string                   { return plan.explanation.AuthorityDigest }
 func (plan Plan) RuntimeAuthority() launch.RuntimeAuthority { return plan.runtimeAuthority.Clone() }
+func (plan Plan) ResolveFilesystemGrants(workingDirectory, sessionsDirectory string) ([]launch.FilesystemGrant, error) {
+	protectedWritable := append([]string(nil), plan.requirements.RuntimeInputs...)
+	if plan.requirements.Executable != "" {
+		protectedWritable = append(protectedWritable, plan.requirements.Executable)
+	}
+	return launch.ResolveFilesystemGrants(append([]launch.PathGrantIntent(nil), plan.pathGrantIntents...), workingDirectory, sessionsDirectory, plan.workspaceAccess, append([]string(nil), plan.requirements.ProtectedPaths...), protectedWritable)
+}
 
 func (plan Plan) Explanation() Explanation {
 	result := plan.explanation
@@ -308,6 +334,7 @@ func buildExplanation(plan Plan) Explanation {
 		workspaceReason = "legacy_compatibility_default"
 	}
 	add(Facts{Requested: []Fact{{ID: "common.workspace", Kind: "workspace", Value: FactValue{Access: string(plan.WorkspaceAccess())}, Reason: workspaceReason, Source: FactSource{Kind: "profile", ID: "workspace", Version: 1}}}})
+	add(pathGrantFacts(plan.pathGrantIntents, plan.WorkspaceAccess()))
 	for _, contribution := range plan.contributions {
 		if semantic, ok := contribution.Value.(semanticContributor); ok {
 			add(semantic.SemanticFacts(plan.sourceVersion, plan.overlay))
@@ -330,6 +357,22 @@ func buildExplanation(plan Plan) Explanation {
 	encoded := canonicalManifest(plan.sourceVersion, plan.overlay, plan.requirements.Recipe, facts)
 	sum := sha256.Sum256(encoded)
 	return Explanation{AuthorityManifestVersion: AuthorityManifestVersion, AuthorityDigest: "sha256:" + hex.EncodeToString(sum[:]), Requested: facts.Requested, TargetAdded: facts.TargetAdded, Effective: facts.Effective, Unsupported: facts.Unsupported}
+}
+
+func pathGrantFacts(intents []launch.PathGrantIntent, workspace launch.WorkspaceAccess) Facts {
+	result := Facts{}
+	for _, intent := range intents {
+		value := FactValue{Access: string(intent.Access), Mode: string(intent.Type), LogicalLocation: intent.ID, Names: []string{string(intent.ReferenceKind)}}
+		if intent.ReferenceKind == launch.PathReferenceWorkspaceRelative {
+			value.LogicalReference = intent.Path
+		}
+		result.Requested = append(result.Requested, Fact{ID: "common.paths." + intent.ID, Kind: "filesystem", Value: value, Reason: "stored_v3_intent", Source: FactSource{Kind: "profile", ID: "paths", Version: 1}})
+		if intent.ReferenceKind == launch.PathReferenceWorkspaceRelative && (intent.Access == launch.PathAccessReadOnly || workspace == launch.WorkspaceAccessReadWrite) {
+			continue
+		}
+		result.Effective = append(result.Effective, Fact{ID: "path." + intent.ID, Kind: "filesystem", Value: value, Reason: "common_path_identity_unchecked", Source: FactSource{Kind: "profile", ID: "paths", Version: 1}})
+	}
+	return result
 }
 
 func recipeFacts(plan Plan) Facts {
@@ -454,6 +497,10 @@ func canonicalFactEncoding(fact Fact) []byte {
 	putUint(uint64(len(fact.Value.Names)))
 	for _, name := range fact.Value.Names {
 		putString(name)
+	}
+	if fact.Value.LogicalReference != "" {
+		putString("logical-reference-v1")
+		putString(fact.Value.LogicalReference)
 	}
 	return encoded
 }

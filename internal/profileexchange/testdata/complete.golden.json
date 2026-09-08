@@ -1,5 +1,5 @@
 {
-  "exchangeVersion": 1,
+  "exchangeVersion": 2,
   "profile": {
     "common": {
       "skills": {
@@ -20,6 +20,10 @@
         "selection": {
           "access": "read-write"
         }
+      },
+      "paths": {
+        "version": 1,
+        "selection": []
       }
     },
     "overlays": {

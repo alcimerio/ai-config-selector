@@ -55,7 +55,15 @@ func runNativeInstalledACSLockedCodexFixture(t *testing.T) {
 	assertLockedCodexIdentity(t, archive, target)
 	codexauthresource.UseIsolatedTestKeychainForComposition(t)
 
-	root := t.TempDir()
+	runnerHome, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal("runner home is unavailable")
+	}
+	root, err := os.MkdirTemp(runnerHome, ".acs-native-codex-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(root)
 	home, workspace, tools := filepath.Join(root, "home"), filepath.Join(root, "workspace"), filepath.Join(root, "tools")
 	for _, directory := range []string{home, workspace, tools} {
 		if err := os.Mkdir(directory, 0o700); err != nil {
@@ -114,7 +122,25 @@ func runNativeInstalledACSLockedCodexFixture(t *testing.T) {
 	if err := os.WriteFile(outsideSecret, []byte("unrelated"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	isolationProbe := fmt.Sprintf(`; if cat %s >/dev/null 2>&1; then printf global-auth-read-bad; else printf global-auth-read-denied; fi; if cat %s >/dev/null 2>&1; then printf outside-read-bad; else printf outside-read-denied; fi; if printf bad > %s 2>/dev/null; then printf outside-write-bad; else printf outside-write-denied; fi`, strconv.Quote(globalAuth), strconv.Quote(outsideSecret), strconv.Quote(outsideWrite))
+	isolationProbe := fmt.Sprintf(`; if cat %s >/dev/null 2>&1; then printf 'global-auth-read-bad\n'; else printf 'global-auth-read-denied\n'; fi; if cat %s >/dev/null 2>&1; then printf 'outside-read-bad\n'; else printf 'outside-read-denied\n'; fi; if printf bad > %s 2>/dev/null; then printf 'outside-write-bad\n'; else printf 'outside-write-denied\n'; fi`, strconv.Quote(globalAuth), strconv.Quote(outsideSecret), strconv.Quote(outsideWrite))
+	pathFixture := prepareNativeCodexPathGrantFixture(t, home)
+	writeNativeCodexPathGrantProfile(t, home, identities["coding"], pathFixture)
+	t.Run("Codex filesystem grants govern matching parent and child operations", func(t *testing.T) {
+		before := installedSessionSnapshot(t, candidate, home, tools, workspace)
+		fixture := newNativeResponsesFixture(t, nativeCodexPathGrantCommand(pathFixture)+isolationProbe+nativeControlledDescendantCommand(pathFixture.descendantReady), home)
+		fixture.descendantReady = pathFixture.descendantReady
+		defer fixture.server.Close()
+		trampoline := filepath.Join(tools, "codex")
+		buildFixedCodexTrampoline(t, grantedTarget, fixture.server.URL+"/backend-api", trampoline)
+		t.Logf("path-grant harness executable sha256=%s; locked target member sha256=%s", fileSHA256(t, trampoline), fileSHA256(t, grantedTarget))
+		runInstalledCodexPTY(t, candidate, home, tools, workspace, "path-grants", fixture, false)
+		descendantPID := fixture.assert(t, true)
+		assertNativeCodexPathGrantOutput(t, fixture)
+		assertNativeCodexPathGrantEffects(t, pathFixture)
+		assertNativeProcessRemoved(t, descendantPID, "Codex path-grant descendant survived settlement")
+		assertNoNativeSessions(t, filepath.Join(home, ".acs", "sessions"))
+		assertNewRemovedInstalledSessions(t, candidate, home, tools, workspace, before, "codex")
+	})
 	t.Run("locked Codex preflight and interactive generations remain private while live", func(t *testing.T) {
 		before := installedSessionSnapshot(t, candidate, home, tools, workspace)
 		fixture := newNativeResponsesFixture(t, "printf codex-native-tool-output"+isolationProbe, home)
@@ -203,8 +229,39 @@ func runNativeInstalledACSLockedCodexFixture(t *testing.T) {
 }
 
 func nativeControlledDescendantCommand(readyPath string) string {
-	quotedReady := strconv.Quote(readyPath)
-	return `; /bin/sh -c 'printf "%s" "$$" > "$1"; exec /bin/sleep 30' descendant-sh ` + quotedReady + ` </dev/null >/dev/null 2>&1 & descendant_pid=$!; for descendant_wait in {1..100}; do [ -s ` + quotedReady + ` ] && break; /bin/sleep 0.02; done; printf descendant-pid:%s "$descendant_pid"`
+	quotedReady := nativeShellArgument(readyPath)
+	return `; /bin/sh -c 'printf "%s" "$$" > "$1"; exec /bin/sleep 30' descendant-sh ` + quotedReady + ` </dev/null >/dev/null 2>&1 & descendant_pid=$!; for descendant_wait in {1..100}; do [ -s ` + quotedReady + ` ] && break; /bin/sleep 0.02; done; printf 'descendant-pid:%s\n' "$descendant_pid"`
+}
+
+func assertNativeCodexPathGrantOutput(t *testing.T, fixture *nativeResponsesFixture) {
+	t.Helper()
+	fixture.mu.Lock()
+	if len(fixture.bodies) != 2 {
+		fixture.mu.Unlock()
+		t.Fatal("path-grant fixture did not retain the matching tool-result request")
+	}
+	body := fixture.bodies[1]
+	fixture.mu.Unlock()
+	toolOutput, err := nativeFunctionCallOutput(body, "acs-call-1")
+	if err != nil {
+		t.Fatalf("path-grant function-call output: %v", err)
+	}
+	required := []string{
+		"parent-exact-read-ok", "parent-exact-write-ok", "parent-exact-sibling-write-denied", "parent-exact-rename-denied",
+		"parent-directory-read-ok", "parent-directory-write-ok", "parent-read-only-read-ok", "parent-read-only-write-denied",
+		"parent-overlap-read-ok", "parent-overlap-parent-write-denied", "parent-overlap-child-write-ok",
+		"child-exact-read-ok", "child-exact-write-ok", "child-exact-sibling-write-denied",
+		"child-directory-read-ok", "child-directory-write-ok", "child-read-only-read-ok", "child-read-only-write-denied",
+		"child-overlap-read-ok", "child-overlap-write-ok",
+	}
+	for _, witness := range required {
+		if !strings.Contains(toolOutput, witness+"\n") {
+			t.Fatalf("matching function-call output omitted operation witness %q", witness)
+		}
+	}
+	if strings.Contains(toolOutput, "-bad\n") {
+		t.Fatalf("matching function-call output reported a path-grant violation: %q", toolOutput)
+	}
 }
 
 func runInstalledSyntheticLogin(t *testing.T, candidate, home, tools, workspace, name string) {
@@ -1285,6 +1342,26 @@ func writeNativeCodexProfile(t *testing.T, home, profileName, authRef, access st
 	if err := os.WriteFile(filepath.Join(profiles, profileName+".json"), []byte(document), 0o600); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func writeNativeCodexPathGrantProfile(t *testing.T, home, authRef string, fixture nativeCodexPathGrantFixture) {
+	t.Helper()
+	profiles := filepath.Join(home, ".acs", "profiles")
+	entries := []string{
+		nativeCodexLocalPathEntry("exact-file", "read-write", "file", fixture.readWriteFile),
+		nativeCodexLocalPathEntry("writable-directory", "read-write", "directory", fixture.readWriteDirectory),
+		nativeCodexLocalPathEntry("read-only-file", "read-only", "file", fixture.readOnlyFile),
+		nativeCodexLocalPathEntry("read-only-parent", "read-only", "directory", fixture.readOnlyParent),
+		nativeCodexLocalPathEntry("writable-child", "read-write", "directory", fixture.writableChild),
+	}
+	document := `{"version":3,"name":"path-grants","common":{"skills":{"version":1,"selection":[{"source":"shared-agents","relativePath":"managed-proof"}]},"workspace":{"version":1,"selection":{"access":"read-only"}},"paths":{"version":1,"selection":{"entries":[` + strings.Join(entries, ",") + `]}}},"overlays":{"codex":{"version":1,"authRef":` + strconv.Quote(authRef) + `}}}`
+	if err := os.WriteFile(filepath.Join(profiles, "path-grants.json"), []byte(document), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func nativeCodexLocalPathEntry(id, access, pathType, path string) string {
+	return `{"id":` + strconv.Quote(id) + `,"access":` + strconv.Quote(access) + `,"type":` + strconv.Quote(pathType) + `,"reference":{"kind":"local-absolute","path":` + strconv.Quote(path) + `}}`
 }
 
 // restoreDeletedNativeCodexProfile keeps the real locked-Codex witness on the

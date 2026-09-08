@@ -42,6 +42,18 @@ func prepareContainedOperationWithAccess(
 	operationFailure error,
 	runtimeAuthorities ...launch.RuntimeAuthority,
 ) (*containedOperationPreparation, error) {
+	return prepareContainedOperationWithAccessAndGrants(ctx, config, sandbox, workspaceAccess, nil, operationFailure, runtimeAuthorities...)
+}
+
+func prepareContainedOperationWithAccessAndGrants(
+	ctx context.Context,
+	config codexLoginConfig,
+	sandbox launch.ProcessSandbox,
+	workspaceAccess launch.WorkspaceAccess,
+	filesystemGrants []launch.FilesystemGrant,
+	operationFailure error,
+	runtimeAuthorities ...launch.RuntimeAuthority,
+) (*containedOperationPreparation, error) {
 	if sandbox == nil {
 		return nil, operationFailure
 	}
@@ -67,7 +79,7 @@ func prepareContainedOperationWithAccess(
 	if err := sandbox.Check(ctx, launch.SandboxCheck{
 		Workspace: config.WorkingDirectory, WorkspaceAccess: workspaceAccess, SessionsDirectory: config.SessionsDirectory,
 		Executable: executable, RuntimeInputs: config.RuntimeInputs,
-		RuntimeProbePaths: config.RuntimeProbePaths, RuntimeAuthority: runtimeAuthority,
+		RuntimeProbePaths: config.RuntimeProbePaths, RuntimeAuthority: runtimeAuthority, FilesystemGrants: filesystemGrants,
 	}); err != nil {
 		preparation.Close()
 		return nil, err

@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/alcimerio/ai-config-selector/internal/pathintent"
 	"github.com/charmbracelet/x/term"
 )
 
@@ -30,6 +31,45 @@ const (
 	WorkspaceAccessReadOnly  WorkspaceAccess = "read-only"
 	WorkspaceAccessReadWrite WorkspaceAccess = "read-write"
 )
+
+type PathAccess = pathintent.Access
+type PathType = pathintent.Type
+type PathReferenceKind = pathintent.ReferenceKind
+
+const (
+	PathAccessReadOnly             = pathintent.AccessReadOnly
+	PathAccessReadWrite            = pathintent.AccessReadWrite
+	PathTypeFile                   = pathintent.TypeFile
+	PathTypeDirectory              = pathintent.TypeDirectory
+	PathReferenceWorkspaceRelative = pathintent.ReferenceWorkspaceRelative
+	PathReferenceLocalAbsolute     = pathintent.ReferenceLocalAbsolute
+)
+
+type PathGrantIntent struct {
+	ID            string
+	Access        PathAccess
+	Type          PathType
+	ReferenceKind PathReferenceKind
+	Path          string
+}
+
+// FilesystemGrant is an operation-scoped canonical path and identity witness.
+// Its machine path is deliberately unavailable outside package launch.
+type FilesystemGrant struct {
+	ID                      string
+	Access                  PathAccess
+	Type                    PathType
+	logicalPath             string
+	logicalWitness          []pathIdentity
+	path                    string
+	identity                pathIdentity
+	workspaceRelative       bool
+	workspaceLogicalPath    string
+	workspaceLogicalWitness []pathIdentity
+	workspacePath           string
+	workspaceIdentity       pathIdentity
+	effective               bool
+}
 
 func normalizeWorkspaceAccess(access WorkspaceAccess) (WorkspaceAccess, error) {
 	if access == WorkspaceAccessLegacy {
@@ -207,6 +247,7 @@ type SandboxCheck struct {
 	RuntimeInputs     []string
 	RuntimeProbePaths []string
 	RuntimeAuthority  RuntimeAuthority
+	FilesystemGrants  []FilesystemGrant
 }
 
 // ProcessRequest describes one command that must run through the selected
@@ -222,6 +263,7 @@ type ProcessRequest struct {
 	RuntimeInputs          []string
 	RuntimeProbePaths      []string
 	RuntimeAuthority       RuntimeAuthority
+	FilesystemGrants       []FilesystemGrant
 	RecoveryProofChallenge []byte
 	Arguments              []string
 	Terminal               Terminal
@@ -539,6 +581,7 @@ type validatedSandboxCheck struct {
 	runtimeProbePaths          []string
 	runtimeProbeTraversalPaths []string
 	runtimeAuthority           RuntimeAuthority
+	filesystemGrants           []FilesystemGrant
 }
 
 func validateSandboxCheck(request SandboxCheck) (validatedSandboxCheck, error) {
@@ -584,11 +627,16 @@ func validateSandboxCheck(request SandboxCheck) (validatedSandboxCheck, error) {
 			return validatedSandboxCheck{}, sandboxError(SandboxUnsafePath, nil)
 		}
 	}
+	filesystemGrants, err := revalidateFilesystemGrants(request.FilesystemGrants, request.Workspace, sessionsDirectory)
+	if err != nil {
+		return validatedSandboxCheck{}, sandboxError(SandboxUnsafePath, err)
+	}
 	return validatedSandboxCheck{
 		workspace: workspace, workspaceAccess: workspaceAccess, sessionsDirectory: sessionsDirectory, executable: executable,
 		runtimeInputs: runtimeInputs, runtimeProbePaths: runtimeProbePaths,
 		runtimeProbeTraversalPaths: runtimeProbeTraversalPaths,
 		runtimeAuthority:           runtimeAuthority,
+		filesystemGrants:           filesystemGrants,
 	}, nil
 }
 
@@ -622,6 +670,7 @@ type validatedProcessRequest struct {
 	runtimeProbePaths          []string
 	runtimeProbeTraversalPaths []string
 	runtimeAuthority           RuntimeAuthority
+	filesystemGrants           []FilesystemGrant
 	recoveryProofChallenge     []byte
 	arguments                  []string
 	environment                []string
@@ -634,6 +683,7 @@ func validateProcessRequest(request ProcessRequest) (validatedProcessRequest, er
 		Executable: request.Executable, RuntimeInputs: request.RuntimeInputs,
 		RuntimeProbePaths: request.RuntimeProbePaths,
 		RuntimeAuthority:  request.RuntimeAuthority,
+		FilesystemGrants:  request.FilesystemGrants,
 	})
 	if err != nil {
 		return validatedProcessRequest{}, err
@@ -660,6 +710,7 @@ func validateProcessRequest(request ProcessRequest) (validatedProcessRequest, er
 		runtimeInputs: checked.runtimeInputs, runtimeProbePaths: checked.runtimeProbePaths,
 		runtimeProbeTraversalPaths: checked.runtimeProbeTraversalPaths,
 		runtimeAuthority:           checked.runtimeAuthority,
+		filesystemGrants:           checked.filesystemGrants,
 		recoveryProofChallenge:     append([]byte(nil), request.RecoveryProofChallenge...),
 		arguments:                  append([]string(nil), request.Arguments...),
 		terminal:                   request.Terminal,

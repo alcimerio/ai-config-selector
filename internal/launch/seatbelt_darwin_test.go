@@ -172,6 +172,40 @@ func TestSeatbeltExecutableAncestors(t *testing.T) {
 	}
 }
 
+func TestSeatbeltPolicyCompilesTypedProfilePathGrants(t *testing.T) {
+	request := validatedProcessRequest{
+		workspace: "/private/tmp/workspace", sessionDirectory: "/private/tmp/session", executable: "/usr/bin/true",
+		filesystemGrants: []FilesystemGrant{
+			{ID: "read-file", Access: PathAccessReadOnly, Type: PathTypeFile, path: "/Users/example/read.txt", effective: true},
+			{ID: "write-file", Access: PathAccessReadWrite, Type: PathTypeFile, path: "/Users/example/write.txt", effective: true},
+			{ID: "write-dir", Access: PathAccessReadWrite, Type: PathTypeDirectory, path: "/Users/example/cache", effective: true},
+			{ID: "covered", Access: PathAccessReadOnly, Type: PathTypeDirectory, path: "/private/tmp/workspace/covered", effective: false},
+		},
+	}
+	policy, definitions, err := buildSeatbeltPolicy(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(definitions, "\n")
+	for _, want := range []string{"-DPROFILE_PATH_0=/Users/example/read.txt", "-DPROFILE_PATH_1=/Users/example/write.txt", "-DPROFILE_PATH_2=/Users/example/cache"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("definitions omit %q: %s", want, joined)
+		}
+	}
+	if strings.Contains(joined, "covered") {
+		t.Fatalf("dominated grant compiled: %s", joined)
+	}
+	if !strings.Contains(policy, `(literal (param "PROFILE_PATH_0"))`) || strings.Contains(policy, `(subpath (param "PROFILE_PATH_0"))`) {
+		t.Fatalf("exact read file boundary is wrong: %s", policy)
+	}
+	if !strings.Contains(policy, `(literal (param "PROFILE_PATH_1"))`) || strings.Contains(policy, `(subpath (param "PROFILE_PATH_1"))`) {
+		t.Fatalf("exact writable file boundary is wrong: %s", policy)
+	}
+	if !strings.Contains(policy, `(literal (param "PROFILE_PATH_2")) (subpath (param "PROFILE_PATH_2"))`) {
+		t.Fatalf("writable directory descendants are absent: %s", policy)
+	}
+}
+
 func TestSeatbeltCheckRejectsUnsafeSystemExecutable(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "sandbox-exec")
 	if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0o777); err != nil {

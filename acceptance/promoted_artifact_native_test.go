@@ -138,6 +138,8 @@ func TestPromotedArtifactNativeContainmentContract(t *testing.T) {
 	t.Run("v3 common material and workspace modes are enforced", assertPromotedArtifactV3WorkspaceModes)
 	t.Run("restored deleted lineage executes contained shell and Devin", assertPromotedArtifactRestoredProfile)
 	t.Run("generic literal command uses candidate containment", assertPromotedArtifactGenericRun)
+	t.Run("explicit profile filesystem grants are enforced", assertPromotedArtifactFilesystemGrants)
+	t.Run("filesystem grant identity changes stop later target generations", assertPromotedArtifactFilesystemGrantIdentityChange)
 	t.Run("filesystem environment descriptors sockets IP preflight and descendants", assertPromotedArtifactNativeContainment)
 	t.Run("Devin preflight and target generations are fresh while retained", assertPromotedArtifactDevinGenerations)
 	t.Run("preflight failure is categorized without target details", assertPromotedArtifactNativePreflightFailureIsSafe)
@@ -849,6 +851,21 @@ type privateCapabilityProbe struct {
 	CurrentInode  uint64 `json:"currentInode"`
 }
 
+type filesystemGrantProbe struct {
+	ReadFile, ReadFileValue, ReadDirectoryFile     string
+	ReadOnlyDirectory, WriteDirectory, WriteFile   string
+	DeniedSibling, DeniedOutside, DeniedPrivate    string
+	OverlapWritableDirectory, OverlapDeniedSibling string
+}
+
+type filesystemGrantObservation struct {
+	ReadFile, ReadDirectory, DeniedSibling, DeniedOutside, DeniedPrivate bool
+	ReadOnlyWriteDenied, WriteDirectoryLifecycle, WriteFileInPlace       bool
+	WriteFileSiblingDenied, WriteFileRenameDenied                        bool
+	OverlapChildWrite, OverlapSiblingDenied                              bool
+	Descendant                                                           *filesystemGrantObservation `json:"descendant,omitempty"`
+}
+
 func runPromotedArtifactGenericHelper(arguments []string) bool {
 	if len(arguments) == 0 || arguments[0] != "--acs-generic-command-helper" {
 		return false
@@ -896,6 +913,33 @@ func runPromotedArtifactGenericHelper(arguments []string) bool {
 			if len(arguments) != 3 || !writeFakeDevinMarker(arguments[2]) {
 				os.Exit(91)
 			}
+			return true
+		case "--filesystem-grants", "--filesystem-grants-child":
+			if len(arguments) != 3 {
+				os.Exit(85)
+			}
+			contents, err := os.ReadFile(arguments[2])
+			if err != nil {
+				os.Exit(84)
+			}
+			var probe filesystemGrantProbe
+			if json.Unmarshal(contents, &probe) != nil {
+				os.Exit(83)
+			}
+			suffix := "parent"
+			if arguments[1] == "--filesystem-grants-child" {
+				suffix = "child"
+			}
+			observation := observeFilesystemGrants(probe, suffix)
+			if arguments[1] == "--filesystem-grants" {
+				child := exec.Command(os.Args[0], "--acs-generic-command-helper", "--filesystem-grants-child", arguments[2])
+				child.Dir, child.Env = mustGetwd(), os.Environ()
+				childOutput, childErr := child.Output()
+				if childErr != nil || json.Unmarshal(childOutput, &observation.Descendant) != nil {
+					os.Exit(82)
+				}
+			}
+			_ = json.NewEncoder(os.Stdout).Encode(observation)
 			return true
 		case "--private-capability-live", "--private-capability-hold":
 			if len(arguments) != 4 {
@@ -955,6 +999,289 @@ func runPromotedArtifactGenericHelper(arguments []string) bool {
 	_ = json.NewEncoder(os.Stdout).Encode(observation)
 	_, _ = fmt.Fprintln(os.Stderr, "generic-stderr-ok")
 	return true
+}
+
+func observeFilesystemGrants(probe filesystemGrantProbe, suffix string) filesystemGrantObservation {
+	readFile, readFileErr := os.ReadFile(probe.ReadFile)
+	_, readDirectoryErr := os.ReadFile(probe.ReadDirectoryFile)
+	_, deniedSiblingErr := os.ReadFile(probe.DeniedSibling)
+	_, deniedOutsideErr := os.ReadFile(probe.DeniedOutside)
+	_, deniedPrivateErr := os.ReadFile(probe.DeniedPrivate)
+	readOnlyWriteErr := os.WriteFile(filepath.Join(probe.ReadOnlyDirectory, "denied-"+suffix), []byte("bad\n"), 0o600)
+	created := filepath.Join(probe.WriteDirectory, "created-"+suffix)
+	renamed := filepath.Join(probe.WriteDirectory, "renamed-"+suffix)
+	writeDirectoryLifecycle := os.WriteFile(created, []byte("created\n"), 0o600) == nil && os.Rename(created, renamed) == nil && os.Remove(renamed) == nil
+	writeFileErr := os.WriteFile(probe.WriteFile, []byte("updated-"+suffix+"\n"), 0o600)
+	writeFileSiblingErr := os.WriteFile(probe.WriteFile+"-sibling-"+suffix, []byte("bad\n"), 0o600)
+	writeFileRenameErr := os.Rename(probe.WriteFile, probe.WriteFile+"-renamed-"+suffix)
+	overlapChildErr := os.WriteFile(filepath.Join(probe.OverlapWritableDirectory, "created-"+suffix), []byte("ok\n"), 0o600)
+	overlapSiblingErr := os.WriteFile(filepath.Join(filepath.Dir(probe.OverlapWritableDirectory), "denied-"+suffix), []byte("bad\n"), 0o600)
+	return filesystemGrantObservation{
+		ReadFile: string(readFile) == probe.ReadFileValue && readFileErr == nil, ReadDirectory: readDirectoryErr == nil,
+		DeniedSibling: deniedSiblingErr != nil, DeniedOutside: deniedOutsideErr != nil, DeniedPrivate: deniedPrivateErr != nil,
+		ReadOnlyWriteDenied: readOnlyWriteErr != nil, WriteDirectoryLifecycle: writeDirectoryLifecycle, WriteFileInPlace: writeFileErr == nil,
+		WriteFileSiblingDenied: writeFileSiblingErr != nil, WriteFileRenameDenied: writeFileRenameErr != nil,
+		OverlapChildWrite: overlapChildErr == nil, OverlapSiblingDenied: overlapSiblingErr != nil,
+	}
+}
+
+func assertPromotedArtifactFilesystemGrants(t *testing.T) {
+	binary := promotedBinary(t)
+	helper, err := filepath.Abs(os.Args[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Keep synthetic HOME under the runner's real home; /private/var is treated
+	// as a protected writable root on macOS. Only fixture resources are created.
+	runnerHome, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	home, err := os.MkdirTemp(runnerHome, ".acs-native-candidate-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(home) })
+	writeSkillBundle(t, home, "review")
+	writeVersionOneProfile(t, home, "reviews")
+	credential := filepath.Join(home, ".local", "share", "devin", "credentials.toml")
+	if err := os.MkdirAll(filepath.Dir(credential), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(credential, []byte("fixture-credential\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	path := os.Getenv("PATH")
+	workspace := realTemporaryDirectory(t)
+	external := filepath.Join(home, "selected-grants")
+	if err := os.MkdirAll(external, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(external) })
+	readOnlyDirectory := filepath.Join(external, "read-only")
+	writeDirectory := filepath.Join(external, "write-directory")
+	overlapParent := filepath.Join(external, "overlap")
+	overlapChild := filepath.Join(overlapParent, "writable-child")
+	outside := filepath.Join(external, "outside")
+	for _, directory := range []string{readOnlyDirectory, writeDirectory, overlapChild, outside} {
+		if err := os.MkdirAll(directory, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	readFile := filepath.Join(external, "exact-read")
+	writeFile := filepath.Join(external, "exact-write")
+	readDirectoryFile := filepath.Join(readOnlyDirectory, "child")
+	deniedSibling := filepath.Join(external, "denied-sibling")
+	deniedOutside := filepath.Join(outside, "denied")
+	deniedPrivate := filepath.Join(home, ".acs", "profiles", "filesystem-grants.json")
+	for file, contents := range map[string]string{
+		readFile: "read-file-witness\n", writeFile: "write-file-original\n", readDirectoryFile: "read-directory-witness\n",
+		deniedSibling: "denied-sibling\n", deniedOutside: "denied-outside\n",
+	} {
+		if err := os.WriteFile(file, []byte(contents), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	probe := filesystemGrantProbe{
+		ReadFile: readFile, ReadFileValue: "read-file-witness\n", ReadDirectoryFile: readDirectoryFile,
+		ReadOnlyDirectory: readOnlyDirectory, WriteDirectory: writeDirectory, WriteFile: writeFile,
+		DeniedSibling: deniedSibling, DeniedOutside: deniedOutside, DeniedPrivate: deniedPrivate,
+		OverlapWritableDirectory: overlapChild, OverlapDeniedSibling: filepath.Join(overlapParent, "denied"),
+	}
+	probeBytes, err := json.Marshal(probe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	probePath := filepath.Join(workspace, "filesystem-grant-probe.json")
+	if err := os.WriteFile(probePath, probeBytes, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	writeFilesystemGrantProfile(t, home, "filesystem-grants", "read-only", []nativePathGrant{
+		{ID: "exact-read", Access: "read-only", Type: "file", Kind: "local-absolute", Path: readFile},
+		{ID: "read-directory", Access: "read-only", Type: "directory", Kind: "local-absolute", Path: readOnlyDirectory},
+		{ID: "write-directory", Access: "read-write", Type: "directory", Kind: "local-absolute", Path: writeDirectory},
+		{ID: "exact-write", Access: "read-write", Type: "file", Kind: "local-absolute", Path: writeFile},
+		{ID: "overlap-parent", Access: "read-only", Type: "directory", Kind: "local-absolute", Path: overlapParent},
+		{ID: "overlap-child", Access: "read-write", Type: "directory", Kind: "local-absolute", Path: overlapChild},
+	})
+	before := promotedSessionSnapshot(t, binary, home, path)
+	command := exec.Command(binary, "run", "--profile", "filesystem-grants", "--", helper, "--acs-generic-command-helper", "--filesystem-grants", probePath)
+	command.Dir, command.Env = workspace, nativeCandidateEnvironment(home, path, nil)
+	output, err := command.Output()
+	if err != nil {
+		t.Fatalf("filesystem grants candidate: %v output=%s", err, output)
+	}
+	var observation filesystemGrantObservation
+	if err := json.Unmarshal(output, &observation); err != nil {
+		t.Fatalf("decode filesystem grant observation: %v output=%s", err, output)
+	}
+	assertFilesystemGrantObservation(t, observation)
+	if observation.Descendant == nil {
+		t.Fatal("contained descendant did not emit a filesystem grant observation")
+	}
+	assertFilesystemGrantObservation(t, *observation.Descendant)
+	assertNoSessions(t, home)
+	assertNewRemovedPromotedSessions(t, binary, home, path, before, "command")
+
+	// Exercise the same grant probe through the public Devin path, including
+	// an independently spawned descendant and session cleanup.
+	tools := realTemporaryDirectory(t)
+	installPromotedArtifactFakeDevin(t, tools)
+	writeFakeDevinConfiguration(t, workspace, fakeDevinConfiguration{Mode: "filesystem-grants"})
+	writeFilesystemGrantProfile(t, home, "filesystem-grants-devin", "read-write", []nativePathGrant{
+		{ID: "exact-read", Access: "read-only", Type: "file", Kind: "local-absolute", Path: readFile},
+		{ID: "read-directory", Access: "read-only", Type: "directory", Kind: "local-absolute", Path: readOnlyDirectory},
+		{ID: "write-directory", Access: "read-write", Type: "directory", Kind: "local-absolute", Path: writeDirectory},
+		{ID: "exact-write", Access: "read-write", Type: "file", Kind: "local-absolute", Path: writeFile},
+		{ID: "overlap-parent", Access: "read-only", Type: "directory", Kind: "local-absolute", Path: overlapParent},
+		{ID: "overlap-child", Access: "read-write", Type: "directory", Kind: "local-absolute", Path: overlapChild},
+	})
+	devinBefore := promotedSessionSnapshot(t, binary, home, path)
+	devin := exec.Command(binary, "devin", "--profile", "filesystem-grants-devin")
+	devin.Dir, devin.Env = workspace, nativeCandidateEnvironment(home, tools+string(os.PathListSeparator)+path, nil)
+	if output, err := devin.CombinedOutput(); err != nil {
+		t.Fatalf("Devin filesystem grants: %v output=%s", err, output)
+	}
+	devenObservation, err := os.ReadFile(filepath.Join(workspace, "filesystem-grant-observation.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var devinObs filesystemGrantObservation
+	if err := json.Unmarshal(devenObservation, &devinObs); err != nil {
+		t.Fatal(err)
+	}
+	assertFilesystemGrantObservation(t, devinObs)
+	if devinObs.Descendant == nil {
+		t.Fatal("Devin descendant observation missing")
+	}
+	assertFilesystemGrantObservation(t, *devinObs.Descendant)
+	assertNewRemovedPromotedSessions(t, binary, home, path, devinBefore, "devin")
+
+	// Prove the protected-file identity seam with an original outside the
+	// workspace and a selected hard-link alias inside it. An ordinary selected
+	// workspace file is the positive control.
+	protected := filepath.Join(home, ".local", "share", "devin", "credentials.toml")
+	alias := filepath.Join(workspace, "protected-native-alias")
+	ordinary := filepath.Join(workspace, "ordinary-native-file")
+	if err := os.Link(protected, alias); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(ordinary, []byte("ordinary\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// The helper's tripwire writes a marker in the workspace; grant the
+	// ordinary control workspace write access so this positive control proves
+	// the selected file is usable rather than failing on the workspace anchor.
+	writeFilesystemGrantProfile(t, home, "filesystem-ordinary", "read-write", []nativePathGrant{{ID: "ordinary", Access: "read-only", Type: "file", Kind: "workspace-relative", Path: filepath.Base(ordinary)}})
+	ordinaryTripwire := filepath.Join(workspace, "ordinary-target-started")
+	ordinaryCommand := exec.Command(binary, "run", "--profile", "filesystem-ordinary", "--", helper, "--acs-generic-command-helper", "--tripwire", ordinaryTripwire)
+	ordinaryCommand.Dir, ordinaryCommand.Env = workspace, nativeCandidateEnvironment(home, path, nil)
+	if ordinaryOutput, err := ordinaryCommand.CombinedOutput(); err != nil {
+		t.Fatalf("ordinary selected-file control: %v output=%s", err, ordinaryOutput)
+	}
+	assertMarkerExists(t, ordinaryTripwire)
+	writeFilesystemGrantProfile(t, home, "filesystem-protected-alias", "read-only", []nativePathGrant{{ID: "protected-alias", Access: "read-only", Type: "file", Kind: "workspace-relative", Path: filepath.Base(alias)}})
+	aliasTripwire := filepath.Join(workspace, "protected-alias-target-started")
+	aliasCommand := exec.Command(binary, "run", "--profile", "filesystem-protected-alias", "--", helper, "--acs-generic-command-helper", "--tripwire", aliasTripwire)
+	aliasCommand.Dir, aliasCommand.Env = workspace, nativeCandidateEnvironment(home, path, nil)
+	aliasOutput, aliasErr := aliasCommand.CombinedOutput()
+	if aliasErr == nil {
+		t.Fatal("selected protected hard-link alias reached the target")
+	}
+	assertSafeCandidateFailure(t, aliasOutput, "unsafe_path")
+	assertMarkerAbsent(t, aliasTripwire, "protected hard-link alias started the target")
+	assertNoSessions(t, home)
+}
+
+func assertFilesystemGrantObservation(t *testing.T, observation filesystemGrantObservation) {
+	t.Helper()
+	if !observation.ReadFile || !observation.ReadDirectory || !observation.DeniedSibling || !observation.DeniedOutside || !observation.DeniedPrivate ||
+		!observation.ReadOnlyWriteDenied || !observation.WriteDirectoryLifecycle || !observation.WriteFileInPlace ||
+		!observation.WriteFileSiblingDenied || !observation.WriteFileRenameDenied || !observation.OverlapChildWrite || !observation.OverlapSiblingDenied {
+		t.Fatalf("filesystem grant observation = %#v", observation)
+	}
+}
+
+type nativePathGrant struct{ ID, Access, Type, Kind, Path string }
+
+func writeFilesystemGrantProfile(t *testing.T, home, name, workspaceAccess string, grants []nativePathGrant) {
+	t.Helper()
+	entries := make([]map[string]any, 0, len(grants))
+	for _, grant := range grants {
+		entries = append(entries, map[string]any{"id": grant.ID, "access": grant.Access, "type": grant.Type, "reference": map[string]string{"kind": grant.Kind, "path": grant.Path}})
+	}
+	profileDocument := map[string]any{
+		"version": 3, "name": name,
+		"common": map[string]any{
+			"skills":    map[string]any{"version": 1, "selection": []any{}},
+			"workspace": map[string]any{"version": 1, "selection": map[string]string{"access": workspaceAccess}},
+			"paths":     map[string]any{"version": 1, "selection": map[string]any{"entries": entries}},
+		},
+		"overlays": map[string]any{"devin": map[string]any{"version": 1}},
+	}
+	contents, err := json.Marshal(profileDocument)
+	if err != nil {
+		t.Fatal(err)
+	}
+	directory := filepath.Join(home, ".acs", "profiles")
+	if err := os.MkdirAll(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(directory, name+".json"), contents, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func assertPromotedArtifactFilesystemGrantIdentityChange(t *testing.T) {
+	binary := promotedBinary(t)
+	home, path := prepareRuntimeHome(t)
+	workspace, tools := realTemporaryDirectory(t), realTemporaryDirectory(t)
+	installPromotedArtifactFakeDevin(t, tools)
+	writeFakeDevinConfiguration(t, workspace, fakeDevinConfiguration{Mode: "session-generations-empty"})
+	selectedRoot := filepath.Join(home, "identity-grants")
+	if err := os.MkdirAll(selectedRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	selected := filepath.Join(selectedRoot, "identity-selected")
+	if err := os.WriteFile(selected, []byte("first\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	writeFilesystemGrantProfile(t, home, "filesystem-identity-change", "read-write", []nativePathGrant{{ID: "selected", Access: "read-only", Type: "file", Kind: "local-absolute", Path: selected}})
+	command := exec.Command(binary, "devin", "--profile", "filesystem-identity-change")
+	command.Dir, command.Env = workspace, nativeCandidateEnvironment(home, tools+string(os.PathListSeparator)+path, nil)
+	before := promotedSessionSnapshot(t, binary, home, path)
+	var output synchronizedNativeCapture
+	command.Stdout, command.Stderr = &output, &output
+	if err := command.Start(); err != nil {
+		t.Fatal(err)
+	}
+	done := startNativeCommand(command)
+	t.Cleanup(func() {
+		_ = writeFakeDevinMarker(filepath.Join(workspace, ".acs-phase-skills-release"))
+		settleNativeCommand(command, done)
+	})
+	if !waitForFakeDevinMarker(filepath.Join(workspace, ".acs-phase-skills-ready"), 10*time.Second) {
+		t.Fatal("skills generation did not reach the controlled identity seam")
+	}
+	replacement := filepath.Join(selectedRoot, "identity-replacement")
+	if err := os.WriteFile(replacement, []byte("second\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(replacement, selected); err != nil {
+		t.Fatal(err)
+	}
+	if !writeFakeDevinMarker(filepath.Join(workspace, ".acs-phase-skills-release")) {
+		t.Fatal("release skills generation")
+	}
+	if err := waitNativeCommand(done, 15*time.Second); err == nil {
+		t.Fatal("identity replacement did not fail the installed candidate")
+	}
+	if waitForFakeDevinMarker(filepath.Join(workspace, ".acs-phase-authentication-ready"), 250*time.Millisecond) || fakeDevinMarkerExists(filepath.Join(workspace, "interactive-started")) {
+		t.Fatal("identity replacement reached a later preflight or attached target")
+	}
+	assertSafeCandidateFailure(t, []byte(output.String()), "unsafe_path")
+	assertNewRemovedPromotedSessions(t, binary, home, path, before, "devin")
+	assertNoSessions(t, home)
 }
 
 func TestNativeDescriptorIdentityDetectorPositiveControl(t *testing.T) {
@@ -2386,6 +2713,12 @@ func runFakeDevinSkills() {
 	}
 	base := filepath.Join(os.Getenv("XDG_CONFIG_HOME"), "devin", "skills", "review")
 	catalog := []map[string]string{{"name": "review", "provider": "Devin", "base_dir": base}}
+	if configuration.Mode == "session-generations-empty" {
+		catalog = nil
+	}
+	if configuration.Mode == "filesystem-grants" {
+		catalog = nil
+	}
 	if configuration.Mode == "shared-target-conformance" {
 		catalog = append(catalog, map[string]string{"name": "delivery", "provider": "Agents", "base_dir": filepath.Join(os.Getenv("HOME"), ".agents", "skills", "delivery")})
 	}
@@ -2422,7 +2755,7 @@ func runFakeDevinInteractive() {
 	}
 	workspace := mustGetwd()
 	holdFakeDevinGenerationPhase(configuration, "interactive", workspace)
-	if configuration.Mode == "session-generations" {
+	if configuration.Mode == "session-generations" || configuration.Mode == "session-generations-empty" {
 		return
 	}
 	if configuration.Mode == "signal" || configuration.Mode == "resize" {
@@ -2431,6 +2764,33 @@ func runFakeDevinInteractive() {
 	}
 	if configuration.Mode == "shared-target-conformance" {
 		runFakeDevinSharedTargetConformance(configuration, workspace)
+		return
+	}
+	if configuration.Mode == "filesystem-grants" {
+		contents, err := os.ReadFile(filepath.Join(workspace, "filesystem-grant-probe.json"))
+		if err != nil {
+			os.Exit(64)
+		}
+		var probe filesystemGrantProbe
+		if json.Unmarshal(contents, &probe) != nil {
+			os.Exit(63)
+		}
+		observation := observeFilesystemGrants(probe, "devin")
+		child := exec.Command(os.Args[0], "--acs-generic-command-helper", "--filesystem-grants-child", filepath.Join(workspace, "filesystem-grant-probe.json"))
+		child.Dir, child.Env = workspace, os.Environ()
+		childOutput, childErr := child.Output()
+		if childErr != nil {
+			os.Exit(61)
+		}
+		var descendant filesystemGrantObservation
+		if json.Unmarshal(childOutput, &descendant) != nil {
+			os.Exit(60)
+		}
+		observation.Descendant = &descendant
+		encoded, _ := json.Marshal(observation)
+		if err := os.WriteFile(filepath.Join(workspace, "filesystem-grant-observation.json"), encoded, 0o600); err != nil {
+			os.Exit(62)
+		}
 		return
 	}
 	result := fakeDevinResult{
@@ -2466,7 +2826,7 @@ func runFakeDevinInteractive() {
 }
 
 func holdFakeDevinGenerationPhase(configuration fakeDevinConfiguration, phase, workspace string) {
-	if configuration.Mode != "session-generations" {
+	if configuration.Mode != "session-generations" && configuration.Mode != "session-generations-empty" {
 		return
 	}
 	ready := filepath.Join(workspace, ".acs-phase-"+phase+"-ready")
