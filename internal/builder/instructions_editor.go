@@ -12,10 +12,10 @@ import (
 )
 
 type instructionEditor struct {
-	draft   category.Draft
-	binding commonprofile.InstructionsBinding
-	catalog []instructions.Bundle
-	cursor  int
+	draft      category.Draft
+	binding    commonprofile.InstructionsBinding
+	catalog    []instructions.Bundle
+	cursor     int
 	discovered bool
 }
 
@@ -112,7 +112,9 @@ func (m instructionEditor) Unresolved() []string {
 		} else {
 			count := 0
 			for _, item := range m.catalog {
-				if item.Reference == ref { count++ }
+				if item.Reference == ref {
+					count++
+				}
 			}
 			switch count {
 			case 0:

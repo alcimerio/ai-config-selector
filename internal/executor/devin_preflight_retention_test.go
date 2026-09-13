@@ -59,9 +59,15 @@ func TestLaunchPreflightsRetainSessionUntilCleanupIsProven(t *testing.T) {
 					}
 				}
 				wantStages := []string{"skills"}
-				if stage == "rules-list" || stage == "rules-show" || stage == "auth" { wantStages = append(wantStages, "rules-list") }
-				if stage == "rules-show" || stage == "auth" { wantStages = append(wantStages, "rules-show") }
-				if stage == "auth" { wantStages = append(wantStages, "auth") }
+				if stage == "rules-list" || stage == "rules-show" || stage == "auth" {
+					wantStages = append(wantStages, "rules-list")
+				}
+				if stage == "rules-show" || stage == "auth" {
+					wantStages = append(wantStages, "rules-show")
+				}
+				if stage == "auth" {
+					wantStages = append(wantStages, "auth")
+				}
 				if !reflect.DeepEqual(sandbox.stages, wantStages) {
 					t.Fatalf("prepared stages = %v, want %v; execution advanced past unsettled cleanup", sandbox.stages, wantStages)
 				}
@@ -127,8 +133,12 @@ func TestLaunchPreflightsPreserveFailureAfterProvenCleanup(t *testing.T) {
 				} else {
 					var preflightErr *devinruntime.PreflightError
 					want := devinruntime.CapabilitySkillIsolation
-					if stage == "rules-list" || stage == "rules-show" { want = devinruntime.CapabilityInstructionRules }
-					if stage == "auth" { want = devinruntime.CapabilityAuthentication }
+					if stage == "rules-list" || stage == "rules-show" {
+						want = devinruntime.CapabilityInstructionRules
+					}
+					if stage == "auth" {
+						want = devinruntime.CapabilityAuthentication
+					}
 					if !errors.As(err, &preflightErr) || preflightErr.Capability != want {
 						t.Fatalf("settled Wait error = %v, want %s preflight failure", err, want)
 					}
@@ -184,7 +194,9 @@ func (*preflightRetentionSandbox) Check(context.Context, launch.SandboxCheck) er
 
 func (sandbox *preflightRetentionSandbox) Prepare(_ context.Context, request launch.ProcessRequest) (launch.Process, error) {
 	stage := request.Arguments[0]
-	if stage == "rules" && len(request.Arguments) > 1 { stage = "rules-" + request.Arguments[1] }
+	if stage == "rules" && len(request.Arguments) > 1 {
+		stage = "rules-" + request.Arguments[1]
+	}
 	sandbox.stages = append(sandbox.stages, stage)
 	process := &preflightRetentionProcess{output: request.Terminal.Output, stage: stage, home: request.SessionHome, ruleFile: sandbox.ruleFile, ruleBody: append([]byte(nil), sandbox.ruleBody...)}
 	if stage == sandbox.stage {
@@ -256,7 +268,9 @@ func (process *preflightRetentionProcess) Wait() error {
 
 func configureRetentionInstructions(t *testing.T, application *executorLaunchApplication, sandbox *preflightRetentionSandbox, stage string) {
 	t.Helper()
-	if !strings.HasPrefix(stage, "rules-") && stage != "auth" { return }
+	if !strings.HasPrefix(stage, "rules-") && stage != "auth" {
+		return
+	}
 	ref := instructions.Reference{Source: instructions.SourceID, RelativePath: "retained.md"}
 	sandbox.ruleFile, sandbox.ruleBody = instructions.DestinationName(ref), []byte("selected retained body")
 	application.request.ExpectedInstructions = []instructions.Bundle{{Reference: ref, Content: append([]byte(nil), sandbox.ruleBody...)}}
@@ -264,11 +278,22 @@ func configureRetentionInstructions(t *testing.T, application *executorLaunchApp
 	application.request.Materializer = retentionInstructionMaterializer{base: base, name: sandbox.ruleFile, body: sandbox.ruleBody}
 }
 
-type retentionInstructionMaterializer struct { base session.Materializer; name string; body []byte }
+type retentionInstructionMaterializer struct {
+	base session.Materializer
+	name string
+	body []byte
+}
+
 func (m retentionInstructionMaterializer) Materialize(home string) error {
-	if m.base != nil { if err := m.base.Materialize(home); err != nil { return err } }
+	if m.base != nil {
+		if err := m.base.Materialize(home); err != nil {
+			return err
+		}
+	}
 	dir := filepath.Join(home, ".devin", "rules")
-	if err := os.MkdirAll(dir, 0700); err != nil { return err }
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return err
+	}
 	data := append([]byte("---\ntrigger: always_on\n---\n"), m.body...)
 	return os.WriteFile(filepath.Join(dir, m.name), data, 0600)
 }
