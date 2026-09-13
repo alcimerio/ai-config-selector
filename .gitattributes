@@ -1,0 +1,2 @@
+internal/executor/testdata/devin-rules-renderer/*.body -whitespace
+internal/executor/testdata/devin-rules-renderer/*.stdout -whitespace
