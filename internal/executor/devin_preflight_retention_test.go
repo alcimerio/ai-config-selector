@@ -168,6 +168,30 @@ func TestVerifyDevinOwnsSessionRetentionBeforePreparingProcess(t *testing.T) {
 	}
 }
 
+func TestInstructionAnchorPrecedesSkillsProbeAndRejectsReplacedHome(t *testing.T) {
+	fixture := newLaunchTestFixture(t)
+	cleanupDone := make(chan struct{})
+	close(cleanupDone)
+	sandbox := &preflightRetentionSandbox{stage: "skills", cleanupDone: cleanupDone, replaceHome: true}
+	fixture.sandbox = sandbox
+	application := fixture.application(t, "/test/devin", t.TempDir(), strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
+	configureRetentionInstructions(t, &application, sandbox, "rules-list")
+	defer func() {
+		if sandbox.guard != nil {
+			_ = sandbox.guard.Close()
+		}
+	}()
+
+	err := application.executor.VerifyDevin(context.Background(), application.request)
+	var preflightErr *devinruntime.PreflightError
+	if !errors.As(err, &preflightErr) || preflightErr.Capability != devinruntime.CapabilityInstructionRules {
+		t.Fatalf("VerifyDevin after HOME replacement = %v, want instruction rules preflight failure", err)
+	}
+	if want := []string{"skills"}; !reflect.DeepEqual(sandbox.stages, want) {
+		t.Fatalf("prepared stages=%v want %v", sandbox.stages, want)
+	}
+}
+
 type preflightRetentionSandbox struct {
 	stage       string
 	failure     string
@@ -180,6 +204,7 @@ type preflightRetentionSandbox struct {
 	guard       *os.File
 	stages      []string
 	process     *preflightRetentionProcess
+	replaceHome bool
 }
 
 func (sandbox *preflightRetentionSandbox) finishCleanup() {
@@ -198,7 +223,11 @@ func (sandbox *preflightRetentionSandbox) Prepare(_ context.Context, request lau
 		stage = "rules-" + request.Arguments[1]
 	}
 	sandbox.stages = append(sandbox.stages, stage)
-	process := &preflightRetentionProcess{output: request.Terminal.Output, stage: stage, home: request.SessionHome, ruleFile: sandbox.ruleFile, ruleBody: append([]byte(nil), sandbox.ruleBody...)}
+	canonicalHome, err := filepath.EvalSymlinks(request.SessionHome)
+	if err != nil {
+		return nil, err
+	}
+	process := &preflightRetentionProcess{output: request.Terminal.Output, stage: stage, home: canonicalHome, ruleFile: sandbox.ruleFile, ruleBody: append([]byte(nil), sandbox.ruleBody...), replaceHome: sandbox.replaceHome}
 	if stage == sandbox.stage {
 		sandbox.root = request.SessionDirectory
 		// Observe the existing lease inode so the test can await its final
@@ -223,6 +252,7 @@ type preflightRetentionProcess struct {
 	failure     string
 	output      io.Writer
 	cleanupDone <-chan struct{}
+	replaceHome bool
 	starts      int
 	waits       int
 }
@@ -243,6 +273,21 @@ func (process *preflightRetentionProcess) Wait() error {
 	}
 	switch process.stage {
 	case "skills":
+		if process.replaceHome {
+			moved := process.home + ".moved"
+			if err := os.Rename(process.home, moved); err != nil {
+				return err
+			}
+			if err := os.Mkdir(process.home, 0700); err != nil {
+				return err
+			}
+			if err := os.MkdirAll(filepath.Join(process.home, ".config", "devin", "skills", "review"), 0700); err != nil {
+				return err
+			}
+			if err := os.WriteFile(filepath.Join(process.home, ".config", "devin", "skills", "review", "SKILL.md"), []byte("# review\n"), 0600); err != nil {
+				return err
+			}
+		}
 		return json.NewEncoder(process.output).Encode([]struct {
 			Name     string `json:"name"`
 			Provider string `json:"provider"`

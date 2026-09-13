@@ -111,29 +111,37 @@ func TestBoundedProbeOutputStopsRetainingAfterLimit(t *testing.T) {
 
 func TestReadProjectedInstructionIsNoFollowNonblockingRegularAndBounded(t *testing.T) {
 	directory := t.TempDir()
-	regular := filepath.Join(directory, "rule.md")
+	regular := filepath.Join(directory, ".devin", "rules", "rule.md")
+	if err := os.MkdirAll(filepath.Dir(regular), 0700); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(regular, []byte("ok"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := readProjectedInstruction(regular, 2); err != nil || string(got) != "ok" {
+	anchor, err := openProjectedInstructionAnchor(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer anchor.Close()
+	if got, err := readProjectedInstruction(anchor, regular, 2); err != nil || string(got) != "ok" {
 		t.Fatalf("regular read=%q err=%v", got, err)
 	}
-	if _, err := readProjectedInstruction(regular, 1); err == nil {
+	if _, err := readProjectedInstruction(anchor, regular, 1); err == nil {
 		t.Fatal("accepted oversized projected rule")
 	}
-	link := filepath.Join(directory, "link.md")
+	link := filepath.Join(directory, ".devin", "rules", "link.md")
 	if err := os.Symlink(regular, link); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := readProjectedInstruction(link, 2); err == nil {
+	if _, err := readProjectedInstruction(anchor, link, 2); err == nil {
 		t.Fatal("followed projected rule symlink")
 	}
-	fifo := filepath.Join(directory, "fifo.md")
+	fifo := filepath.Join(directory, ".devin", "rules", "fifo.md")
 	if err := unix.Mkfifo(fifo, 0600); err != nil {
 		t.Fatal(err)
 	}
 	finished := make(chan error, 1)
-	go func() { _, err := readProjectedInstruction(fifo, 2); finished <- err }()
+	go func() { _, err := readProjectedInstruction(anchor, fifo, 2); finished <- err }()
 	select {
 	case err := <-finished:
 		if err == nil {
@@ -141,6 +149,58 @@ func TestReadProjectedInstructionIsNoFollowNonblockingRegularAndBounded(t *testi
 		}
 	case <-time.After(time.Second):
 		t.Fatal("projected FIFO inspection blocked")
+	}
+}
+
+func TestProjectedInstructionAnchorAcceptsTrustedAliasButRejectsDescendantSymlink(t *testing.T) {
+	parent := t.TempDir()
+	home := filepath.Join(parent, "actual-home")
+	if err := os.Mkdir(home, 0700); err != nil {
+		t.Fatal(err)
+	}
+	alias := filepath.Join(parent, "session-home-alias")
+	if err := os.Symlink(home, alias); err != nil {
+		t.Fatal(err)
+	}
+	anchor, err := openProjectedInstructionAnchor(alias)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer anchor.Close()
+	canonicalHome, err := filepath.EvalSymlinks(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if anchor.canonicalHome != canonicalHome {
+		t.Fatalf("canonical anchor=%q want %q", anchor.canonicalHome, canonicalHome)
+	}
+
+	outside := filepath.Join(parent, "outside")
+	if err := os.MkdirAll(filepath.Join(outside, "rules"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	outsideRule := filepath.Join(outside, "rules", "rule.md")
+	if err := os.WriteFile(outsideRule, []byte("outside"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(home, ".devin")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readProjectedInstruction(anchor, filepath.Join(alias, ".devin", "rules", "rule.md"), 16); err == nil {
+		t.Fatal("followed symlink below trusted Session-home anchor")
+	}
+	otherHome := filepath.Join(parent, "other-home")
+	if err := os.Mkdir(otherHome, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(alias); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(otherHome, alias); err != nil {
+		t.Fatal(err)
+	}
+	if err := anchor.checkPathIdentity(); err == nil {
+		t.Fatal("accepted a retargeted trusted Session-home alias")
 	}
 }
 
@@ -179,9 +239,50 @@ func TestRulesPreflightUsesHeaderReceiptAndRejectsAmbiguousSource(t *testing.T) 
 	}
 	list := []byte(strings.TrimSuffix(name, ".md") + " [Devin] always-on\n" + strings.TrimSuffix(name, ".md") + " [Cursor] always-on\n")
 	show := []byte("Rule: wrong\n\nPath: \"/unmanaged/wrong.md\"\nProvider: Other\nActivation: manual\n\nContent:\n" + devinRuleSeparator + "\n" + string(body) + devinRuleSeparator + "\n")
-	err = newExecutor(&instructionReceiptSandbox{list: list, show: show}).verifyDevinRules(context.Background(), created, DevinRequest{ExpectedInstructions: []instructions.Bundle{{Reference: ref, Content: body}}})
+	anchor, err := openProjectedInstructionAnchor(created.HomeDirectory())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer anchor.Close()
+	err = newExecutor(&instructionReceiptSandbox{list: list, show: show}).verifyDevinRules(context.Background(), created, DevinRequest{ExpectedInstructions: []instructions.Bundle{{Reference: ref, Content: body}}}, anchor)
 	var failure *devinruntime.PreflightError
 	if !errors.As(err, &failure) || failure.Capability != devinruntime.CapabilityInstructionRules || failure.Category() != devinruntime.DevinPreflightFailed {
 		t.Fatalf("ambiguous/forged receipt result = %v", err)
+	}
+}
+
+func TestRulesPreflightMatchesCanonicalReceiptPathForAliasedSessionHome(t *testing.T) {
+	created, err := session.Create(filepath.Join(t.TempDir(), "sessions"), t.TempDir(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer created.Remove()
+	ref := instructions.Reference{Source: instructions.SourceID, RelativePath: "body.md"}
+	name := instructions.DestinationName(ref)
+	body := []byte("selected rule body\n")
+	projected := filepath.Join(created.HomeDirectory(), ".devin", "rules", name)
+	if err := os.MkdirAll(filepath.Dir(projected), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(projected, append([]byte("---\ntrigger: always_on\n---\n"), body...), 0600); err != nil {
+		t.Fatal(err)
+	}
+	alias := filepath.Join(t.TempDir(), "home-alias")
+	if err := os.Symlink(created.HomeDirectory(), alias); err != nil {
+		t.Fatal(err)
+	}
+	anchor, err := openProjectedInstructionAnchor(alias)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer anchor.Close()
+	show := []byte(fmt.Sprintf("Rule: %s\n\nPath: %q\nProvider: Devin\nActivation: always-on\n\nContent:\n%s\n%s\n%s\n", strings.TrimSuffix(name, ".md"), filepath.Join(anchor.canonicalHome, ".devin", "rules", name), devinRuleSeparator, strings.TrimSpace(string(body)), devinRuleSeparator))
+	sandbox := &instructionReceiptSandbox{
+		list: []byte(strings.TrimSuffix(name, ".md") + " [Devin] always-on\n"),
+		show: show,
+	}
+	err = newExecutor(sandbox).verifyDevinRules(context.Background(), created, DevinRequest{ExpectedInstructions: []instructions.Bundle{{Reference: ref, Content: body}}}, anchor)
+	if err != nil {
+		t.Fatalf("accepted production-canonical receipt path for aliased Session home: %v", err)
 	}
 }

@@ -26,10 +26,11 @@ import (
 const nativeInstructionGateEnv = "ACS_RUN_NATIVE_INSTRUCTION_RULES"
 
 type nativeProbeReceipt struct {
-	arguments []string
-	home      string
-	output    []byte
-	projected []byte
+	arguments     []string
+	home          string
+	canonicalHome string
+	output        []byte
+	projected     []byte
 }
 
 type boundedReceipt struct {
@@ -104,7 +105,11 @@ func TestNativeProductionInstructionRulesReceipts(t *testing.T) {
 		if len(request.Arguments) < 2 || request.Arguments[0] != "rules" {
 			return
 		}
-		receipt := &nativeProbeReceipt{arguments: append([]string(nil), request.Arguments...), home: request.SessionHome}
+		canonicalHome, err := filepath.EvalSymlinks(request.SessionHome)
+		if err != nil {
+			t.Fatalf("resolve target HOME before native Prepare: %v", err)
+		}
+		receipt := &nativeProbeReceipt{arguments: append([]string(nil), request.Arguments...), home: request.SessionHome, canonicalHome: canonicalHome}
 		projectedPath := filepath.Join(request.SessionHome, ".devin", "rules", instructions.DestinationName(ref))
 		if material, readErr := os.ReadFile(projectedPath); readErr == nil {
 			receipt.projected = material
@@ -140,8 +145,8 @@ func TestNativeProductionInstructionRulesReceipts(t *testing.T) {
 	}
 	wantMaterial := append([]byte("---\ntrigger: always_on\n---\n"), body...)
 	for _, receipt := range observed {
-		if receipt.home == "" || !bytes.Equal(receipt.projected, wantMaterial) {
-			t.Fatalf("rules probe did not inspect the exact production projection: args=%v home=%q projected=%q", receipt.arguments, receipt.home, receipt.projected)
+		if receipt.home == "" || receipt.canonicalHome == "" || !bytes.Equal(receipt.projected, wantMaterial) {
+			t.Fatalf("rules probe did not inspect the exact production projection: args=%v home=%q canonicalHome=%q projected=%q", receipt.arguments, receipt.home, receipt.canonicalHome, receipt.projected)
 		}
 	}
 	name := instructions.DestinationName(ref)
@@ -152,7 +157,7 @@ func TestNativeProductionInstructionRulesReceipts(t *testing.T) {
 	showOutput := observed[1].output
 	for _, field := range [][]byte{
 		[]byte("Rule: " + showName),
-		[]byte("Path: " + strconv.Quote(filepath.Join(observed[1].home, ".devin", "rules", name))),
+		[]byte("Path: " + strconv.Quote(filepath.Join(observed[1].canonicalHome, ".devin", "rules", name))),
 		[]byte("Provider: Devin"), []byte("Activation: always-on"),
 		[]byte("NATIVE_PRODUCTION_SELECTED_RULE_BODY"), []byte("Provider: literal"),
 	} {

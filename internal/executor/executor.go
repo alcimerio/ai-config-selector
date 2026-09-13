@@ -519,8 +519,22 @@ func (e *Executor) VerifyDevin(ctx context.Context, request DevinRequest) (resul
 }
 
 func (e *Executor) runDevinPreflights(ctx context.Context, created *session.Session, request DevinRequest, semantics authority.TargetSemantics) error {
+	var instructionAnchor *projectedInstructionAnchor
+	if len(request.ExpectedInstructions) > 0 {
+		var err error
+		instructionAnchor, err = openProjectedInstructionAnchor(created.HomeDirectory())
+		if err != nil {
+			return devinruntime.NewPreflightError(devinruntime.CapabilityInstructionRules, devinruntime.ReasonRuleMismatch)
+		}
+		defer instructionAnchor.Close()
+	}
 	for _, preflight := range semantics.Preflights {
 		var err error
+		if instructionAnchor != nil {
+			if err := instructionAnchor.checkPathIdentity(); err != nil {
+				return devinruntime.NewPreflightError(devinruntime.CapabilityInstructionRules, devinruntime.ReasonRuleMismatch)
+			}
+		}
 		switch preflight.ID {
 		case "devin.preflight.skills":
 			if preflight.Mode != "contained-exact-catalog" {
@@ -539,21 +553,32 @@ func (e *Executor) runDevinPreflights(ctx context.Context, created *session.Sess
 			if len(request.ExpectedInstructions) == 0 {
 				continue
 			}
-			err = e.verifyDevinRules(ctx, created, request)
+			err = e.verifyDevinRules(ctx, created, request, instructionAnchor)
 		default:
 			return errors.New("unsupported Devin preflight")
 		}
 		if err != nil {
 			return err
 		}
+		if instructionAnchor != nil {
+			if err := instructionAnchor.checkPathIdentity(); err != nil {
+				return devinruntime.NewPreflightError(devinruntime.CapabilityInstructionRules, devinruntime.ReasonRuleMismatch)
+			}
+		}
 	}
 	return nil
 }
 
-func (e *Executor) verifyDevinRules(ctx context.Context, created *session.Session, request DevinRequest) error {
+func (e *Executor) verifyDevinRules(ctx context.Context, created *session.Session, request DevinRequest, anchor *projectedInstructionAnchor) error {
+	if anchor == nil || anchor.checkPathIdentity() != nil {
+		return devinruntime.NewPreflightError(devinruntime.CapabilityInstructionRules, devinruntime.ReasonRuleMismatch)
+	}
 	output, err := e.runDevinProbe(ctx, created, request, []string{"rules", "list"})
 	if err != nil {
 		return devinPreflightFailure(ctx, err, devinruntime.CapabilityInstructionRules, devinruntime.ReasonRuleInspectionCommandFailed)
+	}
+	if anchor.checkPathIdentity() != nil {
+		return devinruntime.NewPreflightError(devinruntime.CapabilityInstructionRules, devinruntime.ReasonRuleMismatch)
 	}
 	for _, bundle := range request.ExpectedInstructions {
 		name := instructions.DestinationName(bundle.Reference)
@@ -565,11 +590,16 @@ func (e *Executor) verifyDevinRules(ctx context.Context, created *session.Sessio
 		if probeErr != nil {
 			return devinPreflightFailure(ctx, probeErr, devinruntime.CapabilityInstructionRules, devinruntime.ReasonRuleInspectionCommandFailed)
 		}
-		path := filepath.Join(created.HomeDirectory(), ".devin", "rules", name)
-		materialized, readErr := readProjectedInstruction(path, len("---\ntrigger: always_on\n---\n")+len(bundle.Content))
+		if anchor.checkPathIdentity() != nil {
+			return devinruntime.NewPreflightError(devinruntime.CapabilityInstructionRules, devinruntime.ReasonRuleMismatch)
+		}
+		path := filepath.Join(anchor.sessionHome, ".devin", "rules", name)
+		materialized, readErr := readProjectedInstruction(anchor, path, len("---\ntrigger: always_on\n---\n")+len(bundle.Content))
+		anchorErr := anchor.checkPathIdentity()
 		expected := append([]byte("---\ntrigger: always_on\n---\n"), bundle.Content...)
 		receipt, ok := parseDevinRuleReceipt(observed)
-		if readErr != nil || !bytes.Equal(materialized, expected) || !ok || receipt.Name != showName || receipt.Provider != "Devin" || receipt.Path != path || receipt.Activation != "always-on" || !displayedInstructionMatches(receipt.Content, bundle.Content) {
+		projectedPath := filepath.Join(anchor.canonicalHome, ".devin", "rules", name)
+		if readErr != nil || anchorErr != nil || !bytes.Equal(materialized, expected) || !ok || receipt.Name != showName || receipt.Provider != "Devin" || receipt.Path != projectedPath || receipt.Activation != "always-on" || !displayedInstructionMatches(receipt.Content, bundle.Content) {
 			return devinruntime.NewPreflightError(devinruntime.CapabilityInstructionRules, devinruntime.ReasonRuleMismatch)
 		}
 	}
@@ -688,13 +718,89 @@ func displayedInstructionMatches(rendered, body []byte) bool {
 	return bytes.Equal(rendered, want)
 }
 
-func readProjectedInstruction(path string, limit int) ([]byte, error) {
-	directory, err := openPrivateDirectoryPath(filepath.Dir(path))
+type projectedInstructionAnchor struct {
+	sessionHome   string
+	canonicalHome string
+	fd            int
+}
+
+func openProjectedInstructionAnchor(sessionHome string) (*projectedInstructionAnchor, error) {
+	if !filepath.IsAbs(sessionHome) {
+		return nil, errors.New("invalid projected instruction Session home")
+	}
+	// Session homes are ACS-owned trusted anchors. Resolve aliases such as
+	// macOS /var and /tmp only at this boundary, before any Devin probe.
+	canonicalHome, err := filepath.EvalSymlinks(sessionHome)
 	if err != nil {
 		return nil, err
 	}
-	defer directory.Close()
-	fd, err := unix.Openat(int(directory.Fd()), filepath.Base(path), unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0)
+	fd, err := unix.Open(canonicalHome, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_DIRECTORY, 0)
+	if err != nil {
+		return nil, err
+	}
+	anchor := &projectedInstructionAnchor{sessionHome: filepath.Clean(sessionHome), canonicalHome: filepath.Clean(canonicalHome), fd: fd}
+	if err := anchor.checkPathIdentity(); err != nil {
+		_ = anchor.Close()
+		return nil, err
+	}
+	return anchor, nil
+}
+
+func (anchor *projectedInstructionAnchor) checkPathIdentity() error {
+	if anchor == nil || anchor.fd < 0 {
+		return errors.New("closed projected instruction anchor")
+	}
+	var fdStat unix.Stat_t
+	if err := unix.Fstat(anchor.fd, &fdStat); err != nil {
+		return err
+	}
+	for _, path := range []string{anchor.sessionHome, anchor.canonicalHome} {
+		var pathStat unix.Stat_t
+		if err := unix.Stat(path, &pathStat); err != nil {
+			return err
+		}
+		if pathStat.Dev != fdStat.Dev || pathStat.Ino != fdStat.Ino || pathStat.Mode&unix.S_IFMT != fdStat.Mode&unix.S_IFMT {
+			return errors.New("Session home no longer names the anchored directory")
+		}
+	}
+	return nil
+}
+
+func (anchor *projectedInstructionAnchor) Close() error {
+	if anchor == nil || anchor.fd < 0 {
+		return nil
+	}
+	err := unix.Close(anchor.fd)
+	anchor.fd = -1
+	return err
+}
+
+func readProjectedInstruction(anchor *projectedInstructionAnchor, path string, limit int) ([]byte, error) {
+	if anchor == nil || anchor.fd < 0 || limit < 0 || !filepath.IsAbs(path) {
+		return nil, errors.New("invalid projected instruction path")
+	}
+	relative, err := filepath.Rel(anchor.sessionHome, filepath.Clean(path))
+	if err != nil || relative == "." || filepath.IsAbs(relative) || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return nil, errors.New("projected instruction is outside its Session home")
+	}
+	components := strings.Split(relative, string(filepath.Separator))
+	if len(components) != 3 || components[0] != ".devin" || components[1] != "rules" || components[2] == "" || components[2] == "." || components[2] == ".." {
+		return nil, errors.New("invalid projected instruction location")
+	}
+	directoryFD, err := unix.FcntlInt(uintptr(anchor.fd), unix.F_DUPFD_CLOEXEC, 0)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = unix.Close(directoryFD) }()
+	for _, component := range components[:2] {
+		nextFD, openErr := unix.Openat(directoryFD, component, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_DIRECTORY, 0)
+		if openErr != nil {
+			return nil, openErr
+		}
+		_ = unix.Close(directoryFD)
+		directoryFD = nextFD
+	}
+	fd, err := unix.Openat(directoryFD, components[2], unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0)
 	if err != nil {
 		return nil, err
 	}
