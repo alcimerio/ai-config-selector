@@ -42,6 +42,7 @@ unset ACS_PROMOTED_VERSION ACS_PROMOTED_BINARY ACS_PROMOTED_SANDBOX_BACKEND
 unset ACS_RUN_NATIVE_AUTH_GATE ACS_RUN_NATIVE_AUTH_RECOVERY
 unset ACS_NATIVE_AUTH_RECOVERY_ROOT ACS_TEST_CODEX_BINARY ACS_TEST_CODEX_ARCHIVE
 unset ACS_RUN_NATIVE_INSTRUCTION_RULES ACS_TEST_DEVIN_BINARY
+unset ACS_RUN_MCP_AMBIENT_FEASIBILITY
 
 read_digest() {
   digest_output="$(shasum -a 256 "$1")" || return 1
@@ -145,6 +146,14 @@ require_test ./acceptance TestPromotedArtifactNativeInstructionRules
 run_acceptance_test ./acceptance -run '^TestPromotedArtifactNativeInstructionRules$' -count=1 -v
 require_test ./internal/executor TestNativeProductionInstructionRulesReceipts
 ACS_RUN_NATIVE_INSTRUCTION_RULES=1 ACS_TEST_DEVIN_BINARY="$devin_binary" go test ./internal/executor -run '^TestNativeProductionInstructionRulesReceipts$' -count=1 -v
+require_test ./internal/launch TestSeatbeltCandidateMCPAmbientReadDenialWithAbsentAtPrepareAndAliases
+require_test ./internal/launch TestSeatbeltCandidateMCPRecipeWriteAndAncestorDenialsPreserveOrdinaryHome
+require_test ./internal/launch TestSeatbeltCandidatePinnedDevinUsesSelectedHomeMCPConfigOnly
+require_test ./internal/launch TestSeatbeltCandidatePinnedDevinConfigPathReplacementIsolation
+require_test ./internal/launch TestSeatbeltCandidatePinnedDevinNestedDiscoveryGrantScope
+require_test ./internal/launch TestSeatbeltCandidatePinnedDevinDirectorySymlinkRedirection
+require_test ./internal/launch TestSeatbeltCandidatePinnedDevinReservedConfigBasenames
+ACS_RUN_MCP_AMBIENT_FEASIBILITY=1 ACS_TEST_DEVIN_BINARY="$devin_binary" go test ./internal/launch -run '^TestSeatbeltCandidate(MCPAmbientReadDenialWithAbsentAtPrepareAndAliases|MCPRecipeWriteAndAncestorDenialsPreserveOrdinaryHome|PinnedDevinUsesSelectedHomeMCPConfigOnly|PinnedDevinConfigPathReplacementIsolation|PinnedDevinNestedDiscoveryGrantScope|PinnedDevinDirectorySymlinkRedirection|PinnedDevinReservedConfigBasenames)$' -count=1 -v
 require_test ./acceptance TestPromotedArtifactNativeContainmentContract
 run_acceptance_test ./acceptance -run '^TestPromotedArtifactNativeContainmentContract$/^generic_literal_command_uses_candidate_containment$' -count=1 -v
 run_acceptance_test ./acceptance -run '^TestPromotedArtifactNativeContainmentContract$/^effective_explanation_is_linked_and_narrowly_observed$' -count=1 -v

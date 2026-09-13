@@ -39,6 +39,14 @@ func TestDevinTargetLockAndNativeProductionGate(t *testing.T) {
 		"run_acceptance_test ./acceptance -run '^TestPromotedArtifactNativeInstructionRules$'",
 		"TestNativeProductionInstructionRulesReceipts",
 		"ACS_RUN_NATIVE_INSTRUCTION_RULES=1 ACS_TEST_DEVIN_BINARY=\"$devin_binary\" go test ./internal/executor",
+		"TestSeatbeltCandidateMCPAmbientReadDenialWithAbsentAtPrepareAndAliases",
+		"TestSeatbeltCandidateMCPRecipeWriteAndAncestorDenialsPreserveOrdinaryHome",
+		"TestSeatbeltCandidatePinnedDevinUsesSelectedHomeMCPConfigOnly",
+		"TestSeatbeltCandidatePinnedDevinConfigPathReplacementIsolation",
+		"TestSeatbeltCandidatePinnedDevinNestedDiscoveryGrantScope",
+		"TestSeatbeltCandidatePinnedDevinDirectorySymlinkRedirection",
+		"TestSeatbeltCandidatePinnedDevinReservedConfigBasenames",
+		"ACS_RUN_MCP_AMBIENT_FEASIBILITY=1 ACS_TEST_DEVIN_BINARY=\"$devin_binary\" go test ./internal/launch",
 	} {
 		if !strings.Contains(string(gate), want) {
 			t.Errorf("shared native gate omits %q", want)
