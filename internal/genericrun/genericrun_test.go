@@ -3,6 +3,7 @@ package genericrun
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -16,6 +17,8 @@ import (
 type recordingExecutor struct {
 	readinessCalls, runCalls int
 	request                  executor.CommandRequest
+	resultCode               int
+	resultErr                error
 }
 
 func (fake *recordingExecutor) Readiness(context.Context) (launch.SandboxReadiness, error) {
@@ -25,7 +28,7 @@ func (fake *recordingExecutor) Readiness(context.Context) (launch.SandboxReadine
 func (fake *recordingExecutor) RunCommand(_ context.Context, request executor.CommandRequest) (int, error) {
 	fake.runCalls++
 	fake.request = request
-	return 0, nil
+	return fake.resultCode, fake.resultErr
 }
 
 type pathContribution string
@@ -82,5 +85,57 @@ func TestSanitizeErrorHidesInternalFailure(t *testing.T) {
 	var failure *launch.SandboxError
 	if !errors.As(err, &failure) || failure.Category != launch.SandboxSetupFailed {
 		t.Fatalf("error = %T %v", err, err)
+	}
+}
+
+func TestSanitizeErrorReturnsCanonicalEnvironmentFailures(t *testing.T) {
+	for _, expected := range []error{
+		executor.ErrEnvironmentUnavailable,
+		executor.ErrEnvironmentInvalid,
+		executor.ErrEnvironmentTooLarge,
+	} {
+		t.Run(expected.Error(), func(t *testing.T) {
+			private := fmt.Errorf("resolve /private/home/profile.json value=PRIVATE_ENV\n\x1b[31m: %w", expected)
+			err := sanitizeError(private)
+			if err != expected || err.Error() != expected.Error() {
+				t.Fatalf("sanitized error = %q, want canonical environment failure %q", err, expected)
+			}
+		})
+	}
+}
+
+func TestLaunchReturnsCanonicalEnvironmentFailuresWithoutPrivateWrapper(t *testing.T) {
+	workingDirectory := t.TempDir()
+	command, err := runcommand.Resolve(workingDirectory, []string{"/usr/bin/true"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := authority.New([]authority.Contribution{{ID: "test", Value: pathContribution("")}}, launch.WorkspaceAccessReadOnly, 2, "").ForCommandIntent(string(command.Form()), command.ArgumentCount())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []error{
+		executor.ErrEnvironmentUnavailable,
+		executor.ErrEnvironmentInvalid,
+		executor.ErrEnvironmentTooLarge,
+	} {
+		t.Run(expected.Error(), func(t *testing.T) {
+			private := fmt.Errorf("resolve /private/home/profile.json value=PRIVATE_ENV\n\x1b[31m: %w", expected)
+			target := &Target{executor: &recordingExecutor{resultCode: 1, resultErr: private}}
+			code, launchErr := target.Launch(context.Background(), "unused-sessions", workingDirectory, resolved, command, launch.Terminal{})
+			if code != 1 || launchErr != expected || launchErr.Error() != expected.Error() {
+				t.Fatalf("generic launch = (%d, %q), want canonical environment failure %q", code, launchErr, expected)
+			}
+		})
+	}
+}
+
+func TestSanitizeErrorKeepsSandboxFailureAheadOfEnvironmentFailure(t *testing.T) {
+	privateEnvironment := fmt.Errorf("private /private/home PRIVATE_ENV: %w", executor.ErrEnvironmentUnavailable)
+	waitFailure := &launch.SandboxError{Category: launch.SandboxProcessWaitFailed}
+	err := sanitizeError(errors.Join(privateEnvironment, waitFailure))
+	var got *launch.SandboxError
+	if err != waitFailure || !errors.As(err, &got) || got.Category != launch.SandboxProcessWaitFailed {
+		t.Fatalf("sandbox failure precedence lost: %v", err)
 	}
 }

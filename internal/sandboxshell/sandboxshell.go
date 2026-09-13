@@ -61,6 +61,14 @@ func sanitizeError(err error) error {
 	if errors.As(err, &sandboxFailure) {
 		return sandboxFailure
 	}
+	switch {
+	case errors.Is(err, executor.ErrEnvironmentUnavailable):
+		return executor.ErrEnvironmentUnavailable
+	case errors.Is(err, executor.ErrEnvironmentInvalid):
+		return executor.ErrEnvironmentInvalid
+	case errors.Is(err, executor.ErrEnvironmentTooLarge):
+		return executor.ErrEnvironmentTooLarge
+	}
 	return &launch.SandboxError{Category: launch.SandboxSetupFailed}
 }
 
