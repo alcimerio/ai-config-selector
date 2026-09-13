@@ -32,46 +32,6 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// This test-only sandbox-exec stand-in records boolean environment absence at
-// policy validation and proxy entry, then execs the normal in-binary
-// supervisor. Production code and the supervisor protocol remain unchanged.
-func init() {
-	trace := ""
-	separator := -1
-	for index, argument := range os.Args {
-		if strings.HasPrefix(argument, "-DACS_ENV_TEST_TRACE=") {
-			trace = strings.TrimPrefix(argument, "-DACS_ENV_TEST_TRACE=")
-		}
-		if argument == "--" {
-			separator = index
-			break
-		}
-	}
-	if trace == "" || separator < 0 || separator+1 >= len(os.Args) {
-		return
-	}
-	stage := "proxy"
-	if os.Args[separator+1] == "/usr/bin/true" {
-		stage = "validation"
-	}
-	_ = os.WriteFile(trace+"-"+stage, []byte(strconv.FormatBool(seatbeltSelectedEnvironmentAbsent())), 0o600)
-	if stage == "validation" {
-		os.Exit(0)
-	}
-	if err := syscall.Exec(os.Args[separator+1], os.Args[separator+1:], os.Environ()); err != nil {
-		os.Exit(125)
-	}
-}
-
-func seatbeltSelectedEnvironmentAbsent() bool {
-	for _, name := range []string{"ACS_NATIVE_PROFILE_TOKEN", "PROFILE_SELECTED_TOKEN"} {
-		if _, exists := os.LookupEnv(name); exists {
-			return false
-		}
-	}
-	return true
-}
-
 func TestSeatbeltWorkspaceWriteRuleFollowsResolvedAccess(t *testing.T) {
 	base := validatedProcessRequest{workspace: "/private/tmp/workspace", sessionDirectory: "/private/tmp/session", executable: "/bin/zsh"}
 	for _, test := range []struct {
@@ -1135,11 +1095,13 @@ func TestSelectedEnvironmentPolicyValidationStage(t *testing.T) {
 	}
 	defer lease.Release()
 	request.environmentProjection = lease
-	request.arguments = []string{"-test.run=^TestSeatbeltHelperProcess$", "--", "environment-transport-target", trace + "-target"}
+	targetMarker := filepath.Join(request.temporaryDirectory, "environment-transport-target")
+	request.arguments = []string{"-test.run=^TestSeatbeltHelperProcess$", "--", "environment-transport-target", targetMarker}
+	sandboxExecFixture := seatbeltEnvironmentSandboxExecFixture(t)
 	backend := &seatbeltBackend{
-		executable: os.Args[0],
+		executable: sandboxExecFixture,
 		policy: func(validatedProcessRequest) (string, []string, error) {
-			return "(version 1)", []string{"-DACS_ENV_TEST_TRACE=" + trace}, nil
+			return seatbeltEnvironmentTestPolicy(request, trace)
 		},
 	}
 	fixtureContext, cancelFixture := context.WithTimeout(context.Background(), 4*time.Second)
@@ -1165,6 +1127,9 @@ func TestSelectedEnvironmentPolicyValidationStage(t *testing.T) {
 			t.Fatalf("selected environment policy stage unexpectedly reached %s: %v", stage, err)
 		}
 	}
+	if _, err := os.Stat(targetMarker); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("prepare-only selected environment unexpectedly started its target: %v", err)
+	}
 }
 
 func TestSelectedEnvironmentSupervisorStartAndCancelStage(t *testing.T) {
@@ -1184,11 +1149,13 @@ func TestSelectedEnvironmentSupervisorStartAndCancelStage(t *testing.T) {
 	}
 	defer lease.Release()
 	request.environmentProjection = lease
-	request.arguments = []string{"-test.run=^TestSeatbeltHelperProcess$", "--", "environment-transport-blocked-target", trace + "-target"}
+	targetMarker := filepath.Join(request.temporaryDirectory, "environment-transport-target")
+	request.arguments = []string{"-test.run=^TestSeatbeltHelperProcess$", "--", "environment-transport-blocked-target", targetMarker}
+	sandboxExecFixture := seatbeltEnvironmentSandboxExecFixture(t)
 	backend := &seatbeltBackend{
-		executable: os.Args[0],
+		executable: sandboxExecFixture,
 		policy: func(validatedProcessRequest) (string, []string, error) {
-			return "(version 1)", []string{"-DACS_ENV_TEST_TRACE=" + trace}, nil
+			return seatbeltEnvironmentTestPolicy(request, trace)
 		},
 	}
 	fixtureContext, cancelFixture := context.WithTimeout(context.Background(), 12*time.Second)
@@ -1222,7 +1189,7 @@ func TestSelectedEnvironmentSupervisorStartAndCancelStage(t *testing.T) {
 	go func() { waitResult <- process.Wait() }()
 	readyDeadline := time.Now().Add(2 * time.Second)
 	for {
-		contents, readErr := os.ReadFile(trace + "-target")
+		contents, readErr := os.ReadFile(targetMarker)
 		if readErr == nil && string(contents) == "true" {
 			break
 		}
@@ -1304,18 +1271,24 @@ func TestSelectedEnvironmentSupervisorStartAndCancelStage(t *testing.T) {
 	default:
 		t.Fatal("selected environment canceled target lacked authenticated cleanup completion")
 	}
-	for _, stage := range []string{"validation", "proxy", "target"} {
+	for _, stage := range []string{"validation", "proxy"} {
 		contents, err := os.ReadFile(trace + "-" + stage)
 		if err != nil || string(contents) != "true" {
 			t.Fatalf("selected environment start-and-cancel %s observation=%q err=%v", stage, contents, err)
 		}
+	}
+	if contents, err := os.ReadFile(targetMarker); err != nil || string(contents) != "true" {
+		t.Fatalf("selected environment start-and-cancel target observation=%q err=%v", contents, err)
 	}
 }
 
 func TestSelectedEnvironmentStaysSeparateFromPolicyValidationAndStatusProxy(t *testing.T) {
 	request := seatbeltTestRequest(t)
 	trace := filepath.Join(filepath.Dir(filepath.Dir(request.workspace)), "environment-transport")
-	target := trace + "-target"
+	target := filepath.Join(request.temporaryDirectory, "environment-transport-target")
+	denialReceipt := filepath.Join(request.temporaryDirectory, "outside-signal-denied")
+	descendantReady := filepath.Join(request.temporaryDirectory, "environment-descendant.ready")
+	descendantPIDPath := filepath.Join(request.temporaryDirectory, "environment-descendant.pid")
 	lease, err := environmentresource.Resolve([]environmentresource.Intent{{
 		ID: "token", Destination: "PROFILE_SELECTED_TOKEN", Scope: "attached-process-tree", SourceKind: "secret-reference",
 		Provider: "host-environment", Reference: "ACS_NATIVE_PROFILE_TOKEN", Required: true, Classification: "secret",
@@ -1325,11 +1298,63 @@ func TestSelectedEnvironmentStaysSeparateFromPolicyValidationAndStatusProxy(t *t
 	}
 	defer lease.Release()
 	request.environmentProjection = lease
-	request.arguments = []string{"-test.run=^TestSeatbeltHelperProcess$", "--", "environment-transport-target", target}
+	bystanderMarker := filepath.Join(filepath.Dir(filepath.Dir(request.workspace)), "outside-bystander.ready")
+	bystander := exec.Command(os.Args[0], "-test.run=^TestSeatbeltHelperProcess$", "--", "bystander-heartbeat", bystanderMarker)
+	bystander.Env = []string{"PATH=/usr/bin:/bin"}
+	if err := bystander.Start(); err != nil {
+		t.Fatal(err)
+	}
+	bystanderWaited := false
+	cleanupBystander := func() {
+		if !bystanderWaited {
+			_ = bystander.Process.Kill()
+			_ = bystander.Wait()
+			bystanderWaited = true
+		}
+	}
+	t.Cleanup(cleanupBystander)
+	if _, err := waitForSeatbeltHeartbeat(bystanderMarker, 0, time.Second); err != nil {
+		t.Fatalf("outside bystander did not start its heartbeat: %v", err)
+	}
+	procAPI, err := loadSeatbeltProcAPI()
+	if err != nil {
+		t.Fatal(err)
+	}
+	bystanderIdentity, err := procAPI.info(bystander.Process.Pid)
+	if err != nil || bystanderIdentity.PID != uint32(bystander.Process.Pid) {
+		t.Fatalf("read outside bystander identity: identity=%+v err=%v", bystanderIdentity, err)
+	}
+	runnerIdentity, err := procAPI.info(os.Getpid())
+	if err != nil || runnerIdentity.PID != uint32(os.Getpid()) {
+		t.Fatalf("read test runner identity: identity=%+v err=%v", runnerIdentity, err)
+	}
+	observerStop := make(chan struct{})
+	observerDone := make(chan error, 1)
+	go func() {
+		observerDone <- observeSeatbeltBystander(observerStop, procAPI, bystanderMarker,
+			bystander.Process.Pid, bystanderIdentity, os.Getpid(), runnerIdentity)
+	}()
+	observerStopped := false
+	stopObserver := func() error {
+		if !observerStopped {
+			close(observerStop)
+			observerStopped = true
+		}
+		return <-observerDone
+	}
+	t.Cleanup(func() {
+		if !observerStopped {
+			_ = stopObserver()
+		}
+	})
+	request.arguments = []string{
+		"-test.run=^TestSeatbeltHelperProcess$", "--", "environment-transport-blocked-target", target,
+		strconv.Itoa(bystander.Process.Pid), denialReceipt, descendantReady, descendantPIDPath,
+	}
 	backend := &seatbeltBackend{
-		executable: os.Args[0],
+		executable: seatbeltEnvironmentSandboxExecFixture(t),
 		policy: func(validatedProcessRequest) (string, []string, error) {
-			return "(version 1)", []string{"-DACS_ENV_TEST_TRACE=" + trace}, nil
+			return seatbeltEnvironmentTestPolicy(request, trace)
 		},
 	}
 	fixtureContext, cancelFixture := context.WithTimeout(context.Background(), 8*time.Second)
@@ -1360,10 +1385,77 @@ func TestSelectedEnvironmentStaysSeparateFromPolicyValidationAndStatusProxy(t *t
 	}
 	waitResult := make(chan error, 1)
 	go func() { waitResult <- process.Wait() }()
+	readyDeadline := time.Now().Add(5 * time.Second)
+	var descendantPID int
+	var descendantIdentity seatbeltBSDInfo
+	for {
+		targetContents, targetErr := os.ReadFile(target)
+		denialContents, denialErr := os.ReadFile(denialReceipt)
+		readyContents, readyErr := os.ReadFile(descendantReady)
+		pidContents, pidErr := os.ReadFile(descendantPIDPath)
+		if targetErr == nil && string(targetContents) == "true" && denialErr == nil &&
+			string(denialContents) == "EPERM" && readyErr == nil && string(readyContents) == "ready" && pidErr == nil {
+			pid, parseErr := strconv.Atoi(strings.TrimSpace(string(pidContents)))
+			if parseErr != nil || pid <= 0 {
+				t.Fatalf("contained descendant PID receipt=%q err=%v", pidContents, parseErr)
+			}
+			descendantPID = pid
+			descendantIdentity, err = procAPI.info(descendantPID)
+			if err != nil || descendantIdentity.PID != uint32(descendantPID) || descendantIdentity.Status == seatbeltProcStatusZombie {
+				t.Fatalf("contained descendant identity=%+v err=%v", descendantIdentity, err)
+			}
+			break
+		}
+		select {
+		case waitErr := <-waitResult:
+			t.Fatalf("selected environment target exited before cancellation readiness: %v", waitErr)
+		default:
+		}
+		if time.Now().After(readyDeadline) {
+			cleanupErr := process.Signal(syscall.SIGKILL)
+			cleanupSettled := false
+			if cleanupErr == nil {
+				select {
+				case <-waitResult:
+					cleanupSettled = true
+				case <-time.After(6 * time.Second):
+				}
+			}
+			if !cleanupSettled {
+				cancelFixture()
+			}
+			prepared, _ := process.(*seatbeltProcess)
+			if prepared != nil && !cleanupSettled {
+				prepared.closeControl()
+				prepared.closeStatusControl()
+			}
+			if !cleanupSettled {
+				select {
+				case <-waitResult:
+				case <-time.After(time.Second):
+				}
+			}
+			t.Fatalf("selected environment target/descendant did not become ready: cleanup_error=%v cleanup_settled=%t trace=%s", cleanupErr, cleanupSettled, seatbeltEnvironmentTraceState(trace))
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if err := process.Signal(syscall.SIGKILL); err != nil {
+		t.Fatalf("selected environment cancellation signal: %v", err)
+	}
 	select {
 	case err := <-waitResult:
-		if err != nil {
-			t.Fatalf("selected environment composition wait: %v; trace=%s", err, seatbeltEnvironmentTraceState(trace))
+		var exitError *exec.ExitError
+		if !errors.As(err, &exitError) {
+			t.Fatalf("selected environment canceled Wait error=%v, want SIGKILL; trace=%s", err, seatbeltEnvironmentTraceState(trace))
+		}
+		status, ok := exitError.Sys().(syscall.WaitStatus)
+		if !ok || !status.Signaled() || status.Signal() != syscall.SIGKILL {
+			t.Fatalf("selected environment canceled Wait status=%v, want SIGKILL", exitError.Sys())
+		}
+		select {
+		case <-process.(ProcessCleanup).CleanupDone():
+		default:
+			t.Fatal("selected environment target completed without authenticated cleanup")
 		}
 		t.Log("selected environment fixture phase: waited")
 	case <-time.After(6 * time.Second):
@@ -1398,11 +1490,73 @@ func TestSelectedEnvironmentStaysSeparateFromPolicyValidationAndStatusProxy(t *t
 		}
 		t.Fatalf("selected environment composition cleanup exceeded its test bound; wait-after-control-close=%s; trace=%s", waitAfterControlClose, seatbeltEnvironmentTraceState(trace))
 	}
-	for _, stage := range []string{"validation", "proxy", "target"} {
+	if err := stopObserver(); err != nil {
+		t.Fatalf("outside bystander or test runner changed during contained cleanup: %v", err)
+	}
+	descendantExited := false
+	for deadline := time.Now().Add(time.Second); time.Now().Before(deadline); {
+		currentIdentity, err := procAPI.info(descendantPID)
+		if errors.Is(err, syscall.ESRCH) || err == nil &&
+			(currentIdentity.StartSecond != descendantIdentity.StartSecond ||
+				currentIdentity.StartMicrosecond != descendantIdentity.StartMicrosecond ||
+				currentIdentity.Status == seatbeltProcStatusZombie) {
+			descendantExited = true
+			break
+		} else if err != nil {
+			t.Fatalf("inspect contained descendant after cleanup: %v", err)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if !descendantExited {
+		info, err := procAPI.info(descendantPID)
+		t.Fatalf("contained descendant survived authenticated cleanup: original=%+v current=%+v err=%v", descendantIdentity, info, err)
+	}
+	for _, stage := range []string{"validation", "proxy"} {
 		contents, err := os.ReadFile(trace + "-" + stage)
 		if err != nil || string(contents) != "true" {
 			t.Fatalf("selected environment %s observation=%q err=%v", stage, contents, err)
 		}
+	}
+	if contents, err := os.ReadFile(target); err != nil || string(contents) != "true" {
+		t.Fatalf("selected environment target observation=%q err=%v", contents, err)
+	}
+	denial, err := os.ReadFile(denialReceipt)
+	if err != nil || string(denial) != "EPERM" {
+		t.Fatalf("sandbox outside-signal denial receipt=%q err=%v", denial, err)
+	}
+	if _, err := os.Stat(bystanderMarker); err != nil {
+		t.Fatalf("outside bystander heartbeat disappeared after target cleanup: %v", err)
+	}
+	heartbeatAtCleanup, err := readSeatbeltHeartbeat(bystanderMarker)
+	if err != nil {
+		t.Fatalf("read bystander heartbeat after contained cleanup: %v", err)
+	}
+	if _, err := waitForSeatbeltHeartbeat(bystanderMarker, heartbeatAtCleanup, time.Second); err != nil {
+		t.Fatalf("outside bystander made no fresh progress after target cleanup: %v", err)
+	}
+	liveIdentity, err := procAPI.info(bystander.Process.Pid)
+	if err != nil || liveIdentity.PID != bystanderIdentity.PID ||
+		liveIdentity.StartSecond != bystanderIdentity.StartSecond ||
+		liveIdentity.StartMicrosecond != bystanderIdentity.StartMicrosecond ||
+		liveIdentity.Status == seatbeltProcStatusStop || liveIdentity.Status == seatbeltProcStatusZombie {
+		t.Fatalf("outside bystander identity/state changed after target cleanup: before=%+v after=%+v err=%v", bystanderIdentity, liveIdentity, err)
+	}
+	liveRunnerIdentity, err := procAPI.info(os.Getpid())
+	if err != nil || liveRunnerIdentity.PID != runnerIdentity.PID ||
+		liveRunnerIdentity.StartSecond != runnerIdentity.StartSecond ||
+		liveRunnerIdentity.StartMicrosecond != runnerIdentity.StartMicrosecond ||
+		liveRunnerIdentity.Status == seatbeltProcStatusStop || liveRunnerIdentity.Status == seatbeltProcStatusZombie {
+		t.Fatalf("test runner identity/state changed after target cleanup: before=%+v after=%+v err=%v", runnerIdentity, liveRunnerIdentity, err)
+	}
+	if err := bystander.Process.Kill(); err != nil {
+		t.Fatalf("harness-owned bystander teardown: %v", err)
+	}
+	if err := bystander.Wait(); err == nil {
+		t.Fatal("harness-owned bystander kill returned a successful exit")
+	}
+	bystanderWaited = true
+	if _, err := procAPI.info(bystander.Process.Pid); !errors.Is(err, syscall.ESRCH) {
+		t.Fatalf("bystander remained after owned teardown: %v", err)
 	}
 }
 
@@ -1494,8 +1648,8 @@ func TestSelectedEnvironmentChildDiagnostic(t *testing.T) {
 }
 
 func seatbeltEnvironmentTraceState(trace string) string {
-	states := make([]string, 0, 3)
-	for _, stage := range []string{"validation", "proxy", "target"} {
+	states := make([]string, 0, 2)
+	for _, stage := range []string{"validation", "proxy"} {
 		contents, err := os.ReadFile(trace + "-" + stage)
 		state := "missing"
 		if err == nil {
@@ -3379,7 +3533,7 @@ func TestSeatbeltHelperProcess(t *testing.T) {
 	arguments := os.Args[separator+1:]
 	switch arguments[0] {
 	case "environment-transport-target":
-		if len(arguments) != 2 {
+		if len(arguments) != 2 && len(arguments) != 5 {
 			os.Exit(126)
 		}
 		if _, exists := os.LookupEnv("ACS_NATIVE_PROFILE_TOKEN"); exists {
@@ -3389,12 +3543,40 @@ func TestSeatbeltHelperProcess(t *testing.T) {
 		if !exists || value != "selected-test-value" {
 			os.Exit(128)
 		}
+		if len(arguments) == 5 {
+			if arguments[2] != "signal" {
+				os.Exit(135)
+			}
+			pid, err := strconv.Atoi(arguments[3])
+			if err != nil || pid <= 0 {
+				os.Exit(136)
+			}
+			if err := syscall.Kill(pid, syscall.SIGCONT); !errors.Is(err, syscall.EPERM) {
+				os.Exit(137)
+			}
+			if err := os.WriteFile(arguments[4], []byte("EPERM"), 0o600); err != nil {
+				os.Exit(138)
+			}
+		}
 		if err := os.WriteFile(arguments[1], []byte("true"), 0o600); err != nil {
 			os.Exit(129)
 		}
 		os.Exit(0)
+	case "bystander-heartbeat":
+		var sequence uint64
+		for {
+			sequence++
+			temporary := arguments[1] + ".tmp"
+			if err := os.WriteFile(temporary, []byte(strconv.FormatUint(sequence, 10)), 0o600); err != nil {
+				os.Exit(139)
+			}
+			if err := os.Rename(temporary, arguments[1]); err != nil {
+				os.Exit(140)
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
 	case "environment-transport-blocked-target":
-		if len(arguments) != 2 {
+		if len(arguments) != 2 && len(arguments) != 6 {
 			os.Exit(130)
 		}
 		if _, exists := os.LookupEnv("ACS_NATIVE_PROFILE_TOKEN"); exists {
@@ -3404,11 +3586,46 @@ func TestSeatbeltHelperProcess(t *testing.T) {
 		if !exists || value != "selected-test-value" {
 			os.Exit(132)
 		}
+		if len(arguments) == 6 {
+			pid, err := strconv.Atoi(arguments[2])
+			if err != nil || pid <= 0 {
+				os.Exit(141)
+			}
+			if err := syscall.Kill(pid, syscall.SIGCONT); !errors.Is(err, syscall.EPERM) {
+				os.Exit(142)
+			}
+			if err := os.WriteFile(arguments[3], []byte("EPERM"), 0o600); err != nil {
+				os.Exit(143)
+			}
+			child := exec.Command(os.Args[0], "-test.run=^TestSeatbeltHelperProcess$", "--", "environment-transport-descendant", arguments[4])
+			child.Env = os.Environ()
+			child.Stdin = nil
+			child.Stdout = nil
+			child.Stderr = nil
+			child.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+			if err := child.Start(); err != nil {
+				os.Exit(144)
+			}
+			if err := os.WriteFile(arguments[5], []byte(strconv.Itoa(child.Process.Pid)), 0o600); err != nil {
+				_ = child.Process.Kill()
+				_ = child.Wait()
+				os.Exit(145)
+			}
+		}
 		if err := os.WriteFile(arguments[1], []byte("true"), 0o600); err != nil {
 			os.Exit(133)
 		}
 		time.Sleep(30 * time.Second)
 		os.Exit(134)
+	case "environment-transport-descendant":
+		if len(arguments) != 2 {
+			os.Exit(146)
+		}
+		if err := os.WriteFile(arguments[1], []byte("ready"), 0o600); err != nil {
+			os.Exit(147)
+		}
+		time.Sleep(30 * time.Second)
+		os.Exit(148)
 	case "mark":
 		if err := os.WriteFile(arguments[1], []byte("started"), 0o600); err != nil {
 			os.Exit(71)
@@ -4030,6 +4247,112 @@ func seatbeltTestRequest(t *testing.T) validatedProcessRequest {
 		workspace: workspace, sessionsDirectory: filepath.Dir(session), sessionDirectory: session,
 		sessionHome: home, temporaryDirectory: temporary, executable: executable,
 		environment: environment,
+	}
+}
+
+func seatbeltEnvironmentSandboxExecFixture(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "sandbox-exec-fixture")
+	const script = `#!/bin/sh
+set -eu
+trace=
+target=
+after_separator=false
+for argument do
+  case "$argument" in
+    -DACS_ENV_TEST_TRACE=*) trace=${argument#-DACS_ENV_TEST_TRACE=} ;;
+  esac
+  if [ "$after_separator" = true ] && [ -z "$target" ]; then target=$argument; fi
+  if [ "$argument" = "--" ]; then after_separator=true; fi
+done
+if [ -z "$trace" ]; then exit 124; fi
+stage=proxy
+if [ "$target" = /usr/bin/true ]; then stage=validation; fi
+selected_absent=true
+if [ "${ACS_NATIVE_PROFILE_TOKEN+x}" = x ] || [ "${PROFILE_SELECTED_TOKEN+x}" = x ]; then selected_absent=false; fi
+umask 077
+printf '%s' "$selected_absent" > "$trace-$stage"
+exec /usr/bin/sandbox-exec "$@"
+`
+	if err := os.WriteFile(path, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func seatbeltEnvironmentTestPolicy(request validatedProcessRequest, trace string) (string, []string, error) {
+	policy, definitions, err := buildSeatbeltPolicy(request)
+	if err != nil {
+		return "", nil, err
+	}
+	return policy, append(definitions, "-DACS_ENV_TEST_TRACE="+trace), nil
+}
+
+func readSeatbeltHeartbeat(path string) (uint64, error) {
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		return 0, err
+	}
+	return strconv.ParseUint(string(contents), 10, 64)
+}
+
+func waitForSeatbeltHeartbeat(path string, after uint64, timeout time.Duration) (uint64, error) {
+	deadline := time.Now().Add(timeout)
+	for {
+		sequence, err := readSeatbeltHeartbeat(path)
+		if err == nil && sequence > after {
+			return sequence, nil
+		}
+		if time.Now().After(deadline) {
+			return sequence, fmt.Errorf("heartbeat did not advance beyond %d (last read %d, read error %v)", after, sequence, err)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+func observeSeatbeltBystander(
+	stop <-chan struct{}, api seatbeltProcAPI, heartbeatPath string,
+	bystanderPID int, bystanderIdentity seatbeltBSDInfo,
+	runnerPID int, runnerIdentity seatbeltBSDInfo,
+) error {
+	lastHeartbeat, err := readSeatbeltHeartbeat(heartbeatPath)
+	if err != nil {
+		return err
+	}
+	lastProgress := time.Now()
+	ticker := time.NewTicker(5 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-stop:
+			return nil
+		case now := <-ticker.C:
+			heartbeat, err := readSeatbeltHeartbeat(heartbeatPath)
+			if err != nil {
+				return fmt.Errorf("read bystander heartbeat: %w", err)
+			}
+			if heartbeat > lastHeartbeat {
+				lastHeartbeat = heartbeat
+				lastProgress = now
+			} else if now.Sub(lastProgress) > 250*time.Millisecond {
+				return fmt.Errorf("heartbeat stopped advancing at receipt %d", lastHeartbeat)
+			}
+			currentBystander, err := api.info(bystanderPID)
+			if err != nil || currentBystander.PID != bystanderIdentity.PID ||
+				currentBystander.StartSecond != bystanderIdentity.StartSecond ||
+				currentBystander.StartMicrosecond != bystanderIdentity.StartMicrosecond ||
+				currentBystander.Status == seatbeltProcStatusStop ||
+				currentBystander.Status == seatbeltProcStatusZombie {
+				return fmt.Errorf("outside bystander identity/state changed: before=%+v after=%+v err=%v", bystanderIdentity, currentBystander, err)
+			}
+			currentRunner, err := api.info(runnerPID)
+			if err != nil || currentRunner.PID != runnerIdentity.PID ||
+				currentRunner.StartSecond != runnerIdentity.StartSecond ||
+				currentRunner.StartMicrosecond != runnerIdentity.StartMicrosecond ||
+				currentRunner.Status == seatbeltProcStatusStop || currentRunner.Status == seatbeltProcStatusZombie {
+				return fmt.Errorf("test runner identity/state changed: before=%+v after=%+v err=%v", runnerIdentity, currentRunner, err)
+			}
+		}
 	}
 }
 
