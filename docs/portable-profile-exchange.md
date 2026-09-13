@@ -22,9 +22,10 @@ explicit local regular file; stdin and remote URLs are not supported.
 
 ## Export format and output
 
-Exchange version 2 supports common Skills v1, workspace v1, paths v1, and exact
-maintained Devin v1 and Codex v1 overlays. Exchange version 1 remains decodable
-and produces its original two-capability local Profile. A version-1 or version-2 local Profile must first
+Exchange version 3 supports common Skills v1, workspace v1, paths v1,
+executables v1, environment v1, and exact maintained Devin v1 and Codex v1
+overlays. Exchange versions 1 and 2 remain decodable and produce their original
+capability sets. A version-1 or version-2 local Profile must first
 use the existing explicit `acs profile migrate NAME` workflow. Export never
 migrates or rewrites its source.
 
@@ -47,7 +48,7 @@ project-relative paths and are never rebound by display name. For example:
 
 ```json
 {
-  "exchangeVersion": 2,
+  "exchangeVersion": 3,
   "profile": {
     "common": {
       "skills": {
@@ -65,6 +66,35 @@ project-relative paths and are never rebound by display name. For example:
         "selection": [
           {"id":"cache","access":"read-write","type":"directory","reference":{"kind":"bound","pathBinding":"path-1"}}
         ]
+      },
+      "executables": {
+        "version": 1,
+        "selection": []
+      },
+      "environment": {
+        "version": 1,
+        "selection": [
+          {
+            "id": "mode",
+            "destination": "BUILD_MODE",
+            "scope": "attached-process-tree",
+            "source": {"kind": "host-environment", "name": "ACS_BUILD_MODE"},
+            "required": false,
+            "classification": "non-secret"
+          },
+          {
+            "id": "token",
+            "destination": "SERVICE_TOKEN",
+            "scope": "attached-process-tree",
+            "source": {
+              "kind": "secret-reference",
+              "provider": "host-environment",
+              "referenceBinding": "environment-1"
+            },
+            "required": true,
+            "classification": "secret"
+          }
+        ]
       }
     },
     "overlays": {
@@ -77,7 +107,10 @@ project-relative paths and are never rebound by display name. For example:
     "authentications": [
       {"id": "authentication-1", "kind": "codex-chatgpt"}
     ],
-    "paths": [{"id":"path-1","kind":"local-absolute"}]
+    "paths": [{"id":"path-1","kind":"local-absolute"}],
+    "environment": [
+      {"id":"environment-1","kind":"host-environment-secret-reference"}
+    ]
   }
 }
 ```
@@ -92,11 +125,12 @@ Import uses a separate local binding document:
 
 ```json
 {
-  "bindingVersion": 2,
+  "bindingVersion": 3,
   "sources": {"source-1": "shared-agents"},
   "authentications": {"authentication-1": "work"},
   "paths": {"path-1": "/Users/example/cache"},
-  "executables": {"executable-1": "/Users/example/bin/tool"}
+  "executables": {"executable-1": "/Users/example/bin/tool"},
+  "environment": {"environment-1": "ACS_SERVICE_TOKEN"}
 }
 ```
 
@@ -124,6 +158,18 @@ mixed symbolic/reference fields are rejected in the portable document. The
 optional version-2 executable requirement and binding members may be omitted or
 explicit empty arrays/maps, but explicit `null` and non-container values fail
 closed.
+
+Non-secret host-environment source names are portable logical references and
+remain in the exchange document. Secret-reference names are machine-local:
+export replaces each with a deterministic `environment-N` requirement and
+never emits its local reference or resolved value. A version-3 binding document
+maps each symbol to one valid uppercase host-environment reference. Exact source
+shapes are enforced: host sources accept only `kind` and `name`; secret sources
+accept only `kind`, `provider`, and `referenceBinding`. Mixed, empty, or `null`
+fields are rejected. Environment arrays/maps may be explicit empty in v3 but
+not `null`. A v1 or v2 binding document may satisfy a newer exchange only when
+none of the newer symbolic binding classes are required; those old documents
+must not contain a v3 `environment` member even when empty.
 
 Complete bindings mean only that every symbolic requirement has a valid local
 mapping. Source availability, named-auth existence/status, target executables,
@@ -154,8 +200,8 @@ complete` or `unresolved`, and destination status from unchecked source
 availability/authentication/runtime. JSON format 1 contains exactly
 `formatVersion`, `operation`, `status`, `code`, `structure`, `semantics`,
 `bindings`, `destination`, `sourceAvailability`, `authentication`, `runtime`,
-`requiredSources`, `requiredAuthentication`, `requiredPaths`, and
-`requiredExecutables`. Exit 0 is fully valid
+`requiredSources`, `requiredAuthentication`, `requiredPaths`,
+`requiredExecutables`, and `requiredEnvironment`. Exit 0 is fully valid
 with complete bindings, exit 2 is supported intent with unresolved bindings, and
 exit 1 is invalid, unsafe, unsupported, or unreadable input.
 

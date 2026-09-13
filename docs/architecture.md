@@ -144,7 +144,18 @@ canonical paths. The policy grants:
 The target environment is reconstructed. It sets synthetic `HOME`, XDG, and
 temporary paths, a fixed `/usr/local/bin:/usr/bin:/bin` `PATH`, and a small
 terminal/locale allowlist. Arbitrary host environment variables and inherited
-file descriptors are absent.
+file descriptors are absent. Explicit v3 `common.environment` values are
+resolved into a sealed lease before Session creation, then transferred on
+macOS over the private bounded supervisor control channel only after policy
+validation. The supervisor constructs the final target environment immediately
+before start; validation, status, Devin Skills/authentication, Codex version and
+auth/status processes remain value-free. The values necessarily transit
+trusted supervisor memory and remain readable by the target process tree.
+For selected-environment Codex launches, ACS disables the target's shell
+snapshot feature so exported values are not serialized into private Session
+files; the actual Codex tool process and descendants still receive them.
+Linux rejects selected environment transport before Session creation and never
+renders it as Bubblewrap `--setenv` argv.
 
 Unrelated host paths, writes outside workspace/Session, symlink escapes, and
 unrelated Unix sockets remain denied. This is process and filesystem isolation,

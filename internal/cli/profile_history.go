@@ -884,6 +884,44 @@ func preserveCurrentRestoreBindings(candidate *profile.Profile, current profile.
 		candidate.Common[commonprofile.ExecutablesCapabilityID] = selectedPayload
 	}
 
+	// Secret environment references are private local bindings. Reuse only the
+	// current reference for the same stable logical entry shape; never revive a
+	// historical host reference merely because it exists in snapshot bytes.
+	if selectedPayload, ok := candidate.Common[commonprofile.EnvironmentCapabilityID]; ok {
+		selected, err := commonprofile.DecodeEnvironmentSelection(selectedPayload.Selection)
+		if err != nil {
+			return false, err
+		}
+		currentByID := map[string]commonprofile.EnvironmentEntry{}
+		if payload, exists := current.Common[commonprofile.EnvironmentCapabilityID]; exists {
+			currentSelection, err := commonprofile.DecodeEnvironmentSelection(payload.Selection)
+			if err != nil {
+				return false, err
+			}
+			for _, entry := range currentSelection.Entries {
+				currentByID[entry.ID] = entry
+			}
+		}
+		for index := range selected.Entries {
+			entry := &selected.Entries[index]
+			if entry.Source.Kind != "secret-reference" {
+				continue
+			}
+			bound, exists := currentByID[entry.ID]
+			if !exists || bound.Destination != entry.Destination || bound.Scope != entry.Scope || bound.Required != entry.Required || bound.Classification != entry.Classification || bound.Source.Kind != entry.Source.Kind || bound.Source.Provider != entry.Source.Provider {
+				needs = true
+				continue
+			}
+			entry.Source.Reference = bound.Source.Reference
+		}
+		encoded, err := commonprofile.EncodeEnvironmentSelection(selected)
+		if err != nil {
+			return false, err
+		}
+		selectedPayload.Selection = encoded
+		candidate.Common[commonprofile.EnvironmentCapabilityID] = selectedPayload
+	}
+
 	for id, overlay := range candidate.Overlays {
 		if now, ok := current.Overlays[id]; ok {
 			overlay.AuthRef = now.AuthRef

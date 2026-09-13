@@ -14,6 +14,7 @@ import (
 
 	"github.com/alcimerio/ai-config-selector/internal/authority"
 	"github.com/alcimerio/ai-config-selector/internal/codexauthresource"
+	"github.com/alcimerio/ai-config-selector/internal/environmentresource"
 	"github.com/alcimerio/ai-config-selector/internal/launch"
 	"github.com/alcimerio/ai-config-selector/internal/session"
 )
@@ -32,7 +33,7 @@ func newCodexExecutionRunner(config codexLoginConfig, sandbox launch.ProcessSand
 	return &codexExecutionRunner{config: config, sandbox: sandbox}
 }
 
-func (runner *codexExecutionRunner) prepare(ctx context.Context, access launch.WorkspaceAccess, requirements authority.TargetRequirements, runtimeAuthority launch.RuntimeAuthority, filesystemGrants []launch.FilesystemGrant, executableGrants []launch.ExecutableGrant, pinned *pinnedExecutable) (*containedOperationPreparation, error) {
+func (runner *codexExecutionRunner) prepare(ctx context.Context, access launch.WorkspaceAccess, requirements authority.TargetRequirements, runtimeAuthority launch.RuntimeAuthority, filesystemGrants []launch.FilesystemGrant, executableGrants []launch.ExecutableGrant, pinned *pinnedExecutable, requiresEnvironment bool) (*containedOperationPreparation, error) {
 	if runner == nil {
 		return nil, ErrCodexFailed
 	}
@@ -45,7 +46,7 @@ func (runner *codexExecutionRunner) prepare(ctx context.Context, access launch.W
 	if runner.beforeSnapshotHook != nil {
 		runner.beforeSnapshotHook()
 	}
-	preparation, err := prepareContainedOperationWithAccessAndGrantsUsingExecutable(ctx, config, runner.sandbox, access, filesystemGrants, executableGrants, pinned, ErrCodexFailed, runtimeAuthority)
+	preparation, err := prepareContainedOperationWithAccessAndGrantsUsingExecutable(ctx, config, runner.sandbox, access, filesystemGrants, executableGrants, pinned, requiresEnvironment, ErrCodexFailed, runtimeAuthority)
 	return preparation, err
 }
 
@@ -143,7 +144,7 @@ func disabledMap(mode string) string {
 	return "{unsupported=true}"
 }
 
-func (runner *codexExecutionRunner) run(ctx context.Context, config codexLoginConfig, created *session.Session, metadata IdentityMetadata, access launch.WorkspaceAccess, challenge string, binding loginResourceBinding, arguments []string, terminal launch.Terminal, supervisor *devinSignalSupervisor, semantics authority.TargetSemantics, runtimeAuthority launch.RuntimeAuthority, filesystemGrants []launch.FilesystemGrant, executableGrants []launch.ExecutableGrant) containedRunResult {
+func (runner *codexExecutionRunner) run(ctx context.Context, config codexLoginConfig, created *session.Session, metadata IdentityMetadata, access launch.WorkspaceAccess, challenge string, binding loginResourceBinding, arguments []string, terminal launch.Terminal, supervisor *devinSignalSupervisor, semantics authority.TargetSemantics, runtimeAuthority launch.RuntimeAuthority, filesystemGrants []launch.FilesystemGrant, executableGrants []launch.ExecutableGrant, environment *environmentresource.Lease) containedRunResult {
 	mode := retainedProbe
 	reserved := false
 	if supervisor != nil {
@@ -176,13 +177,23 @@ func (runner *codexExecutionRunner) run(ctx context.Context, config codexLoginCo
 		return containedRunResult{err: ErrCodexFailed, cleanupProven: true}
 	}
 	executor := &Executor{sandbox: runner.sandbox}
+	targetArguments := codexExecutionArgumentsForSemantics(semantics, metadata.Workspace, created.WorkingDirectory(), arguments...)
+	if environment != nil && !environment.Empty() {
+		// Codex's stable shell-snapshot feature persists every exported target
+		// variable under CODEX_HOME. Selected Profile values must remain
+		// available to tool children without being written into Session files,
+		// so disable that target-owned snapshot only for selected-environment
+		// launches that resolved at least one value.
+		targetArguments = append([]string{"-c", "features.shell_snapshot=false"}, targetArguments...)
+	}
 	process, err := executor.prepareRetainedProcess(ctx, created, launch.ProcessRequest{
 		Workspace: created.WorkingDirectory(), WorkspaceAccess: access, SessionsDirectory: created.SessionsDirectory(),
 		SessionDirectory: created.RootDirectory(), SessionHome: created.HomeDirectory(), TemporaryDirectory: created.TemporaryDirectory(),
 		Executable: config.BinaryPath, RuntimeInputs: config.RuntimeInputs, RuntimeProbePaths: config.RuntimeProbePaths,
-		RecoveryProofChallenge: proof, Arguments: codexExecutionArgumentsForSemantics(semantics, metadata.Workspace, created.WorkingDirectory(), arguments...), Terminal: terminal, RuntimeAuthority: runtimeAuthority,
+		RecoveryProofChallenge: proof, Arguments: targetArguments, Terminal: terminal, RuntimeAuthority: runtimeAuthority,
 		FilesystemGrants: filesystemGrants,
 		ExecutableGrants: executableGrants,
+		Environment:      environment,
 	})
 	if err != nil {
 		cancelReservation()
@@ -194,11 +205,12 @@ func (runner *codexExecutionRunner) run(ctx context.Context, config codexLoginCo
 	if reserved {
 		mode = retainedDevinReserved
 	}
+	transferred := releaseEnvironmentAfterCleanup(process, environment)
 	runErr, cleanupErr := settleRetainedProcess(process, mode, supervisor)
 	if cleanupErr != nil {
-		return containedRunResult{err: ErrCodexCleanupUncertain, cleanupProven: false, cleanupProcess: process, cleanupChallenge: challenge}
+		return containedRunResult{err: ErrCodexCleanupUncertain, cleanupProven: false, cleanupProcess: process, cleanupChallenge: challenge, environmentReleaseTransferred: transferred}
 	}
-	return containedRunResult{err: runErr, cleanupProven: true}
+	return containedRunResult{err: runErr, cleanupProven: true, environmentReleaseTransferred: transferred}
 }
 
 func decodeRecoveryChallenge(value string) ([]byte, error) {
@@ -259,7 +271,8 @@ func (service *CodexAuthService) ExecuteCodex(ctx context.Context, request Codex
 	}
 	access := request.ResolvedPlan.WorkspaceAccess()
 	runtimeAuthority := request.ResolvedPlan.RuntimeAuthority()
-	preparation, err := service.execution.prepare(preflightContext, access, requirements, runtimeAuthority, filesystemGrants, executableGrants, operationExecutable)
+	requiresEnvironment := len(request.ResolvedPlan.EnvironmentIntents()) != 0
+	preparation, err := service.execution.prepare(preflightContext, access, requirements, runtimeAuthority, filesystemGrants, executableGrants, operationExecutable, requiresEnvironment)
 	if err != nil {
 		if preflightContext.Err() != nil {
 			return 1, ErrCodexFailed
@@ -267,6 +280,16 @@ func (service *CodexAuthService) ExecuteCodex(ctx context.Context, request Codex
 		return 1, sanitizeCodexExecutionError(err)
 	}
 	defer preparation.Close()
+	environment, err := resolvePlanEnvironment(request.ResolvedPlan, service.environmentLookup)
+	if err != nil {
+		return 1, err
+	}
+	releaseEnvironment := environment != nil
+	defer func() {
+		if releaseEnvironment {
+			environment.Release()
+		}
+	}()
 	if preflightContext.Err() != nil {
 		return 1, ErrCodexFailed
 	}
@@ -336,7 +359,7 @@ func (service *CodexAuthService) ExecuteCodex(ctx context.Context, request Codex
 		return 1, ErrCodexFailed
 	}
 	versionOutput := boundedBuffer{limit: maximumVersionOutputSize}
-	version := service.execution.run(preflightContext, preparation.config, created, metadata, access, challenge, binding, []string{"--version"}, launch.Terminal{Output: &versionOutput, ErrorOutput: io.Discard}, nil, requirements.Semantics, runtimeAuthority, filesystemGrants, executableGrants)
+	version := service.execution.run(preflightContext, preparation.config, created, metadata, access, challenge, binding, []string{"--version"}, launch.Terminal{Output: &versionOutput, ErrorOutput: io.Discard}, nil, requirements.Semantics, runtimeAuthority, filesystemGrants, executableGrants, nil)
 	if preflightContext.Err() != nil && version.cleanupProven {
 		version.err = ErrCodexFailed
 	} else if version.err == nil && (versionOutput.overflow || strings.TrimSpace(versionOutput.String()) != "codex-cli "+service.execution.config.SupportedVersion) {
@@ -344,9 +367,12 @@ func (service *CodexAuthService) ExecuteCodex(ctx context.Context, request Codex
 	}
 	run := version
 	if version.err == nil && version.cleanupProven && preflightContext.Err() == nil {
-		run = service.execution.run(preflightContext, preparation.config, created, metadata, access, challenge, binding, nil, request.Terminal, supervisor, requirements.Semantics, runtimeAuthority, filesystemGrants, executableGrants)
+		run = service.execution.run(preflightContext, preparation.config, created, metadata, access, challenge, binding, nil, request.Terminal, supervisor, requirements.Semantics, runtimeAuthority, filesystemGrants, executableGrants, environment)
 	} else if version.err == nil && preflightContext.Err() != nil {
 		run.err = ErrCodexFailed
+	}
+	if run.environmentReleaseTransferred {
+		releaseEnvironment = false
 	}
 	if !run.cleanupProven {
 		service.transferResourcePendingBinding(created, binding, cleanupChallenge(run, challenge), run.cleanupProcess)

@@ -366,5 +366,23 @@ func renderFactValue(value authority.FactValue) string {
 	if len(value.Names) != 0 {
 		parts = append(parts, "names="+strings.Join(value.Names, ","))
 	}
+	if value.Destination != "" {
+		parts = append(parts, "destination="+value.Destination)
+	}
+	if value.Scope != "" {
+		parts = append(parts, "scope="+value.Scope)
+	}
+	if value.SourceKind != "" {
+		parts = append(parts, "source-kind="+value.SourceKind)
+	}
+	if value.Provider != "" {
+		parts = append(parts, "provider="+value.Provider)
+	}
+	if value.Classification != "" {
+		parts = append(parts, "classification="+value.Classification)
+	}
+	if value.Required != nil {
+		parts = append(parts, fmt.Sprintf("required=%t", *value.Required))
+	}
 	return strings.Join(parts, "; ")
 }

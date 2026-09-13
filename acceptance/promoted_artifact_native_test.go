@@ -16,6 +16,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -31,13 +32,17 @@ import (
 )
 
 const (
-	fakeDevinConfigurationName  = ".acs-native-candidate-fixture.json"
-	fakeDevinResultName         = ".acs-native-candidate-result.json"
-	fakeDevinSkillsProbeMarker  = ".acs-native-skills-probe"
-	fakeDevinAuthProbeMarker    = ".acs-native-auth-probe"
-	privateEnvironmentValue     = "candidate-secret-value"
-	privateDescriptorValue      = "candidate-descriptor-value"
-	fakeDevinDescendantExitWait = 3 * time.Second
+	fakeDevinConfigurationName       = ".acs-native-candidate-fixture.json"
+	fakeDevinResultName              = ".acs-native-candidate-result.json"
+	fakeDevinSkillsProbeMarker       = ".acs-native-skills-probe"
+	fakeDevinAuthProbeMarker         = ".acs-native-auth-probe"
+	privateEnvironmentValue          = "candidate-secret-value"
+	privateDescriptorValue           = "candidate-descriptor-value"
+	scopedEnvironmentModeValue       = "selected-mode-value"
+	scopedEnvironmentOptionalValue   = "selected-optional-value"
+	scopedEnvironmentSecretValue     = "selected-secret-value"
+	scopedEnvironmentUnselectedValue = "unselected-secret-value"
+	fakeDevinDescendantExitWait      = 3 * time.Second
 )
 
 // TestMain also makes this test executable a credential-free fake Devin. The
@@ -184,6 +189,7 @@ func TestPromotedArtifactNativeContainmentContract(t *testing.T) {
 	t.Run("generic literal command uses candidate containment", assertPromotedArtifactGenericRun)
 	t.Run("explicit profile filesystem grants are enforced", assertPromotedArtifactFilesystemGrants)
 	t.Run("explicit executable visibility is enforced and revalidated", assertPromotedArtifactExecutableVisibility)
+	t.Run("scoped Profile environment reaches only attached target trees", assertPromotedArtifactScopedEnvironment)
 	t.Run("filesystem grant identity changes stop later target generations", assertPromotedArtifactFilesystemGrantIdentityChange)
 	t.Run("filesystem environment descriptors sockets IP preflight and descendants", assertPromotedArtifactNativeContainment)
 	t.Run("Devin preflight and target generations are fresh while retained", assertPromotedArtifactDevinGenerations)
@@ -839,9 +845,15 @@ type nativeExplanationFact struct {
 		Version int    `json:"version"`
 	} `json:"source"`
 	Value struct {
-		Access string   `json:"access"`
-		Mode   string   `json:"mode"`
-		Names  []string `json:"names"`
+		Access         string   `json:"access"`
+		Mode           string   `json:"mode"`
+		Names          []string `json:"names"`
+		Destination    string   `json:"destination"`
+		Scope          string   `json:"scope"`
+		SourceKind     string   `json:"sourceKind"`
+		Provider       string   `json:"provider"`
+		Classification string   `json:"classification"`
+		Required       *bool    `json:"required"`
 	} `json:"value"`
 }
 
@@ -887,6 +899,40 @@ type genericHelperObservation struct {
 	WorkspaceWrite  bool     `json:"workspaceWrite"`
 	ExternalRead    bool     `json:"externalRead"`
 	ExternalWrite   bool     `json:"externalWrite"`
+}
+
+type scopedEnvironmentObservation struct {
+	SelectedNonSecret bool                          `json:"selectedNonSecret"`
+	SelectedOptional  bool                          `json:"selectedOptional"`
+	OptionalAbsent    bool                          `json:"optionalAbsent"`
+	SelectedSecret    bool                          `json:"selectedSecret"`
+	UnselectedAbsent  bool                          `json:"unselectedAbsent"`
+	Descendant        *scopedEnvironmentObservation `json:"descendant,omitempty"`
+}
+
+func observeScopedEnvironment(nonSecretPath, optionalPath, secretPath string) scopedEnvironmentObservation {
+	nonSecret, nonSecretErr := os.ReadFile(nonSecretPath)
+	optional, optionalErr := os.ReadFile(optionalPath)
+	secret, secretErr := os.ReadFile(secretPath)
+	selectedNonSecret, selectedNonSecretPresent := os.LookupEnv("PROFILE_SELECTED_MODE")
+	selectedOptional, selectedOptionalPresent := os.LookupEnv("PROFILE_SELECTED_OPTIONAL")
+	selectedSecret, selectedSecretPresent := os.LookupEnv("PROFILE_SELECTED_TOKEN")
+	return scopedEnvironmentObservation{
+		SelectedNonSecret: nonSecretErr == nil && selectedNonSecretPresent && selectedNonSecret == string(nonSecret),
+		SelectedOptional:  optionalErr == nil && selectedOptionalPresent && selectedOptional == string(optional),
+		OptionalAbsent:    !selectedOptionalPresent,
+		SelectedSecret:    secretErr == nil && selectedSecretPresent && selectedSecret == string(secret),
+		UnselectedAbsent:  environmentNamesAbsent("PROFILE_UNSELECTED", "ACS_NATIVE_PROFILE_UNSELECTED", "ACS_NATIVE_PROFILE_MODE", "ACS_NATIVE_PROFILE_OPTIONAL", "ACS_NATIVE_PROFILE_TOKEN"),
+	}
+}
+
+func environmentNamesAbsent(names ...string) bool {
+	for _, name := range names {
+		if _, present := os.LookupEnv(name); present {
+			return false
+		}
+	}
+	return true
 }
 
 type privateCapabilityObservation struct {
@@ -1017,6 +1063,21 @@ func runPromotedArtifactGenericHelper(arguments []string) bool {
 			selected.Dir, selected.Env = mustGetwd(), os.Environ()
 			observation := executableVisibilityObservation{SelectedLogical: selected.Run() == nil && fakeDevinMarkerExists(arguments[3])}
 			observation.IntrinsicSystem = exec.Command("/usr/bin/true").Run() == nil
+			_ = json.NewEncoder(os.Stdout).Encode(observation)
+			return true
+		case "--scoped-environment", "--scoped-environment-child":
+			if len(arguments) != 5 {
+				os.Exit(80)
+			}
+			observation := observeScopedEnvironment(arguments[2], arguments[3], arguments[4])
+			if arguments[1] == "--scoped-environment" {
+				child := exec.Command(os.Args[0], "--acs-generic-command-helper", "--scoped-environment-child", arguments[2], arguments[3], arguments[4])
+				child.Dir, child.Env = mustGetwd(), os.Environ()
+				output, err := child.Output()
+				if err != nil || json.Unmarshal(output, &observation.Descendant) != nil {
+					os.Exit(79)
+				}
+			}
 			_ = json.NewEncoder(os.Stdout).Encode(observation)
 			return true
 		case "--execute-path":
@@ -2657,6 +2718,274 @@ func assertPromotedArtifactNativeReadiness(t *testing.T) {
 	assertNoSessions(t, home)
 }
 
+func assertPromotedArtifactScopedEnvironment(t *testing.T) {
+	binary := promotedBinary(t)
+	helper, err := filepath.Abs(os.Args[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	home, path := prepareRuntimeHome(t)
+	root := realTemporaryDirectory(t)
+	workspace, tools := filepath.Join(root, "workspace"), filepath.Join(root, "tools")
+	for _, directory := range []string{workspace, tools} {
+		if err := os.Mkdir(directory, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	installPromotedArtifactFakeDevin(t, tools)
+	writeScopedEnvironmentProfile(t, home, "scoped-environment")
+
+	expectedMode := filepath.Join(workspace, "expected-mode")
+	expectedOptional := filepath.Join(workspace, "expected-optional")
+	expectedSecret := filepath.Join(workspace, "expected-secret")
+	for path, value := range map[string]string{
+		expectedMode: scopedEnvironmentModeValue, expectedOptional: scopedEnvironmentOptionalValue, expectedSecret: scopedEnvironmentSecretValue,
+	} {
+		if err := os.WriteFile(path, []byte(value), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	selectedSources := map[string]string{
+		"ACS_NATIVE_PROFILE_MODE":       scopedEnvironmentModeValue,
+		"ACS_NATIVE_PROFILE_OPTIONAL":   scopedEnvironmentOptionalValue,
+		"ACS_NATIVE_PROFILE_TOKEN":      scopedEnvironmentSecretValue,
+		"ACS_NATIVE_PROFILE_UNSELECTED": scopedEnvironmentUnselectedValue,
+	}
+	targetPath := tools + string(os.PathListSeparator) + path
+
+	explain := exec.Command(binary, "explain", "run", "--profile", "scoped-environment", "--json", "--", helper, "--acs-generic-command-helper", "--tripwire", filepath.Join(workspace, "explain-must-not-start"))
+	explain.Dir, explain.Env = workspace, nativeCandidateEnvironment(home, targetPath, selectedSources)
+	explanationOutput, err := explain.CombinedOutput()
+	if err != nil {
+		t.Fatalf("scoped environment explanation: %v; output=%s", err, explanationOutput)
+	}
+	for _, value := range []string{scopedEnvironmentModeValue, scopedEnvironmentOptionalValue, scopedEnvironmentSecretValue, scopedEnvironmentUnselectedValue, "ACS_NATIVE_PROFILE_MODE", "ACS_NATIVE_PROFILE_OPTIONAL", "ACS_NATIVE_PROFILE_TOKEN"} {
+		if bytes.Contains(explanationOutput, []byte(value)) {
+			t.Fatal("scoped environment explanation exposed a local source or value")
+		}
+	}
+	var explanation struct {
+		Plan struct {
+			Requested []nativeExplanationFact `json:"requested"`
+			Effective []nativeExplanationFact `json:"effective"`
+		} `json:"plan"`
+	}
+	if err := json.Unmarshal(explanationOutput, &explanation); err != nil {
+		t.Fatalf("decode scoped environment explanation: %v; output=%s", err, explanationOutput)
+	}
+	for _, want := range []struct {
+		id, destination, classification string
+		required                        bool
+	}{
+		{id: "common.environment.mode", destination: "PROFILE_SELECTED_MODE", classification: "non-secret", required: true},
+		{id: "common.environment.optional", destination: "PROFILE_SELECTED_OPTIONAL", classification: "non-secret", required: false},
+		{id: "common.environment.token", destination: "PROFILE_SELECTED_TOKEN", classification: "secret", required: true},
+	} {
+		fact, found := nativeExplanationFactByID(explanation.Plan.Requested, want.id)
+		if !found || fact.Value.Destination != want.destination || fact.Value.Scope != "attached-process-tree" || fact.Value.Classification != want.classification || fact.Value.Required == nil || *fact.Value.Required != want.required {
+			t.Fatalf("scoped environment requested fact %s = %#v", want.id, fact)
+		}
+		effectiveID := strings.TrimPrefix(want.id, "common.")
+		if !nativeExplanationHasFact(explanation.Plan.Effective, effectiveID) {
+			t.Fatalf("scoped environment omitted effective fact %s", effectiveID)
+		}
+	}
+	assertMarkerAbsent(t, filepath.Join(workspace, "explain-must-not-start"), "scoped environment explanation started a target")
+	assertNoSessions(t, home)
+
+	export := exec.Command(binary, "profile", "export", "scoped-environment")
+	export.Env = nativeCandidateEnvironment(home, targetPath, selectedSources)
+	var exported, exportReport bytes.Buffer
+	export.Stdout, export.Stderr = &exported, &exportReport
+	if err := export.Run(); err != nil {
+		t.Fatalf("scoped environment export: %v; report=%s", err, exportReport.Bytes())
+	}
+	assertScopedEnvironmentValuesAbsent(t, "portable export", append(exported.Bytes(), exportReport.Bytes()...))
+
+	shellParent, shellChild := filepath.Join(workspace, "environment-shell-parent"), filepath.Join(workspace, "environment-shell-child")
+	shellScript := "set -eu\n" +
+		"test \"$PROFILE_SELECTED_MODE\" = \"$(cat " + strconv.Quote(expectedMode) + ")\"\n" +
+		"test \"$PROFILE_SELECTED_OPTIONAL\" = \"$(cat " + strconv.Quote(expectedOptional) + ")\"\n" +
+		"test \"$PROFILE_SELECTED_TOKEN\" = \"$(cat " + strconv.Quote(expectedSecret) + ")\"\n" +
+		"test -z \"${PROFILE_UNSELECTED+x}\" && test -z \"${ACS_NATIVE_PROFILE_MODE+x}\" && test -z \"${ACS_NATIVE_PROFILE_OPTIONAL+x}\" && test -z \"${ACS_NATIVE_PROFILE_TOKEN+x}\" && test -z \"${ACS_NATIVE_PROFILE_UNSELECTED+x}\"\n" +
+		"printf ok > " + strconv.Quote(shellParent) + "\n" +
+		"/bin/sh -c 'test \"$PROFILE_SELECTED_MODE\" = \"$(cat \"$1\")\" && test \"$PROFILE_SELECTED_OPTIONAL\" = \"$(cat \"$2\")\" && test \"$PROFILE_SELECTED_TOKEN\" = \"$(cat \"$3\")\" && test -z \"${PROFILE_UNSELECTED+x}\" && test -z \"${ACS_NATIVE_PROFILE_MODE+x}\" && test -z \"${ACS_NATIVE_PROFILE_OPTIONAL+x}\" && test -z \"${ACS_NATIVE_PROFILE_TOKEN+x}\" && test -z \"${ACS_NATIVE_PROFILE_UNSELECTED+x}\" && printf ok > \"$4\"' child " +
+		strings.Join([]string{strconv.Quote(expectedMode), strconv.Quote(expectedOptional), strconv.Quote(expectedSecret), strconv.Quote(shellChild)}, " ") + "\nexit 0\n"
+	before := promotedSessionSnapshot(t, binary, home, path)
+	shell := exec.Command(binary, "sandbox", "--profile", "scoped-environment")
+	shell.Dir, shell.Env, shell.Stdin = workspace, nativeCandidateEnvironment(home, targetPath, selectedSources), strings.NewReader(shellScript)
+	if output, err := shell.CombinedOutput(); err != nil {
+		t.Fatalf("scoped environment shell: %v; output=%s", err, output)
+	}
+	assertMarkerExists(t, shellParent)
+	assertMarkerExists(t, shellChild)
+	assertNoSessions(t, home)
+	assertNewRemovedPromotedSessions(t, binary, home, path, before, "shell")
+
+	before = promotedSessionSnapshot(t, binary, home, path)
+	generic := exec.Command(binary, "run", "--profile", "scoped-environment", "--", helper, "--acs-generic-command-helper", "--scoped-environment", expectedMode, expectedOptional, expectedSecret)
+	generic.Dir, generic.Env = workspace, nativeCandidateEnvironment(home, targetPath, selectedSources)
+	genericOutput, err := generic.Output()
+	if err != nil {
+		t.Fatalf("scoped environment generic target: %v", err)
+	}
+	var genericObservation scopedEnvironmentObservation
+	if json.Unmarshal(genericOutput, &genericObservation) != nil || !completeScopedEnvironmentObservation(genericObservation) || genericObservation.Descendant == nil || !completeScopedEnvironmentObservation(*genericObservation.Descendant) {
+		t.Fatalf("scoped environment generic observation=%+v", genericObservation)
+	}
+	assertNoSessions(t, home)
+	assertNewRemovedPromotedSessions(t, binary, home, path, before, "command")
+
+	before = promotedSessionSnapshot(t, binary, home, path)
+	optionalMissing := exec.Command(binary, "run", "--profile", "scoped-environment", "--", helper, "--acs-generic-command-helper", "--scoped-environment", expectedMode, expectedOptional, expectedSecret)
+	optionalMissing.Dir = workspace
+	optionalMissing.Env = removeNativeEnvironmentName(nativeCandidateEnvironment(home, targetPath, selectedSources), "ACS_NATIVE_PROFILE_OPTIONAL")
+	optionalOutput, err := optionalMissing.Output()
+	if err != nil {
+		t.Fatalf("scoped environment optional omission: %v", err)
+	}
+	var optionalObservation scopedEnvironmentObservation
+	if json.Unmarshal(optionalOutput, &optionalObservation) != nil || !scopedEnvironmentOptionalOmitted(optionalObservation) || optionalObservation.Descendant == nil || !scopedEnvironmentOptionalOmitted(*optionalObservation.Descendant) {
+		t.Fatalf("scoped environment optional omission observation=%+v", optionalObservation)
+	}
+	assertNoSessions(t, home)
+	assertNewRemovedPromotedSessions(t, binary, home, path, before, "command")
+
+	writeFakeDevinConfiguration(t, workspace, fakeDevinConfiguration{Mode: "scoped-environment", ExpectedNonSecret: expectedMode, ExpectedOptional: expectedOptional, ExpectedSecret: expectedSecret})
+	before = promotedSessionSnapshot(t, binary, home, path)
+	devin := exec.Command(binary, "devin", "--profile", "scoped-environment")
+	devin.Dir, devin.Env = workspace, nativeCandidateEnvironment(home, targetPath, selectedSources)
+	if output, err := devin.CombinedOutput(); err != nil {
+		t.Fatalf("scoped environment Devin: %v; output=%s", err, output)
+	}
+	devinResult := readFakeDevinResult(t, workspace)
+	if !devinResult.EnvironmentSkillsAbsent || !devinResult.EnvironmentAuthAbsent || !devinResult.EnvironmentSelected || !devinResult.EnvironmentOptional || !devinResult.EnvironmentSecretSelected || !devinResult.EnvironmentUnselectedGone || !devinResult.EnvironmentChildSelected || !devinResult.EnvironmentChildOptional || !devinResult.EnvironmentChildSecret || !devinResult.EnvironmentChildUnselected {
+		t.Fatalf("scoped environment Devin observation=%+v", devinResult)
+	}
+	assertNoSessions(t, home)
+	assertNewRemovedPromotedSessions(t, binary, home, path, before, "devin")
+
+	missingSources := map[string]string{
+		"ACS_NATIVE_PROFILE_MODE":       scopedEnvironmentModeValue,
+		"ACS_NATIVE_PROFILE_OPTIONAL":   scopedEnvironmentOptionalValue,
+		"ACS_NATIVE_PROFILE_UNSELECTED": scopedEnvironmentUnselectedValue,
+	}
+	for _, test := range []struct {
+		name   string
+		marker string
+		make   func() *exec.Cmd
+	}{
+		{name: "shell", marker: filepath.Join(workspace, "missing-shell-started"), make: func() *exec.Cmd {
+			command := exec.Command(binary, "sandbox", "--profile", "scoped-environment")
+			command.Stdin = strings.NewReader("printf bad > ./missing-shell-started\nexit 0\n")
+			return command
+		}},
+		{name: "generic", marker: filepath.Join(workspace, "missing-generic-started"), make: func() *exec.Cmd {
+			return exec.Command(binary, "run", "--profile", "scoped-environment", "--", helper, "--acs-generic-command-helper", "--tripwire", filepath.Join(workspace, "missing-generic-started"))
+		}},
+		{name: "devin", marker: filepath.Join(workspace, fakeDevinResultName), make: func() *exec.Cmd {
+			_ = os.Remove(filepath.Join(workspace, fakeDevinResultName))
+			return exec.Command(binary, "devin", "--profile", "scoped-environment")
+		}},
+	} {
+		t.Run("missing required before "+test.name+" Session", func(t *testing.T) {
+			before := promotedSessionSnapshot(t, binary, home, path)
+			command := test.make()
+			command.Dir = workspace
+			command.Env = removeNativeEnvironmentName(nativeCandidateEnvironment(home, targetPath, missingSources), "ACS_NATIVE_PROFILE_TOKEN")
+			output, err := command.CombinedOutput()
+			if err == nil {
+				t.Fatalf("missing required environment started %s", test.name)
+			}
+			if !bytes.Contains(output, []byte("selected environment value is unavailable")) {
+				t.Fatalf("missing required %s omitted the environment-unavailable diagnostic: %s", test.name, output)
+			}
+			for _, value := range []string{scopedEnvironmentModeValue, scopedEnvironmentOptionalValue, scopedEnvironmentUnselectedValue} {
+				if bytes.Contains(output, []byte(value)) {
+					t.Fatalf("missing required %s error exposed an environment value", test.name)
+				}
+			}
+			assertMarkerAbsent(t, test.marker, "missing required environment started "+test.name)
+			after := promotedSessionSnapshot(t, binary, home, path)
+			if !reflect.DeepEqual(after, before) {
+				t.Fatalf("missing required environment changed Sessions for %s", test.name)
+			}
+		})
+	}
+	assertScopedEnvironmentValuesAbsentFromState(t, filepath.Join(home, ".acs"))
+}
+
+func assertScopedEnvironmentValuesAbsent(t *testing.T, location string, contents []byte) {
+	t.Helper()
+	for _, value := range []string{scopedEnvironmentModeValue, scopedEnvironmentOptionalValue, scopedEnvironmentSecretValue, scopedEnvironmentUnselectedValue} {
+		if bytes.Contains(contents, []byte(value)) {
+			t.Fatalf("%s persisted or exposed a selected environment value", location)
+		}
+	}
+}
+
+func assertScopedEnvironmentValuesAbsentFromState(t *testing.T, root string) {
+	t.Helper()
+	if err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		if !info.Mode().IsRegular() {
+			return nil
+		}
+		contents, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		assertScopedEnvironmentValuesAbsent(t, "ACS persistent state", contents)
+		return nil
+	}); err != nil {
+		t.Fatalf("scan ACS persistent state: %v", err)
+	}
+}
+
+func removeNativeEnvironmentName(environment []string, name string) []string {
+	prefix := name + "="
+	filtered := make([]string, 0, len(environment))
+	for _, entry := range environment {
+		if !strings.HasPrefix(entry, prefix) {
+			filtered = append(filtered, entry)
+		}
+	}
+	return filtered
+}
+
+func completeScopedEnvironmentObservation(observation scopedEnvironmentObservation) bool {
+	return observation.SelectedNonSecret && observation.SelectedOptional && observation.SelectedSecret && observation.UnselectedAbsent
+}
+
+func scopedEnvironmentOptionalOmitted(observation scopedEnvironmentObservation) bool {
+	return observation.SelectedNonSecret && !observation.SelectedOptional && observation.OptionalAbsent && observation.SelectedSecret && observation.UnselectedAbsent
+}
+
+func writeScopedEnvironmentProfile(t *testing.T, home, name string) {
+	t.Helper()
+	directory := filepath.Join(home, ".acs", "profiles")
+	if err := os.MkdirAll(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	document := `{"version":3,"name":` + strconv.Quote(name) + `,"common":{"skills":{"version":1,"selection":[{"source":"devin-config","relativePath":"review"}]},"workspace":{"version":1,"selection":{"access":"read-write"}},"environment":{"version":1,"selection":{"entries":[` +
+		`{"id":"mode","destination":"PROFILE_SELECTED_MODE","scope":"attached-process-tree","source":{"kind":"host-environment","name":"ACS_NATIVE_PROFILE_MODE"},"required":true,"classification":"non-secret"},` +
+		`{"id":"optional","destination":"PROFILE_SELECTED_OPTIONAL","scope":"attached-process-tree","source":{"kind":"host-environment","name":"ACS_NATIVE_PROFILE_OPTIONAL"},"required":false,"classification":"non-secret"},` +
+		`{"id":"token","destination":"PROFILE_SELECTED_TOKEN","scope":"attached-process-tree","source":{"kind":"secret-reference","provider":"host-environment","reference":"ACS_NATIVE_PROFILE_TOKEN"},"required":true,"classification":"secret"}` +
+		`]}}},"overlays":{"devin":{"version":1}}}`
+	if err := os.WriteFile(filepath.Join(directory, name+".json"), []byte(document), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func assertPromotedArtifactNativeContainment(t *testing.T) {
 	binary := promotedBinary(t)
 	home, path := prepareRuntimeHome(t)
@@ -2910,34 +3239,47 @@ type fakeDevinConfiguration struct {
 	PrivateOutput       string `json:"privateOutput,omitempty"`
 	ProjectAgentPath    string `json:"projectAgentPath,omitempty"`
 	ProjectDevinPath    string `json:"projectDevinPath,omitempty"`
+	ExpectedNonSecret   string `json:"expectedNonSecret,omitempty"`
+	ExpectedOptional    string `json:"expectedOptional,omitempty"`
+	ExpectedSecret      string `json:"expectedSecret,omitempty"`
 }
 
 type fakeDevinResult struct {
-	PreflightSkills           bool `json:"preflightSkills"`
-	PreflightAuthentication   bool `json:"preflightAuthentication"`
-	WorkspaceWritable         bool `json:"workspaceWritable"`
-	SessionWritable           bool `json:"sessionWritable"`
-	TemporaryWritable         bool `json:"temporaryWritable"`
-	HostFileReadable          bool `json:"hostFileReadable"`
-	SymlinkEscapeReadable     bool `json:"symlinkEscapeReadable"`
-	AllowedEnvironment        bool `json:"allowedEnvironment"`
-	BlockedEnvironmentVisible bool `json:"blockedEnvironmentVisible"`
-	DescriptorLeaked          bool `json:"descriptorLeaked"`
-	HostSocketReachable       bool `json:"hostSocketReachable"`
-	OutboundIP                bool `json:"outboundIP"`
-	LocalIPBind               bool `json:"localIPBind"`
-	LocalUnixBind             bool `json:"localUnixBind"`
-	ExternalWriteSucceeded    bool `json:"externalWriteSucceeded"`
-	DescendantStarted         bool `json:"descendantStarted"`
-	RegisteredSysctls         bool `json:"registeredSysctls"`
-	UnregisteredSysctlDenied  bool `json:"unregisteredSysctlDenied"`
-	SystemTrustSettings       bool `json:"systemTrustSettings"`
-	LocalSystemTrust          bool `json:"localSystemTrust"`
-	SelectedCommonSkills      bool `json:"selectedCommonSkills"`
-	SelectedProjectedSkills   bool `json:"selectedProjectedSkills"`
-	UnselectedGlobalAbsent    bool `json:"unselectedGlobalAbsent"`
-	ProjectAgentReadable      bool `json:"projectAgentReadable"`
-	ProjectDevinReadable      bool `json:"projectDevinReadable"`
+	PreflightSkills            bool `json:"preflightSkills"`
+	PreflightAuthentication    bool `json:"preflightAuthentication"`
+	WorkspaceWritable          bool `json:"workspaceWritable"`
+	SessionWritable            bool `json:"sessionWritable"`
+	TemporaryWritable          bool `json:"temporaryWritable"`
+	HostFileReadable           bool `json:"hostFileReadable"`
+	SymlinkEscapeReadable      bool `json:"symlinkEscapeReadable"`
+	AllowedEnvironment         bool `json:"allowedEnvironment"`
+	BlockedEnvironmentVisible  bool `json:"blockedEnvironmentVisible"`
+	DescriptorLeaked           bool `json:"descriptorLeaked"`
+	HostSocketReachable        bool `json:"hostSocketReachable"`
+	OutboundIP                 bool `json:"outboundIP"`
+	LocalIPBind                bool `json:"localIPBind"`
+	LocalUnixBind              bool `json:"localUnixBind"`
+	ExternalWriteSucceeded     bool `json:"externalWriteSucceeded"`
+	DescendantStarted          bool `json:"descendantStarted"`
+	RegisteredSysctls          bool `json:"registeredSysctls"`
+	UnregisteredSysctlDenied   bool `json:"unregisteredSysctlDenied"`
+	SystemTrustSettings        bool `json:"systemTrustSettings"`
+	LocalSystemTrust           bool `json:"localSystemTrust"`
+	SelectedCommonSkills       bool `json:"selectedCommonSkills"`
+	SelectedProjectedSkills    bool `json:"selectedProjectedSkills"`
+	UnselectedGlobalAbsent     bool `json:"unselectedGlobalAbsent"`
+	ProjectAgentReadable       bool `json:"projectAgentReadable"`
+	ProjectDevinReadable       bool `json:"projectDevinReadable"`
+	EnvironmentSkillsAbsent    bool `json:"environmentSkillsAbsent"`
+	EnvironmentAuthAbsent      bool `json:"environmentAuthAbsent"`
+	EnvironmentSelected        bool `json:"environmentSelected"`
+	EnvironmentOptional        bool `json:"environmentOptional"`
+	EnvironmentSecretSelected  bool `json:"environmentSecretSelected"`
+	EnvironmentUnselectedGone  bool `json:"environmentUnselectedGone"`
+	EnvironmentChildSelected   bool `json:"environmentChildSelected"`
+	EnvironmentChildOptional   bool `json:"environmentChildOptional"`
+	EnvironmentChildSecret     bool `json:"environmentChildSecret"`
+	EnvironmentChildUnselected bool `json:"environmentChildUnselected"`
 }
 
 func installPromotedArtifactFakeDevin(t *testing.T, tools string) {
@@ -2992,6 +3334,10 @@ func runPromotedArtifactFakeDevin(arguments []string) bool {
 		runFakeDevinDescendant()
 		return true
 	}
+	if len(arguments) == 1 && arguments[0] == "--acs-native-environment-descendant" {
+		runFakeDevinEnvironmentDescendant()
+		return true
+	}
 	if len(arguments) == 3 && arguments[0] == "skills" && arguments[1] == "list" && arguments[2] == "--json" {
 		runFakeDevinSkills()
 		return true
@@ -3013,6 +3359,10 @@ func runFakeDevinSkills() {
 	holdFakeDevinGenerationPhase(configuration, "skills", workspace)
 	if configuration.Mode == "shared-target-conformance" {
 		writeFakeDevinMarker(filepath.Join(os.Getenv("HOME"), fakeDevinSkillsProbeMarker))
+	} else if configuration.Mode == "scoped-environment" {
+		if scopedEnvironmentNamesAbsent() {
+			writeFakeDevinMarker(filepath.Join(workspace, "environment-skills-absent"))
+		}
 	} else {
 		writeFakeDevinMarker(filepath.Join(workspace, "preflight-skills"))
 	}
@@ -3047,6 +3397,10 @@ func runFakeDevinAuthentication() {
 	}
 	if configuration.Mode == "shared-target-conformance" {
 		writeFakeDevinMarker(filepath.Join(os.Getenv("HOME"), fakeDevinAuthProbeMarker))
+	} else if configuration.Mode == "scoped-environment" {
+		if scopedEnvironmentNamesAbsent() {
+			writeFakeDevinMarker(filepath.Join(mustGetwd(), "environment-auth-absent"))
+		}
 	} else {
 		writeFakeDevinMarker(filepath.Join(mustGetwd(), "preflight-authentication"))
 	}
@@ -3098,6 +3452,33 @@ func runFakeDevinInteractive() {
 		}
 		return
 	}
+	if configuration.Mode == "scoped-environment" {
+		observation := observeScopedEnvironment(configuration.ExpectedNonSecret, configuration.ExpectedOptional, configuration.ExpectedSecret)
+		child := exec.Command(os.Args[0], "--acs-native-environment-descendant")
+		child.Dir, child.Env = workspace, os.Environ()
+		childOutput, childErr := child.Output()
+		var descendant scopedEnvironmentObservation
+		if childErr != nil || json.Unmarshal(childOutput, &descendant) != nil {
+			os.Exit(59)
+		}
+		result := fakeDevinResult{
+			EnvironmentSkillsAbsent:    fakeDevinMarkerExists(filepath.Join(workspace, "environment-skills-absent")),
+			EnvironmentAuthAbsent:      fakeDevinMarkerExists(filepath.Join(workspace, "environment-auth-absent")),
+			EnvironmentSelected:        observation.SelectedNonSecret,
+			EnvironmentOptional:        observation.SelectedOptional,
+			EnvironmentSecretSelected:  observation.SelectedSecret,
+			EnvironmentUnselectedGone:  observation.UnselectedAbsent,
+			EnvironmentChildSelected:   descendant.SelectedNonSecret,
+			EnvironmentChildOptional:   descendant.SelectedOptional,
+			EnvironmentChildSecret:     descendant.SelectedSecret,
+			EnvironmentChildUnselected: descendant.UnselectedAbsent,
+		}
+		contents, err := json.Marshal(result)
+		if err != nil || os.WriteFile(filepath.Join(workspace, fakeDevinResultName), contents, 0o600) != nil {
+			os.Exit(58)
+		}
+		return
+	}
 	result := fakeDevinResult{
 		PreflightSkills:           fakeDevinMarkerExists(filepath.Join(workspace, "preflight-skills")),
 		PreflightAuthentication:   fakeDevinMarkerExists(filepath.Join(workspace, "preflight-authentication")),
@@ -3128,6 +3509,19 @@ func runFakeDevinInteractive() {
 	if err := os.WriteFile(filepath.Join(workspace, fakeDevinResultName), contents, 0o600); err != nil {
 		os.Exit(73)
 	}
+}
+
+func scopedEnvironmentNamesAbsent() bool {
+	return environmentNamesAbsent("PROFILE_SELECTED_MODE", "PROFILE_SELECTED_OPTIONAL", "PROFILE_SELECTED_TOKEN", "PROFILE_UNSELECTED",
+		"ACS_NATIVE_PROFILE_MODE", "ACS_NATIVE_PROFILE_OPTIONAL", "ACS_NATIVE_PROFILE_TOKEN", "ACS_NATIVE_PROFILE_UNSELECTED")
+}
+
+func runFakeDevinEnvironmentDescendant() {
+	configuration, err := readFakeDevinConfiguration()
+	if err != nil {
+		os.Exit(57)
+	}
+	_ = json.NewEncoder(os.Stdout).Encode(observeScopedEnvironment(configuration.ExpectedNonSecret, configuration.ExpectedOptional, configuration.ExpectedSecret))
 }
 
 func holdFakeDevinGenerationPhase(configuration fakeDevinConfiguration, phase, workspace string) {
@@ -3456,10 +3850,21 @@ func nativeCandidateEnvironment(home, path string, overrides map[string]string) 
 		}
 		environment = append(environment, entry)
 	}
-	for _, key := range []string{"HOME", "PATH", "TERM", "NO_COLOR", "ACS_NATIVE_CANDIDATE_SECRET", "ACS_GENERIC_HOST_SECRET", "ACS_SESSION_PRIVATE_CHALLENGE"} {
+	baseKeys := []string{"HOME", "PATH", "TERM", "NO_COLOR"}
+	for _, key := range baseKeys {
 		if value, ok := values[key]; ok {
 			environment = append(environment, key+"="+value)
 		}
+	}
+	extraKeys := make([]string, 0, len(values)-len(baseKeys))
+	for key := range values {
+		if key != "HOME" && key != "PATH" && key != "TERM" && key != "NO_COLOR" {
+			extraKeys = append(extraKeys, key)
+		}
+	}
+	sort.Strings(extraKeys)
+	for _, key := range extraKeys {
+		environment = append(environment, key+"="+values[key])
 	}
 	return environment
 }

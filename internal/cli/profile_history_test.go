@@ -28,6 +28,10 @@ func executableHistoryDocument(name, id, path string) []byte {
 	return []byte(`{"version":3,"name":"` + name + `","common":{"skills":{"version":1,"selection":[]},"workspace":{"version":1,"selection":{"access":"read-only"}},"executables":{"version":1,"selection":{"entries":[{"id":"` + id + `","reference":{"kind":"local-absolute","path":"` + path + `"}}]}}},"overlays":{"devin":{"version":1}}}`)
 }
 
+func environmentHistoryDocument(name, id, destination, reference string) []byte {
+	return []byte(`{"version":3,"name":"` + name + `","common":{"skills":{"version":1,"selection":[]},"workspace":{"version":1,"selection":{"access":"read-only"}},"environment":{"version":1,"selection":{"entries":[{"id":"` + id + `","destination":"` + destination + `","scope":"attached-process-tree","source":{"kind":"secret-reference","provider":"host-environment","reference":"` + reference + `"},"required":true,"classification":"secret"}]}}},"overlays":{"devin":{"version":1}}}`)
+}
+
 func historyApp(t *testing.T) (cli.App, *profilerepo.Repository, string) {
 	t.Helper()
 	home := t.TempDir()
@@ -547,6 +551,132 @@ func TestProfileRestoreExecutableBindingsUseCurrentOrExplicitTransactionInputs(t
 		deletedSelection, err := commonprofile.DecodeExecutableSelection(deleted.Common[commonprofile.ExecutablesCapabilityID].Selection)
 		if err != nil || len(deletedSelection.Entries) != 1 || deletedSelection.Entries[0].Reference.Path != "/rebound/tool" {
 			t.Fatalf("deleted selection=%+v err=%v", deletedSelection, err)
+		}
+	})
+}
+
+func TestProfileRestoreEnvironmentBindingsUseCurrentOrExplicitTransactionInputs(t *testing.T) {
+	t.Run("current compatible binding and stale preview", func(t *testing.T) {
+		app, repository, home := historyApp(t)
+		applyHistory(t, repository, "alpha", environmentHistoryDocument("alpha", "token", "TOKEN", "HISTORICAL_TOKEN"), environmentHistoryDocument("alpha", "token", "TOKEN", "CURRENT_TOKEN"))
+		history, err := repository.History(context.Background(), profilerepo.HistorySelector{Name: "alpha"}, 100)
+		if err != nil || len(history.Events) < 2 {
+			t.Fatalf("history=%+v err=%v", history, err)
+		}
+		var out, errOut bytes.Buffer
+		app.Output, app.ErrorOutput = &out, &errOut
+		previewArgs := []string{"profile", "restore", "alpha", "--revision", history.Events[1].EventID, "--dry-run", "--json"}
+		if _, code := app.RunProfileHistory(context.Background(), previewArgs, func() (string, error) { return home, nil }); code != 0 {
+			t.Fatalf("preview code=%d out=%s err=%s", code, out.String(), errOut.String())
+		}
+		var preview restorePreviewResult
+		if err := json.Unmarshal(out.Bytes(), &preview); err != nil || preview.Bindings != "preserved_current" || preview.Digest == "" {
+			t.Fatalf("preview=%s err=%v", out.String(), err)
+		}
+		current, err := repository.Read(context.Background(), "alpha")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := repository.Apply(context.Background(), profilerepo.ReplaceRequest{Name: "alpha", Expected: current.Revision, Bytes: environmentHistoryDocument("alpha", "token", "TOKEN", "CHANGED_TOKEN")}); err != nil {
+			t.Fatal(err)
+		}
+		out.Reset()
+		apply := []string{"profile", "restore", "alpha", "--revision", history.Events[1].EventID, "--expect", preview.Digest, "--confirm", "alpha", "--json"}
+		if _, code := app.RunProfileHistory(context.Background(), apply, func() (string, error) { return home, nil }); code != 1 || !strings.Contains(out.String(), `"code":"conflict"`) {
+			t.Fatalf("stale apply code=%d out=%s", code, out.String())
+		}
+		out.Reset()
+		if _, code := app.RunProfileHistory(context.Background(), previewArgs, func() (string, error) { return home, nil }); code != 0 {
+			t.Fatalf("fresh preview code=%d out=%s", code, out.String())
+		}
+		if err := json.Unmarshal(out.Bytes(), &preview); err != nil || preview.Digest == "" {
+			t.Fatalf("fresh preview=%s err=%v", out.String(), err)
+		}
+		out.Reset()
+		apply[6] = preview.Digest
+		if _, code := app.RunProfileHistory(context.Background(), apply, func() (string, error) { return home, nil }); code != 0 {
+			t.Fatalf("fresh apply code=%d out=%s err=%s", code, out.String(), errOut.String())
+		}
+		stored, err := profile.NewStore(filepath.Join(home, ".acs"), app.Categories).Load("alpha")
+		if err != nil {
+			t.Fatal(err)
+		}
+		selection, err := commonprofile.DecodeEnvironmentSelection(stored.Common[commonprofile.EnvironmentCapabilityID].Selection)
+		if err != nil || len(selection.Entries) != 1 || selection.Entries[0].Source.Reference != "CHANGED_TOKEN" || selection.Entries[0].Source.Reference == "HISTORICAL_TOKEN" {
+			t.Fatalf("selection=%+v err=%v", selection, err)
+		}
+	})
+
+	t.Run("incompatible derived and deleted lineage require explicit binding", func(t *testing.T) {
+		app, repository, home := historyApp(t)
+		applyHistory(t, repository, "alpha", environmentHistoryDocument("alpha", "token", "TOKEN", "HISTORICAL_TOKEN"), environmentHistoryDocument("alpha", "token", "OTHER_TOKEN", "CURRENT_TOKEN"))
+		history, err := repository.History(context.Background(), profilerepo.HistorySelector{Name: "alpha"}, 100)
+		if err != nil || len(history.Events) < 2 {
+			t.Fatalf("history=%+v err=%v", history, err)
+		}
+		var out, errOut bytes.Buffer
+		app.Output, app.ErrorOutput = &out, &errOut
+		args := []string{"profile", "restore", "alpha", "--revision", history.Events[1].EventID, "--as", "derived", "--dry-run", "--json"}
+		if _, code := app.RunProfileHistory(context.Background(), args, func() (string, error) { return home, nil }); code != 1 || !strings.Contains(out.String(), `"code":"unresolved_binding"`) {
+			t.Fatalf("unbound derived code=%d out=%s", code, out.String())
+		}
+		bindings := []byte(`{"bindingVersion":3,"sources":{},"authentications":{},"paths":{},"executables":{},"environment":{"environment-1":"REBOUND_TOKEN"}}`)
+		app.ReadProfileDocument = func(string) ([]byte, error) { return append([]byte(nil), bindings...), nil }
+		out.Reset()
+		args = append(args[:len(args)-2], "--bindings", "bindings.json", "--dry-run", "--json")
+		if _, code := app.RunProfileHistory(context.Background(), args, func() (string, error) { return home, nil }); code != 0 {
+			t.Fatalf("bound derived code=%d out=%s err=%s", code, out.String(), errOut.String())
+		}
+		var preview restorePreviewResult
+		if err := json.Unmarshal(out.Bytes(), &preview); err != nil || preview.Bindings != "preserved_source_current_and_explicit_declarative" || preview.Digest == "" {
+			t.Fatalf("derived preview=%s err=%v", out.String(), err)
+		}
+		out.Reset()
+		apply := []string{"profile", "restore", "alpha", "--revision", history.Events[1].EventID, "--as", "derived", "--bindings", "bindings.json", "--expect", preview.Digest, "--confirm", "derived", "--json"}
+		if _, code := app.RunProfileHistory(context.Background(), apply, func() (string, error) { return home, nil }); code != 0 {
+			t.Fatalf("derived apply code=%d out=%s err=%s", code, out.String(), errOut.String())
+		}
+		derived, err := profile.NewStore(filepath.Join(home, ".acs"), app.Categories).Load("derived")
+		if err != nil {
+			t.Fatal(err)
+		}
+		selection, err := commonprofile.DecodeEnvironmentSelection(derived.Common[commonprofile.EnvironmentCapabilityID].Selection)
+		if err != nil || len(selection.Entries) != 1 || selection.Entries[0].Source.Reference != "REBOUND_TOKEN" {
+			t.Fatalf("derived selection=%+v err=%v", selection, err)
+		}
+
+		current, err := repository.Read(context.Background(), "alpha")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := repository.Apply(context.Background(), profilerepo.HistoryRequest{Request: profilerepo.DeleteRequest{Name: "alpha", Expected: current.Revision}, Operation: "delete"}); err != nil {
+			t.Fatal(err)
+		}
+		out.Reset()
+		deletedArgs := []string{"profile", "restore", "--lineage", history.LineageID, "--revision", history.Events[1].EventID, "--as", "deleted-copy", "--dry-run", "--json"}
+		if _, code := app.RunProfileHistory(context.Background(), deletedArgs, func() (string, error) { return home, nil }); code != 1 || !strings.Contains(out.String(), `"code":"unresolved_binding"`) {
+			t.Fatalf("unbound deleted code=%d out=%s", code, out.String())
+		}
+		deletedArgs = append(deletedArgs[:len(deletedArgs)-2], "--bindings", "bindings.json", "--dry-run", "--json")
+		out.Reset()
+		if _, code := app.RunProfileHistory(context.Background(), deletedArgs, func() (string, error) { return home, nil }); code != 0 {
+			t.Fatalf("bound deleted code=%d out=%s err=%s", code, out.String(), errOut.String())
+		}
+		if err := json.Unmarshal(out.Bytes(), &preview); err != nil || preview.Bindings != "explicit_declarative" || preview.Digest == "" {
+			t.Fatalf("deleted preview=%s err=%v", out.String(), err)
+		}
+		out.Reset()
+		applyDeleted := []string{"profile", "restore", "--lineage", history.LineageID, "--revision", history.Events[1].EventID, "--as", "deleted-copy", "--bindings", "bindings.json", "--expect", preview.Digest, "--confirm", "deleted-copy", "--json"}
+		if _, code := app.RunProfileHistory(context.Background(), applyDeleted, func() (string, error) { return home, nil }); code != 0 {
+			t.Fatalf("deleted apply code=%d out=%s err=%s", code, out.String(), errOut.String())
+		}
+		deleted, err := profile.NewStore(filepath.Join(home, ".acs"), app.Categories).Load("deleted-copy")
+		if err != nil {
+			t.Fatal(err)
+		}
+		selection, err = commonprofile.DecodeEnvironmentSelection(deleted.Common[commonprofile.EnvironmentCapabilityID].Selection)
+		if err != nil || len(selection.Entries) != 1 || selection.Entries[0].Source.Reference != "REBOUND_TOKEN" {
+			t.Fatalf("deleted selection=%+v err=%v", selection, err)
 		}
 	})
 }

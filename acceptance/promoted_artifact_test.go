@@ -54,7 +54,7 @@ func TestPromotedArtifactReportsItsVersionAndCreatesAnEmptyProfileThroughAPTY(t 
 
 	result := runPromotedPTY(t, binary, home, "promoted-empty", func(t *testing.T, terminal io.Writer, capture *safeCapture) {
 		waitForOutput(t, capture, `Create Profile "promoted-empty"`)
-		writePTY(t, terminal, "\x1b[B", "\x1b[B", "\x1b[B", "\x1b[B", "\r")
+		openProfilePreview(t, terminal)
 		waitForOutput(t, capture, "Create an empty Profile?")
 		writePTY(t, terminal, "y")
 	})
@@ -849,6 +849,26 @@ func writePTY(t *testing.T, terminal io.Writer, inputs ...string) {
 		}
 		time.Sleep(75 * time.Millisecond)
 	}
+}
+
+func openProfilePreview(t *testing.T, terminal io.Writer) {
+	t.Helper()
+	keys := make([]string, 0, 18)
+	for range 16 {
+		keys = append(keys, "\x1b[B")
+	}
+	keys = append(keys, "\x1b[A", "\r")
+	writePTY(t, terminal, keys...)
+}
+
+func openProfileSkillsAfterReload(t *testing.T, terminal io.Writer) {
+	t.Helper()
+	keys := make([]string, 0, 17)
+	for range 16 {
+		keys = append(keys, "\x1b[A")
+	}
+	keys = append(keys, "\r")
+	writePTY(t, terminal, keys...)
 }
 
 func promotedBinary(t *testing.T) string {

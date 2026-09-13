@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -17,9 +18,11 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
+	"github.com/alcimerio/ai-config-selector/internal/environmentresource"
 	"golang.org/x/sys/unix"
 )
 
@@ -34,6 +37,13 @@ const (
 
 type seatbeltPolicyBuilder func(validatedProcessRequest) (string, []string, error)
 type seatbeltVerifier func(context.Context, string) error
+
+type seatbeltControl interface {
+	io.Reader
+	io.Writer
+	io.Closer
+	SetDeadline(time.Time) error
+}
 
 type seatbeltBackend struct {
 	executable string
@@ -106,16 +116,22 @@ func (backend *seatbeltBackend) prepare(ctx context.Context, request validatedPr
 	}
 	unix.CloseOnExec(sockets[0])
 	unix.CloseOnExec(sockets[1])
-	control := os.NewFile(uintptr(sockets[0]), "acs-seatbelt-control")
+	controlFile := os.NewFile(uintptr(sockets[0]), "acs-seatbelt-control")
 	helperControl := os.NewFile(uintptr(sockets[1]), "acs-seatbelt-helper-control")
-	if control == nil || helperControl == nil {
-		if control != nil {
-			_ = control.Close()
+	if controlFile == nil || helperControl == nil {
+		if controlFile != nil {
+			_ = controlFile.Close()
 		}
 		if helperControl != nil {
 			_ = helperControl.Close()
 		}
 		return nil, sandboxError(SandboxSetupFailed, nil)
+	}
+	control, err := net.FileConn(controlFile)
+	_ = controlFile.Close()
+	if err != nil {
+		_ = helperControl.Close()
+		return nil, sandboxError(SandboxSetupFailed, err)
 	}
 	statusSockets, err := unix.Socketpair(unix.AF_UNIX, unix.SOCK_STREAM, 0)
 	if err != nil {
@@ -170,7 +186,7 @@ func (backend *seatbeltBackend) prepare(ctx context.Context, request validatedPr
 		ctx: ctx, command: command, terminal: terminal, foregroundGroup: foregroundGroup,
 		cleanupDone: make(chan struct{}), supervised: true, control: control,
 		helperControl: helperControl, statusControl: statusControl, proxyStatus: proxyStatus,
-		challenge: challenge,
+		challenge: challenge, environmentProjection: request.environmentProjection,
 	}
 	command.Cancel = process.cancel
 	command.WaitDelay = time.Second
@@ -219,14 +235,18 @@ type seatbeltProcess struct {
 	leaderWaitMutex           sync.Mutex
 	leaderWaitDone            <-chan error
 	supervised                bool
-	control                   *os.File
+	control                   seatbeltControl
 	helperControl             *os.File
 	statusControl             *os.File
 	proxyStatus               *os.File
 	challenge                 []byte
 	controlMutex              sync.Mutex
+	controlStateMutex         sync.Mutex
 	statusControlMutex        sync.Mutex
 	proofTimeout              func() <-chan time.Time
+	environmentProjection     *environmentresource.Lease
+	supervisorStarted         atomic.Bool
+	startupDeadline           time.Duration
 }
 
 func (process *seatbeltProcess) Start() error {
@@ -258,6 +278,7 @@ func (process *seatbeltProcess) Start() error {
 			process.reapStartedSupervisor()
 			return errors.Join(sandboxError(SandboxProcessStartFailed, writeErr), process.restoreForegroundTerminal())
 		}
+		process.supervisorStarted.Store(true)
 	}
 	if err == nil {
 		return nil
@@ -269,35 +290,42 @@ func (process *seatbeltProcess) Start() error {
 }
 
 func (process *seatbeltProcess) startSupervisor() error {
+	process.controlStateMutex.Lock()
+	control := process.control
+	process.controlStateMutex.Unlock()
+	if control == nil {
+		return os.ErrProcessDone
+	}
+	deadline := process.startupDeadline
+	if deadline <= 0 {
+		deadline = seatbeltStartupHandshakeTime
+	}
+	if err := control.SetDeadline(time.Now().Add(deadline)); err != nil {
+		return err
+	}
+	defer control.SetDeadline(time.Time{})
 	if err := process.writeControl(process.challenge); err != nil {
 		return err
 	}
-	if process.control == nil {
-		return os.ErrProcessDone
+	ready := []byte{0}
+	if _, err := io.ReadFull(control, ready); err != nil {
+		return err
 	}
-	type handshakeResult struct {
-		ready byte
-		err   error
-	}
-	result := make(chan handshakeResult, 1)
-	go func() {
-		ready := []byte{0}
-		_, err := io.ReadFull(process.control, ready)
-		result <- handshakeResult{ready: ready[0], err: err}
-	}()
-	var handshake handshakeResult
-	select {
-	case handshake = <-result:
-	case <-time.After(seatbeltStartupHandshakeTime):
-		return context.DeadlineExceeded
-	}
-	if handshake.err != nil {
-		return handshake.err
-	}
-	if handshake.ready != seatbeltSupervisorReady {
+	if ready[0] != seatbeltSupervisorReady {
 		return errors.New("invalid Seatbelt supervisor readiness")
 	}
-	return process.writeControl([]byte{seatbeltSupervisorStart})
+	var protocol bytes.Buffer
+	defer func() { clear(protocol.Bytes()) }()
+	if process.environmentProjection == nil || process.environmentProjection.Empty() {
+		protocol.WriteByte(seatbeltSupervisorNoEnvironment)
+	} else {
+		protocol.WriteByte(seatbeltSupervisorEnvironmentFrame)
+		if err := process.environmentProjection.WriteFrame(&protocol); err != nil {
+			return err
+		}
+	}
+	protocol.WriteByte(seatbeltSupervisorStart)
+	return process.writeControl(protocol.Bytes())
 }
 
 func (process *seatbeltProcess) Wait() error {
@@ -351,18 +379,21 @@ func (process *seatbeltProcess) waitForSupervisorProof() error {
 }
 
 func (process *seatbeltProcess) readCleanupProof() ([]byte, error) {
-	if process.control == nil {
+	process.controlStateMutex.Lock()
+	control := process.control
+	process.controlStateMutex.Unlock()
+	if control == nil {
 		return nil, errors.New("Seatbelt cleanup proof channel is unavailable")
 	}
 	done := make(chan struct{})
 	var data []byte
 	var readErr error
 	go func() {
-		data, readErr = io.ReadAll(io.LimitReader(process.control, 4097))
+		data, readErr = io.ReadAll(io.LimitReader(control, 4097))
 		close(done)
 	}()
 	finish := func() ([]byte, error) {
-		_ = process.control.Close()
+		process.closeControl()
 		if len(data) > 4096 {
 			return nil, errors.New("Seatbelt cleanup proof exceeds its limit")
 		}
@@ -389,7 +420,7 @@ func (process *seatbeltProcess) readCleanupProof() ([]byte, error) {
 	case <-done:
 		return finish()
 	case <-timeout():
-		_ = process.control.Close()
+		process.closeControl()
 		return nil, context.DeadlineExceeded
 	}
 }
@@ -487,9 +518,18 @@ func (process *seatbeltProcess) CleanupDone() <-chan struct{} {
 
 func (process *seatbeltProcess) cancel() error {
 	if process.supervised {
-		process.startupIdentityMutex.Lock()
-		process.startupIdentityMutex.Unlock()
-		return process.Signal(syscall.SIGKILL)
+		if process.supervisorStarted.Load() {
+			return process.Signal(syscall.SIGKILL)
+		}
+		process.closeControl()
+		processGroup := process.stableProcessGroup()
+		if processGroup <= 0 {
+			return os.ErrProcessDone
+		}
+		if err := process.signalProcessGroup(processGroup, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
+			return fmt.Errorf("stop Seatbelt process group: %w", err)
+		}
+		return nil
 	}
 	// exec.Cmd can call Cancel before Start returns to our caller. Wait until
 	// the process-group identity has either been recorded or definitively
@@ -512,11 +552,14 @@ func (process *seatbeltProcess) cancel() error {
 func (process *seatbeltProcess) writeControl(data []byte) error {
 	process.controlMutex.Lock()
 	defer process.controlMutex.Unlock()
-	if process.control == nil {
+	process.controlStateMutex.Lock()
+	control := process.control
+	process.controlStateMutex.Unlock()
+	if control == nil {
 		return os.ErrProcessDone
 	}
 	for len(data) > 0 {
-		written, err := process.control.Write(data)
+		written, err := control.Write(data)
 		if err != nil {
 			return err
 		}
@@ -526,10 +569,12 @@ func (process *seatbeltProcess) writeControl(data []byte) error {
 }
 
 func (process *seatbeltProcess) closeControl() {
-	process.controlMutex.Lock()
-	defer process.controlMutex.Unlock()
-	if process.control != nil {
-		_ = process.control.Close()
+	process.controlStateMutex.Lock()
+	control := process.control
+	process.control = nil
+	process.controlStateMutex.Unlock()
+	if control != nil {
+		_ = control.Close()
 	}
 }
 

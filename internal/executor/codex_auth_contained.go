@@ -12,10 +12,11 @@ import (
 )
 
 type containedRunResult struct {
-	err              error
-	cleanupProven    bool
-	cleanupProcess   launch.Process
-	cleanupChallenge string
+	err                           error
+	cleanupProven                 bool
+	cleanupProcess                launch.Process
+	cleanupChallenge              string
+	environmentReleaseTransferred bool
 }
 
 type containedOperationPreparation struct {
@@ -54,7 +55,7 @@ func prepareContainedOperationWithAccessAndGrants(
 	operationFailure error,
 	runtimeAuthorities ...launch.RuntimeAuthority,
 ) (*containedOperationPreparation, error) {
-	return prepareContainedOperationWithAccessAndGrantsUsingExecutable(ctx, config, sandbox, workspaceAccess, filesystemGrants, nil, nil, operationFailure, runtimeAuthorities...)
+	return prepareContainedOperationWithAccessAndGrantsUsingExecutable(ctx, config, sandbox, workspaceAccess, filesystemGrants, nil, nil, false, operationFailure, runtimeAuthorities...)
 }
 
 func prepareContainedOperationWithAccessAndGrantsUsingExecutable(
@@ -65,6 +66,7 @@ func prepareContainedOperationWithAccessAndGrantsUsingExecutable(
 	filesystemGrants []launch.FilesystemGrant,
 	executableGrants []launch.ExecutableGrant,
 	pinned *pinnedExecutable,
+	requiresEnvironment bool,
 	operationFailure error,
 	runtimeAuthorities ...launch.RuntimeAuthority,
 ) (*containedOperationPreparation, error) {
@@ -96,6 +98,7 @@ func prepareContainedOperationWithAccessAndGrantsUsingExecutable(
 		Workspace: config.WorkingDirectory, WorkspaceAccess: workspaceAccess, SessionsDirectory: config.SessionsDirectory,
 		Executable: executable, RuntimeInputs: config.RuntimeInputs,
 		RuntimeProbePaths: config.RuntimeProbePaths, RuntimeAuthority: runtimeAuthority, FilesystemGrants: filesystemGrants, ExecutableGrants: executableGrants,
+		RequiresEnvironment: requiresEnvironment,
 	}); err != nil {
 		preparation.Close()
 		return nil, err

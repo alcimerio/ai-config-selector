@@ -29,12 +29,17 @@ An existing Profile is adopted only on its first successful mutation. Passive hi
 
 A history event advertises the state produced by its successful operation, and selecting a live event restores that advertised supported state. First adoption records a protected predecessor so the bytes displaced by the first mutation remain selectable. A deletion tombstone selects its last live snapshot for recovery while reporting its resulting state as deleted.
 
-Restore decodes the selected snapshot through the current Profile codec, changes only the destination logical name, canonicalizes it, and preserves current machine-local binding choices where a valid live destination supplies them. If the destination is absent, or its current intent cannot supply every selected binding decision, pass `--bindings FILE` using the same bounded local binding document accepted by Profile import. Version 1 remains compatible for source/authentication-only intent; path or executable bindings require version 2. Current choices still take precedence when only missing choices need the file. A corrupt or unsupported current destination is rejected; it is never treated as absent and never contributes guessed bindings.
+Restore decodes the selected snapshot through the current Profile codec, changes only the destination logical name, canonicalizes it, and preserves current machine-local binding choices where a valid live destination supplies them. If the destination is absent, or its current intent cannot supply every selected binding decision, pass `--bindings FILE` using the same bounded local binding document accepted by Profile import. Version 1 remains compatible for source/authentication-only intent; path or executable bindings require version 2; environment-reference bindings require version 3. Current choices still take precedence when only missing choices need the file. A corrupt or unsupported current destination is rejected; it is never treated as absent and never contributes guessed bindings.
 
-Restore never reuses machine-local path or executable values solely because they
+Restore never reuses machine-local path, executable, or secret-environment
+reference values solely because they
 occurred in an old private snapshot. A live destination supplies a local
 executable binding only when entry ID and reference kind still match; otherwise
-an explicit current exchange binding is required. It never restores credential
+an explicit current exchange binding is required. A secret environment
+reference is preserved only from a live destination whose entry ID,
+destination, scope, required/classification fields, source kind, and provider
+still match. Non-secret host names remain portable logical intent. It never
+restores credential
 values, Keychain items, external Skill files, target authentication state,
 Sessions, provider state, or generated policies. Unsupported or corrupt old
 schemas and unresolved, invalid or conflicting binding decisions fail before
@@ -43,17 +48,19 @@ dry-run still does not access a provider or Keychain.
 
 A binding file uses the existing strict Profile-import shape. Version 1 remains
 compatible when only source/authentication bindings are required; version 2
-adds path and executable binding maps. Its exact required
+adds path and executable binding maps; version 3 adds the environment binding
+map. Its exact required
 keys depend on the selected supported intent; omitted, extra, duplicate, unsafe,
 or unsupported choices fail closed:
 
 ```json
 {
-  "bindingVersion": 2,
+  "bindingVersion": 3,
   "sources": {"source-1": "shared-agents"},
   "authentications": {"authentication-1": "work"},
   "paths": {},
-  "executables": {"executable-1": "/Users/example/bin/tool"}
+  "executables": {"executable-1": "/Users/example/bin/tool"},
+  "environment": {"environment-1": "ACS_SERVICE_TOKEN"}
 }
 ```
 

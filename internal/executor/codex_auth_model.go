@@ -8,6 +8,7 @@ import (
 
 	"github.com/alcimerio/ai-config-selector/internal/authority"
 	"github.com/alcimerio/ai-config-selector/internal/codexauthresource"
+	"github.com/alcimerio/ai-config-selector/internal/environmentresource"
 	"github.com/alcimerio/ai-config-selector/internal/launch"
 	"github.com/alcimerio/ai-config-selector/internal/session"
 )
@@ -76,6 +77,7 @@ type CodexAuthService struct {
 	verifyCleanup     func(string, []byte) (bool, error)
 	sessionsDirectory string
 	workingDirectory  string
+	environmentLookup environmentresource.Lookup
 }
 
 type loginRunResult struct{ containedRunResult }
@@ -148,7 +150,7 @@ func NewCodexAuth(config CodexAuthConfig) (*CodexAuthService, error) {
 			RuntimeInputs: config.RuntimeInputs, SessionsDirectory: config.SessionsDirectory,
 			WorkingDirectory: config.WorkingDirectory, PrivateRoot: acsHome,
 		}, sandbox),
-		verifyCleanup: launch.VerifySessionCleanupProof,
+		verifyCleanup: launch.VerifySessionCleanupProof, environmentLookup: hostEnvironmentLookup,
 	}
 	service.status = newCodexStatusRunner(codexLoginConfig{
 		BinaryPath: config.BinaryPath, SupportedVersion: config.SupportedVersion,

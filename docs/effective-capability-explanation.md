@@ -47,10 +47,12 @@ omitted. `runtime.executable-visibility` records the intrinsic readable runtime,
 and `unsupported.exclusive-execution-filtering` states that executable
 visibility is additive and non-exclusive rather than a command allowlist.
 
-Selected Skill logical identities are intentionally public. Canonical source,
-workspace, executable, runtime and Session paths; argument and environment
-values; auth references; credentials; project files; raw native policy; and
-backend/target output are omitted.
+Selected Skill identities and environment destinations, scope, source/provider
+class, required state, and classification are intentionally public.
+Environment source names, secret references, resolved values, canonical source,
+workspace, executable, runtime and Session paths, argument values, auth
+references, credentials, project files, raw native policy, and backend/target
+output are omitted.
 
 Each unknown inactive version-3 overlay produces one sanitized
 `inactive_overlay_unknown` limitation. Its key and payload remain omitted, and
@@ -69,8 +71,10 @@ generated configuration, inheritance, environment-name policy, Session/process/
 terminal/device/system/Mach/sysctl grants, and coarse network mode affect it.
 Explicit path IDs, access/type/reference class, and workspace-relative logical
 paths also affect it. Executable IDs, reference class, fixed-search names, and
-workspace-relative logical paths affect it as well. Local absolute path and
-executable binding values do not.
+workspace-relative logical paths affect it as well. Environment IDs,
+destinations, scope, source/provider class, required state, and classification
+also affect it. Local absolute path and executable bindings, environment source
+names/references, and resolved values do not.
 
 Machine-local bindings are deliberately excluded: Profile name/revision,
 canonical paths and file contents, argument values, auth references/provider

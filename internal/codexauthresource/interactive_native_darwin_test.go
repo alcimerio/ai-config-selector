@@ -18,6 +18,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"runtime"
 	"strconv"
@@ -70,6 +71,12 @@ func runNativeInstalledACSLockedCodexFixture(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	const selectedModeValue = "locked-codex-selected-mode"
+	const selectedSecretValue = "locked-codex-selected-secret"
+	const unselectedValue = "locked-codex-unselected-secret"
+	t.Setenv("ACS_NATIVE_CODEX_MODE", selectedModeValue)
+	t.Setenv("ACS_NATIVE_CODEX_TOKEN", selectedSecretValue)
+	t.Setenv("ACS_NATIVE_CODEX_UNSELECTED", unselectedValue)
 	writeNativeSkill(t, filepath.Join(home, ".agents", "skills", "managed-proof"), "managed-proof", "ACS_MANAGED_SKILL_SENTINEL")
 	writeNativeSkill(t, filepath.Join(workspace, ".agents", "skills", "project-proof"), "project-proof", "PROJECT_INHERITED_SKILL_SENTINEL")
 	hostileMCPMarker := filepath.Join(workspace, "hostile-project-mcp-started")
@@ -110,6 +117,7 @@ func runNativeInstalledACSLockedCodexFixture(t *testing.T) {
 	writeNativeCodexProfile(t, home, "coding", identities["coding"], "read-write")
 	writeNativeCodexProfile(t, home, "readonly", identities["readonly"], "read-only")
 	writeNativeCodexProfile(t, home, "recovery", identities["recovery"], "read-write")
+	writeNativeCodexEnvironmentProfile(t, home, "environment", identities["coding"])
 	restoredCoding := restoreDeletedNativeCodexProfile(t, candidate, home, tools, workspace, identities["coding"])
 	grantedTarget := filepath.Join(workspace, "locked-codex-target")
 	copyLockedTarget(t, target, grantedTarget)
@@ -157,6 +165,78 @@ func runNativeInstalledACSLockedCodexFixture(t *testing.T) {
 		fixture.assert(t, false)
 		assertNoNativeSessions(t, filepath.Join(home, ".acs", "sessions"))
 		assertNewRemovedInstalledSessions(t, candidate, home, tools, workspace, before, "codex")
+	})
+	t.Run("locked Codex receives selected environment only after version preflight", func(t *testing.T) {
+		expectedMode := filepath.Join(workspace, ".acs-codex-expected-mode")
+		expectedSecret := filepath.Join(workspace, ".acs-codex-expected-secret")
+		parentMarker := filepath.Join(workspace, "codex-environment-parent")
+		childMarker := filepath.Join(workspace, "codex-environment-child")
+		if err := os.WriteFile(expectedMode, []byte(selectedModeValue), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(expectedSecret, []byte(selectedSecretValue), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		parentCheck := `if [ "${PROFILE_CODEX_MODE+x}" = x ] && [ "$PROFILE_CODEX_MODE" = "$(cat ` + nativeShellArgument(expectedMode) + `)" ] && [ "${PROFILE_CODEX_TOKEN+x}" = x ] && [ "$PROFILE_CODEX_TOKEN" = "$(cat ` + nativeShellArgument(expectedSecret) + `)" ] && [ -z "${PROFILE_CODEX_UNSELECTED+x}" ] && [ -z "${ACS_NATIVE_CODEX_MODE+x}" ] && [ -z "${ACS_NATIVE_CODEX_TOKEN+x}" ] && [ -z "${ACS_NATIVE_CODEX_UNSELECTED+x}" ]; then printf ok > ` + nativeShellArgument(parentMarker) + `; else exit 67; fi`
+		childCheck := `/bin/sh -c 'if [ "${PROFILE_CODEX_MODE+x}" = x ] && [ "$PROFILE_CODEX_MODE" = "$(cat "$1")" ] && [ "${PROFILE_CODEX_TOKEN+x}" = x ] && [ "$PROFILE_CODEX_TOKEN" = "$(cat "$2")" ] && [ -z "${PROFILE_CODEX_UNSELECTED+x}" ] && [ -z "${ACS_NATIVE_CODEX_MODE+x}" ] && [ -z "${ACS_NATIVE_CODEX_TOKEN+x}" ] && [ -z "${ACS_NATIVE_CODEX_UNSELECTED+x}" ]; then printf ok > "$3"; else exit 68; fi' codex-environment-child ` + strings.Join([]string{nativeShellArgument(expectedMode), nativeShellArgument(expectedSecret), nativeShellArgument(childMarker)}, " ")
+		command := parentCheck + `; ` + childCheck + `; printf codex-native-tool-output` + isolationProbe
+		before := installedSessionSnapshot(t, candidate, home, tools, workspace)
+		fixture := newNativeResponsesFixture(t, command, home)
+		fixture.privateSentinels = []string{selectedModeValue, selectedSecretValue, unselectedValue}
+		fixture.coordination = &nativeCodexPhaseCoordination{
+			versionReady:       filepath.Join(workspace, ".acs-codex-environment-version-ready"),
+			versionRelease:     filepath.Join(workspace, ".acs-codex-environment-version-release"),
+			interactiveReady:   filepath.Join(workspace, ".acs-codex-environment-interactive-ready"),
+			interactiveRelease: filepath.Join(workspace, ".acs-codex-environment-interactive-release"),
+			expectEnvironment:  true,
+		}
+		defer fixture.server.Close()
+		buildFixedCodexTrampoline(t, grantedTarget, fixture.server.URL+"/backend-api", filepath.Join(tools, "codex"), *fixture.coordination)
+		runInstalledCodexPTY(t, candidate, home, tools, workspace, "environment", fixture, false)
+		fixture.assert(t, false)
+		if contents, err := os.ReadFile(parentMarker); err != nil || string(contents) != "ok" {
+			t.Fatalf("locked Codex selected environment parent marker=%q err=%v", contents, err)
+		}
+		if contents, err := os.ReadFile(childMarker); err != nil || string(contents) != "ok" {
+			t.Fatalf("locked Codex selected environment child marker=%q err=%v", contents, err)
+		}
+		fixture.mu.Lock()
+		for _, body := range fixture.bodies {
+			for _, sentinel := range fixture.privateSentinels {
+				if strings.Contains(body, sentinel) {
+					fixture.mu.Unlock()
+					t.Fatal("locked Codex request body exposed a selected environment value")
+				}
+			}
+		}
+		fixture.mu.Unlock()
+		assertNoNativeSessions(t, filepath.Join(home, ".acs", "sessions"))
+		assertNewRemovedInstalledSessions(t, candidate, home, tools, workspace, before, "codex")
+	})
+	t.Run("missing required environment precedes locked Codex Session", func(t *testing.T) {
+		ready := filepath.Join(workspace, ".acs-codex-missing-environment-started")
+		buildFixedCodexTrampoline(t, grantedTarget, "http://127.0.0.1:1/backend-api", filepath.Join(tools, "codex"), nativeCodexPhaseCoordination{
+			versionReady: ready, versionRelease: filepath.Join(workspace, ".acs-codex-missing-environment-release"), expectEnvironment: true,
+		})
+		before := installedSessionSnapshot(t, candidate, home, tools, workspace)
+		command := exec.Command(candidate, "codex", "--profile", "environment")
+		command.Dir = workspace
+		command.Env = removeNativeCodexEnvironmentName(nativeCandidateEnvironment(home, tools), "ACS_NATIVE_CODEX_TOKEN")
+		output, err := command.CombinedOutput()
+		if err == nil || !bytes.Contains(output, []byte("selected environment value is unavailable")) {
+			t.Fatalf("missing required Codex environment result=%v output=%q", err, output)
+		}
+		for _, sentinel := range []string{selectedModeValue, selectedSecretValue, unselectedValue} {
+			if bytes.Contains(output, []byte(sentinel)) {
+				t.Fatal("missing required Codex environment error exposed a value")
+			}
+		}
+		if _, err := os.Stat(ready); !os.IsNotExist(err) {
+			t.Fatalf("missing required environment started Codex version preflight: %v", err)
+		}
+		if after := installedSessionSnapshot(t, candidate, home, tools, workspace); !reflect.DeepEqual(after, before) {
+			t.Fatal("missing required environment changed Codex Session state")
+		}
 	})
 	normalDescendantReady := filepath.Join(workspace, ".acs-normal-descendant-ready")
 	recoveryDescendantReady := filepath.Join(workspace, ".acs-recovery-descendant-ready")
@@ -403,7 +483,24 @@ func queryNativeKeychainSelection(environment []string, operation string) (strin
 }
 
 func nativeCandidateEnvironment(home, tools string) []string {
-	return []string{"HOME=" + home, "PATH=" + tools + ":/usr/bin:/bin", "LANG=C", "LC_ALL=C", "TERM=xterm", "COLORTERM=truecolor"}
+	environment := []string{"HOME=" + home, "PATH=" + tools + ":/usr/bin:/bin", "LANG=C", "LC_ALL=C", "TERM=xterm", "COLORTERM=truecolor"}
+	for _, name := range []string{"ACS_NATIVE_CODEX_MODE", "ACS_NATIVE_CODEX_TOKEN", "ACS_NATIVE_CODEX_UNSELECTED"} {
+		if value, present := os.LookupEnv(name); present {
+			environment = append(environment, name+"="+value)
+		}
+	}
+	return environment
+}
+
+func removeNativeCodexEnvironmentName(environment []string, name string) []string {
+	prefix := name + "="
+	filtered := make([]string, 0, len(environment))
+	for _, entry := range environment {
+		if !strings.HasPrefix(entry, prefix) {
+			filtered = append(filtered, entry)
+		}
+	}
+	return filtered
 }
 
 func assertInstalledIdentityVisible(t *testing.T, candidate, home, tools, workspace, name string) {
@@ -528,6 +625,12 @@ func runInstalledCodexPTY(t *testing.T, candidate, home, tools, workspace, profi
 	// irrelevant repaint makes the kill timing depend on Rosetta throughput.
 	if !crashAfterTool && (!waitNativeCaptureContainsAfter(&output, 0, "fixture-complete", 5*time.Second) || !waitNativeCaptureStable(&output, 5*time.Second)) {
 		t.Fatalf("real Codex did not finish rendering the completed turn; terminal=%q", output.String())
+	}
+	if !crashAfterTool && len(fixture.privateSentinels) > 0 {
+		observationErr := observeNativeSessionProjection(home, fixture.preexistingHomes, fixture.privateSentinels)
+		fixture.mu.Lock()
+		fixture.finalSessionObservationErr = observationErr
+		fixture.mu.Unlock()
 	}
 	fixture.assertLiveDescendant(t)
 	if crashAfterTool {
@@ -791,21 +894,23 @@ func (capture *nativeSafeCapture) Len() int {
 }
 
 type nativeResponsesFixture struct {
-	server                *httptest.Server
-	completed             chan struct{}
-	mu                    sync.Mutex
-	requests              int
-	bodies                []string
-	headers               []http.Header
-	sessionObservationErr string
-	observations          []nativeRequestObservation
-	websocketFallbacks    int
-	modelRequests         int
-	protocolErr           string
-	preexistingHomes      map[string]struct{}
-	descendantReady       string
-	liveDescendantPID     int
-	coordination          *nativeCodexPhaseCoordination
+	server                     *httptest.Server
+	completed                  chan struct{}
+	mu                         sync.Mutex
+	requests                   int
+	bodies                     []string
+	headers                    []http.Header
+	sessionObservationErr      string
+	finalSessionObservationErr string
+	observations               []nativeRequestObservation
+	websocketFallbacks         int
+	modelRequests              int
+	protocolErr                string
+	preexistingHomes           map[string]struct{}
+	descendantReady            string
+	liveDescendantPID          int
+	coordination               *nativeCodexPhaseCoordination
+	privateSentinels           []string
 }
 
 // nativeCodexPhaseCoordination is intentionally fixture-only.  Its literal
@@ -814,6 +919,7 @@ type nativeResponsesFixture struct {
 type nativeCodexPhaseCoordination struct {
 	versionReady, versionRelease, interactiveReady, interactiveRelease string
 	versionCapability                                                  *nativeCodexCapability
+	expectEnvironment                                                  bool
 }
 
 type nativeCodexCapability struct {
@@ -973,7 +1079,7 @@ func newNativeResponsesFixture(t *testing.T, shellCommand, launcherHome string) 
 		fixture.bodies = append(fixture.bodies, body)
 		fixture.headers = append(fixture.headers, request.Header.Clone())
 		if index == 2 {
-			fixture.sessionObservationErr = observeNativeSessionProjection(launcherHome, fixture.preexistingHomes)
+			fixture.sessionObservationErr = observeNativeSessionProjection(launcherHome, fixture.preexistingHomes, fixture.privateSentinels)
 		}
 		fixture.mu.Unlock()
 		response.Header().Set("Content-Type", "text/event-stream")
@@ -1071,8 +1177,8 @@ func (fixture *nativeResponsesFixture) assert(t *testing.T, wantDescendant bool)
 	if fixture.modelRequests < 1 {
 		t.Fatalf("authenticated model requests=%d, want at least one; loopback=%s", fixture.modelRequests, fixture.summaryLocked())
 	}
-	if fixture.sessionObservationErr != "" {
-		t.Fatal(fixture.sessionObservationErr)
+	if fixture.sessionObservationErr != "" || fixture.finalSessionObservationErr != "" {
+		t.Fatalf("locked Codex retained Session scans: early=%q final=%q", fixture.sessionObservationErr, fixture.finalSessionObservationErr)
 	}
 	for _, headers := range fixture.headers {
 		if headers.Get("Authorization") != "Bearer synthetic-access" || headers.Get("ChatGPT-Account-ID") != "synthetic-workspace" {
@@ -1171,7 +1277,7 @@ func nativeSessionHomes(launcherHome string) []string {
 	return homes
 }
 
-func observeNativeSessionProjection(launcherHome string, preexisting map[string]struct{}) string {
+func observeNativeSessionProjection(launcherHome string, preexisting map[string]struct{}, privateSentinels []string) string {
 	var sessionHomes []string
 	for _, home := range nativeSessionHomes(launcherHome) {
 		if _, existed := preexisting[home]; !existed {
@@ -1182,31 +1288,179 @@ func observeNativeSessionProjection(launcherHome string, preexisting map[string]
 		return "live target did not retain exactly one private Session HOME"
 	}
 	sessionHome := sessionHomes[0]
-	var rolloutPath string
+	var rolloutPaths []string
 	err := filepath.WalkDir(filepath.Join(sessionHome, ".codex", "sessions"), func(path string, entry os.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
 		if !entry.IsDir() && strings.HasPrefix(entry.Name(), "rollout-") && strings.HasSuffix(entry.Name(), ".jsonl") {
-			rolloutPath = path
+			info, err := entry.Info()
+			if err != nil {
+				return err
+			}
+			if info.Mode().IsRegular() {
+				rolloutPaths = append(rolloutPaths, path)
+			}
 		}
 		return nil
 	})
-	if err != nil || rolloutPath == "" {
+	if err != nil || len(rolloutPaths) == 0 {
 		return "locked Codex private rollout was not observable while the Session was retained"
 	}
-	info, err := os.Stat(rolloutPath)
-	if err != nil || info.Size() == 0 {
-		return "locked Codex private rollout was empty or unavailable"
+	for _, rolloutPath := range rolloutPaths {
+		info, err := os.Stat(rolloutPath)
+		if err != nil || info.Size() == 0 {
+			return "locked Codex private rollout was empty or unavailable"
+		}
+		contents, err := os.ReadFile(rolloutPath)
+		if err != nil {
+			return "locked Codex private rollout could not be inspected"
+		}
+		for _, sentinel := range privateSentinels {
+			if sentinel != "" && bytes.Contains(contents, []byte(sentinel)) {
+				return "locked Codex private rollout exposed a selected environment value"
+			}
+		}
+		relativeRollout, err := filepath.Rel(sessionHome, rolloutPath)
+		if err != nil {
+			return "locked Codex private rollout path was invalid"
+		}
+		if _, err := os.Stat(filepath.Join(launcherHome, relativeRollout)); !os.IsNotExist(err) {
+			return "locked Codex private rollout reached the launcher HOME"
+		}
 	}
-	relativeRollout, err := filepath.Rel(sessionHome, rolloutPath)
-	if err != nil {
-		return "locked Codex private rollout path was invalid"
-	}
-	if _, err := os.Stat(filepath.Join(launcherHome, relativeRollout)); !os.IsNotExist(err) {
-		return "locked Codex private rollout reached the launcher HOME"
+	if len(privateSentinels) > 0 {
+		snapshots := filepath.Join(sessionHome, ".codex", "shell_snapshots")
+		entries, snapshotErr := os.ReadDir(snapshots)
+		if snapshotErr != nil && !os.IsNotExist(snapshotErr) {
+			return "locked Codex shell snapshot state could not be inspected"
+		}
+		for _, entry := range entries {
+			info, infoErr := entry.Info()
+			if infoErr != nil {
+				return "locked Codex shell snapshot state could not be inspected"
+			}
+			if info.Mode().IsRegular() {
+				return "locked Codex shell snapshot remained enabled for selected environment"
+			}
+		}
+		const maxSessionArtifactBytes = 16 << 20
+		const maxSessionArtifactTotal = 64 << 20
+		var total int64
+		sessionRoot := filepath.Dir(sessionHome)
+		artifactClass := ""
+		err := filepath.WalkDir(sessionRoot, func(path string, entry os.DirEntry, walkErr error) error {
+			if walkErr != nil {
+				return walkErr
+			}
+			if entry.IsDir() {
+				return nil
+			}
+			info, err := entry.Info()
+			if err != nil {
+				return err
+			}
+			if !info.Mode().IsRegular() {
+				return nil
+			}
+			if info.Size() > maxSessionArtifactBytes || total+info.Size() > maxSessionArtifactTotal {
+				return errNativeSessionArtifactBounds
+			}
+			total += info.Size()
+			file, err := os.Open(path)
+			if err != nil {
+				return err
+			}
+			contents, readErr := io.ReadAll(io.LimitReader(file, maxSessionArtifactBytes+1))
+			closeErr := file.Close()
+			if readErr != nil {
+				return readErr
+			}
+			if closeErr != nil {
+				return closeErr
+			}
+			if len(contents) > maxSessionArtifactBytes {
+				return errNativeSessionArtifactBounds
+			}
+			for _, sentinel := range privateSentinels {
+				if sentinel != "" && bytes.Contains(contents, []byte(sentinel)) {
+					artifactClass = nativeSessionArtifactClass(sessionRoot, path)
+					return errNativeSessionArtifactValue
+				}
+			}
+			return nil
+		})
+		switch {
+		case errors.Is(err, errNativeSessionArtifactValue):
+			return "locked Codex private Session artifact class " + artifactClass + " exposed a selected environment value"
+		case errors.Is(err, errNativeSessionArtifactBounds):
+			return "locked Codex private Session artifacts exceeded inspection bounds"
+		case err != nil:
+			return "locked Codex private Session artifacts could not be inspected"
+		}
 	}
 	return ""
+}
+
+func nativeSessionArtifactClass(sessionRoot, path string) string {
+	relative, err := filepath.Rel(sessionRoot, path)
+	if err != nil || relative == "." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return "other-regular"
+	}
+	parts := strings.Split(relative, string(filepath.Separator))
+	if len(parts) >= 4 && parts[0] == "home" && parts[1] == ".codex" {
+		switch parts[2] {
+		case "shell_snapshots":
+			return "codex-shell-snapshot"
+		case "sessions":
+			return "codex-rollout"
+		}
+	}
+	if len(parts) == 3 && parts[0] == "home" && parts[1] == ".codex" && parts[2] == "config.toml" {
+		return "codex-generated-config"
+	}
+	return "other-regular"
+}
+
+var (
+	errNativeSessionArtifactValue  = errors.New("private Session artifact contains selected environment value")
+	errNativeSessionArtifactBounds = errors.New("private Session artifact inspection bounds exceeded")
+)
+
+func TestNativeSessionProjectionScansEveryRegularRollout(t *testing.T) {
+	launcherHome := t.TempDir()
+	sessionHome := filepath.Join(launcherHome, ".acs", "sessions", "session-review", "home")
+	rollouts := filepath.Join(sessionHome, ".codex", "sessions")
+	if err := os.MkdirAll(rollouts, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(rollouts, "rollout-a.jsonl"), []byte("private-sentinel\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(rollouts, "rollout-z.jsonl"), []byte("safe\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := observeNativeSessionProjection(launcherHome, map[string]struct{}{}, []string{"private-sentinel"}); got != "locked Codex private rollout exposed a selected environment value" {
+		t.Fatalf("non-final rollout scan = %q", got)
+	}
+}
+
+func TestNativeSessionProjectionScansNonRolloutArtifacts(t *testing.T) {
+	launcherHome := t.TempDir()
+	sessionRoot := filepath.Join(launcherHome, ".acs", "sessions", "session-review")
+	rollouts := filepath.Join(sessionRoot, "home", ".codex", "sessions")
+	if err := os.MkdirAll(rollouts, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(rollouts, "rollout-safe.jsonl"), []byte("safe\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sessionRoot, "generated-state.json"), []byte("private-sentinel\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := observeNativeSessionProjection(launcherHome, map[string]struct{}{}, []string{"private-sentinel"}); got != "locked Codex private Session artifact class other-regular exposed a selected environment value" {
+		t.Fatalf("non-rollout Session artifact scan = %q", got)
+	}
 }
 
 func completedEvent(id string) map[string]any {
@@ -1226,9 +1480,18 @@ func buildFixedCodexTrampoline(t *testing.T, target, baseURL, destination string
 	openAIOverride := fmt.Sprintf("openai_base_url=%q", baseURL+"/codex")
 	chatGPTOverride := fmt.Sprintf("chatgpt_base_url=%q", baseURL)
 	var versionReady, versionRelease, interactiveReady, interactiveRelease string
+	environmentCheck := ""
 	if len(coordination) > 0 {
 		versionReady, versionRelease = coordination[0].versionReady, coordination[0].versionRelease
 		interactiveReady, interactiveRelease = coordination[0].interactiveReady, coordination[0].interactiveRelease
+		if coordination[0].expectEnvironment {
+			environmentCheck = `
+	if (version) {
+		if (getenv("PROFILE_CODEX_MODE") || getenv("PROFILE_CODEX_TOKEN") || getenv("ACS_NATIVE_CODEX_MODE") || getenv("ACS_NATIVE_CODEX_TOKEN") || getenv("ACS_NATIVE_CODEX_UNSELECTED")) return 127;
+	} else {
+		if (!getenv("PROFILE_CODEX_MODE") || !getenv("PROFILE_CODEX_TOKEN") || getenv("PROFILE_CODEX_UNSELECTED") || getenv("ACS_NATIVE_CODEX_MODE") || getenv("ACS_NATIVE_CODEX_TOKEN") || getenv("ACS_NATIVE_CODEX_UNSELECTED")) return 128;
+	}`
+		}
 	}
 	program := fmt.Sprintf(`#include <fcntl.h>
 #include <stdio.h>
@@ -1262,10 +1525,11 @@ int main(int argc, char **argv) {
   if (!next) return 120;
   next[0] = %s;
   int version = 0;
-  for (int i = 1; i < argc; i++) {
+	for (int i = 1; i < argc; i++) {
     next[i] = argv[i];
-    if (strcmp(argv[i], "--version") == 0) version = 1;
+		if (strcmp(argv[i], "--version") == 0) version = 1;
 	}
+	%s
 	if (!version) {
 		next[argc] = "-c";
     next[argc + 1] = %s;
@@ -1276,7 +1540,7 @@ int main(int argc, char **argv) {
   execv(next[0], next);
   return 121;
 }
-`, strconv.Quote(target), strconv.Quote(openAIOverride), strconv.Quote(chatGPTOverride), strconv.Quote(versionReady), strconv.Quote(interactiveReady), strconv.Quote(versionRelease), strconv.Quote(interactiveRelease))
+`, strconv.Quote(target), environmentCheck, strconv.Quote(openAIOverride), strconv.Quote(chatGPTOverride), strconv.Quote(versionReady), strconv.Quote(interactiveReady), strconv.Quote(versionRelease), strconv.Quote(interactiveRelease))
 	if err := os.WriteFile(source, []byte(program), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -1318,6 +1582,7 @@ int main(int argc, char **argv) {
   for (int i = 1; i < argc; i++) {
     if (strcmp(argv[i], "--version") == 0) { puts("codex-cli 0.149.1"); return 0; }
   }
+	if (getenv("ACS_NATIVE_CODEX_MODE") || getenv("ACS_NATIVE_CODEX_TOKEN") || getenv("ACS_NATIVE_CODEX_UNSELECTED") || getenv("PROFILE_CODEX_MODE") || getenv("PROFILE_CODEX_TOKEN")) return 14;
   fputs("synthetic-login-target:started\n", stderr);
   fflush(stderr);
   const char *home = getenv("HOME");
@@ -1358,6 +1623,21 @@ func writeNativeCodexProfile(t *testing.T, home, profileName, authRef, access st
 		t.Fatal(err)
 	}
 	document := `{"version":3,"name":` + strconv.Quote(profileName) + `,"common":{"skills":{"version":1,"selection":[{"source":"shared-agents","relativePath":"managed-proof"}]},"workspace":{"version":1,"selection":{"access":` + strconv.Quote(access) + `}}},"overlays":{"codex":{"version":1,"authRef":` + strconv.Quote(authRef) + `}}}`
+	if err := os.WriteFile(filepath.Join(profiles, profileName+".json"), []byte(document), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func writeNativeCodexEnvironmentProfile(t *testing.T, home, profileName, authRef string) {
+	t.Helper()
+	profiles := filepath.Join(home, ".acs", "profiles")
+	if err := os.MkdirAll(profiles, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	document := `{"version":3,"name":` + strconv.Quote(profileName) + `,"common":{"skills":{"version":1,"selection":[{"source":"shared-agents","relativePath":"managed-proof"}]},"workspace":{"version":1,"selection":{"access":"read-write"}},"environment":{"version":1,"selection":{"entries":[` +
+		`{"id":"mode","destination":"PROFILE_CODEX_MODE","scope":"attached-process-tree","source":{"kind":"host-environment","name":"ACS_NATIVE_CODEX_MODE"},"required":true,"classification":"non-secret"},` +
+		`{"id":"token","destination":"PROFILE_CODEX_TOKEN","scope":"attached-process-tree","source":{"kind":"secret-reference","provider":"host-environment","reference":"ACS_NATIVE_CODEX_TOKEN"},"required":true,"classification":"secret"}` +
+		`]}}},"overlays":{"codex":{"version":1,"authRef":` + strconv.Quote(authRef) + `}}}`
 	if err := os.WriteFile(filepath.Join(profiles, profileName+".json"), []byte(document), 0o600); err != nil {
 		t.Fatal(err)
 	}
