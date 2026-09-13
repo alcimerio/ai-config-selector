@@ -4,8 +4,9 @@ package devinruntime
 type Capability string
 
 const (
-	CapabilitySkillIsolation Capability = "skill isolation"
-	CapabilityAuthentication Capability = "authentication"
+	CapabilitySkillIsolation   Capability = "skill isolation"
+	CapabilityInstructionRules Capability = "instruction rules"
+	CapabilityAuthentication   Capability = "authentication"
 )
 
 // PreflightErrorCategory is a stable, redacted class of existing-Devin
@@ -29,6 +30,8 @@ const (
 	ReasonSkillInspectionCommandFailed
 	ReasonSkillInspectionOutputInvalid
 	ReasonCatalogMismatch
+	ReasonRuleInspectionCommandFailed
+	ReasonRuleMismatch
 	ReasonAuthenticationCommandFailed
 	ReasonAuthenticationUnavailable
 )
@@ -54,6 +57,8 @@ func (e *PreflightError) Category() PreflightErrorCategory {
 	switch e.Capability {
 	case CapabilitySkillIsolation:
 		return SkillPreflightFailed
+	case CapabilityInstructionRules:
+		return DevinPreflightFailed
 	case CapabilityAuthentication:
 		return AuthenticationPreflightFailed
 	default:
@@ -75,6 +80,10 @@ func (e *PreflightError) Error() string {
 		message = "Devin returned an incompatible global Skill Catalog response; update Devin or ACS before retrying"
 	case ReasonCatalogMismatch:
 		message = "skill isolation could not be verified because the global Skill Catalog did not match; the installed Devin CLI is incompatible with ACS isolation"
+	case ReasonRuleInspectionCommandFailed:
+		message = "the selected instruction rules probe failed; update Devin or ACS before retrying"
+	case ReasonRuleMismatch:
+		message = "selected instruction rules could not be verified in the contained Devin home; the installed Devin CLI is incompatible with ACS isolation"
 	case ReasonAuthenticationCommandFailed:
 		message = "the authentication probe failed; run `devin auth status` outside ACS and resolve the reported CLI error"
 	case ReasonAuthenticationUnavailable:

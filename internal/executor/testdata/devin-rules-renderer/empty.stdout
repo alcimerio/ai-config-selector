@@ -1,0 +1,10 @@
+Rule: empty
+
+Path: "/tmp/acs-instructions-real-renderer-corpus/home/.devin/rules/empty.md"
+Provider: Devin
+Activation: always-on
+
+Content:
+────────────────────────────────────────────────────────────
+
+────────────────────────────────────────────────────────────

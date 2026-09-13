@@ -16,6 +16,7 @@ import (
 	"github.com/alcimerio/ai-config-selector/internal/codexauthresource"
 	"github.com/alcimerio/ai-config-selector/internal/environmentintent"
 	"github.com/alcimerio/ai-config-selector/internal/executableintent"
+	"github.com/alcimerio/ai-config-selector/internal/instructions"
 	"github.com/alcimerio/ai-config-selector/internal/pathintent"
 	"github.com/alcimerio/ai-config-selector/internal/profile"
 	"github.com/alcimerio/ai-config-selector/internal/skills"
@@ -57,9 +58,10 @@ type Overlay struct {
 	Support string `json:"support"`
 }
 type Category struct {
-	ID            string                  `json:"id"`
-	SchemaVersion *int                    `json:"schemaVersion"`
-	Selection     []skills.SkillReference `json:"selection"`
+	ID            string                   `json:"id"`
+	SchemaVersion *int                     `json:"schemaVersion"`
+	Selection     []skills.SkillReference  `json:"selection,omitempty"`
+	Instructions  []instructions.Reference `json:"instructions,omitempty"`
 }
 
 func newResult(operation string) Result {
@@ -305,6 +307,20 @@ func decodeVersionThree(entry Entry, envelope map[string]json.RawMessage) Entry 
 			return entry.failed("invalid_structure")
 		}
 		entry.Categories = append(entry.Categories, Category{ID: "environment", SchemaVersion: &environmentVersion})
+	}
+	if instructionsPayload, exists := common["instructions"]; exists {
+		iv, raw, code := decodeCommonPayload(instructionsPayload)
+		if code != "" || iv != 1 {
+			if code == "" {
+				code = "unsupported_content"
+			}
+			return entry.failed(code)
+		}
+		refs, err := instructions.Decode(raw)
+		if err != nil {
+			return entry.failed("invalid_structure")
+		}
+		entry.Categories = append(entry.Categories, Category{ID: "instructions", SchemaVersion: &iv, Instructions: refs})
 	}
 	var overlays map[string]json.RawMessage
 	if !required(envelope, "overlays", &overlays) || overlays == nil {

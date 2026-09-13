@@ -1,0 +1,10 @@
+Rule: plain
+
+Path: "/tmp/acs-instructions-real-renderer-corpus/home/.devin/rules/plain.md"
+Provider: Devin
+Activation: always-on
+
+Content:
+────────────────────────────────────────────────────────────
+body
+────────────────────────────────────────────────────────────

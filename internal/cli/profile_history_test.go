@@ -16,12 +16,116 @@ import (
 	"github.com/alcimerio/ai-config-selector/internal/adapter/devin"
 	"github.com/alcimerio/ai-config-selector/internal/cli"
 	"github.com/alcimerio/ai-config-selector/internal/commonprofile"
+	"github.com/alcimerio/ai-config-selector/internal/instructions"
 	"github.com/alcimerio/ai-config-selector/internal/profile"
 	"github.com/alcimerio/ai-config-selector/internal/profilerepo"
 )
 
 func historyDocument(name, auth string) []byte {
 	return []byte(`{"version":3,"name":"` + name + `","common":{"skills":{"version":1,"selection":[{"source":"shared-agents","relativePath":"review"}]},"workspace":{"version":1,"selection":{"access":"read-only"}}},"overlays":{"codex":{"version":1,"authRef":"` + auth + `"},"devin":{"version":1}}}`)
+}
+
+func instructionHistoryDocument(name string, paths ...string) []byte {
+	selection := make([]string, 0, len(paths))
+	for _, path := range paths {
+		selection = append(selection, `{"source":"`+instructions.SourceID+`","relativePath":"`+path+`"}`)
+	}
+	return []byte(`{"version":3,"name":"` + name + `","common":{"skills":{"version":1,"selection":[]},"instructions":{"version":1,"selection":[` + strings.Join(selection, ",") + `]},"workspace":{"version":1,"selection":{"access":"read-only"}}},"overlays":{"devin":{"version":1}}}`)
+}
+
+func storedInstructionPaths(t *testing.T, contents []byte) []string {
+	t.Helper()
+	var document struct {
+		Common map[string]struct {
+			Selection json.RawMessage `json:"selection"`
+		} `json:"common"`
+	}
+	if err := json.Unmarshal(contents, &document); err != nil {
+		t.Fatal(err)
+	}
+	refs, err := instructions.Decode(document.Common[commonprofile.InstructionsCapabilityID].Selection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	paths := make([]string, len(refs))
+	for index := range refs {
+		paths[index] = refs[index].RelativePath
+	}
+	return paths
+}
+
+func TestInstructionHistoryRestoreAndStalePreviewPreserveUnavailableReferences(t *testing.T) {
+	app, repository, home := historyApp(t)
+	old := instructionHistoryDocument("alpha", "missing/older.md", "shared/preserved.md")
+	current := instructionHistoryDocument("alpha", "current.md", "missing/current.md")
+	applyHistory(t, repository, "alpha", old, current)
+	history, err := repository.History(context.Background(), profilerepo.HistorySelector{Name: "alpha"}, 100)
+	if err != nil || len(history.Events) != 2 {
+		t.Fatalf("history=%+v err=%v", history, err)
+	}
+
+	var out, errOut bytes.Buffer
+	app.Output, app.ErrorOutput = &out, &errOut
+	if _, code := app.RunProfileHistory(context.Background(), []string{"profile", "history", "alpha", "--json"}, func() (string, error) { return home, nil }); code != 0 {
+		t.Fatalf("history command code=%d out=%s err=%s", code, out.String(), errOut.String())
+	}
+	if !strings.Contains(out.String(), history.Events[0].EventID) || !strings.Contains(out.String(), history.Events[1].EventID) {
+		t.Fatalf("public history omitted its revisions: %s", out.String())
+	}
+
+	oldEvent := history.Events[1].EventID
+	out.Reset()
+	previewArgs := []string{"profile", "restore", "alpha", "--revision", oldEvent, "--dry-run", "--json"}
+	if _, code := app.RunProfileHistory(context.Background(), previewArgs, func() (string, error) { return home, nil }); code != 0 {
+		t.Fatalf("restore preview code=%d out=%s err=%s", code, out.String(), errOut.String())
+	}
+	var preview restorePreviewResult
+	if err := json.Unmarshal(out.Bytes(), &preview); err != nil || preview.Digest == "" {
+		t.Fatalf("restore preview=%s err=%v", out.String(), err)
+	}
+	args := []string{"profile", "restore", "alpha", "--revision", oldEvent, "--expect", preview.Digest, "--confirm", "alpha", "--json"}
+	out.Reset()
+	if _, code := app.RunProfileHistory(context.Background(), args, func() (string, error) { return home, nil }); code != 0 {
+		t.Fatalf("restore apply code=%d out=%s err=%s", code, out.String(), errOut.String())
+	}
+	restored, err := repository.Read(context.Background(), "alpha")
+	if err != nil || !reflect.DeepEqual(storedInstructionPaths(t, restored.Bytes), []string{"missing/older.md", "shared/preserved.md"}) {
+		t.Fatalf("restore lost selected/unavailable identities: snapshot=%+v err=%v", restored, err)
+	}
+
+	// A second preview is invalidated by any intervening Profile revision;
+	// stale refusal must leave the exact intervening bytes and revision intact.
+	newer := instructionHistoryDocument("alpha", "newer.md", "missing/newer.md")
+	if _, err := repository.Apply(context.Background(), profilerepo.ReplaceRequest{Name: "alpha", Expected: restored.Revision, Bytes: newer}); err != nil {
+		t.Fatal(err)
+	}
+	base, err := repository.Read(context.Background(), "alpha")
+	if err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	if _, code := app.RunProfileHistory(context.Background(), previewArgs, func() (string, error) { return home, nil }); code != 0 {
+		t.Fatalf("second restore preview code=%d out=%s", code, out.String())
+	}
+	if err := json.Unmarshal(out.Bytes(), &preview); err != nil || preview.Digest == "" {
+		t.Fatalf("second restore preview=%s err=%v", out.String(), err)
+	}
+	if _, err := repository.Apply(context.Background(), profilerepo.ReplaceRequest{Name: "alpha", Expected: base.Revision, Bytes: instructionHistoryDocument("alpha", "intervening.md")}); err != nil {
+		t.Fatal(err)
+	}
+	intervening, err := repository.Read(context.Background(), "alpha")
+	if err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	staleArgs := []string{"profile", "restore", "alpha", "--revision", oldEvent, "--expect", preview.Digest, "--confirm", "alpha", "--json"}
+	if _, code := app.RunProfileHistory(context.Background(), staleArgs, func() (string, error) { return home, nil }); code != 1 || !strings.Contains(out.String(), `"code":"conflict"`) {
+		t.Fatalf("stale restore code=%d out=%s err=%s", code, out.String(), errOut.String())
+	}
+	after, err := repository.Read(context.Background(), "alpha")
+	if err != nil || after.Revision != intervening.Revision || !bytes.Equal(after.Bytes, intervening.Bytes) {
+		t.Fatalf("stale restore changed current instruction Profile: before=%+v after=%+v err=%v", intervening, after, err)
+	}
 }
 
 func executableHistoryDocument(name, id, path string) []byte {

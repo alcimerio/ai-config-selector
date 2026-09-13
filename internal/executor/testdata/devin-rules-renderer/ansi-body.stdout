@@ -1,0 +1,10 @@
+Rule: ansi-body
+
+Path: "/tmp/acs-instructions-real-renderer-corpus/home/.devin/rules/ansi-body.md"
+Provider: Devin
+Activation: always-on
+
+Content:
+────────────────────────────────────────────────────────────
+[31mred[0m
+────────────────────────────────────────────────────────────

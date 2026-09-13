@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/alcimerio/ai-config-selector/internal/commonprofile"
+	"github.com/alcimerio/ai-config-selector/internal/instructions"
 	"github.com/alcimerio/ai-config-selector/internal/launch"
 	"github.com/alcimerio/ai-config-selector/internal/profile"
 )
@@ -47,6 +48,31 @@ func TestExportIsDeterministicAndRemovesLocalBindings(t *testing.T) {
 	golden, err := os.ReadFile("testdata/complete.golden.json")
 	if err != nil || !bytes.Equal(first, golden) {
 		t.Fatalf("golden mismatch: %v\nwant:\n%s\ngot:\n%s", err, golden, first)
+	}
+}
+
+func TestInstructionSelectionRoundTripsAsBoundCommonMaterial(t *testing.T) {
+	candidate := fixtureProfile(t)
+	raw, err := instructions.Encode([]instructions.Reference{{Source: instructions.SourceID, RelativePath: "nested/guide.md"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate.Common[commonprofile.InstructionsCapabilityID] = profile.CommonPayload{Version: 1, Selection: raw}
+	exported, report, err := Export(candidate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.SourceBindings != 3 || !bytes.Contains(exported, []byte(`"instructions"`)) {
+		t.Fatalf("instruction export missing binding: report=%#v %s", report, exported)
+	}
+	bindings := []byte(`{"bindingVersion":3,"sources":{"source-1":"acs-instructions","source-2":"devin-config","source-3":"shared-agents"},"authentications":{"authentication-1":"personal"},"paths":{},"executables":{},"environment":{}}`)
+	result := Decode(exported, bindings, "restored")
+	if result.Code != CodeValid || result.Candidate == nil {
+		t.Fatalf("decode result %#v", result)
+	}
+	got, err := instructions.Decode(result.Candidate.Common[commonprofile.InstructionsCapabilityID].Selection)
+	if err != nil || len(got) != 1 || got[0].Source != instructions.SourceID || got[0].RelativePath != "nested/guide.md" {
+		t.Fatalf("roundtrip %#v %v", got, err)
 	}
 }
 

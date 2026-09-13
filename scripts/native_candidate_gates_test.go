@@ -23,6 +23,7 @@ func TestNativeCandidateGatesRequireSuppliedArtifacts(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			command := exec.Command("sh", "run-native-candidate-gates.sh", "v0.4.0", test.candidate, test.target, test.archive, filepath.Join(fixture.root, "recovery"), "available")
+			command.Env = append(os.Environ(), "ACS_TEST_DEVIN_BINARY="+fixture.devin)
 			output, err := command.CombinedOutput()
 			if err == nil {
 				t.Fatal("native candidate gate accepted a missing supplied artifact")
@@ -184,6 +185,7 @@ type nativeGateFixture struct {
 	candidate string
 	target    string
 	archive   string
+	devin     string
 	callsPath string
 	hashCalls string
 }
@@ -197,13 +199,14 @@ func newNativeGateFixture(t *testing.T) nativeGateFixture {
 		candidate: filepath.Join(root, "acs"),
 		target:    filepath.Join(root, "codex"),
 		archive:   filepath.Join(root, "codex.tar.gz"),
+		devin:     filepath.Join(root, "devin"),
 		callsPath: filepath.Join(root, "calls"),
 		hashCalls: filepath.Join(root, "hash-calls"),
 	}
 	if err := os.Mkdir(fixture.bin, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	for _, path := range []string{fixture.candidate, fixture.target} {
+	for _, path := range []string{fixture.candidate, fixture.target, fixture.devin} {
 		if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
 			t.Fatal(err)
 		}
@@ -242,9 +245,9 @@ case "$ACS_TEST_MODE:$count" in
   hash-baseline-fail:1) exit 41 ;;
   hash-baseline-empty:1) exit 0 ;;
   hash-baseline-malformed:1) printf '%s\n' malformed; exit 0 ;;
-  hash-final-fail:*|fail-primary-final-fail:*) if [ "$count" -gt 3 ]; then exit 41; fi ;;
-  hash-final-empty:*|fail-primary-final-empty:*) if [ "$count" -gt 3 ]; then exit 0; fi ;;
-  hash-final-malformed:*|fail-primary-final-malformed:*) if [ "$count" -gt 3 ]; then printf '%s\n' malformed; exit 0; fi ;;
+  hash-final-fail:*|fail-primary-final-fail:*) if [ "$count" -gt 4 ]; then exit 41; fi ;;
+  hash-final-empty:*|fail-primary-final-empty:*) if [ "$count" -gt 4 ]; then exit 0; fi ;;
+  hash-final-malformed:*|fail-primary-final-malformed:*) if [ "$count" -gt 4 ]; then printf '%s\n' malformed; exit 0; fi ;;
 esac
 exec "$ACS_REAL_SHASUM" "$@"
 `
@@ -282,6 +285,7 @@ func (fixture nativeGateFixture) command(mode string) *exec.Cmd {
 		"ACS_NATIVE_AUTH_RECOVERY_ROOT=/ambient/recovery",
 		"ACS_TEST_CODEX_BINARY=/ambient/codex",
 		"ACS_TEST_CODEX_ARCHIVE=/ambient/codex.tar.gz",
+		"ACS_TEST_DEVIN_BINARY="+fixture.devin,
 	)
 	return command
 }

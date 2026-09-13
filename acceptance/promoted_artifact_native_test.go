@@ -25,6 +25,7 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/alcimerio/ai-config-selector/internal/instructions"
 	"github.com/charmbracelet/x/term"
 	"github.com/creack/pty"
 	"github.com/ebitengine/purego"
@@ -195,6 +196,111 @@ func TestPromotedArtifactNativeContainmentContract(t *testing.T) {
 	t.Run("Devin preflight and target generations are fresh while retained", assertPromotedArtifactDevinGenerations)
 	t.Run("preflight failure is categorized without target details", assertPromotedArtifactNativePreflightFailureIsSafe)
 	t.Run("missing backend OR invalid policy cannot start a marker", assertPromotedArtifactMissingBackendFailsClosed)
+}
+
+// TestPromotedArtifactNativeInstructionRules exercises selected projection and
+// retained rules verification through the public installed candidate. The
+// expected authentication refusal is observable only after rules succeeds.
+func TestPromotedArtifactNativeInstructionRules(t *testing.T) {
+	binary := promotedBinary(t)
+	if promotedSandboxCapability(t) != "available" {
+		t.Skip("native instruction verification requires the configured Seatbelt backend")
+	}
+	devinBinary := os.Getenv("ACS_TEST_DEVIN_BINARY")
+	if devinBinary == "" {
+		t.Fatal("checksum-locked Devin CLI target is required")
+	}
+	info, err := os.Lstat(devinBinary)
+	if err != nil || !info.Mode().IsRegular() || info.Mode()&0111 == 0 {
+		t.Fatal("checksum-locked Devin CLI target is unavailable")
+	}
+	for _, workspaceMode := range []string{"repository", "non-git", "provider-collision"} {
+		t.Run(workspaceMode, func(t *testing.T) {
+			home, path := prepareRuntimeHome(t)
+			credential := filepath.Join(home, ".local", "share", "devin", "credentials.toml")
+			if err := os.Remove(credential); err != nil {
+				t.Fatalf("remove synthetic credential fixture: %v", err)
+			}
+			sessionRoot := realTemporaryDirectory(t)
+			workspace := filepath.Join(sessionRoot, "workspace")
+			if err := os.MkdirAll(workspace, 0700); err != nil {
+				t.Fatal(err)
+			}
+			if workspaceMode != "non-git" {
+				if err := os.Mkdir(filepath.Join(workspace, ".git"), 0700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := os.WriteFile(filepath.Join(workspace, "AGENTS.md"), []byte("ACS_NATIVE_AMBIENT_AGENTS_SENTINEL\n"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			instructionRoot := filepath.Join(home, ".acs", "instructions", "nested")
+			if err := os.MkdirAll(instructionRoot, 0700); err != nil {
+				t.Fatal(err)
+			}
+			body := []byte("---\r\ntrigger: manual\r\n---\r\nACS_NATIVE_SELECTED_INSTRUCTION_SENTINEL")
+			if err := os.WriteFile(filepath.Join(instructionRoot, "guide.md"), body, 0600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(instructionRoot, "unselected.md"), []byte("ACS_NATIVE_UNSELECTED_SENTINEL"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			ref := instructions.Reference{Source: instructions.SourceID, RelativePath: "nested/guide.md"}
+			name := instructions.DestinationName(ref)
+			if err := os.MkdirAll(filepath.Join(home, ".devin", "rules"), 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(home, ".devin", "rules", name), []byte("ACS_NATIVE_HOST_DECOY_SENTINEL"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if workspaceMode == "provider-collision" {
+				dir := filepath.Join(workspace, ".cursor", "rules")
+				if err := os.MkdirAll(dir, 0700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(dir, name), []byte("ACS_NATIVE_COLLISION_SENTINEL"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			writeNativeInstructionProfile(t, home, "selected-instructions", ref)
+			cliDir := filepath.Dir(devinBinary)
+			command := exec.Command(binary, "devin", "--profile", "selected-instructions")
+			command.Dir = workspace
+			command.Env = nativeCandidateEnvironment(home, cliDir+string(os.PathListSeparator)+path, nil)
+			var output synchronizedNativeCapture
+			command.Stdout, command.Stderr = &output, &output
+			err = command.Run()
+			captured := output.String()
+			if workspaceMode == "provider-collision" {
+				if err == nil || !strings.Contains(captured, "devin_preflight_failed") || !strings.Contains(captured, "selected instruction rules could not be verified") || strings.Contains(captured, "selected instruction rules probe failed") || strings.Contains(captured, "authentication_preflight_failed") {
+					t.Fatalf("collision outcome did not distinguish failed rules verification: err=%v output=%q", err, captured)
+				}
+			} else {
+				if err == nil || !strings.Contains(captured, "authentication_preflight_failed") || !strings.Contains(captured, "usable existing authentication could not be verified") || strings.Contains(captured, "authentication probe failed") || strings.Contains(captured, "devin_preflight_failed") {
+					t.Fatalf("candidate did not reach typed authentication refusal after rules verification: err=%v output=%q", err, captured)
+				}
+			}
+			for _, secret := range []string{"ACS_NATIVE_SELECTED_INSTRUCTION_SENTINEL", "ACS_NATIVE_HOST_DECOY_SENTINEL", "ACS_NATIVE_UNSELECTED_SENTINEL", "ACS_NATIVE_COLLISION_SENTINEL"} {
+				if strings.Contains(captured, secret) {
+					t.Fatalf("preflight exposed instruction content %q", secret)
+				}
+			}
+			assertNoSessions(t, home)
+		})
+	}
+}
+
+func writeNativeInstructionProfile(t *testing.T, home, name string, ref instructions.Reference) {
+	t.Helper()
+	directory := filepath.Join(home, ".acs", "profiles")
+	if err := os.MkdirAll(directory, 0700); err != nil {
+		t.Fatal(err)
+	}
+	selection := fmt.Sprintf(`{"source":%q,"relativePath":%q}`, ref.Source, ref.RelativePath)
+	raw := fmt.Sprintf(`{"version":3,"name":%q,"common":{"skills":{"version":1,"selection":[]},"workspace":{"version":1,"selection":{"access":"read-only"}},"instructions":{"version":1,"selection":[%s]}},"overlays":{"devin":{"version":1}}}`, name, selection)
+	if err := os.WriteFile(filepath.Join(directory, name+".json"), []byte(raw), 0600); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func assertPromotedArtifactDevinGenerations(t *testing.T) {
@@ -1674,6 +1780,14 @@ func assertPromotedArtifactGenericRun(t *testing.T) {
 		t.Fatal(err)
 	}
 	home, path := prepareRuntimeHome(t)
+	instructionRoot := filepath.Join(home, ".acs", "instructions")
+	if err := os.MkdirAll(instructionRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(instructionRoot, "generic.md"), []byte("ACS_GENERIC_INSTRUCTION_MATERIAL_SENTINEL\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	writeGenericInstructionProfile(t, home, "generic-instructions")
 	sharedSkill := filepath.Join(home, ".agents", "skills", "delivery")
 	if err := os.MkdirAll(sharedSkill, 0o700); err != nil {
 		t.Fatal(err)
@@ -1684,6 +1798,12 @@ func assertPromotedArtifactGenericRun(t *testing.T) {
 	writeSharedTargetProfile(t, home, "generic-readwrite", "read-write")
 	writeSharedTargetProfile(t, home, "generic-readonly", "read-only")
 	workspace := realTemporaryDirectory(t)
+	materialized := exec.Command(binary, "run", "--profile", "generic-instructions", "--", "/bin/sh", "-c", "test -f \"$HOME/.acs/common/v1/instructions/acs-instructions/generic.md\" && test ! -e \"$HOME/.devin/rules\" && grep -q ACS_GENERIC_INSTRUCTION_MATERIAL_SENTINEL \"$HOME/.acs/common/v1/instructions/acs-instructions/generic.md\"")
+	materialized.Dir = workspace
+	materialized.Env = nativeCandidateEnvironment(home, path, nil)
+	if output, err := materialized.CombinedOutput(); err != nil {
+		t.Fatalf("generic run did not expose only selected common instruction bytes: %v; output=%s", err, output)
+	}
 	external := realTemporaryDirectory(t)
 	externalSecret := filepath.Join(external, "secret")
 	externalWrite := filepath.Join(external, "write")
@@ -1897,6 +2017,18 @@ func assertPromotedArtifactGenericRun(t *testing.T) {
 		t.Fatalf("generic resize was not forwarded: %s", capture.String())
 	}
 	assertNoSessions(t, home)
+}
+
+func writeGenericInstructionProfile(t *testing.T, home, name string) {
+	t.Helper()
+	directory := filepath.Join(home, ".acs", "profiles")
+	if err := os.MkdirAll(directory, 0700); err != nil {
+		t.Fatal(err)
+	}
+	raw := fmt.Sprintf(`{"version":3,"name":%q,"common":{"skills":{"version":1,"selection":[]},"workspace":{"version":1,"selection":{"access":"read-only"}},"instructions":{"version":1,"selection":[{"source":"acs-instructions","relativePath":"generic.md"}]}},"overlays":{}}`, name)
+	if err := os.WriteFile(filepath.Join(directory, name+".json"), []byte(raw), 0600); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // assertLiveTrackedCapabilityIsolation observes the candidate-created private

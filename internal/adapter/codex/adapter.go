@@ -15,6 +15,7 @@ import (
 	"github.com/alcimerio/ai-config-selector/internal/codexauth"
 	"github.com/alcimerio/ai-config-selector/internal/commonprofile"
 	"github.com/alcimerio/ai-config-selector/internal/executor"
+	"github.com/alcimerio/ai-config-selector/internal/instructions"
 	"github.com/alcimerio/ai-config-selector/internal/launch"
 	"github.com/alcimerio/ai-config-selector/internal/profile"
 	"github.com/alcimerio/ai-config-selector/internal/skillmaterial"
@@ -42,6 +43,15 @@ type Adapter struct {
 	auth       codexExecutor
 }
 
+type codexInstructionProjection struct{}
+
+func (codexInstructionProjection) ID() string   { return "codex" }
+func (codexInstructionProjection) Version() int { return 1 }
+func (codexInstructionProjection) Expected(selected []instructions.Bundle) ([]instructions.Bundle, error) {
+	return selected, nil
+}
+func (codexInstructionProjection) Materialize(string, []instructions.Bundle) error { return nil }
+
 func New(config Config) (*Adapter, error) {
 	if config.BinaryPath == "" || config.ExistingHomeDir == "" {
 		return nil, errors.New("create Codex Adapter: binary path and existing home are required")
@@ -63,6 +73,12 @@ func New(config Config) (*Adapter, error) {
 	if err != nil {
 		return nil, err
 	}
+	instructionsBinding, err := commonprofile.NewInstructionsBinding(func(_ context.Context, refs []instructions.Reference) ([]instructions.Bundle, error) {
+		return instructions.Resolve(a.home, refs)
+	}, codexInstructionProjection{})
+	if err != nil {
+		return nil, err
+	}
 	pathsBinding, err := commonprofile.NewPathsBinding()
 	if err != nil {
 		return nil, err
@@ -80,7 +96,7 @@ func New(config Config) (*Adapter, error) {
 		RuntimeInputs: append([]string(nil), config.RuntimeInputs...), RuntimeInputIDs: append([]string(nil), config.RuntimeInputIDs...),
 		ProtectedPaths:   []string{filepath.Join(a.home, ".acs"), filepath.Join(a.home, ".codex"), filepath.Join(a.home, ".local", "share", "devin", "credentials.toml")},
 		ProtectedPathIDs: []string{"acs-private", "codex-private", "devin-credential"}, Semantics: authority.CodexSemantics(),
-	}, []category.Registration{skillsBinding.Registration(), workspaceBinding.Registration(), pathsBinding.Registration(), executablesBinding.Registration(), environmentBinding.Registration()})
+	}, []category.Registration{skillsBinding.Registration(), instructionsBinding.Registration(), workspaceBinding.Registration(), pathsBinding.Registration(), executablesBinding.Registration(), environmentBinding.Registration()})
 	if err != nil {
 		return nil, err
 	}
@@ -91,6 +107,10 @@ func New(config Config) (*Adapter, error) {
 		return nil, err
 	}
 	workspaceEditor, err := builder.RegisterWorkspaceEditor(workspaceBinding)
+	if err != nil {
+		return nil, err
+	}
+	instructionsEditor, err := builder.RegisterInstructionsEditor(instructionsBinding, func(context.Context) ([]instructions.Bundle, error) { return instructions.Discover(a.home) })
 	if err != nil {
 		return nil, err
 	}
@@ -106,7 +126,7 @@ func New(config Config) (*Adapter, error) {
 	if err != nil {
 		return nil, err
 	}
-	a.editors, err = builder.NewEditorRegistry(a.categories, skillsEditor, workspaceEditor, pathsEditor, executablesEditor, environmentEditor)
+	a.editors, err = builder.NewEditorRegistry(a.categories, skillsEditor, instructionsEditor, workspaceEditor, pathsEditor, executablesEditor, environmentEditor)
 	if err != nil {
 		return nil, err
 	}

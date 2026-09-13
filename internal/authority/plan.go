@@ -14,6 +14,7 @@ import (
 	"reflect"
 	"sort"
 
+	"github.com/alcimerio/ai-config-selector/internal/instructions"
 	"github.com/alcimerio/ai-config-selector/internal/launch"
 	"github.com/alcimerio/ai-config-selector/internal/skills"
 )
@@ -70,8 +71,8 @@ type TargetSemantics struct {
 
 func DevinSemantics() TargetSemantics {
 	return TargetSemantics{Version: 1,
-		Preflights:           []ConfigurationDecision{{ID: "devin.preflight.skills", Mode: "contained-exact-catalog"}, {ID: "devin.preflight.authentication", Mode: "contained-status"}},
-		Inheritance:          []InheritanceRule{{ID: "devin.project-skills", LogicalRoots: []string{".devin/skills", ".agents/skills"}}},
+		Preflights:           []ConfigurationDecision{{ID: "devin.preflight.skills", Mode: "contained-exact-catalog"}, {ID: "devin.preflight.rules", Mode: "contained-selected-rules"}, {ID: "devin.preflight.authentication", Mode: "contained-status"}},
+		Inheritance:          []InheritanceRule{{ID: "devin.project-skills", LogicalRoots: []string{".devin/skills", ".agents/skills"}}, {ID: "devin.project-instructions", LogicalRoots: []string{"AGENTS.md", ".devin/rules"}}},
 		CredentialProjection: "optional-allowlisted-value-omitted"}
 }
 
@@ -664,6 +665,15 @@ func (plan Plan) DevinExpectedCatalog() []skills.SkillReference {
 		}
 	}
 	return nil
+}
+
+func (plan Plan) DevinExpectedInstructions() []instructions.Bundle {
+	for _, entry := range plan.contributions {
+		if selected, ok := entry.Value.(interface{ DevinInstructionBundles() []instructions.Bundle }); ok {
+			return selected.DevinInstructionBundles()
+		}
+	}
+	return []instructions.Bundle{}
 }
 
 func (plan Plan) Plan(ctx context.Context, workingDirectory string) (launch.Plan, error) {

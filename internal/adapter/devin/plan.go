@@ -22,6 +22,7 @@ func (a *Adapter) PlanLaunch(ctx context.Context, workingDirectory string, resol
 	if err := a.planProjectSkills(ctx, workingDirectory, &plan); err != nil {
 		return launch.Plan{}, err
 	}
+	plan.Sections = append(plan.Sections, launch.PlanSection{Title: "Workspace instruction discovery retained for Devin:", Items: []launch.PlanItem{{Label: "AGENTS.md and project rule files remain workspace-owned and are not copied into the Profile or Session home."}, {Label: "Devin's workspace root can vary with repository boundaries; rules-list rows require exact source classification."}}})
 	readiness, err := a.executor.Readiness(ctx)
 	if err != nil {
 		return launch.Plan{}, fmt.Errorf("inspect required process sandbox readiness: %w", err)

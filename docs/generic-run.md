@@ -43,9 +43,11 @@ file-identity guarantee.
 ## Profile, environment, and grants
 
 Generic execution selects no target overlay and no named authentication. For
-v3 Profiles it materializes selected common Skills only under
-`$HOME/.acs/common/v1/skills/<source>/<relative-path>` in the synthetic Session
-home. Inactive Devin, Codex, and unknown overlay payloads stay inert. Legacy
+v3 Profiles it materializes selected common Skills under
+`$HOME/.acs/common/v1/skills/<source>/<relative-path>` and explicitly selected
+instruction files under `$HOME/.acs/common/v1/instructions/<source>/<relative-path>`
+in the synthetic Session home. It does not create Devin rules paths or apply
+Devin activation semantics. Inactive Devin, Codex, and unknown overlay payloads stay inert. Legacy
 v1/v2 Profiles retain their established writable workspace and legacy Skill
 placement; a v3 Profile defaults to read-only unless the user explicitly chose
 coding write.
