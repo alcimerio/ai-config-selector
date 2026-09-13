@@ -17,6 +17,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -3599,6 +3600,600 @@ func TestSeatbeltCandidatePinnedDevinUsesSelectedHomeMCPConfigOnly(t *testing.T)
 	}
 }
 
+func TestSeatbeltCandidatePinnedDevinConfigPathReplacementIsolation(t *testing.T) {
+	if os.Getenv("ACS_RUN_MCP_AMBIENT_FEASIBILITY") != "1" {
+		t.Skip("run through the checksum-locked native MCP ambient feasibility gate")
+	}
+	skipSeatbeltNativeTestBinaryUnderRace(t)
+	binary := os.Getenv("ACS_TEST_DEVIN_BINARY")
+	if binary == "" {
+		t.Fatal("native MCP feasibility requires the checksum-locked Devin binary")
+	}
+	binaryInfo, err := os.Lstat(binary)
+	if err != nil || !binaryInfo.Mode().IsRegular() || binaryInfo.Mode()&0111 == 0 {
+		t.Fatal("checksum-locked Devin target is unavailable or unsafe")
+	}
+
+	for _, root := range []string{"project", "local"} {
+		for _, replacementKind := range []string{"symlink", "hardlink", "atomic-replacement"} {
+			root, replacementKind := root, replacementKind
+			t.Run(root+"/"+replacementKind, func(t *testing.T) {
+				t.Run("baseline", func(t *testing.T) {
+					runSeatbeltPinnedDevinReplacementCase(t, binary, root, replacementKind, false)
+				})
+				t.Run("candidate-denial", func(t *testing.T) {
+					runSeatbeltPinnedDevinReplacementCase(t, binary, root, replacementKind, true)
+				})
+			})
+		}
+	}
+	if afterInfo, err := os.Lstat(binary); err != nil || !os.SameFile(binaryInfo, afterInfo) || binaryInfo.Size() != afterInfo.Size() || !binaryInfo.ModTime().Equal(afterInfo.ModTime()) {
+		t.Fatal("pinned Devin identity changed during config path replacement observation")
+	}
+}
+
+type seatbeltDevinReplacementFixture struct {
+	fixture         *seatbeltMCPTestFixture
+	request         ProcessRequest
+	configPath      string
+	neighbor        string
+	selectedName    string
+	ambientName     string
+	ambientContents []byte
+}
+
+func newSeatbeltDevinReplacementFixture(t *testing.T, binary, root, replacementKind string) seatbeltDevinReplacementFixture {
+	t.Helper()
+	selectedName := "acs-selected-replacement-control"
+	ambientName := "acs-ambient-" + root + "-" + replacementKind
+	selectedConfig := seatbeltCandidateDevinConfig(t, selectedName)
+	ambientConfig := seatbeltCandidateDevinConfig(t, ambientName)
+	fixture := newSeatbeltMCPTestFixture(t)
+	validated := fixture.request
+	validated.workspaceAccess = WorkspaceAccessReadWrite
+	configRoot := validated.workspace
+	configDir := filepath.Join(configRoot, ".devin")
+	if err := os.MkdirAll(configDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	projectConfig := filepath.Join(configDir, "mcp_config.json")
+	localConfig := filepath.Join(configDir, "mcp_config.local.json")
+	configPath := projectConfig
+	if root == "local" {
+		configPath = localConfig
+		if err := os.WriteFile(projectConfig, []byte(`{"mcpServers":{}}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(configPath, []byte(`{"mcpServers":{}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	userConfig := filepath.Join(validated.sessionHome, ".config", "devin", "mcp_config.json")
+	if err := os.MkdirAll(filepath.Dir(userConfig), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(userConfig, selectedConfig, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	neighbor := filepath.Join(configDir, "allowed-neighbor-"+replacementKind+".json")
+	if err := os.WriteFile(neighbor, ambientConfig, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	request := ProcessRequest{
+		Workspace: validated.workspace, WorkspaceAccess: WorkspaceAccessReadWrite,
+		SessionsDirectory: validated.sessionsDirectory, SessionDirectory: validated.sessionDirectory,
+		SessionHome: validated.sessionHome, TemporaryDirectory: validated.temporaryDirectory,
+		Executable: binary, RuntimeAuthority: DefaultRuntimeAuthority(), Arguments: []string{"mcp", "list"},
+	}
+	return seatbeltDevinReplacementFixture{fixture: fixture, request: request, configPath: configPath,
+		neighbor: neighbor, selectedName: selectedName, ambientName: ambientName, ambientContents: ambientConfig}
+}
+
+func runSeatbeltPinnedDevinReplacementCase(t *testing.T, binary, root, replacementKind string, denied bool) {
+	t.Helper()
+	fixture := newSeatbeltDevinReplacementFixture(t, binary, root, replacementKind)
+	sandbox := NewProcessSandbox()
+	label := "baseline"
+	if denied {
+		label = "candidate denial"
+		sandbox = seatbeltCandidateMCPDenySandbox(t, []string{fixture.configPath}, nil)
+	}
+	var output bytes.Buffer
+	fixture.request.Terminal = Terminal{Output: &output, ErrorOutput: &output}
+	targetContext, targetCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer targetCancel()
+	targetProcess, err := sandbox.Prepare(targetContext, fixture.request)
+	if err != nil {
+		t.Fatalf("prepare pinned Devin %s: %v", label, err)
+	}
+	configIdentity := replaceSeatbeltDevinConfigAfterPrepare(t, fixture.configPath, fixture.neighbor, replacementKind, fixture.ambientContents)
+	verifySeatbeltDevinReplacement(t, fixture.configPath, fixture.neighbor, configIdentity, fixture.ambientContents)
+
+	// A separate child proves the allowed neighboring JSON remains readable
+	// under the same production backend and exact-path candidate denial.
+	marker := filepath.Join(fixture.fixture.request.workspace, "neighbor-read.json")
+	validated := fixture.fixture.request
+	validated.workspaceAccess = WorkspaceAccessReadWrite
+	neighborRequest := processRequestFromValidated(validated)
+	neighborRequest.Arguments = []string{"-test.run=^TestSeatbeltHelperProcess$", "--", "mcp-feasibility-read", fixture.neighbor, marker}
+	neighborContext, neighborCancel := context.WithTimeout(context.Background(), 15*time.Second)
+	neighborProcess, err := sandbox.Prepare(neighborContext, neighborRequest)
+	if err != nil {
+		neighborCancel()
+		t.Fatalf("prepare neighboring-file control under %s: %v", label, err)
+	}
+	fixture.fixture.started = true
+	fixture.fixture.settled = false
+	if err := neighborProcess.Start(); err != nil {
+		settleSeatbeltCandidateStartFailure(t, neighborProcess, fixture.fixture)
+		neighborCancel()
+		t.Fatalf("start neighboring-file control under %s: %v", label, err)
+	}
+	waitSeatbeltCandidateProcess(t, neighborProcess, fixture.fixture)
+	neighborCancel()
+	markerBytes, err := os.ReadFile(marker)
+	if err != nil {
+		t.Fatalf("read neighboring-file control receipt: %v", err)
+	}
+	var observations []struct {
+		Read             string `json:"read"`
+		PermissionDenied bool   `json:"permissionDenied"`
+	}
+	if err := json.Unmarshal(markerBytes, &observations); err != nil || len(observations) != 1 || observations[0].PermissionDenied || observations[0].Read != string(fixture.ambientContents) {
+		t.Fatalf("neighbor was not readable under %s: %+v, %v", label, observations, err)
+	}
+	verifySeatbeltDevinReplacement(t, fixture.configPath, fixture.neighbor, configIdentity, fixture.ambientContents)
+
+	fixture.fixture.settled = false
+	if err := targetProcess.Start(); err != nil {
+		settleSeatbeltCandidateStartFailure(t, targetProcess, fixture.fixture)
+		t.Fatalf("start pinned Devin %s after config replacement: %v", label, err)
+	}
+	waitSeatbeltCandidateProcess(t, targetProcess, fixture.fixture)
+	result := output.String()
+	if denied {
+		if !strings.Contains(result, fixture.selectedName) {
+			t.Fatalf("selected user entry missing under %s: %q", label, result)
+		}
+		if strings.Contains(result, fixture.ambientName) {
+			t.Fatalf("ambient entry survived %s: %q", label, result)
+		}
+	} else if !strings.Contains(result, fixture.selectedName) || !strings.Contains(result, fixture.ambientName) {
+		t.Fatalf("baseline did not load selected and retargeted ambient entries: %q", result)
+	}
+	verifySeatbeltDevinReplacement(t, fixture.configPath, fixture.neighbor, configIdentity, fixture.ambientContents)
+}
+
+func replaceSeatbeltDevinConfigAfterPrepare(t *testing.T, configPath, neighbor, kind string, contents []byte) os.FileInfo {
+	t.Helper()
+	neighborBefore, err := os.Lstat(neighbor)
+	if err != nil || !neighborBefore.Mode().IsRegular() {
+		t.Fatalf("stat allowed neighbor before replacement: %v", err)
+	}
+	neighborBytes, err := os.ReadFile(neighbor)
+	if err != nil || !bytes.Equal(neighborBytes, contents) {
+		t.Fatalf("allowed neighbor bytes before replacement = %q, %v", neighborBytes, err)
+	}
+	switch kind {
+	case "symlink", "hardlink":
+		if err := os.Remove(configPath); err != nil {
+			t.Fatal(err)
+		}
+		if kind == "symlink" {
+			if err := os.Symlink(neighbor, configPath); err != nil {
+				t.Fatal(err)
+			}
+		} else if err := os.Link(neighbor, configPath); err != nil {
+			t.Fatal(err)
+		}
+	case "atomic-replacement":
+		temporary := configPath + ".replacement"
+		if err := os.WriteFile(temporary, contents, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		temporaryInfo, err := os.Lstat(temporary)
+		if err != nil || !temporaryInfo.Mode().IsRegular() {
+			t.Fatalf("stat atomic replacement temporary: %v", err)
+		}
+		if err := os.Rename(temporary, configPath); err != nil {
+			t.Fatalf("atomically replace exact config pathname: %v", err)
+		}
+		replaced, err := os.Lstat(configPath)
+		if err != nil || !os.SameFile(temporaryInfo, replaced) {
+			t.Fatalf("atomic replacement did not install the prepared file identity: %v", err)
+		}
+	default:
+		t.Fatalf("unknown config replacement kind %q", kind)
+	}
+	configInfo, err := os.Lstat(configPath)
+	if err != nil {
+		t.Fatalf("stat replaced config pathname: %v", err)
+	}
+	switch kind {
+	case "symlink":
+		if configInfo.Mode()&os.ModeSymlink == 0 {
+			t.Fatal("replacement pathname is not a symlink")
+		}
+		target, err := os.Readlink(configPath)
+		if err != nil || target != neighbor {
+			t.Fatalf("symlink target = %q, %v", target, err)
+		}
+		targetInfo, err := os.Stat(configPath)
+		if err != nil || !os.SameFile(neighborBefore, targetInfo) {
+			t.Fatalf("symlink does not resolve to the allowed neighbor: %v", err)
+		}
+	case "hardlink":
+		if !configInfo.Mode().IsRegular() || !os.SameFile(neighborBefore, configInfo) {
+			t.Fatal("hardlink replacement is not the allowed neighbor inode")
+		}
+	case "atomic-replacement":
+		if !configInfo.Mode().IsRegular() || os.SameFile(neighborBefore, configInfo) {
+			t.Fatal("atomic replacement is not a distinct regular config file")
+		}
+	}
+	verifySeatbeltDevinReplacement(t, configPath, neighbor, configInfo, contents)
+	return configInfo
+}
+
+func verifySeatbeltDevinReplacement(t *testing.T, configPath, neighbor string, configIdentity os.FileInfo, contents []byte) {
+	t.Helper()
+	current, err := os.Lstat(configPath)
+	if err != nil || !os.SameFile(configIdentity, current) {
+		t.Fatalf("replaced config identity changed: %v", err)
+	}
+	actual, err := os.ReadFile(configPath)
+	if err != nil || !bytes.Equal(actual, contents) {
+		t.Fatalf("replaced config bytes = %q, %v", actual, err)
+	}
+	neighborInfo, err := os.Lstat(neighbor)
+	if err != nil || !neighborInfo.Mode().IsRegular() {
+		t.Fatalf("allowed neighboring config is unavailable: %v", err)
+	}
+	neighborBytes, err := os.ReadFile(neighbor)
+	if err != nil || !bytes.Equal(neighborBytes, contents) {
+		t.Fatalf("allowed neighbor bytes = %q, %v", neighborBytes, err)
+	}
+}
+
+func TestSeatbeltCandidatePinnedDevinNestedDiscoveryGrantScope(t *testing.T) {
+	if os.Getenv("ACS_RUN_MCP_AMBIENT_FEASIBILITY") != "1" {
+		t.Skip("run through the checksum-locked native MCP ambient feasibility gate")
+	}
+	skipSeatbeltNativeTestBinaryUnderRace(t)
+	binary := os.Getenv("ACS_TEST_DEVIN_BINARY")
+	if binary == "" {
+		t.Fatal("native MCP feasibility requires the checksum-locked Devin binary")
+	}
+	for _, gitMode := range []string{"non-git", "initialized-git"} {
+		gitMode := gitMode
+		t.Run(gitMode, func(t *testing.T) {
+			var baselineLoaded []string
+			t.Run("baseline", func(t *testing.T) {
+				fixture := newSeatbeltDevinNestedDiscoveryFixture(t, binary, gitMode)
+				output := runSeatbeltDevinTargetList(t, fixture.fixture, NewProcessSandbox(), fixture.request)
+				baselineLoaded = loadedSeatbeltMCPNames(output, fixture.namePaths)
+				t.Logf("nested %s baseline loaded ambient IDs: %v", gitMode, baselineLoaded)
+				if len(baselineLoaded) == 0 {
+					t.Fatal("nested baseline did not load any measured ambient marker")
+				}
+				if !strings.Contains(output, fixture.selectedName) {
+					t.Fatalf("selected HOME entry missing from nested %s baseline: %q", gitMode, output)
+				}
+				requiredIDs := []string{"acs-nested-outer-project", "acs-nested-outer-local"}
+				if gitMode == "non-git" {
+					requiredIDs = append(requiredIDs, "acs-nested-above-git-project", "acs-nested-above-git-local")
+				}
+				for _, required := range requiredIDs {
+					if !strings.Contains(output, required) {
+						t.Fatalf("nested %s baseline did not discover measured ancestor %s: %q", gitMode, required, output)
+					}
+				}
+			})
+			t.Run("candidate-denial", func(t *testing.T) {
+				fixture := newSeatbeltDevinNestedDiscoveryFixture(t, binary, gitMode)
+				denyPaths := make([]string, 0, len(baselineLoaded))
+				for _, name := range baselineLoaded {
+					denyPaths = append(denyPaths, fixture.namePaths[name])
+				}
+				if len(denyPaths) == 0 {
+					for _, path := range fixture.namePaths {
+						denyPaths = append(denyPaths, path)
+					}
+				}
+				output := runSeatbeltDevinTargetList(t, fixture.fixture, seatbeltCandidateMCPDenySandbox(t, denyPaths, nil), fixture.request)
+				candidateLoaded := loadedSeatbeltMCPNames(output, fixture.namePaths)
+				t.Logf("nested %s candidate loaded ambient IDs: %v (baseline IDs: %v)", gitMode, candidateLoaded, baselineLoaded)
+				if !strings.Contains(output, fixture.selectedName) {
+					t.Fatalf("selected HOME entry missing under nested %s candidate denial: %q", gitMode, output)
+				}
+				if len(candidateLoaded) != 0 {
+					t.Fatalf("ambient IDs survived nested %s candidate denial: candidate IDs=%v baseline IDs=%v: %q", gitMode, candidateLoaded, baselineLoaded, output)
+				}
+			})
+		})
+	}
+}
+
+func TestSeatbeltCandidatePinnedDevinDirectorySymlinkRedirection(t *testing.T) {
+	if os.Getenv("ACS_RUN_MCP_AMBIENT_FEASIBILITY") != "1" {
+		t.Skip("run through the checksum-locked native MCP ambient feasibility gate")
+	}
+	skipSeatbeltNativeTestBinaryUnderRace(t)
+	binary := os.Getenv("ACS_TEST_DEVIN_BINARY")
+	if binary == "" {
+		t.Fatal("native MCP feasibility requires the checksum-locked Devin binary")
+	}
+	for _, denied := range []bool{false, true} {
+		label := "baseline"
+		if denied {
+			label = "candidate-denial"
+		}
+		t.Run(label, func(t *testing.T) {
+			fixture := newSeatbeltMCPTestFixture(t)
+			validated := fixture.request
+			validated.workspaceAccess = WorkspaceAccessReadWrite
+			configDir := filepath.Join(validated.workspace, ".devin")
+			if _, err := os.Lstat(configDir); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf(".devin must be absent at Prepare: %v", err)
+			}
+			selectedName := "acs-selected-directory-redirection"
+			projectName := "acs-ambient-directory-project"
+			localName := "acs-ambient-directory-local"
+			selectedConfig := seatbeltCandidateDevinConfig(t, selectedName)
+			userConfig := filepath.Join(validated.sessionHome, ".config", "devin", "mcp_config.json")
+			if err := os.MkdirAll(filepath.Dir(userConfig), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(userConfig, selectedConfig, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			neighborDir := filepath.Join(validated.workspace, "allowed-neighbor-directory")
+			if err := os.Mkdir(neighborDir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			projectBytes := seatbeltCandidateDevinConfig(t, projectName)
+			localBytes := seatbeltCandidateDevinConfig(t, localName)
+			projectPath := filepath.Join(configDir, "mcp_config.json")
+			localPath := filepath.Join(configDir, "mcp_config.local.json")
+			candidatePaths := []string{projectPath, localPath}
+			request := ProcessRequest{
+				Workspace: validated.workspace, WorkspaceAccess: WorkspaceAccessReadWrite,
+				SessionsDirectory: validated.sessionsDirectory, SessionDirectory: validated.sessionDirectory,
+				SessionHome: validated.sessionHome, TemporaryDirectory: validated.temporaryDirectory,
+				Executable: binary, RuntimeAuthority: DefaultRuntimeAuthority(), Arguments: []string{"mcp", "list"},
+			}
+			var sandbox ProcessSandbox = NewProcessSandbox()
+			if denied {
+				sandbox = seatbeltCandidateMCPDenySandbox(t, candidatePaths, nil)
+			}
+			var output bytes.Buffer
+			request.Terminal = Terminal{Output: &output, ErrorOutput: &output}
+			targetContext, targetCancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer targetCancel()
+			targetProcess, err := sandbox.Prepare(targetContext, request)
+			if err != nil {
+				t.Fatalf("prepare pinned Devin %s before .devin exists: %v", label, err)
+			}
+
+			if err := os.WriteFile(filepath.Join(neighborDir, "mcp_config.json"), projectBytes, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(neighborDir, "mcp_config.local.json"), localBytes, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(neighborDir, configDir); err != nil {
+				t.Fatalf("redirect .devin to readable neighbor after Prepare: %v", err)
+			}
+			linkInfo, err := os.Lstat(configDir)
+			if err != nil || linkInfo.Mode()&os.ModeSymlink == 0 {
+				t.Fatalf("stat .devin symlink: %v", err)
+			}
+			linkTarget, err := os.Readlink(configDir)
+			if err != nil || linkTarget != neighborDir {
+				t.Fatalf(".devin symlink target = %q, %v", linkTarget, err)
+			}
+			neighborInfo, err := os.Stat(configDir)
+			if err != nil || !os.SameFile(neighborInfo, mustStatSeatbeltDir(t, neighborDir)) {
+				t.Fatalf(".devin does not resolve to the prepared neighbor directory: %v", err)
+			}
+			for _, expected := range []struct {
+				path string
+				data []byte
+			}{{filepath.Join(configDir, "mcp_config.json"), projectBytes}, {filepath.Join(configDir, "mcp_config.local.json"), localBytes}} {
+				actual, readErr := os.ReadFile(expected.path)
+				if readErr != nil || !bytes.Equal(actual, expected.data) {
+					t.Fatalf("redirected config %s changed: %q, %v", expected.path, actual, readErr)
+				}
+			}
+			// A helper child proves the neighboring directory remains readable
+			// under the same backend even when exact project/local paths are denied.
+			marker := filepath.Join(validated.workspace, "directory-neighbor-read.json")
+			neighborRequest := processRequestFromValidated(validated)
+			neighborRequest.Arguments = []string{"-test.run=^TestSeatbeltHelperProcess$", "--", "mcp-feasibility-read", filepath.Join(neighborDir, "mcp_config.json"), filepath.Join(neighborDir, "mcp_config.local.json"), marker}
+			neighborRequest.Terminal = Terminal{Output: io.Discard, ErrorOutput: io.Discard}
+			neighborContext, neighborCancel := context.WithTimeout(context.Background(), 15*time.Second)
+			neighborProcess, err := sandbox.Prepare(neighborContext, neighborRequest)
+			if err != nil {
+				neighborCancel()
+				t.Fatalf("prepare neighboring-directory read control: %v", err)
+			}
+			fixture.started, fixture.settled = true, false
+			if err := neighborProcess.Start(); err != nil {
+				settleSeatbeltCandidateStartFailure(t, neighborProcess, fixture)
+				neighborCancel()
+				t.Fatalf("start neighboring-directory read control: %v", err)
+			}
+			waitSeatbeltCandidateProcess(t, neighborProcess, fixture)
+			neighborCancel()
+			markerBytes, err := os.ReadFile(marker)
+			if err != nil {
+				t.Fatalf("read neighboring-directory receipt: %v", err)
+			}
+			var observations []struct {
+				Read             string `json:"read"`
+				PermissionDenied bool   `json:"permissionDenied"`
+			}
+			if err := json.Unmarshal(markerBytes, &observations); err != nil || len(observations) != 2 || observations[0].PermissionDenied || observations[0].Read != string(projectBytes) || observations[1].PermissionDenied || observations[1].Read != string(localBytes) {
+				t.Fatalf("neighbor configs were not both readable under %s: %+v, %v", label, observations, err)
+			}
+			fixture.settled = false
+			if err := targetProcess.Start(); err != nil {
+				settleSeatbeltCandidateStartFailure(t, targetProcess, fixture)
+				t.Fatalf("start pinned Devin %s after .devin redirection: %v", label, err)
+			}
+			waitSeatbeltCandidateProcess(t, targetProcess, fixture)
+			result := output.String()
+			if !strings.Contains(result, selectedName) {
+				t.Fatalf("selected user entry missing under %s: %q", label, result)
+			}
+			if denied {
+				for _, ambient := range []string{projectName, localName} {
+					if strings.Contains(result, ambient) {
+						t.Fatalf("ambient entry %s survived %s: %q", ambient, label, result)
+					}
+				}
+			} else {
+				for _, ambient := range []string{projectName, localName} {
+					if !strings.Contains(result, ambient) {
+						t.Fatalf("baseline did not load redirected ambient entry %s: %q", ambient, result)
+					}
+				}
+			}
+		})
+	}
+}
+
+func mustStatSeatbeltDir(t *testing.T, path string) os.FileInfo {
+	t.Helper()
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return info
+}
+
+type seatbeltDevinNestedDiscoveryFixture struct {
+	fixture      *seatbeltMCPTestFixture
+	request      ProcessRequest
+	selectedName string
+	namePaths    map[string]string
+}
+
+func newSeatbeltDevinNestedDiscoveryFixture(t *testing.T, binary, gitMode string) seatbeltDevinNestedDiscoveryFixture {
+	t.Helper()
+	userHome, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture := newSeatbeltMCPTestFixtureUnder(t, userHome)
+	validated := fixture.request
+	workspaceRoot := validated.workspace
+	grantRoot := filepath.Dir(workspaceRoot)
+	nested := filepath.Join(workspaceRoot, "nested", "child")
+	if err := os.MkdirAll(nested, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if gitMode == "initialized-git" {
+		output, err := exec.Command("git", "init", "--quiet", workspaceRoot).CombinedOutput()
+		if err != nil {
+			t.Fatalf("initialize synthetic Git root: %v: %s", err, output)
+		}
+	} else {
+		for _, path := range []string{filepath.Join(workspaceRoot, ".git"), filepath.Join(nested, ".git")} {
+			if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("non-Git nested fixture unexpectedly contains %s: %v", path, err)
+			}
+		}
+	}
+	validated.workspace = nested
+	validated.workspaceAccess = WorkspaceAccessReadWrite
+	fixture.request.workspace = nested
+	ancestorGrants, err := ResolveFilesystemGrants([]PathGrantIntent{{
+		ID: "mcp-discovery-ancestor", Access: PathAccessReadOnly, Type: PathTypeDirectory,
+		ReferenceKind: PathReferenceLocalAbsolute, Path: grantRoot,
+	}}, nested, validated.sessionsDirectory, WorkspaceAccessReadWrite)
+	if err != nil || len(ancestorGrants) != 1 || !ancestorGrants[0].effective {
+		t.Fatalf("explicit readable ancestor grant is unavailable or ineffective: grants=%+v err=%v", ancestorGrants, err)
+	}
+	selectedName := "acs-nested-selected"
+	selectedConfig := seatbeltCandidateDevinConfig(t, selectedName)
+	userConfig := filepath.Join(validated.sessionHome, ".config", "devin", "mcp_config.json")
+	if err := os.MkdirAll(filepath.Dir(userConfig), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(userConfig, selectedConfig, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	type discoveryRoot struct {
+		name string
+		path string
+	}
+	roots := []discoveryRoot{
+		{name: "cwd", path: nested},
+		{name: "intermediate", path: filepath.Dir(nested)},
+		{name: "outer", path: workspaceRoot},
+		{name: "above-git", path: grantRoot},
+	}
+	namePaths := make(map[string]string)
+	for _, root := range roots {
+		configDir := filepath.Join(root.path, ".devin")
+		if err := os.MkdirAll(configDir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		for _, config := range []struct {
+			suffix string
+			file   string
+		}{{"project", "mcp_config.json"}, {"local", "mcp_config.local.json"}} {
+			name := "acs-nested-" + root.name + "-" + config.suffix
+			contents := seatbeltCandidateDevinConfig(t, name)
+			path := filepath.Join(configDir, config.file)
+			if err := os.WriteFile(path, contents, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			namePaths[name] = path
+		}
+	}
+	request := ProcessRequest{
+		Workspace: nested, WorkspaceAccess: WorkspaceAccessReadWrite,
+		SessionsDirectory: validated.sessionsDirectory, SessionDirectory: validated.sessionDirectory,
+		SessionHome: validated.sessionHome, TemporaryDirectory: validated.temporaryDirectory,
+		Executable: binary, RuntimeAuthority: DefaultRuntimeAuthority(), Arguments: []string{"mcp", "list"},
+		FilesystemGrants: ancestorGrants,
+	}
+	return seatbeltDevinNestedDiscoveryFixture{fixture: fixture, request: request, selectedName: selectedName, namePaths: namePaths}
+}
+
+func loadedSeatbeltMCPNames(output string, namePaths map[string]string) []string {
+	loaded := make([]string, 0, len(namePaths))
+	for name := range namePaths {
+		if strings.Contains(output, name) {
+			loaded = append(loaded, name)
+		}
+	}
+	sort.Strings(loaded)
+	return loaded
+}
+
+func runSeatbeltDevinTargetList(t *testing.T, fixture *seatbeltMCPTestFixture, sandbox ProcessSandbox, request ProcessRequest) string {
+	t.Helper()
+	var output bytes.Buffer
+	request.Terminal = Terminal{Output: &output, ErrorOutput: &output}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	process, err := sandbox.Prepare(ctx, request)
+	if err != nil {
+		t.Fatalf("prepare pinned Devin mcp list: %v", err)
+	}
+	fixture.started = true
+	fixture.settled = false
+	if err := process.Start(); err != nil {
+		settleSeatbeltCandidateStartFailure(t, process, fixture)
+		t.Fatalf("start pinned Devin mcp list: %v", err)
+	}
+	waitSeatbeltCandidateProcess(t, process, fixture)
+	return output.String()
+}
+
 func TestSeatbeltCandidateMCPRecipeWriteAndAncestorDenialsPreserveOrdinaryHome(t *testing.T) {
 	if os.Getenv("ACS_RUN_MCP_AMBIENT_FEASIBILITY") != "1" {
 		t.Skip("run through the explicit native MCP ambient feasibility gate")
@@ -3703,8 +4298,12 @@ type seatbeltMCPTestFixture struct {
 }
 
 func newSeatbeltMCPTestFixture(t *testing.T) *seatbeltMCPTestFixture {
+	return newSeatbeltMCPTestFixtureUnder(t, "/private/tmp")
+}
+
+func newSeatbeltMCPTestFixtureUnder(t *testing.T, parent string) *seatbeltMCPTestFixture {
 	t.Helper()
-	root, err := os.MkdirTemp("/private/tmp", "acs-seatbelt-mcp-")
+	root, err := os.MkdirTemp(parent, "acs-seatbelt-mcp-")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -3846,6 +4445,18 @@ type seatbeltCandidateWriteDeny struct {
 
 func seatbeltCandidateMCPDenySandbox(t *testing.T, readPaths []string, writePaths []seatbeltCandidateWriteDeny) ProcessSandbox {
 	t.Helper()
+	// Capture canonical intended paths when this candidate sandbox is built.
+	// In retargeting experiments this happens before mutation, so subsequent
+	// Prepare calls for the target and positive control share one fixed policy.
+	canonicalReadPaths := make([]string, len(readPaths))
+	for index, path := range readPaths {
+		canonicalReadPaths[index] = canonicalSeatbeltCandidatePath(path)
+	}
+	canonicalWritePaths := make([]seatbeltCandidateWriteDeny, len(writePaths))
+	for index, denied := range writePaths {
+		denied.path = canonicalSeatbeltCandidatePath(denied.path)
+		canonicalWritePaths[index] = denied
+	}
 	sandbox, ok := NewProcessSandbox().(*nativeProcessSandbox)
 	if !ok {
 		t.Fatalf("NewProcessSandbox() = %T, want production native sandbox", sandbox)
@@ -3860,16 +4471,13 @@ func seatbeltCandidateMCPDenySandbox(t *testing.T, readPaths []string, writePath
 			return "", nil, err
 		}
 		var rules strings.Builder
-		for index, path := range readPaths {
+		for index, path := range canonicalReadPaths {
 			name := "MCP_CANDIDATE_READ_DENY_" + strconv.Itoa(index)
 			definitions = append(definitions, "-D"+name+"="+path)
 			fmt.Fprintf(&rules, "\n(deny file-read* (literal (param %q)))", name)
 		}
-		for index, denied := range writePaths {
+		for index, denied := range canonicalWritePaths {
 			path := denied.path
-			if canonical, canonicalErr := filepath.EvalSymlinks(path); canonicalErr == nil {
-				path = canonical
-			}
 			name := "MCP_CANDIDATE_WRITE_DENY_" + strconv.Itoa(index)
 			definitions = append(definitions, "-D"+name+"="+path)
 			fmt.Fprintf(&rules, "\n(deny file-write* (literal (param %q))", name)
@@ -3881,6 +4489,30 @@ func seatbeltCandidateMCPDenySandbox(t *testing.T, readPaths []string, writePath
 		return policy + rules.String(), definitions, nil
 	}
 	return sandbox
+}
+
+func canonicalSeatbeltCandidatePath(path string) string {
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		return filepath.Clean(path)
+	}
+	current := filepath.Clean(absolute)
+	var suffix []string
+	for {
+		resolved, resolveErr := filepath.EvalSymlinks(current)
+		if resolveErr == nil {
+			for index := len(suffix) - 1; index >= 0; index-- {
+				resolved = filepath.Join(resolved, suffix[index])
+			}
+			return filepath.Clean(resolved)
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return filepath.Clean(absolute)
+		}
+		suffix = append(suffix, filepath.Base(current))
+		current = parent
+	}
 }
 
 func TestSeatbeltHelperProcess(t *testing.T) {
