@@ -3434,6 +3434,455 @@ func waitSeatbeltNativePTYHarness(t *testing.T, command *exec.Cmd, wait <-chan e
 	}
 }
 
+func TestSeatbeltCandidateMCPAmbientReadDenialWithAbsentAtPrepareAndAliases(t *testing.T) {
+	if os.Getenv("ACS_RUN_MCP_AMBIENT_FEASIBILITY") != "1" {
+		t.Skip("run through the explicit native MCP ambient feasibility gate")
+	}
+	skipSeatbeltNativeTestBinaryUnderRace(t)
+	fixture := newSeatbeltMCPTestFixture(t)
+	request := fixture.request
+	request.workspaceAccess = WorkspaceAccessReadWrite
+	configDir := filepath.Join(request.workspace, ".devin")
+	if err := os.MkdirAll(configDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	config := filepath.Join(configDir, "mcp_config.json")
+	neighbor := filepath.Join(configDir, "ordinary.json")
+	if err := os.WriteFile(neighbor, []byte("neighbor"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	symlink := filepath.Join(configDir, "mcp_config.alias.json")
+	hardlink := filepath.Join(configDir, "mcp_config.hardlink.json")
+	if err := os.Symlink(config, symlink); err != nil {
+		t.Fatal(err)
+	}
+	// The file is deliberately absent while the real backend prepares its policy.
+	marker := filepath.Join(request.workspace, "ambient-read-observation.json")
+	request.arguments = []string{"-test.run=^TestSeatbeltHelperProcess$", "--", "mcp-feasibility-read", config, symlink, hardlink, neighbor, marker}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	process, err := seatbeltCandidateMCPDenySandbox(t, []string{config}, nil).Prepare(ctx, processRequestFromValidated(request))
+	if err != nil {
+		t.Fatalf("prepare real Seatbelt process: %v", err)
+	}
+	if err := os.WriteFile(config, []byte("created-after-prepare"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Link(config, hardlink); err != nil {
+		t.Fatal(err)
+	}
+	fixture.started = true
+	if err := process.Start(); err != nil {
+		settleSeatbeltCandidateStartFailure(t, process, fixture)
+		t.Fatalf("start real Seatbelt process: %v", err)
+	}
+	waitSeatbeltCandidateProcess(t, process, fixture)
+	var observed []struct {
+		Path             string `json:"path"`
+		Read             string `json:"read"`
+		PermissionDenied bool   `json:"permissionDenied"`
+	}
+	contents, err := os.ReadFile(marker)
+	if err != nil {
+		t.Fatalf("read parent-observed marker: %v", err)
+	}
+	if err := json.Unmarshal(contents, &observed); err != nil {
+		t.Fatalf("decode marker: %v", err)
+	}
+	if len(observed) != 4 {
+		t.Fatalf("observations = %#v", observed)
+	}
+	if !observed[0].PermissionDenied || observed[0].Read != "" {
+		t.Fatalf("canonical ambient config read was not denied: %+v", observed[0])
+	}
+	for _, index := range []int{1, 2} {
+		if !observed[index].PermissionDenied || observed[index].Read != "" {
+			t.Errorf("alias bypassed the exact-path denial (this bounds the mechanism): %+v", observed[index])
+		}
+	}
+	if observed[3].PermissionDenied || observed[3].Read != "neighbor" {
+		t.Fatalf("neighbor read changed: %+v", observed[3])
+	}
+}
+
+func TestSeatbeltCandidatePinnedDevinUsesSelectedHomeMCPConfigOnly(t *testing.T) {
+	if os.Getenv("ACS_RUN_MCP_AMBIENT_FEASIBILITY") != "1" {
+		t.Skip("run through the checksum-locked native MCP ambient feasibility gate")
+	}
+	skipSeatbeltNativeTestBinaryUnderRace(t)
+	binary := os.Getenv("ACS_TEST_DEVIN_BINARY")
+	if binary == "" {
+		t.Fatal("native MCP feasibility requires the checksum-locked Devin binary")
+	}
+	binaryInfo, err := os.Lstat(binary)
+	if err != nil || !binaryInfo.Mode().IsRegular() || binaryInfo.Mode()&0111 == 0 {
+		t.Fatal("checksum-locked Devin target is unavailable or unsafe")
+	}
+
+	selected := seatbeltCandidateDevinConfig(t, "acs-selected-feasibility")
+	projectDecoy := seatbeltCandidateDevinConfig(t, "acs-project-ambient-decoy")
+	localDecoy := seatbeltCandidateDevinConfig(t, "acs-local-ambient-decoy")
+	makeFixture := func() (*seatbeltMCPTestFixture, ProcessRequest, string, string) {
+		t.Helper()
+		fixture := newSeatbeltMCPTestFixture(t)
+		request := fixture.request
+		request.workspaceAccess = WorkspaceAccessReadWrite
+		projectConfig := filepath.Join(request.workspace, ".devin", "mcp_config.json")
+		localConfig := filepath.Join(request.workspace, ".devin", "mcp_config.local.json")
+		userConfig := filepath.Join(request.sessionHome, ".config", "devin", "mcp_config.json")
+		if err := os.MkdirAll(filepath.Dir(userConfig), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(userConfig, selected, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		for _, item := range []struct {
+			path string
+			data []byte
+		}{{projectConfig, projectDecoy}, {localConfig, localDecoy}} {
+			if err := os.MkdirAll(filepath.Dir(item.path), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(item.path, item.data, 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		processRequest := ProcessRequest{
+			Workspace: request.workspace, WorkspaceAccess: WorkspaceAccessReadWrite,
+			SessionsDirectory: request.sessionsDirectory, SessionDirectory: request.sessionDirectory,
+			SessionHome: request.sessionHome, TemporaryDirectory: request.temporaryDirectory,
+			Executable: binary, RuntimeAuthority: DefaultRuntimeAuthority(), Arguments: []string{"mcp", "list"},
+		}
+		return fixture, processRequest, projectConfig, localConfig
+	}
+	runList := func(fixture *seatbeltMCPTestFixture, processRequest ProcessRequest, label string, sandbox ProcessSandbox) string {
+		t.Helper()
+		var output bytes.Buffer
+		processRequest.Terminal = Terminal{Output: &output, ErrorOutput: &output}
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		process, err := sandbox.Prepare(ctx, processRequest)
+		if err != nil {
+			t.Fatalf("prepare pinned Devin mcp list %s: %v", label, err)
+		}
+		fixture.settled = false
+		fixture.started = true
+		if err := process.Start(); err != nil {
+			settleSeatbeltCandidateStartFailure(t, process, fixture)
+			t.Fatalf("start pinned Devin mcp list %s: %v", label, err)
+		}
+		waitSeatbeltCandidateProcess(t, process, fixture)
+		return output.String()
+	}
+	// Paired fresh fixtures prove these exact roots are discovered under the
+	// unmodified production backend before measuring the candidate denial.
+	baselineFixture, baselineRequest, _, _ := makeFixture()
+	baseline := runList(baselineFixture, baselineRequest, "without candidate denial", NewProcessSandbox())
+	for _, expected := range []string{"acs-selected-feasibility", "acs-project-ambient-decoy", "acs-local-ambient-decoy"} {
+		if !strings.Contains(baseline, expected) {
+			t.Fatalf("pinned Devin baseline did not load fixture entry %q: %q", expected, baseline)
+		}
+	}
+	deniedFixture, deniedRequest, projectConfig, localConfig := makeFixture()
+	result := runList(deniedFixture, deniedRequest, "under candidate denial", seatbeltCandidateMCPDenySandbox(t, []string{projectConfig, localConfig}, nil))
+	afterInfo, err := os.Lstat(binary)
+	if err != nil || !os.SameFile(binaryInfo, afterInfo) || binaryInfo.Size() != afterInfo.Size() || !binaryInfo.ModTime().Equal(afterInfo.ModTime()) {
+		t.Fatal("pinned Devin identity changed during native config observation")
+	}
+	if !strings.Contains(result, "acs-selected-feasibility") {
+		t.Fatalf("selected user projection was not usable: %q", result)
+	}
+	for _, ambient := range []string{"acs-project-ambient-decoy", "acs-local-ambient-decoy"} {
+		if strings.Contains(result, ambient) {
+			t.Errorf("ambient Devin MCP entry loaded despite candidate denial: %q", ambient)
+		}
+	}
+}
+
+func TestSeatbeltCandidateMCPRecipeWriteAndAncestorDenialsPreserveOrdinaryHome(t *testing.T) {
+	if os.Getenv("ACS_RUN_MCP_AMBIENT_FEASIBILITY") != "1" {
+		t.Skip("run through the explicit native MCP ambient feasibility gate")
+	}
+	skipSeatbeltNativeTestBinaryUnderRace(t)
+	// This bounded experiment protects the recipe file and each target-writable
+	// directory ancestor (recipe directory, HOME, and Session root). Directory
+	// truncation is not an OS operation; regular-file truncation is exercised.
+	for _, kind := range []string{"ordinary-home-write", "overwrite", "truncate", "unlink", "rename-out", "atomic-replace", "rename-recipe-ancestor", "rename-home-ancestor", "rename-session-ancestor"} {
+		t.Run(kind, func(t *testing.T) {
+			fixture := newSeatbeltMCPTestFixture(t)
+			request := fixture.request
+			request.workspaceAccess = WorkspaceAccessReadWrite
+			recipeDir := filepath.Join(request.sessionHome, ".acs-mcp")
+			if err := os.MkdirAll(recipeDir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			recipe := filepath.Join(recipeDir, "recipe.json")
+			original := []byte("immutable-recipe")
+			if err := os.WriteFile(recipe, original, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			marker := filepath.Join(request.workspace, "recipe-operation.json")
+			request.arguments = []string{"-test.run=^TestSeatbeltHelperProcess$", "--", "mcp-feasibility-recipe-op", marker, kind, recipe, recipeDir, request.sessionHome, request.sessionDirectory}
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			process, err := seatbeltCandidateMCPDenySandbox(t, nil, []seatbeltCandidateWriteDeny{{path: request.sessionDirectory}, {path: request.sessionHome}, {path: recipeDir, descendants: true}}).Prepare(ctx, processRequestFromValidated(request))
+			if err != nil {
+				t.Fatalf("prepare real Seatbelt process: %v", err)
+			}
+			before := make(map[string]os.FileInfo)
+			for _, path := range []string{request.sessionDirectory, request.sessionHome, recipeDir, recipe} {
+				info, statErr := os.Lstat(path)
+				if statErr != nil {
+					t.Fatalf("stat protected path before launch %q: %v", path, statErr)
+				}
+				before[path] = info
+			}
+			fixture.started = true
+			if err := process.Start(); err != nil {
+				settleSeatbeltCandidateStartFailure(t, process, fixture)
+				t.Fatalf("start real Seatbelt process: %v", err)
+			}
+			waitSeatbeltCandidateProcess(t, process, fixture)
+			var result struct {
+				Operation              string
+				PermissionDenied       bool
+				Succeeded              bool
+				PrepareSucceeded       bool
+				RenamePermissionDenied bool
+				RenameSucceeded        bool
+			}
+			markerBytes, err := os.ReadFile(marker)
+			if err != nil {
+				t.Fatalf("read marker after cleanup: %v", err)
+			}
+			if err := json.Unmarshal(markerBytes, &result); err != nil {
+				t.Fatalf("decode operation receipt: %v", err)
+			}
+			if kind == "ordinary-home-write" {
+				if !result.Succeeded || result.PermissionDenied {
+					t.Fatalf("ordinary HOME write should be allowed: %+v", result)
+				}
+				if got, err := os.ReadFile(filepath.Join(request.sessionHome, "ordinary-home-write")); err != nil || string(got) != "allowed" {
+					t.Fatalf("HOME write effect = %q, %v", got, err)
+				}
+			} else if kind == "atomic-replace" {
+				if !result.PrepareSucceeded || !result.RenamePermissionDenied || result.RenameSucceeded {
+					t.Fatalf("atomic replacement did not reach and deny the protected rename: %+v", result)
+				}
+			} else if kind == "rename-session-ancestor" {
+				// This is a combined-boundary observation: the production Session
+				// policy and candidate ancestor/destination restrictions both apply.
+				if !result.PermissionDenied || result.Succeeded {
+					t.Fatalf("Session ancestor rename was not denied: %+v", result)
+				}
+			} else if !result.PermissionDenied || result.Succeeded {
+				t.Fatalf("protected recipe operation was not denied: %+v", result)
+			}
+			for path, identity := range before {
+				after, statErr := os.Lstat(path)
+				if statErr != nil || !os.SameFile(identity, after) {
+					t.Errorf("protected path identity changed for %q: before=%v after=%v", path, identity, statErr)
+					continue
+				}
+				if path == recipe {
+					afterBytes, readErr := os.ReadFile(path)
+					if readErr != nil || !bytes.Equal(afterBytes, original) {
+						t.Errorf("recipe bytes changed after cleanup: %q %v", afterBytes, readErr)
+					}
+				}
+			}
+		})
+	}
+}
+
+type seatbeltMCPTestFixture struct {
+	request validatedProcessRequest
+	root    string
+	started bool
+	settled bool
+}
+
+func newSeatbeltMCPTestFixture(t *testing.T) *seatbeltMCPTestFixture {
+	t.Helper()
+	root, err := os.MkdirTemp("/private/tmp", "acs-seatbelt-mcp-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspace := filepath.Join(root, "home", "workspace")
+	session := filepath.Join(root, "sessions", "session-one")
+	home, temporary := filepath.Join(session, "home"), filepath.Join(session, "tmp")
+	for _, directory := range []string{workspace, home, temporary} {
+		if err := os.MkdirAll(directory, 0o700); err != nil {
+			_ = os.RemoveAll(root)
+			t.Fatal(err)
+		}
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		_ = os.RemoveAll(root)
+		t.Fatal(err)
+	}
+	executable, err = filepath.EvalSymlinks(executable)
+	if err != nil {
+		_ = os.RemoveAll(root)
+		t.Fatal(err)
+	}
+	environment, err := buildProcessEnvironment(home, temporary, []string{"TERM=xterm-256color"})
+	if err != nil {
+		_ = os.RemoveAll(root)
+		t.Fatal(err)
+	}
+	fixture := &seatbeltMCPTestFixture{root: root, request: validatedProcessRequest{
+		workspace: workspace, workspaceAccess: WorkspaceAccessReadWrite,
+		sessionsDirectory: filepath.Dir(session), sessionDirectory: session,
+		sessionHome: home, temporaryDirectory: temporary, executable: executable, environment: environment,
+	}}
+	t.Cleanup(func() {
+		if !fixture.started || fixture.settled {
+			_ = os.RemoveAll(fixture.root)
+			return
+		}
+		t.Logf("retaining unsettled native Seatbelt fixture at %s", fixture.root)
+	})
+	return fixture
+}
+
+func waitSeatbeltCandidateProcess(t *testing.T, process Process, fixture *seatbeltMCPTestFixture) {
+	t.Helper()
+	waitDone := make(chan error, 1)
+	go func() { waitDone <- process.Wait() }()
+	var waitErr error
+	timedOut := false
+	waitSettled := true
+	select {
+	case waitErr = <-waitDone:
+	case <-time.After(10 * time.Second):
+		timedOut = true
+		waitSettled = false
+		_ = process.Signal(syscall.SIGKILL)
+		select {
+		case waitErr = <-waitDone:
+			waitSettled = true
+		case <-time.After(5 * time.Second):
+			// Still inspect CleanupDone below. Keep the fixture if Wait never
+			// confirms that the process lifecycle has settled.
+		}
+	}
+	requireSeatbeltCandidateCleanup(t, process)
+	fixture.settled = waitSettled
+	if timedOut {
+		t.Fatal("Seatbelt fixture exceeded its 10 second bound after cleanup")
+	}
+	if waitErr != nil {
+		t.Fatalf("bounded Seatbelt fixture failed after cleanup: %v", waitErr)
+	}
+}
+
+func settleSeatbeltCandidateStartFailure(t *testing.T, process Process, fixture *seatbeltMCPTestFixture) {
+	t.Helper()
+	waitDone := make(chan error, 1)
+	go func() { waitDone <- process.Wait() }()
+	waitSettled := true
+	select {
+	case <-waitDone:
+	case <-time.After(10 * time.Second):
+		waitSettled = false
+		_ = process.Signal(syscall.SIGKILL)
+		select {
+		case <-waitDone:
+			waitSettled = true
+		case <-time.After(5 * time.Second):
+			// Still inspect CleanupDone below and retain the fixture unless
+			// both lifecycle signals settle.
+		}
+	}
+	requireSeatbeltCandidateCleanup(t, process)
+	fixture.settled = waitSettled
+	if !waitSettled {
+		t.Fatal("Seatbelt Start failure did not settle after bounded kill; fixture retained")
+	}
+}
+
+func seatbeltCandidateDevinConfig(t *testing.T, server string) []byte {
+	t.Helper()
+	contents, err := json.Marshal(map[string]any{"mcpServers": map[string]any{
+		server: map[string]any{"command": "/usr/bin/true", "args": []string{}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return contents
+}
+
+func requireSeatbeltCandidateCleanup(t *testing.T, process Process) {
+	t.Helper()
+	cleanup, ok := process.(ProcessCleanup)
+	if !ok {
+		t.Fatal("real Seatbelt process lacks ProcessCleanup proof")
+	}
+	done := cleanup.CleanupDone()
+	if done == nil {
+		t.Fatal("real Seatbelt CleanupDone returned nil")
+	}
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Seatbelt cleanup proof did not complete")
+	}
+}
+
+func processRequestFromValidated(request validatedProcessRequest) ProcessRequest {
+	return ProcessRequest{Workspace: request.workspace, WorkspaceAccess: request.workspaceAccess,
+		SessionsDirectory: request.sessionsDirectory, SessionDirectory: request.sessionDirectory,
+		SessionHome: request.sessionHome, TemporaryDirectory: request.temporaryDirectory,
+		Executable: request.executable, RuntimeInputs: []string{request.executable}, RuntimeAuthority: DefaultRuntimeAuthority(),
+		Arguments: request.arguments, Terminal: Terminal{Output: io.Discard, ErrorOutput: io.Discard}}
+}
+
+type seatbeltCandidateWriteDeny struct {
+	path        string
+	descendants bool
+}
+
+func seatbeltCandidateMCPDenySandbox(t *testing.T, readPaths []string, writePaths []seatbeltCandidateWriteDeny) ProcessSandbox {
+	t.Helper()
+	sandbox, ok := NewProcessSandbox().(*nativeProcessSandbox)
+	if !ok {
+		t.Fatalf("NewProcessSandbox() = %T, want production native sandbox", sandbox)
+	}
+	backend, ok := sandbox.backends["darwin"].(*seatbeltBackend)
+	if !ok || backend == nil {
+		t.Fatalf("production Darwin backend = %T", sandbox.backends["darwin"])
+	}
+	backend.policy = func(request validatedProcessRequest) (string, []string, error) {
+		policy, definitions, err := buildSeatbeltPolicy(request)
+		if err != nil {
+			return "", nil, err
+		}
+		var rules strings.Builder
+		for index, path := range readPaths {
+			name := "MCP_CANDIDATE_READ_DENY_" + strconv.Itoa(index)
+			definitions = append(definitions, "-D"+name+"="+path)
+			fmt.Fprintf(&rules, "\n(deny file-read* (literal (param %q)))", name)
+		}
+		for index, denied := range writePaths {
+			path := denied.path
+			if canonical, canonicalErr := filepath.EvalSymlinks(path); canonicalErr == nil {
+				path = canonical
+			}
+			name := "MCP_CANDIDATE_WRITE_DENY_" + strconv.Itoa(index)
+			definitions = append(definitions, "-D"+name+"="+path)
+			fmt.Fprintf(&rules, "\n(deny file-write* (literal (param %q))", name)
+			if denied.descendants {
+				fmt.Fprintf(&rules, " (subpath (param %q))", name)
+			}
+			rules.WriteString(")")
+		}
+		return policy + rules.String(), definitions, nil
+	}
+	return sandbox
+}
+
 func TestSeatbeltHelperProcess(t *testing.T) {
 	separator := -1
 	for index, argument := range os.Args {
@@ -3821,6 +4270,92 @@ func TestSeatbeltHelperProcess(t *testing.T) {
 		signal.Stop(signals)
 		if err := os.WriteFile(arguments[1], []byte(received.String()), 0o600); err != nil {
 			os.Exit(101)
+		}
+		os.Exit(0)
+	case "mcp-feasibility-read":
+		if len(arguments) < 3 {
+			os.Exit(151)
+		}
+		type observation struct {
+			Path             string `json:"path"`
+			Read             string `json:"read"`
+			PermissionDenied bool   `json:"permissionDenied"`
+		}
+		observations := make([]observation, 0, (len(arguments)-1)/2)
+		for index := 1; index < len(arguments)-1; index++ {
+			contents, err := os.ReadFile(arguments[index])
+			entry := observation{Path: filepath.Base(arguments[index])}
+			if err != nil {
+				entry.PermissionDenied = isSeatbeltPermission(err)
+			} else {
+				entry.Read = string(contents)
+			}
+			observations = append(observations, entry)
+		}
+		encoded, err := json.Marshal(observations)
+		if err != nil {
+			os.Exit(152)
+		}
+		if err := os.WriteFile(arguments[len(arguments)-1], encoded, 0o600); err != nil {
+			os.Exit(153)
+		}
+		os.Exit(0)
+	case "mcp-feasibility-recipe-op":
+		if len(arguments) != 7 {
+			os.Exit(154)
+		}
+		marker, kind, recipe, recipeDir, home, session := arguments[1], arguments[2], arguments[3], arguments[4], arguments[5], arguments[6]
+		var operationErr error
+		switch kind {
+		case "overwrite":
+			operationErr = os.WriteFile(recipe, []byte("changed"), 0o600)
+		case "truncate":
+			file, err := os.OpenFile(recipe, os.O_WRONLY|os.O_TRUNC, 0)
+			if err != nil {
+				operationErr = err
+			} else {
+				operationErr = file.Close()
+			}
+		case "unlink":
+			operationErr = os.Remove(recipe)
+		case "rename-out":
+			operationErr = os.Rename(recipe, filepath.Join(home, "escaped-recipe"))
+		case "atomic-replace":
+			temporary := filepath.Join(home, "replacement.tmp")
+			prepareErr := os.WriteFile(temporary, []byte("replacement"), 0o600)
+			renameErr := error(nil)
+			if prepareErr == nil {
+				renameErr = os.Rename(temporary, recipe)
+			}
+			result := map[string]any{"operation": kind, "prepareSucceeded": prepareErr == nil,
+				"renamePermissionDenied": isSeatbeltPermission(renameErr), "renameSucceeded": renameErr == nil,
+				"permissionDenied": isSeatbeltPermission(renameErr), "succeeded": prepareErr == nil && renameErr == nil}
+			encoded, err := json.Marshal(result)
+			if err != nil {
+				os.Exit(156)
+			}
+			if err := os.WriteFile(marker, encoded, 0o600); err != nil {
+				os.Exit(157)
+			}
+			os.Exit(0)
+		case "rename-recipe-ancestor":
+			operationErr = os.Rename(recipeDir, filepath.Join(home, "moved-recipe-dir"))
+		case "rename-home-ancestor":
+			operationErr = os.Rename(home, filepath.Join(session, "moved-home"))
+		case "rename-session-ancestor":
+			operationErr = os.Rename(session, filepath.Join(filepath.Dir(session), "moved-session"))
+		case "ordinary-home-write":
+			operationErr = os.WriteFile(filepath.Join(home, "ordinary-home-write"), []byte("allowed"), 0o600)
+		default:
+			os.Exit(155)
+		}
+		result := map[string]any{"operation": kind, "permissionDenied": isSeatbeltPermission(operationErr), "succeeded": operationErr == nil}
+		encoded, err := json.Marshal(result)
+		if err != nil {
+			os.Exit(156)
+		}
+		if err := os.WriteFile(marker, encoded, 0o600); err != nil {
+			os.Exit(157)
 		}
 		os.Exit(0)
 	case "sleep":

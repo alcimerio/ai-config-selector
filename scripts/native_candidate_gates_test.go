@@ -157,6 +157,10 @@ func TestNativeCandidateGatesPropagateFailureRecoverAndProtectIdentity(t *testin
 			"go test -race ./...",
 			"TestNativeKeychainCredentialFreeContract",
 			"TestNativeRealStoreInstalledTargetComposition",
+			"TestSeatbeltCandidateMCPAmbientReadDenialWithAbsentAtPrepareAndAliases",
+			"TestSeatbeltCandidateMCPRecipeWriteAndAncestorDenialsPreserveOrdinaryHome",
+			"TestSeatbeltCandidatePinnedDevinUsesSelectedHomeMCPConfigOnly",
+			"go test ./internal/launch -run ^TestSeatbeltCandidate(MCPAmbientReadDenialWithAbsentAtPrepareAndAliases|MCPRecipeWriteAndAncestorDenialsPreserveOrdinaryHome|PinnedDevinUsesSelectedHomeMCPConfigOnly)$ -count=1 -v",
 			"TestNativeInstalledTargetContainedStatusWithoutCredentials",
 			"TestNativeDirectInstalledTargetInteractiveLifecycle",
 			"go test ./acceptance -count=1",
@@ -168,6 +172,9 @@ func TestNativeCandidateGatesPropagateFailureRecoverAndProtectIdentity(t *testin
 		}
 		for _, scoped := range []string{
 			"auth= promoted= version= backend= recovery= go test ./...",
+			"go test ./... mcp=\n",
+			"go test -race ./... mcp=\n",
+			"go test ./internal/launch -run ^TestSeatbeltCandidate(MCPAmbientReadDenialWithAbsentAtPrepareAndAliases|MCPRecipeWriteAndAncestorDenialsPreserveOrdinaryHome|PinnedDevinUsesSelectedHomeMCPConfigOnly)$ -count=1 -v mcp=1\n",
 			"auth=1 promoted=" + fixture.candidate + " version= backend= recovery= go test ./internal/codexauthresource -run ^TestNativeKeychainCredentialFreeContract$",
 			"auth= promoted=" + fixture.candidate + " version=v0.4.0 backend=available recovery= go test ./acceptance -count=1",
 			"auth= promoted= version= backend= recovery=1 go test ./internal/codexauthresource -run ^TestNativeKeychainRecoveryEntrypoint$",
@@ -215,7 +222,7 @@ func newNativeGateFixture(t *testing.T) nativeGateFixture {
 		t.Fatal(err)
 	}
 	fakeGo := `#!/bin/sh
-printf 'auth=%s promoted=%s version=%s backend=%s recovery=%s go %s\n' "${ACS_RUN_NATIVE_AUTH_GATE:-}" "${ACS_PROMOTED_BINARY:-}" "${ACS_PROMOTED_VERSION:-}" "${ACS_PROMOTED_SANDBOX_BACKEND:-}" "${ACS_RUN_NATIVE_AUTH_RECOVERY:-}" "$*" >>"$ACS_TEST_CALLS"
+printf 'auth=%s promoted=%s version=%s backend=%s recovery=%s go %s mcp=%s\n' "${ACS_RUN_NATIVE_AUTH_GATE:-}" "${ACS_PROMOTED_BINARY:-}" "${ACS_PROMOTED_VERSION:-}" "${ACS_PROMOTED_SANDBOX_BACKEND:-}" "${ACS_RUN_NATIVE_AUTH_RECOVERY:-}" "$*" "${ACS_RUN_MCP_AMBIENT_FEASIBILITY:-}" >>"$ACS_TEST_CALLS"
 previous=
 for argument do
   if [ "$previous" = -list ]; then
@@ -282,6 +289,7 @@ func (fixture nativeGateFixture) command(mode string) *exec.Cmd {
 		"ACS_PROMOTED_SANDBOX_BACKEND=ambient-backend",
 		"ACS_RUN_NATIVE_AUTH_GATE=ambient-auth",
 		"ACS_RUN_NATIVE_AUTH_RECOVERY=ambient-recovery",
+		"ACS_RUN_MCP_AMBIENT_FEASIBILITY=ambient-mcp-feasibility",
 		"ACS_NATIVE_AUTH_RECOVERY_ROOT=/ambient/recovery",
 		"ACS_TEST_CODEX_BINARY=/ambient/codex",
 		"ACS_TEST_CODEX_ARCHIVE=/ambient/codex.tar.gz",
