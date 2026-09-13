@@ -17,6 +17,7 @@ import (
 
 	"github.com/alcimerio/ai-config-selector/internal/codexauth"
 	"github.com/alcimerio/ai-config-selector/internal/commonprofile"
+	"github.com/alcimerio/ai-config-selector/internal/instructions"
 	"github.com/alcimerio/ai-config-selector/internal/launch"
 	"github.com/alcimerio/ai-config-selector/internal/profile"
 	"github.com/alcimerio/ai-config-selector/internal/profileinspect"
@@ -87,11 +88,20 @@ type exchangeProfile struct {
 	Overlays map[string]exchangeOverlay `json:"overlays"`
 }
 type commonIntent struct {
-	Skills      exchangeSkills      `json:"skills"`
-	Workspace   exchangeWorkspace   `json:"workspace"`
-	Paths       exchangePaths       `json:"paths,omitempty"`
-	Executables exchangeExecutables `json:"executables,omitempty"`
-	Environment exchangeEnvironment `json:"environment,omitempty"`
+	Skills       exchangeSkills        `json:"skills"`
+	Workspace    exchangeWorkspace     `json:"workspace"`
+	Paths        exchangePaths         `json:"paths,omitempty"`
+	Executables  exchangeExecutables   `json:"executables,omitempty"`
+	Environment  exchangeEnvironment   `json:"environment,omitempty"`
+	Instructions *exchangeInstructions `json:"instructions,omitempty"`
+}
+type exchangeInstructions struct {
+	Version   int                            `json:"version"`
+	Selection []exchangeInstructionReference `json:"selection"`
+}
+type exchangeInstructionReference struct {
+	SourceBinding string `json:"sourceBinding"`
+	RelativePath  string `json:"relativePath"`
 }
 
 type exchangeEnvironment struct {
@@ -245,6 +255,18 @@ func Export(candidate profile.Profile) ([]byte, Report, error) {
 	if err != nil || len(references) > maxArray {
 		return nil, Report{}, errors.New("invalid Skills intent")
 	}
+	instructionRefs := []instructions.Reference{}
+	instructionsPresent := false
+	if payload, ok := candidate.Common[commonprofile.InstructionsCapabilityID]; ok {
+		if payload.Version != commonprofile.InstructionsCapabilityVersion {
+			return nil, Report{}, errors.New("unsupported instructions capability")
+		}
+		instructionRefs, err = instructions.Decode(payload.Selection)
+		if err != nil {
+			return nil, Report{}, errors.New("invalid instructions intent")
+		}
+		instructionsPresent = true
+	}
 	var workspace workspaceSelection
 	if err := decodeStrict(workspacePayload.Selection, &workspace); err != nil || (workspace.Access != launch.WorkspaceAccessReadOnly && workspace.Access != launch.WorkspaceAccessReadWrite) {
 		return nil, Report{}, errors.New("invalid workspace intent")
@@ -255,6 +277,12 @@ func Export(candidate profile.Profile) ([]byte, Report, error) {
 		if !seenSource[string(reference.Source)] {
 			seenSource[string(reference.Source)] = true
 			sources = append(sources, string(reference.Source))
+		}
+	}
+	for _, reference := range instructionRefs {
+		if !seenSource[reference.Source] {
+			seenSource[reference.Source] = true
+			sources = append(sources, reference.Source)
 		}
 	}
 	sort.Strings(sources)
@@ -268,6 +296,10 @@ func Export(candidate profile.Profile) ([]byte, Report, error) {
 	exchangeReferences := make([]exchangeSkillReference, 0, len(references))
 	for _, reference := range references {
 		exchangeReferences = append(exchangeReferences, exchangeSkillReference{SourceBinding: sourceSymbols[string(reference.Source)], RelativePath: reference.RelativePath})
+	}
+	exchangeInstructionRefs := make([]exchangeInstructionReference, 0, len(instructionRefs))
+	for _, reference := range instructionRefs {
+		exchangeInstructionRefs = append(exchangeInstructionRefs, exchangeInstructionReference{SourceBinding: sourceSymbols[reference.Source], RelativePath: reference.RelativePath})
 	}
 	sort.Slice(exchangeReferences, func(i, j int) bool {
 		if exchangeReferences[i].SourceBinding != exchangeReferences[j].SourceBinding {
@@ -356,6 +388,9 @@ func Export(candidate profile.Profile) ([]byte, Report, error) {
 		Executables: exchangeExecutables{Version: commonprofile.ExecutablesCapabilityVersion, Selection: exchangeExecutableEntries},
 		Environment: exchangeEnvironment{Version: commonprofile.EnvironmentCapabilityVersion, Selection: exchangeEnvironmentEntries},
 	}, Overlays: overlays}, Requirements: reqs}
+	if instructionsPresent {
+		doc.Profile.Common.Instructions = &exchangeInstructions{Version: 1, Selection: exchangeInstructionRefs}
+	}
 	encoded, err := json.MarshalIndent(doc, "", "  ")
 	if err != nil {
 		return nil, Report{}, err
@@ -387,6 +422,7 @@ func Decode(data, bindingData []byte, name string) Result {
 	pathsPresent := exchangeCommonFieldPresent(data, "paths")
 	executablesPresent := exchangeCommonFieldPresent(data, "executables")
 	environmentPresent := exchangeCommonFieldPresent(data, "environment")
+	instructionsPresent := exchangeCommonFieldPresent(data, "instructions")
 	executableRequirementsPresent := exchangeRequirementsFieldPresent(data, "executables")
 	environmentRequirementsPresent := exchangeRequirementsFieldPresent(data, "environment")
 	if executableRequirementsPresent && exchangeRequirementsFieldNull(data, "executables") {
@@ -434,6 +470,10 @@ func Decode(data, bindingData []byte, name string) Result {
 		result.Code = CodeInvalidStructure
 		return result
 	}
+	if instructionsPresent && (doc.ExchangeVersion != ExchangeVersion || doc.Profile.Common.Instructions == nil || doc.Profile.Common.Instructions.Version != 1 || doc.Profile.Common.Instructions.Selection == nil || len(doc.Profile.Common.Instructions.Selection) > instructions.MaxEntries) {
+		result.Code = CodeUnsupportedContent
+		return result
+	}
 	if doc.Profile.Common.Workspace.Selection.Access != launch.WorkspaceAccessReadOnly && doc.Profile.Common.Workspace.Selection.Access != launch.WorkspaceAccessReadWrite {
 		result.Code = CodeInvalidStructure
 		return result
@@ -441,6 +481,12 @@ func Decode(data, bindingData []byte, name string) Result {
 	if err := validateSymbolicReferences(doc.Profile.Common.Skills.Selection); err != nil {
 		result.Code = CodeUnsafePath
 		return result
+	}
+	if doc.Profile.Common.Instructions != nil {
+		if err := validateSymbolicInstructionReferences(doc.Profile.Common.Instructions.Selection); err != nil {
+			result.Code = CodeUnsafePath
+			return result
+		}
 	}
 	if code := validateDocumentRelations(&doc); code != CodeValid {
 		result.Code = code
@@ -515,6 +561,17 @@ func Decode(data, bindingData []byte, name string) Result {
 			return result
 		}
 		localReferences = append(localReferences, skills.SkillReference{Source: skills.Source(local), RelativePath: reference.RelativePath})
+	}
+	localInstructionRefs := []instructions.Reference{}
+	if doc.Profile.Common.Instructions != nil {
+		for _, reference := range doc.Profile.Common.Instructions.Selection {
+			local := bindings.Sources[reference.SourceBinding]
+			if local != instructions.SourceID {
+				result.Code = CodeBindingInvalid
+				return result
+			}
+			localInstructionRefs = append(localInstructionRefs, instructions.Reference{Source: local, RelativePath: reference.RelativePath})
+		}
 	}
 	if err := validateLocalReferences(localReferences); err != nil {
 		result.Code = CodeBindingConflict
@@ -645,6 +702,11 @@ func Decode(data, bindingData []byte, name string) Result {
 		result.Code = CodeInvalidStructure
 		return result
 	}
+	encodedInstructions, err := instructions.Encode(localInstructionRefs)
+	if err != nil {
+		result.Code = CodeInvalidStructure
+		return result
+	}
 	encodedWorkspace, _ := json.Marshal(workspaceSelection{Access: doc.Profile.Common.Workspace.Selection.Access})
 	candidate := profile.Profile{Version: profile.CurrentVersion, SourceVersion: profile.CurrentVersion, Name: name, Common: map[string]profile.CommonPayload{
 		"skills": {Version: 1, Selection: encodedSkills}, "workspace": {Version: 1, Selection: encodedWorkspace},
@@ -655,6 +717,9 @@ func Decode(data, bindingData []byte, name string) Result {
 	}
 	if doc.ExchangeVersion == 3 {
 		candidate.Common[commonprofile.EnvironmentCapabilityID] = profile.CommonPayload{Version: commonprofile.EnvironmentCapabilityVersion, Selection: encodedEnvironment}
+	}
+	if doc.Profile.Common.Instructions != nil {
+		candidate.Common[commonprofile.InstructionsCapabilityID] = profile.CommonPayload{Version: commonprofile.InstructionsCapabilityVersion, Selection: encodedInstructions}
 	}
 	result.Code, result.Bindings, result.Candidate = CodeValid, "complete", &candidate
 	return result
@@ -807,6 +872,14 @@ func validateDocumentRelations(doc *document) Code {
 		}
 		usedSources[reference.SourceBinding] = true
 	}
+	if doc.Profile.Common.Instructions != nil {
+		for _, reference := range doc.Profile.Common.Instructions.Selection {
+			if !sources[reference.SourceBinding] {
+				return CodeBindingInvalid
+			}
+			usedSources[reference.SourceBinding] = true
+		}
+	}
 	for _, payload := range doc.Profile.Overlays {
 		if payload.AuthBinding != "" {
 			if !auth[payload.AuthBinding] {
@@ -884,6 +957,20 @@ func validateSymbolicReferences(references []exchangeSkillReference) error {
 		local = append(local, skills.SkillReference{Source: skills.Source(reference.SourceBinding), RelativePath: reference.RelativePath})
 	}
 	return validateLocalReferences(local)
+}
+
+func validateSymbolicInstructionReferences(references []exchangeInstructionReference) error {
+	seen := map[exchangeInstructionReference]bool{}
+	for _, reference := range references {
+		if !bindingIDPattern.MatchString(reference.SourceBinding) || !strings.HasPrefix(reference.SourceBinding, "source-") || !safeRelativePath(reference.RelativePath) || !strings.HasSuffix(reference.RelativePath, ".md") {
+			return errors.New("unsafe symbolic instruction reference")
+		}
+		if seen[reference] {
+			return errors.New("duplicate symbolic instruction reference")
+		}
+		seen[reference] = true
+	}
+	return nil
 }
 
 func validateLocalReferences(references []skills.SkillReference) error {

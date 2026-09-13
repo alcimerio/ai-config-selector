@@ -325,7 +325,7 @@ func TestPromotedProfileExplicitMigrationPreviewsSelectedWorkspaceReduction(t *t
 	home, path, _ := mutationCandidateHome(t)
 	result := runMutationCandidatePTY(t, binary, home, []string{"profile", "migrate", "old"}, func(master *os.File, capture *safeCapture, _ *os.Process) {
 		waitForOutput(t, capture, `Migrate Profile "old"`)
-		writePTY(t, master, "\x1b[B", "\r")
+		writePTY(t, master, "\x1b[B", "\x1b[B", "\r")
 		waitForOutput(t, capture, "Workspace access")
 		writePTY(t, master, " ", "\x1b[D")
 		openProfilePreview(t, master)

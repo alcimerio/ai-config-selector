@@ -6,7 +6,7 @@ machine-local Profile from an explicit JSON file. The document supplies its
 own name. Standard input and implicit file selection are not supported.
 
 Only the currently supported version-3 representation is accepted. The exact
-common `skills`, `workspace`, `paths`, `executables`, and `environment`
+common `skills`, optional `instructions`, `workspace`, `paths`, `executables`, and `environment`
 capabilities and supported version-1 `devin` and `codex` overlays may be
 present. Environment source names and secret references are validated as
 logical local bindings; provider values are never read by creation or dry-run.
@@ -22,6 +22,11 @@ FIFOs, devices and directories are rejected without waiting for content.
 Symlinks to regular files are deliberately supported. Replacing the source
 pathname after it is opened does not change the captured candidate. ACS never
 changes the input bytes or mode.
+
+Instruction references use the `acs-instructions` source and validated bounded
+UTF-8 Markdown files; see the [instruction bundle contract](instruction-bundles.md).
+An omitted instructions capability remains compatible with earlier Profiles;
+when present, its version and reference array are strict.
 
 Missing Skill material and absent named Codex authentication are not structural
 errors. Exact valid Skill source and relative-path identities and the opaque

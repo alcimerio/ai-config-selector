@@ -1,0 +1,10 @@
+Rule: unicode-whitespace
+
+Path: "/tmp/acs-instructions-real-renderer-corpus/home/.devin/rules/unicode-whitespace.md"
+Provider: Devin
+Activation: always-on
+
+Content:
+────────────────────────────────────────────────────────────
+body
+────────────────────────────────────────────────────────────

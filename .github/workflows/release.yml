@@ -151,6 +151,17 @@ jobs:
             "${{ matrix.arch }}" \
             "$target_root/bin/codex"
 
+      - name: Install checksum locked Devin rules target
+        shell: bash
+        run: |
+          target_root="${RUNNER_TEMP}/devin-target-${{ matrix.os }}-${{ matrix.arch }}"
+          mkdir -p "$target_root/bin"
+          scripts/install-devin-test-target.sh \
+            scripts/devin-test-targets.lock \
+            "$target_root" \
+            "$target_root/bin/devin"
+          echo "ACS_TEST_DEVIN_BINARY=$target_root/bin/devin" >> "$GITHUB_ENV"
+
       - name: Run shared native release candidate gates
         run: |
           scripts/run-native-candidate-gates.sh \

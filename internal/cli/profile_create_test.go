@@ -3,6 +3,7 @@ package cli_test
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"os"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/alcimerio/ai-config-selector/internal/adapter/devin"
 	"github.com/alcimerio/ai-config-selector/internal/cli"
+	"github.com/alcimerio/ai-config-selector/internal/instructions"
 	"github.com/alcimerio/ai-config-selector/internal/profile"
 	"github.com/alcimerio/ai-config-selector/internal/profilerepo"
 	"golang.org/x/sys/unix"
@@ -21,6 +23,47 @@ import (
 
 func declarativeDocument(name string) []byte {
 	return []byte(`{"version":3,"name":"` + name + `","common":{"skills":{"version":1,"selection":[{"source":"shared-agents","relativePath":"review"}]},"workspace":{"version":1,"selection":{"access":"read-only"}}},"overlays":{"codex":{"version":1,"authRef":"work"},"devin":{"version":1}}}`)
+}
+
+func TestDeclarativeCreatePreservesMultipleInstructionReferencesWithoutResolvingSources(t *testing.T) {
+	root := t.TempDir()
+	home := filepath.Join(root, "home")
+	if err := os.Mkdir(home, 0700); err != nil {
+		t.Fatal(err)
+	}
+	editor, err := devin.NewProfileEditor(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	storeHome := filepath.Join(home, ".acs")
+	app := cli.App{Categories: editor.Categories(), Profiles: profile.NewStore(storeHome, editor.Categories()), Output: &bytes.Buffer{}, ErrorOutput: &bytes.Buffer{}}
+	const document = `{"version":3,"name":"instruction-create","common":{"skills":{"version":1,"selection":[]},"instructions":{"version":1,"selection":[{"source":"acs-instructions","relativePath":"available.md"},{"source":"acs-instructions","relativePath":"unavailable/missing.md"}]},"workspace":{"version":1,"selection":{"access":"read-only"}}},"overlays":{"devin":{"version":1}}}`
+	app.ReadProfileDocument = func(string) ([]byte, error) { return []byte(document), nil }
+	var out, errOut bytes.Buffer
+	app.Output, app.ErrorOutput = &out, &errOut
+	if code := app.Run(context.Background(), []string{"profile", "create", "--file", "ignored"}); code != 0 {
+		t.Fatalf("create code=%d stderr=%q", code, errOut.String())
+	}
+	stored, err := os.ReadFile(filepath.Join(storeHome, "profiles", "instruction-create.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var envelope struct {
+		Common map[string]struct {
+			Version   int             `json:"version"`
+			Selection json.RawMessage `json:"selection"`
+		} `json:"common"`
+	}
+	if err := json.Unmarshal(stored, &envelope); err != nil {
+		t.Fatal(err)
+	}
+	refs, err := instructions.Decode(envelope.Common["instructions"].Selection)
+	if err != nil || len(refs) != 2 || refs[0].RelativePath != "available.md" || refs[1].RelativePath != "unavailable/missing.md" {
+		t.Fatalf("create changed or resolved stored instruction identities: refs=%+v err=%v", refs, err)
+	}
+	if !strings.Contains(out.String(), `Created Profile "instruction-create".`) {
+		t.Fatalf("unexpected create result: %q", out.String())
+	}
 }
 
 func declarativeApp(t *testing.T, acsHome string) cli.App {

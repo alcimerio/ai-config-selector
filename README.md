@@ -8,6 +8,7 @@ The current development and future release contract is Apple Silicon-only:
 
 - macOS 26 on `darwin/arm64`;
 - Skills discovered from `~/.config/devin/skills` and `~/.agents/skills`;
+- explicitly selected common Markdown instruction bundles, with a verified Devin rules projection;
 - Devin launches with selected Skills and its allowlisted credential;
 - a credential-free sandbox shell for inspecting the same isolation directly.
 - literal generic argv execution under common Profile authority, without a shell.
@@ -55,6 +56,8 @@ a script. See the [common Profile format,
 migration, grants and projection contract](docs/common-profile-format.md) and
 the [shared Devin/Codex behavior, evidence boundaries and daily-use
 checklist](docs/shared-target-conformance.md).
+Selected instruction references and their Devin always-on projection are
+described in the [instruction bundle contract](docs/instruction-bundles.md).
 
 Explain the effective common and target authority without creating a Session or
 starting a target with `acs explain sandbox|devin|codex|run --profile NAME`.
@@ -195,7 +198,7 @@ absolute path for tools elsewhere. See the [generic command contract](docs/gener
 for executable forms, common Skills paths, workspace modes, environment,
 descriptor, exit, dry-run, and recovery behavior.
 
-ACS discovers selectable global Skills only in `~/.config/devin/skills` and
+ACS discovers selectable global Skills in `~/.config/devin/skills` and
 `~/.agents/skills`. Each immediate child directory must contain a regular
 `SKILL.md`: for example, `~/.agents/skills/backend-review/SKILL.md`. A loose
 `SKILL.md` at the root or deeper nested bundles are not catalog entries.
@@ -218,7 +221,8 @@ Create the Profile:
 acs devin create-profile --name backend-review
 ```
 
-Press Enter on Skills, select `acs-first-review` with Space/Enter, return with
+Press Enter on Skills, select `acs-first-review` with Space/Enter, and use
+Instructions to select files under `~/.acs/instructions`. Return with
 Left/Esc, then choose Create Profile. `/` searches; Esc while searching clears
 the filter. An empty catalog explains where to add Skills; an empty search
 suggests clearing the filter. Restart creation after adding a bundle. Ctrl+C
@@ -308,8 +312,9 @@ Launch Devin:
 acs devin --profile backend-review
 ```
 
-The Devin path creates a synthetic home, materializes selected Skills, copies
-only `~/.local/share/devin/credentials.toml` when present, verifies the Skill
+The Devin path creates a synthetic home, materializes selected Skills and
+common instructions, projects and verifies selected rules before authentication,
+copies only `~/.local/share/devin/credentials.toml` when present, verifies the Skill
 catalog and authentication inside Seatbelt, and then starts Devin with its
 workspace-trust prompt disabled. The trust decision is redundant inside ACS's
 required fail-closed sandbox and could not persist in the ephemeral synthetic
@@ -503,7 +508,7 @@ refresh observation remains supplemental and is never a CI credential gate.
 ## Compatibility and limitations
 
 - Devin and the fixed interactive Codex recipe are the production CLI adapters.
-- Skills is the only production Profile category.
+- Common Skills and instruction selections are production Profile capabilities.
 - The published v0.4.0 CLI cannot list, edit, delete, import, or export Profiles;
   current development source provides those commands, including sanitized
   portable exchange with explicit local bindings.
@@ -515,7 +520,7 @@ refresh observation remains supplemental and is never a CI credential gate.
 - Linux source is retained without binaries, native CI, or support guarantees.
 - Source builds and authenticated smoke runs are development evidence, not
   immutable-release evidence.
-- ACS does not manage MCP servers, hooks, instructions, agents, or arbitrary
+- ACS does not manage MCP servers, hooks, agents, or arbitrary
   target settings. Interactive Codex isolates ordinary host/project MCP inputs;
   it does not claim to override every account-service enterprise policy.
 - Interactive Codex supports only `codex-cli 0.149.1`, ChatGPT named identities,

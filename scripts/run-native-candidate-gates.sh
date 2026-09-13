@@ -16,6 +16,7 @@ codex_binary="$3"
 codex_archive="$4"
 recovery_root="$5"
 sandbox_backend="$6"
+devin_binary="${ACS_TEST_DEVIN_BINARY:-}"
 
 fail() {
   printf 'run native candidate gates: %s\n' "$1" >&2
@@ -23,13 +24,16 @@ fail() {
 }
 
 [ -n "$candidate_version" ] || fail "candidate version is required"
+[ -n "$devin_binary" ] || fail "checksum-locked Devin target is required"
 case "$candidate_binary:$codex_binary:$codex_archive:$recovery_root" in
   /*:/*:/*:/*) ;;
   *) fail "candidate, target, archive and recovery paths must be absolute" ;;
 esac
+case "$devin_binary" in /*) ;; *) fail "Devin target path must be absolute" ;; esac
 [ -f "$candidate_binary" ] && [ ! -L "$candidate_binary" ] && [ -x "$candidate_binary" ] || fail "supplied candidate binary is unavailable or unsafe"
 [ -f "$codex_binary" ] && [ ! -L "$codex_binary" ] && [ -x "$codex_binary" ] || fail "supplied Codex binary is unavailable or unsafe"
 [ -f "$codex_archive" ] && [ ! -L "$codex_archive" ] || fail "supplied Codex archive is unavailable or unsafe"
+[ -f "$devin_binary" ] && [ ! -L "$devin_binary" ] && [ -x "$devin_binary" ] || fail "checksum-locked Devin target is unavailable or unsafe"
 [ "$sandbox_backend" = "available" ] || fail "native sandbox backend must be available"
 
 # The caller supplies these values as positional inputs. Do not let ambient
@@ -37,6 +41,7 @@ esac
 unset ACS_PROMOTED_VERSION ACS_PROMOTED_BINARY ACS_PROMOTED_SANDBOX_BACKEND
 unset ACS_RUN_NATIVE_AUTH_GATE ACS_RUN_NATIVE_AUTH_RECOVERY
 unset ACS_NATIVE_AUTH_RECOVERY_ROOT ACS_TEST_CODEX_BINARY ACS_TEST_CODEX_ARCHIVE
+unset ACS_RUN_NATIVE_INSTRUCTION_RULES ACS_TEST_DEVIN_BINARY
 
 read_digest() {
   digest_output="$(shasum -a 256 "$1")" || return 1
@@ -53,6 +58,8 @@ read_digest "$codex_binary" || fail "Codex identity could not be read"
 codex_digest="$read_digest_value"
 read_digest "$codex_archive" || fail "Codex archive identity could not be read"
 archive_digest="$read_digest_value"
+read_digest "$devin_binary" || fail "Devin target identity could not be read"
+devin_digest="$read_digest_value"
 
 run_auth_test() {
   ACS_PROMOTED_BINARY="$candidate_binary" \
@@ -67,6 +74,7 @@ run_acceptance_test() {
   ACS_PROMOTED_VERSION="$candidate_version" \
   ACS_PROMOTED_BINARY="$candidate_binary" \
   ACS_PROMOTED_SANDBOX_BACKEND="$sandbox_backend" \
+  ACS_TEST_DEVIN_BINARY="$devin_binary" \
     go test "$@"
 }
 
@@ -95,6 +103,9 @@ finish() {
     identity_status=1
   fi
   if ! read_digest "$codex_archive" || [ "$read_digest_value" != "$archive_digest" ]; then
+    identity_status=1
+  fi
+  if ! read_digest "$devin_binary" || [ "$read_digest_value" != "$devin_digest" ]; then
     identity_status=1
   fi
   if [ "$identity_status" -ne 0 ]; then
@@ -130,6 +141,10 @@ go test ./...
 
 require_test ./acceptance TestPromotedArtifactSharedTargetConformance
 run_acceptance_test ./acceptance -run '^TestPromotedArtifactSharedTargetConformance$' -count=1 -v
+require_test ./acceptance TestPromotedArtifactNativeInstructionRules
+run_acceptance_test ./acceptance -run '^TestPromotedArtifactNativeInstructionRules$' -count=1 -v
+require_test ./internal/executor TestNativeProductionInstructionRulesReceipts
+ACS_RUN_NATIVE_INSTRUCTION_RULES=1 ACS_TEST_DEVIN_BINARY="$devin_binary" go test ./internal/executor -run '^TestNativeProductionInstructionRulesReceipts$' -count=1 -v
 require_test ./acceptance TestPromotedArtifactNativeContainmentContract
 run_acceptance_test ./acceptance -run '^TestPromotedArtifactNativeContainmentContract$/^generic_literal_command_uses_candidate_containment$' -count=1 -v
 run_acceptance_test ./acceptance -run '^TestPromotedArtifactNativeContainmentContract$/^effective_explanation_is_linked_and_narrowly_observed$' -count=1 -v

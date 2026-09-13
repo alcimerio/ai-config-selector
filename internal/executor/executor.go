@@ -14,19 +14,29 @@ import (
 	"os/signal"
 	"path/filepath"
 	"reflect"
+	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 
 	"github.com/alcimerio/ai-config-selector/internal/authority"
 	"github.com/alcimerio/ai-config-selector/internal/devinruntime"
 	"github.com/alcimerio/ai-config-selector/internal/environmentresource"
+	"github.com/alcimerio/ai-config-selector/internal/instructions"
 	"github.com/alcimerio/ai-config-selector/internal/launch"
 	"github.com/alcimerio/ai-config-selector/internal/runcommand"
 	"github.com/alcimerio/ai-config-selector/internal/session"
 	"github.com/alcimerio/ai-config-selector/internal/skills"
+	"golang.org/x/sys/unix"
 )
 
 const systemShell = "/bin/zsh"
+
+const maxDevinProbeOutput = 2 << 20
+
+const devinRuleSeparator = "────────────────────────────────────────────────────────────"
+
+var errDevinProbeOutputLimit = errors.New("Devin probe output exceeds its limit")
 
 // ShellRequest contains the target-independent inputs needed to create a
 // credential-free Session and attach ACS's fixed interactive shell.
@@ -52,6 +62,7 @@ type DevinRequest struct {
 	RuntimeInputs         []string
 	ExistingHomeDirectory string
 	ExpectedCatalog       []skills.SkillReference
+	ExpectedInstructions  []instructions.Bundle
 	ResolvedPlan          *authority.Plan
 	RuntimeAuthority      launch.RuntimeAuthority
 	FilesystemGrants      []launch.FilesystemGrant
@@ -350,6 +361,9 @@ func (e *Executor) RunDevin(ctx context.Context, request DevinRequest) (exitCode
 		return 1, errors.New("resolved authority does not select the Devin execution recipe")
 	}
 	request.WorkspaceAccess, request.Materializer, request.ExpectedCatalog = workspaceAccess, materializer, expectedCatalog
+	if request.ResolvedPlan != nil {
+		request.ExpectedInstructions = request.ResolvedPlan.DevinExpectedInstructions()
+	}
 	request.Executable, request.RuntimeInputs, request.ExistingHomeDirectory = requirements.Executable, requirements.RuntimeInputs, requirements.ExistingHomeDirectory
 	if request.ResolvedPlan != nil {
 		request.RuntimeAuthority = request.ResolvedPlan.RuntimeAuthority()
@@ -452,6 +466,9 @@ func (e *Executor) VerifyDevin(ctx context.Context, request DevinRequest) (resul
 		return errors.New("resolved authority does not select the Devin execution recipe")
 	}
 	request.WorkspaceAccess, request.Materializer, request.ExpectedCatalog = workspaceAccess, materializer, expectedCatalog
+	if request.ResolvedPlan != nil {
+		request.ExpectedInstructions = request.ResolvedPlan.DevinExpectedInstructions()
+	}
 	request.Executable, request.RuntimeInputs, request.ExistingHomeDirectory = requirements.Executable, requirements.RuntimeInputs, requirements.ExistingHomeDirectory
 	if request.ResolvedPlan != nil {
 		request.RuntimeAuthority = request.ResolvedPlan.RuntimeAuthority()
@@ -502,8 +519,22 @@ func (e *Executor) VerifyDevin(ctx context.Context, request DevinRequest) (resul
 }
 
 func (e *Executor) runDevinPreflights(ctx context.Context, created *session.Session, request DevinRequest, semantics authority.TargetSemantics) error {
+	var instructionAnchor *projectedInstructionAnchor
+	if len(request.ExpectedInstructions) > 0 {
+		var err error
+		instructionAnchor, err = openProjectedInstructionAnchor(created.HomeDirectory())
+		if err != nil {
+			return devinruntime.NewPreflightError(devinruntime.CapabilityInstructionRules, devinruntime.ReasonRuleMismatch)
+		}
+		defer instructionAnchor.Close()
+	}
 	for _, preflight := range semantics.Preflights {
 		var err error
+		if instructionAnchor != nil {
+			if err := instructionAnchor.checkPathIdentity(); err != nil {
+				return devinruntime.NewPreflightError(devinruntime.CapabilityInstructionRules, devinruntime.ReasonRuleMismatch)
+			}
+		}
 		switch preflight.ID {
 		case "devin.preflight.skills":
 			if preflight.Mode != "contained-exact-catalog" {
@@ -515,14 +546,281 @@ func (e *Executor) runDevinPreflights(ctx context.Context, created *session.Sess
 				return errors.New("unsupported Devin authentication preflight")
 			}
 			err = e.verifyDevinAuthentication(ctx, created, request)
+		case "devin.preflight.rules":
+			if preflight.Mode != "contained-selected-rules" {
+				return errors.New("unsupported Devin instruction rules preflight")
+			}
+			if len(request.ExpectedInstructions) == 0 {
+				continue
+			}
+			err = e.verifyDevinRules(ctx, created, request, instructionAnchor)
 		default:
 			return errors.New("unsupported Devin preflight")
 		}
 		if err != nil {
 			return err
 		}
+		if instructionAnchor != nil {
+			if err := instructionAnchor.checkPathIdentity(); err != nil {
+				return devinruntime.NewPreflightError(devinruntime.CapabilityInstructionRules, devinruntime.ReasonRuleMismatch)
+			}
+		}
 	}
 	return nil
+}
+
+func (e *Executor) verifyDevinRules(ctx context.Context, created *session.Session, request DevinRequest, anchor *projectedInstructionAnchor) error {
+	if anchor == nil || anchor.checkPathIdentity() != nil {
+		return devinruntime.NewPreflightError(devinruntime.CapabilityInstructionRules, devinruntime.ReasonRuleMismatch)
+	}
+	output, err := e.runDevinProbe(ctx, created, request, []string{"rules", "list"})
+	if err != nil {
+		return devinPreflightFailure(ctx, err, devinruntime.CapabilityInstructionRules, devinruntime.ReasonRuleInspectionCommandFailed)
+	}
+	if anchor.checkPathIdentity() != nil {
+		return devinruntime.NewPreflightError(devinruntime.CapabilityInstructionRules, devinruntime.ReasonRuleMismatch)
+	}
+	for _, bundle := range request.ExpectedInstructions {
+		name := instructions.DestinationName(bundle.Reference)
+		showName := strings.TrimSuffix(name, ".md")
+		if !listedRuleIsUniqueAlwaysOn(output, showName) {
+			return devinruntime.NewPreflightError(devinruntime.CapabilityInstructionRules, devinruntime.ReasonRuleMismatch)
+		}
+		observed, probeErr := e.runDevinProbe(ctx, created, request, []string{"rules", "show", showName})
+		if probeErr != nil {
+			return devinPreflightFailure(ctx, probeErr, devinruntime.CapabilityInstructionRules, devinruntime.ReasonRuleInspectionCommandFailed)
+		}
+		if anchor.checkPathIdentity() != nil {
+			return devinruntime.NewPreflightError(devinruntime.CapabilityInstructionRules, devinruntime.ReasonRuleMismatch)
+		}
+		path := filepath.Join(anchor.sessionHome, ".devin", "rules", name)
+		materialized, readErr := readProjectedInstruction(anchor, path, len("---\ntrigger: always_on\n---\n")+len(bundle.Content))
+		anchorErr := anchor.checkPathIdentity()
+		expected := append([]byte("---\ntrigger: always_on\n---\n"), bundle.Content...)
+		receipt, ok := parseDevinRuleReceipt(observed)
+		projectedPath := filepath.Join(anchor.canonicalHome, ".devin", "rules", name)
+		if readErr != nil || anchorErr != nil || !bytes.Equal(materialized, expected) || !ok || receipt.Name != showName || receipt.Provider != "Devin" || receipt.Path != projectedPath || receipt.Activation != "always-on" || !displayedInstructionMatches(receipt.Content, bundle.Content) {
+			return devinruntime.NewPreflightError(devinruntime.CapabilityInstructionRules, devinruntime.ReasonRuleMismatch)
+		}
+	}
+	return nil
+}
+
+type devinRuleReceipt struct {
+	Name, Path, Provider, Activation string
+	Content                          []byte
+}
+
+func listedRuleIsUniqueAlwaysOn(output []byte, wanted string) bool {
+	matches := 0
+	valid := false
+	for _, raw := range bytes.Split(output, []byte{'\n'}) {
+		line := strings.TrimSpace(strings.TrimSuffix(string(raw), "\r"))
+		open := strings.LastIndex(line, " [")
+		if open <= 0 {
+			if strings.Contains(line, wanted) {
+				return false
+			}
+			continue
+		}
+		close := strings.Index(line[open+2:], "] ")
+		if close < 0 {
+			if strings.Contains(line, wanted) {
+				return false
+			}
+			continue
+		}
+		close += open + 2
+		name, provider, activation := line[:open], line[open+2:close], strings.TrimSpace(line[close+2:])
+		if name != wanted {
+			if strings.Contains(name, wanted) {
+				return false
+			}
+			continue
+		}
+		matches++
+		valid = provider == "Devin" && activation == "always-on"
+	}
+	return matches == 1 && valid
+}
+
+func parseDevinRuleReceipt(output []byte) (devinRuleReceipt, bool) {
+	var receipt devinRuleReceipt
+	separator := []byte("\nContent:\n")
+	contentAt := bytes.Index(output, separator)
+	if contentAt < 0 {
+		separator = []byte("\r\nContent:\r\n")
+		contentAt = bytes.Index(output, separator)
+	}
+	if contentAt < 0 {
+		return receipt, false
+	}
+	header := output[:contentAt]
+	seen := map[string]bool{}
+	for _, raw := range bytes.Split(header, []byte{'\n'}) {
+		line := strings.TrimSpace(strings.TrimSuffix(string(raw), "\r"))
+		recognized := false
+		for _, field := range []string{"Rule", "Path", "Provider", "Activation"} {
+			prefix := field + ":"
+			if !strings.HasPrefix(line, prefix) {
+				continue
+			}
+			recognized = true
+			if seen[field] {
+				return devinRuleReceipt{}, false
+			}
+			seen[field] = true
+			value := strings.TrimSpace(strings.TrimPrefix(line, prefix))
+			if field == "Path" {
+				decoded, err := strconv.Unquote(value)
+				if err != nil {
+					return devinRuleReceipt{}, false
+				}
+				value = decoded
+			}
+			switch field {
+			case "Rule":
+				receipt.Name = value
+			case "Path":
+				receipt.Path = value
+			case "Provider":
+				receipt.Provider = value
+			case "Activation":
+				receipt.Activation = value
+			}
+		}
+		if line != "" && !recognized {
+			return devinRuleReceipt{}, false
+		}
+	}
+	if len(seen) != 4 {
+		return devinRuleReceipt{}, false
+	}
+	content := output[contentAt+len(separator):]
+	framePrefix := []byte(devinRuleSeparator + "\n")
+	frameSuffix := []byte("\n" + devinRuleSeparator + "\n")
+	if len(content) < len(framePrefix)+len(frameSuffix) || !bytes.HasPrefix(content, framePrefix) || !bytes.HasSuffix(content, frameSuffix) {
+		return devinRuleReceipt{}, false
+	}
+	receipt.Content = append([]byte(nil), content[len(framePrefix):len(content)-len(frameSuffix)]...)
+	receipt.Content = append(receipt.Content, '\n')
+	return receipt, true
+}
+
+func isRuleSeparator(line []byte) bool {
+	return bytes.Equal(bytes.TrimSuffix(line, []byte("\r")), []byte(devinRuleSeparator))
+}
+
+func displayedInstructionMatches(rendered, body []byte) bool {
+	// Pinned CLI corpus: rules show uses Go strings.TrimSpace(source) plus a
+	// final display newline; this does not alter independently checked file bytes.
+	want := []byte(strings.TrimSpace(string(body)) + "\n")
+	return bytes.Equal(rendered, want)
+}
+
+type projectedInstructionAnchor struct {
+	sessionHome   string
+	canonicalHome string
+	fd            int
+}
+
+func openProjectedInstructionAnchor(sessionHome string) (*projectedInstructionAnchor, error) {
+	if !filepath.IsAbs(sessionHome) {
+		return nil, errors.New("invalid projected instruction Session home")
+	}
+	// Session homes are ACS-owned trusted anchors. Resolve aliases such as
+	// macOS /var and /tmp only at this boundary, before any Devin probe.
+	canonicalHome, err := filepath.EvalSymlinks(sessionHome)
+	if err != nil {
+		return nil, err
+	}
+	fd, err := unix.Open(canonicalHome, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_DIRECTORY, 0)
+	if err != nil {
+		return nil, err
+	}
+	anchor := &projectedInstructionAnchor{sessionHome: filepath.Clean(sessionHome), canonicalHome: filepath.Clean(canonicalHome), fd: fd}
+	if err := anchor.checkPathIdentity(); err != nil {
+		_ = anchor.Close()
+		return nil, err
+	}
+	return anchor, nil
+}
+
+func (anchor *projectedInstructionAnchor) checkPathIdentity() error {
+	if anchor == nil || anchor.fd < 0 {
+		return errors.New("closed projected instruction anchor")
+	}
+	var fdStat unix.Stat_t
+	if err := unix.Fstat(anchor.fd, &fdStat); err != nil {
+		return err
+	}
+	for _, path := range []string{anchor.sessionHome, anchor.canonicalHome} {
+		var pathStat unix.Stat_t
+		if err := unix.Stat(path, &pathStat); err != nil {
+			return err
+		}
+		if pathStat.Dev != fdStat.Dev || pathStat.Ino != fdStat.Ino || pathStat.Mode&unix.S_IFMT != fdStat.Mode&unix.S_IFMT {
+			return errors.New("Session home no longer names the anchored directory")
+		}
+	}
+	return nil
+}
+
+func (anchor *projectedInstructionAnchor) Close() error {
+	if anchor == nil || anchor.fd < 0 {
+		return nil
+	}
+	err := unix.Close(anchor.fd)
+	anchor.fd = -1
+	return err
+}
+
+func readProjectedInstruction(anchor *projectedInstructionAnchor, path string, limit int) ([]byte, error) {
+	if anchor == nil || anchor.fd < 0 || limit < 0 || !filepath.IsAbs(path) {
+		return nil, errors.New("invalid projected instruction path")
+	}
+	relative, err := filepath.Rel(anchor.sessionHome, filepath.Clean(path))
+	if err != nil || relative == "." || filepath.IsAbs(relative) || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return nil, errors.New("projected instruction is outside its Session home")
+	}
+	components := strings.Split(relative, string(filepath.Separator))
+	if len(components) != 3 || components[0] != ".devin" || components[1] != "rules" || components[2] == "" || components[2] == "." || components[2] == ".." {
+		return nil, errors.New("invalid projected instruction location")
+	}
+	directoryFD, err := unix.FcntlInt(uintptr(anchor.fd), unix.F_DUPFD_CLOEXEC, 0)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = unix.Close(directoryFD) }()
+	for _, component := range components[:2] {
+		nextFD, openErr := unix.Openat(directoryFD, component, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_DIRECTORY, 0)
+		if openErr != nil {
+			return nil, openErr
+		}
+		_ = unix.Close(directoryFD)
+		directoryFD = nextFD
+	}
+	fd, err := unix.Openat(directoryFD, components[2], unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, err
+	}
+	file := os.NewFile(uintptr(fd), filepath.Base(path))
+	if file == nil {
+		_ = unix.Close(fd)
+		return nil, errors.New("open projected instruction")
+	}
+	before, err := file.Stat()
+	if err != nil || !before.Mode().IsRegular() || before.Size() > int64(limit) {
+		_ = file.Close()
+		return nil, errors.New("projected instruction is not a bounded regular file")
+	}
+	data, readErr := io.ReadAll(io.LimitReader(file, int64(limit)+1))
+	after, statErr := file.Stat()
+	closeErr := file.Close()
+	if readErr != nil || statErr != nil || closeErr != nil || len(data) > limit || !os.SameFile(before, after) || before.Size() != after.Size() || before.ModTime() != after.ModTime() || before.Mode() != after.Mode() {
+		return nil, errors.New("projected instruction changed during inspection")
+	}
+	return data, nil
 }
 
 // DevinExit is intentionally small: the adapter translates it to its stable
@@ -580,8 +878,8 @@ func devinPreflightFailure(ctx context.Context, err error, capability devinrunti
 }
 
 func (e *Executor) runDevinProbe(ctx context.Context, created *session.Session, request DevinRequest, arguments []string) ([]byte, error) {
-	var output bytes.Buffer
-	process, err := e.prepareDevin(ctx, created, request, arguments, launch.Terminal{Output: &output, ErrorOutput: io.Discard})
+	output := &boundedProbeOutput{limit: maxDevinProbeOutput}
+	process, err := e.prepareDevin(ctx, created, request, arguments, launch.Terminal{Output: output, ErrorOutput: io.Discard})
 	if err != nil {
 		return nil, err
 	}
@@ -591,7 +889,33 @@ func (e *Executor) runDevinProbe(ctx context.Context, created *session.Session, 
 		// cleanup proof therefore outranks every probe outcome.
 		return nil, cleanupErr
 	}
-	return output.Bytes(), runErr
+	if runErr != nil {
+		return nil, runErr
+	}
+	if output.exceeded {
+		return nil, errDevinProbeOutputLimit
+	}
+	return append([]byte(nil), output.buffer.Bytes()...), nil
+}
+
+type boundedProbeOutput struct {
+	buffer   bytes.Buffer
+	limit    int
+	exceeded bool
+}
+
+func (output *boundedProbeOutput) Write(value []byte) (int, error) {
+	remaining := output.limit - output.buffer.Len()
+	if remaining <= 0 {
+		output.exceeded = true
+		return len(value), nil
+	}
+	if len(value) > remaining {
+		_, _ = output.buffer.Write(value[:remaining])
+		output.exceeded = true
+		return len(value), nil
+	}
+	return output.buffer.Write(value)
 }
 
 func (e *Executor) prepareDevin(ctx context.Context, created *session.Session, request DevinRequest, arguments []string, terminal launch.Terminal, selected ...*environmentresource.Lease) (launch.Process, error) {

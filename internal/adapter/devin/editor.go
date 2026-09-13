@@ -11,6 +11,7 @@ import (
 
 	"github.com/alcimerio/ai-config-selector/internal/builder"
 	"github.com/alcimerio/ai-config-selector/internal/category"
+	"github.com/alcimerio/ai-config-selector/internal/instructions"
 	"github.com/alcimerio/ai-config-selector/internal/skills"
 )
 
@@ -21,12 +22,16 @@ func NewProfileEditor(home string) (*Adapter, error) {
 		return nil, errors.New("Profile editor home is required")
 	}
 	a := &Adapter{existingHomeDir: home}
-	registry, binding, workspaceBinding, pathsBinding, executablesBinding, environmentBinding, err := newCategoryRegistry(a)
+	registry, binding, instructionsBinding, workspaceBinding, pathsBinding, executablesBinding, environmentBinding, err := newCategoryRegistry(a)
 	if err != nil {
 		return nil, err
 	}
-	a.categories, a.skillsCategory, a.workspaceCategory, a.pathsCategory, a.executablesCategory, a.environmentCategory = registry, binding, workspaceBinding, pathsBinding, executablesBinding, environmentBinding
+	a.categories, a.skillsCategory, a.instructionsCategory, a.workspaceCategory, a.pathsCategory, a.executablesCategory, a.environmentCategory = registry, binding, instructionsBinding, workspaceBinding, pathsBinding, executablesBinding, environmentBinding
 	skillsRegistration, err := builder.RegisterSkillsRepairEditor(a.skillsCategory, a.discoverProfileSkills)
+	if err != nil {
+		return nil, err
+	}
+	instructionsRegistration, err := builder.RegisterInstructionsEditor(a.instructionsCategory, func(context.Context) ([]instructions.Bundle, error) { return instructions.Discover(a.existingHomeDir) })
 	if err != nil {
 		return nil, err
 	}
@@ -46,7 +51,7 @@ func NewProfileEditor(home string) (*Adapter, error) {
 	if err != nil {
 		return nil, err
 	}
-	a.editors, err = builder.NewEditorRegistry(a.categories, skillsRegistration, workspaceRegistration, pathsRegistration, executablesRegistration, environmentRegistration)
+	a.editors, err = builder.NewEditorRegistry(a.categories, skillsRegistration, instructionsRegistration, workspaceRegistration, pathsRegistration, executablesRegistration, environmentRegistration)
 	return a, err
 }
 
@@ -62,6 +67,12 @@ func (a *Adapter) BuildProfile(ctx context.Context, name string, draft category.
 
 func newEditorRegistry(adapter *Adapter) (*builder.EditorRegistry, error) {
 	skillsRegistration, err := builder.RegisterSkillsEditor(adapter.skillsCategory, adapter.DiscoverGlobalSkillCatalog)
+	if err != nil {
+		return nil, err
+	}
+	instructionsRegistration, err := builder.RegisterInstructionsEditor(adapter.instructionsCategory, func(context.Context) ([]instructions.Bundle, error) {
+		return instructions.Discover(adapter.existingHomeDir)
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -81,7 +92,7 @@ func newEditorRegistry(adapter *Adapter) (*builder.EditorRegistry, error) {
 	if err != nil {
 		return nil, err
 	}
-	return builder.NewEditorRegistry(adapter.categories, skillsRegistration, workspaceRegistration, pathsRegistration, executablesRegistration, environmentRegistration)
+	return builder.NewEditorRegistry(adapter.categories, skillsRegistration, instructionsRegistration, workspaceRegistration, pathsRegistration, executablesRegistration, environmentRegistration)
 }
 
 // EditProfileDraft presents the current line-oriented Skills editor. The

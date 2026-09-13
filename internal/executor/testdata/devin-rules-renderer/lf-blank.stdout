@@ -1,0 +1,10 @@
+Rule: lf-blank
+
+Path: "/tmp/acs-instructions-real-renderer-corpus/home/.devin/rules/lf-blank.md"
+Provider: Devin
+Activation: always-on
+
+Content:
+────────────────────────────────────────────────────────────
+body
+────────────────────────────────────────────────────────────

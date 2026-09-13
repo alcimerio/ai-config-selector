@@ -1,0 +1,13 @@
+Rule: metadata-body
+
+Path: "/tmp/acs-instructions-real-renderer-corpus/home/.devin/rules/metadata-body.md"
+Provider: Devin
+Activation: always-on
+
+Content:
+────────────────────────────────────────────────────────────
+Content:
+Provider: Other
+Path: /fake
+Activation: manual
+────────────────────────────────────────────────────────────

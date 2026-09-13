@@ -15,6 +15,7 @@ var commonCapabilities = []CommonCapability{
 	{ID: "paths", Version: 1},
 	{ID: "executables", Version: 1},
 	{ID: "environment", Version: 1},
+	{ID: "instructions", Version: 1},
 }
 
 func CommonCapabilities() []CommonCapability {

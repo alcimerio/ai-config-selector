@@ -18,6 +18,12 @@ to use the established read, edit and explicit migration paths.
         {"source": "shared-agents", "relativePath": "backend-review"}
       ]
     },
+    "instructions": {
+      "version": 1,
+      "selection": [
+        {"source": "acs-instructions", "relativePath": "reviews/backend.md"}
+      ]
+    },
     "workspace": {
       "version": 1,
       "selection": {"access": "read-only"}
@@ -71,7 +77,7 @@ to use the established read, edit and explicit migration paths.
 ```
 
 The envelope, each common capability, and each target overlay are independently
-versioned. Skills retain exact `source` plus `relativePath` identity; a missing
+versioned. Skills and instructions retain exact `source` plus `relativePath` identity; a missing
 or differently spelled source entry is not rebound by display name or cleaned
 path. Unknown common capabilities and unsupported selected overlays fail
 closed. Unknown inactive overlays can be reported by passive inspection but do
@@ -211,6 +217,10 @@ For v3, selected Skills are copied first to:
 
 ```text
 $SESSION_HOME/.acs/common/v1/skills/<source>/<relativePath>/
+
+Selected instruction files are captured before Session allocation and copied
+as verified bytes to `$SESSION_HOME/.acs/common/v1/instructions/<source>/<relativePath>`.
+They remain available to generic `acs run` without activating Devin paths.
 ```
 
 The source segment prevents two source identities from being flattened. ACS

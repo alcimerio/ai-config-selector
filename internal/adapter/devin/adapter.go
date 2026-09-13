@@ -13,6 +13,7 @@ import (
 	"github.com/alcimerio/ai-config-selector/internal/commonprofile"
 	"github.com/alcimerio/ai-config-selector/internal/devinruntime"
 	"github.com/alcimerio/ai-config-selector/internal/executor"
+	"github.com/alcimerio/ai-config-selector/internal/instructions"
 	"github.com/alcimerio/ai-config-selector/internal/launch"
 	"github.com/alcimerio/ai-config-selector/internal/skills"
 )
@@ -57,18 +58,19 @@ type devinExecutor interface {
 }
 
 type Adapter struct {
-	binaryPath          string
-	existingHomeDir     string
-	categories          *category.Registry
-	editors             *builder.EditorRegistry
-	skillsCategory      commonprofile.SkillsBinding
-	workspaceCategory   commonprofile.WorkspaceBinding
-	pathsCategory       commonprofile.PathsBinding
-	executablesCategory commonprofile.ExecutablesBinding
-	environmentCategory commonprofile.EnvironmentBinding
-	executor            devinExecutor
-	runtimeInputs       []string
-	runtimeInputIDs     []string
+	binaryPath           string
+	existingHomeDir      string
+	categories           *category.Registry
+	editors              *builder.EditorRegistry
+	skillsCategory       commonprofile.SkillsBinding
+	instructionsCategory commonprofile.InstructionsBinding
+	workspaceCategory    commonprofile.WorkspaceBinding
+	pathsCategory        commonprofile.PathsBinding
+	executablesCategory  commonprofile.ExecutablesBinding
+	environmentCategory  commonprofile.EnvironmentBinding
+	executor             devinExecutor
+	runtimeInputs        []string
+	runtimeInputIDs      []string
 }
 
 // SetPathSelection updates a draft through this adapter's registered paths
@@ -131,12 +133,13 @@ func newAdapter(config Config) (*Adapter, error) {
 		runtimeInputIDs: append([]string(nil), config.RuntimeInputIDs...),
 	}
 	adapter.executor = executor.New()
-	registry, binding, workspaceBinding, pathsBinding, executablesBinding, environmentBinding, err := newCategoryRegistry(adapter)
+	registry, binding, instructionsBinding, workspaceBinding, pathsBinding, executablesBinding, environmentBinding, err := newCategoryRegistry(adapter)
 	if err != nil {
 		return nil, fmt.Errorf("create Devin Adapter categories: %w", err)
 	}
 	adapter.categories = registry
 	adapter.skillsCategory = binding
+	adapter.instructionsCategory = instructionsBinding
 	adapter.workspaceCategory = workspaceBinding
 	adapter.pathsCategory = pathsBinding
 	adapter.executablesCategory = executablesBinding
@@ -147,6 +150,10 @@ func newAdapter(config Config) (*Adapter, error) {
 	}
 	adapter.editors = editors
 	return adapter, nil
+}
+
+func (a *Adapter) SetInstructionSelection(draft *category.Draft, selection []instructions.Reference) error {
+	return category.SetSelection(draft, a.instructionsCategory, selection)
 }
 
 // Categories returns the fixed ordered Profile Component Categories supported

@@ -1,6 +1,6 @@
 Effective capability explanation for Profile "format-profile" (stored version 3)
 Intent: devin
-Semantic authority digest: sha256:2904179d2b1151e916004b13b2ff3473ab15e162a0ad441c50ce155b1016d762
+Semantic authority digest: sha256:98fc95b0a03ae2ddc13f7812e11cf1cbf916f5684356f4be45c3a2a6cb0d995e
 Digest scope: semantic ACS authority and recipe requirements only; excluded local bindings are rechecked separately where execution requires it.
 
 Requested:
@@ -14,7 +14,9 @@ Requested:
 Target-added:
   devin.credentials [credential-projection]: mode=optional-allowlisted-value-omitted (reason=fixed_target_recipe; source=target:devin@v1)
   devin.preflight.authentication [target-preflight]: mode=contained-status (reason=fixed_target_recipe; source=target:devin@v1)
+  devin.preflight.rules [target-preflight]: mode=contained-selected-rules (reason=fixed_target_recipe; source=target:devin@v1)
   devin.preflight.skills [target-preflight]: mode=contained-exact-catalog (reason=fixed_target_recipe; source=target:devin@v1)
+  devin.project-instructions [project-inheritance]: names=AGENTS.md,.devin/rules (reason=target_inheritance; source=target:devin@v1)
   devin.project-skills [project-inheritance]: names=.devin/skills,.agents/skills (reason=target_inheritance; source=target:devin@v1)
   runtime.session-destinations [session-destination]: names=session-home,session-temporary,session-home/.config,session-home/.local/share,session-home/.cache,session-home/.local/state (reason=intrinsic_session; source=acs:session@v1)
   skills.target-projection [target-projection]: mode=selected-material (reason=registered_projection; source=target:devin@v1)

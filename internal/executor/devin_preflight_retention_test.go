@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -16,12 +17,13 @@ import (
 	"time"
 
 	"github.com/alcimerio/ai-config-selector/internal/devinruntime"
+	"github.com/alcimerio/ai-config-selector/internal/instructions"
 	"github.com/alcimerio/ai-config-selector/internal/launch"
 	"github.com/alcimerio/ai-config-selector/internal/session"
 )
 
 func TestLaunchPreflightsRetainSessionUntilCleanupIsProven(t *testing.T) {
-	for _, stage := range []string{"skills", "auth"} {
+	for _, stage := range []string{"skills", "rules-list", "rules-show", "auth"} {
 		for _, failure := range []string{"start", "wait", "none"} {
 			t.Run(stage+"/"+failure, func(t *testing.T) {
 				t.Parallel()
@@ -31,6 +33,7 @@ func TestLaunchPreflightsRetainSessionUntilCleanupIsProven(t *testing.T) {
 				}
 				fixture.sandbox = sandbox
 				application := fixture.application(t, "/test/devin", t.TempDir(), strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
+				configureRetentionInstructions(t, &application, sandbox, stage)
 				t.Cleanup(func() {
 					sandbox.finishCleanup()
 					if sandbox.guard != nil {
@@ -56,6 +59,12 @@ func TestLaunchPreflightsRetainSessionUntilCleanupIsProven(t *testing.T) {
 					}
 				}
 				wantStages := []string{"skills"}
+				if stage == "rules-list" || stage == "rules-show" || stage == "auth" {
+					wantStages = append(wantStages, "rules-list")
+				}
+				if stage == "rules-show" || stage == "auth" {
+					wantStages = append(wantStages, "rules-show")
+				}
 				if stage == "auth" {
 					wantStages = append(wantStages, "auth")
 				}
@@ -91,7 +100,7 @@ func TestLaunchPreflightsRetainSessionUntilCleanupIsProven(t *testing.T) {
 }
 
 func TestLaunchPreflightsPreserveFailureAfterProvenCleanup(t *testing.T) {
-	for _, stage := range []string{"skills", "auth"} {
+	for _, stage := range []string{"skills", "rules-list", "rules-show", "auth"} {
 		for _, failure := range []string{"start", "wait"} {
 			t.Run(stage+"/"+failure, func(t *testing.T) {
 				fixture := newLaunchTestFixture(t)
@@ -106,6 +115,7 @@ func TestLaunchPreflightsPreserveFailureAfterProvenCleanup(t *testing.T) {
 				})
 				fixture.sandbox = sandbox
 				application := fixture.application(t, "/test/devin", t.TempDir(), strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
+				configureRetentionInstructions(t, &application, sandbox, stage)
 				exitCode, err := application.run(context.Background())
 				if exitCode != 1 || err == nil {
 					t.Fatalf("launch result = (%d, %v), want preflight failure", exitCode, err)
@@ -123,6 +133,9 @@ func TestLaunchPreflightsPreserveFailureAfterProvenCleanup(t *testing.T) {
 				} else {
 					var preflightErr *devinruntime.PreflightError
 					want := devinruntime.CapabilitySkillIsolation
+					if stage == "rules-list" || stage == "rules-show" {
+						want = devinruntime.CapabilityInstructionRules
+					}
 					if stage == "auth" {
 						want = devinruntime.CapabilityAuthentication
 					}
@@ -155,9 +168,35 @@ func TestVerifyDevinOwnsSessionRetentionBeforePreparingProcess(t *testing.T) {
 	}
 }
 
+func TestInstructionAnchorPrecedesSkillsProbeAndRejectsReplacedHome(t *testing.T) {
+	fixture := newLaunchTestFixture(t)
+	cleanupDone := make(chan struct{})
+	close(cleanupDone)
+	sandbox := &preflightRetentionSandbox{stage: "skills", cleanupDone: cleanupDone, replaceHome: true}
+	fixture.sandbox = sandbox
+	application := fixture.application(t, "/test/devin", t.TempDir(), strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
+	configureRetentionInstructions(t, &application, sandbox, "rules-list")
+	defer func() {
+		if sandbox.guard != nil {
+			_ = sandbox.guard.Close()
+		}
+	}()
+
+	err := application.executor.VerifyDevin(context.Background(), application.request)
+	var preflightErr *devinruntime.PreflightError
+	if !errors.As(err, &preflightErr) || preflightErr.Capability != devinruntime.CapabilityInstructionRules {
+		t.Fatalf("VerifyDevin after HOME replacement = %v, want instruction rules preflight failure", err)
+	}
+	if want := []string{"skills"}; !reflect.DeepEqual(sandbox.stages, want) {
+		t.Fatalf("prepared stages=%v want %v", sandbox.stages, want)
+	}
+}
+
 type preflightRetentionSandbox struct {
 	stage       string
 	failure     string
+	ruleFile    string
+	ruleBody    []byte
 	cleanupDone chan struct{}
 	cleanupOnce sync.Once
 	root        string
@@ -165,6 +204,7 @@ type preflightRetentionSandbox struct {
 	guard       *os.File
 	stages      []string
 	process     *preflightRetentionProcess
+	replaceHome bool
 }
 
 func (sandbox *preflightRetentionSandbox) finishCleanup() {
@@ -179,8 +219,15 @@ func (*preflightRetentionSandbox) Check(context.Context, launch.SandboxCheck) er
 
 func (sandbox *preflightRetentionSandbox) Prepare(_ context.Context, request launch.ProcessRequest) (launch.Process, error) {
 	stage := request.Arguments[0]
+	if stage == "rules" && len(request.Arguments) > 1 {
+		stage = "rules-" + request.Arguments[1]
+	}
 	sandbox.stages = append(sandbox.stages, stage)
-	process := &preflightRetentionProcess{output: request.Terminal.Output, stage: stage, home: request.SessionHome}
+	canonicalHome, err := filepath.EvalSymlinks(request.SessionHome)
+	if err != nil {
+		return nil, err
+	}
+	process := &preflightRetentionProcess{output: request.Terminal.Output, stage: stage, home: canonicalHome, ruleFile: sandbox.ruleFile, ruleBody: append([]byte(nil), sandbox.ruleBody...), replaceHome: sandbox.replaceHome}
 	if stage == sandbox.stage {
 		sandbox.root = request.SessionDirectory
 		// Observe the existing lease inode so the test can await its final
@@ -200,9 +247,12 @@ func (sandbox *preflightRetentionSandbox) Prepare(_ context.Context, request lau
 type preflightRetentionProcess struct {
 	stage       string
 	home        string
+	ruleFile    string
+	ruleBody    []byte
 	failure     string
 	output      io.Writer
 	cleanupDone <-chan struct{}
+	replaceHome bool
 	starts      int
 	waits       int
 }
@@ -223,6 +273,21 @@ func (process *preflightRetentionProcess) Wait() error {
 	}
 	switch process.stage {
 	case "skills":
+		if process.replaceHome {
+			moved := process.home + ".moved"
+			if err := os.Rename(process.home, moved); err != nil {
+				return err
+			}
+			if err := os.Mkdir(process.home, 0700); err != nil {
+				return err
+			}
+			if err := os.MkdirAll(filepath.Join(process.home, ".config", "devin", "skills", "review"), 0700); err != nil {
+				return err
+			}
+			if err := os.WriteFile(filepath.Join(process.home, ".config", "devin", "skills", "review", "SKILL.md"), []byte("# review\n"), 0600); err != nil {
+				return err
+			}
+		}
 		return json.NewEncoder(process.output).Encode([]struct {
 			Name     string `json:"name"`
 			Provider string `json:"provider"`
@@ -233,9 +298,49 @@ func (process *preflightRetentionProcess) Wait() error {
 	case "auth":
 		_, err := io.WriteString(process.output, "Logged in (via fixture).\n")
 		return err
+	case "rules-list":
+		_, err := fmt.Fprintf(process.output, "%s [Devin] always-on\n", strings.TrimSuffix(process.ruleFile, ".md"))
+		return err
+	case "rules-show":
+		name := strings.TrimSuffix(process.ruleFile, ".md")
+		path := filepath.Join(process.home, ".devin", "rules", process.ruleFile)
+		_, err := fmt.Fprintf(process.output, "Rule: %s\n\nPath: %q\nProvider: Devin\nActivation: always-on\n\nContent:\n%s\n%s\n%s\n", name, path, devinRuleSeparator, strings.TrimSpace(string(process.ruleBody)), devinRuleSeparator)
+		return err
 	default:
 		return errors.New("interactive launch must not follow an unsettled preflight")
 	}
+}
+
+func configureRetentionInstructions(t *testing.T, application *executorLaunchApplication, sandbox *preflightRetentionSandbox, stage string) {
+	t.Helper()
+	if !strings.HasPrefix(stage, "rules-") && stage != "auth" {
+		return
+	}
+	ref := instructions.Reference{Source: instructions.SourceID, RelativePath: "retained.md"}
+	sandbox.ruleFile, sandbox.ruleBody = instructions.DestinationName(ref), []byte("selected retained body")
+	application.request.ExpectedInstructions = []instructions.Bundle{{Reference: ref, Content: append([]byte(nil), sandbox.ruleBody...)}}
+	base := application.request.Materializer
+	application.request.Materializer = retentionInstructionMaterializer{base: base, name: sandbox.ruleFile, body: sandbox.ruleBody}
+}
+
+type retentionInstructionMaterializer struct {
+	base session.Materializer
+	name string
+	body []byte
+}
+
+func (m retentionInstructionMaterializer) Materialize(home string) error {
+	if m.base != nil {
+		if err := m.base.Materialize(home); err != nil {
+			return err
+		}
+	}
+	dir := filepath.Join(home, ".devin", "rules")
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return err
+	}
+	data := append([]byte("---\ntrigger: always_on\n---\n"), m.body...)
+	return os.WriteFile(filepath.Join(dir, m.name), data, 0600)
 }
 
 func (*preflightRetentionProcess) Signal(os.Signal) error               { return nil }

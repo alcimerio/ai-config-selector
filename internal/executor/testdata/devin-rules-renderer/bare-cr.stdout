@@ -1,0 +1,10 @@
+Rule: bare-cr
+
+Path: "/tmp/acs-instructions-real-renderer-corpus/home/.devin/rules/bare-cr.md"
+Provider: Devin
+Activation: always-on
+
+Content:
+────────────────────────────────────────────────────────────
+onetwo
+────────────────────────────────────────────────────────────
