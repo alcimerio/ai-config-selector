@@ -1133,6 +1133,7 @@ func TestSelectedEnvironmentPolicyValidationStage(t *testing.T) {
 }
 
 func TestSelectedEnvironmentSupervisorStartAndCancelStage(t *testing.T) {
+	skipSeatbeltNativeTestBinaryUnderRace(t)
 	request := seatbeltTestRequest(t)
 	traceRoot, err := os.MkdirTemp("/private/tmp", "acs-selected-start-stage-")
 	if err != nil {
@@ -1283,6 +1284,7 @@ func TestSelectedEnvironmentSupervisorStartAndCancelStage(t *testing.T) {
 }
 
 func TestSelectedEnvironmentStaysSeparateFromPolicyValidationAndStatusProxy(t *testing.T) {
+	skipSeatbeltNativeTestBinaryUnderRace(t)
 	request := seatbeltTestRequest(t)
 	trace := filepath.Join(filepath.Dir(filepath.Dir(request.workspace)), "environment-transport")
 	target := filepath.Join(request.temporaryDirectory, "environment-transport-target")
@@ -1607,6 +1609,7 @@ func TestSelectedEnvironmentChildDiagnostic(t *testing.T) {
 	if os.Getenv(selectedEnvironmentChildDiagnosticGuard) != "parent" {
 		t.Skip("diagnostic-only parent guard")
 	}
+	skipSeatbeltNativeTestBinaryUnderRace(t)
 
 	const fixture = "TestSelectedEnvironmentStaysSeparateFromPolicyValidationAndStatusProxy"
 	parentContext, cancel := context.WithTimeout(context.Background(), 25*time.Second)
