@@ -3472,6 +3472,14 @@ func TestSeatbeltCandidateMCPAmbientReadDenialWithAbsentAtPrepareAndAliases(t *t
 	if err := os.Link(config, hardlink); err != nil {
 		t.Fatal(err)
 	}
+	configInfo, err := os.Stat(config)
+	if err != nil {
+		t.Fatalf("stat ambient config source: %v", err)
+	}
+	hardlinkInfo, err := os.Stat(hardlink)
+	if err != nil || !os.SameFile(configInfo, hardlinkInfo) {
+		t.Fatalf("hardlink alias does not identify the ambient config inode: %v", err)
+	}
 	fixture.started = true
 	if err := process.Start(); err != nil {
 		settleSeatbeltCandidateStartFailure(t, process, fixture)
@@ -3496,11 +3504,13 @@ func TestSeatbeltCandidateMCPAmbientReadDenialWithAbsentAtPrepareAndAliases(t *t
 	if !observed[0].PermissionDenied || observed[0].Read != "" {
 		t.Fatalf("canonical ambient config read was not denied: %+v", observed[0])
 	}
-	for _, index := range []int{1, 2} {
-		if !observed[index].PermissionDenied || observed[index].Read != "" {
-			t.Errorf("alias bypassed the exact-path denial (this bounds the mechanism): %+v", observed[index])
-		}
+	if !observed[1].PermissionDenied || observed[1].Read != "" {
+		t.Errorf("symlink alias bypassed the exact-path denial: %+v", observed[1])
 	}
+	if observed[2].PermissionDenied || observed[2].Read != "created-after-prepare" {
+		t.Fatalf("hardlink limitation changed: observed=%+v want readable original bytes", observed[2])
+	}
+	t.Logf("measured limitation: exact-path denial permits reading the verified hardlink alias; bytes=%q", observed[2].Read)
 	if observed[3].PermissionDenied || observed[3].Read != "neighbor" {
 		t.Fatalf("neighbor read changed: %+v", observed[3])
 	}
@@ -3927,7 +3937,7 @@ func TestSeatbeltCandidatePinnedDevinDirectorySymlinkRedirection(t *testing.T) {
 	for _, denied := range []bool{false, true} {
 		label := "baseline"
 		if denied {
-			label = "candidate-denial"
+			label = "rejected-literal-path-limitation"
 		}
 		t.Run(label, func(t *testing.T) {
 			fixture := newSeatbeltMCPTestFixture(t)
@@ -4047,19 +4057,15 @@ func TestSeatbeltCandidatePinnedDevinDirectorySymlinkRedirection(t *testing.T) {
 			if !strings.Contains(result, selectedName) {
 				t.Fatalf("selected user entry missing under %s: %q", label, result)
 			}
-			if denied {
-				for _, ambient := range []string{projectName, localName} {
-					if strings.Contains(result, ambient) {
-						t.Fatalf("ambient entry %s survived %s: %q", ambient, label, result)
-					}
-				}
-			} else {
-				for _, ambient := range []string{projectName, localName} {
-					if !strings.Contains(result, ambient) {
-						t.Fatalf("baseline did not load redirected ambient entry %s: %q", ambient, result)
-					}
+			for _, ambient := range []string{projectName, localName} {
+				if !strings.Contains(result, ambient) {
+					t.Fatalf("%s did not load measured redirected ambient entry %s: %q", label, ambient, result)
 				}
 			}
+			if denied {
+				t.Logf("measured limitation: rejected literal-path policy still loads both redirected ambient entries; selected=%s project=%s local=%s", selectedName, projectName, localName)
+			}
+			t.Logf("pinned Devin %s receipt: %s", label, result)
 		})
 	}
 }
@@ -4082,7 +4088,7 @@ func TestSeatbeltCandidatePinnedDevinReservedConfigBasenames(t *testing.T) {
 	if binary == "" {
 		t.Fatal("native MCP feasibility requires the checksum-locked Devin binary")
 	}
-	for _, form := range []string{"directory-symlink", "directory-and-file-symlinks"} {
+	for _, form := range []string{"directory-symlink", "directory-and-file-symlinks", "case-insensitive-basename", "case-insensitive-file-symlinks"} {
 		form := form
 		t.Run(form, func(t *testing.T) {
 			t.Run("baseline", func(t *testing.T) {
@@ -4136,6 +4142,8 @@ func runSeatbeltDevinReservedBasenameCase(t *testing.T, binary, form string, can
 	if err := os.Mkdir(neighborDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
+	caseInsensitiveEntries := form == "case-insensitive-basename"
+	caseInsensitiveFileSymlinks := form == "case-insensitive-file-symlinks"
 	ordinaryProject := filepath.Join(neighborDir, "ordinary-project.json")
 	ordinaryLocal := filepath.Join(neighborDir, "ordinary-local.json")
 	ordinaryJSON := filepath.Join(neighborDir, "ordinary.json")
@@ -4144,6 +4152,20 @@ func runSeatbeltDevinReservedBasenameCase(t *testing.T, binary, form string, can
 	rulesPath := filepath.Join(configDir, "rules")
 	reservedProject := filepath.Join(neighborDir, "mcp_config.json")
 	reservedLocal := filepath.Join(neighborDir, "mcp_config.local.json")
+	physicalProject := reservedProject
+	physicalLocal := reservedLocal
+	if caseInsensitiveEntries {
+		physicalProject = filepath.Join(neighborDir, "MCP_CONFIG.JSON")
+		physicalLocal = filepath.Join(neighborDir, "MCP_CONFIG.LOCAL.JSON")
+	}
+	if caseInsensitiveFileSymlinks {
+		caseAliasTargetDir := filepath.Join(validated.workspace, "casefold-reserved-targets")
+		if err := os.Mkdir(caseAliasTargetDir, 0o700); err != nil {
+			t.Fatalf("create separate case-alias target directory: %v", err)
+		}
+		physicalProject = filepath.Join(caseAliasTargetDir, "MCP_CONFIG.JSON")
+		physicalLocal = filepath.Join(caseAliasTargetDir, "MCP_CONFIG.LOCAL.JSON")
+	}
 	selectedWriteDenials := []seatbeltCandidateWriteDeny{
 		{path: validated.sessionsDirectory},
 		{path: validated.sessionDirectory},
@@ -4184,17 +4206,27 @@ func runSeatbeltDevinReservedBasenameCase(t *testing.T, binary, form string, can
 		waitSeatbeltCandidateProcess(t, targetProcess, fixture)
 	}()
 
-	if form == "directory-and-file-symlinks" {
+	if form == "directory-and-file-symlinks" || caseInsensitiveFileSymlinks {
 		if err := os.WriteFile(ordinaryProject, projectBytes, 0o600); err != nil {
 			t.Fatal(err)
 		}
 		if err := os.WriteFile(ordinaryLocal, localBytes, 0o600); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.Symlink(ordinaryProject, reservedProject); err != nil {
+		projectTarget, localTarget := ordinaryProject, ordinaryLocal
+		if caseInsensitiveFileSymlinks {
+			projectTarget, localTarget = physicalProject, physicalLocal
+			if err := os.WriteFile(physicalProject, projectBytes, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(physicalLocal, localBytes, 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := os.Symlink(projectTarget, reservedProject); err != nil {
 			t.Fatalf("create project config-file symlink after Prepare: %v", err)
 		}
-		if err := os.Symlink(ordinaryLocal, reservedLocal); err != nil {
+		if err := os.Symlink(localTarget, reservedLocal); err != nil {
 			t.Fatalf("create local config-file symlink after Prepare: %v", err)
 		}
 	} else {
@@ -4204,10 +4236,10 @@ func runSeatbeltDevinReservedBasenameCase(t *testing.T, binary, form string, can
 		if err := os.WriteFile(ordinaryLocal, localBytes, 0o600); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(reservedProject, projectBytes, 0o600); err != nil {
+		if err := os.WriteFile(physicalProject, projectBytes, 0o600); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(reservedLocal, localBytes, 0o600); err != nil {
+		if err := os.WriteFile(physicalLocal, localBytes, 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -4231,8 +4263,12 @@ func runSeatbeltDevinReservedBasenameCase(t *testing.T, binary, form string, can
 	if err != nil {
 		t.Fatalf("stat local entry before directory redirection: %v", err)
 	}
-	if form == "directory-and-file-symlinks" {
-		for _, link := range []struct{ path, target string }{{reservedProject, ordinaryProject}, {reservedLocal, ordinaryLocal}} {
+	if form == "directory-and-file-symlinks" || caseInsensitiveFileSymlinks {
+		projectTarget, localTarget := ordinaryProject, ordinaryLocal
+		if caseInsensitiveFileSymlinks {
+			projectTarget, localTarget = physicalProject, physicalLocal
+		}
+		for _, link := range []struct{ path, target string }{{reservedProject, projectTarget}, {reservedLocal, localTarget}} {
 			linkInfo, statErr := os.Lstat(link.path)
 			linkTarget, readErr := os.Readlink(link.path)
 			resolvedInfo, resolveErr := os.Stat(link.path)
@@ -4249,6 +4285,50 @@ func runSeatbeltDevinReservedBasenameCase(t *testing.T, binary, form string, can
 			actual, readErr := os.ReadFile(item.path)
 			if readErr != nil || !bytes.Equal(actual, item.data) {
 				t.Fatalf("regular reserved config %s bytes = %q, %v", item.path, actual, readErr)
+			}
+		}
+	}
+	if caseInsensitiveEntries {
+		entries, readErr := os.ReadDir(neighborDir)
+		if readErr != nil {
+			t.Fatalf("read case-insensitive fixture directory entries: %v", readErr)
+		}
+		spelling := map[string]bool{}
+		for _, entry := range entries {
+			spelling[entry.Name()] = true
+		}
+		if !spelling["MCP_CONFIG.JSON"] || !spelling["MCP_CONFIG.LOCAL.JSON"] {
+			t.Fatalf("uppercase reserved directory-entry spellings missing: %v", spelling)
+		}
+		for _, item := range []struct{ actual, canonical string }{{physicalProject, reservedProject}, {physicalLocal, reservedLocal}} {
+			actualInfo, actualErr := os.Lstat(item.actual)
+			canonicalInfo, canonicalErr := os.Lstat(item.canonical)
+			if actualErr != nil || canonicalErr != nil || !os.SameFile(actualInfo, canonicalInfo) {
+				t.Fatalf("case-insensitive APFS alias is not physically verified: actual=%s (%v) canonical=%s (%v)", item.actual, actualErr, item.canonical, canonicalErr)
+			}
+		}
+	}
+	if caseInsensitiveFileSymlinks {
+		entries, readErr := os.ReadDir(filepath.Dir(physicalProject))
+		if readErr != nil {
+			t.Fatalf("read uppercase reserved-target directory entries: %v", readErr)
+		}
+		spelling := map[string]bool{}
+		for _, entry := range entries {
+			spelling[entry.Name()] = true
+		}
+		if !spelling["MCP_CONFIG.JSON"] || !spelling["MCP_CONFIG.LOCAL.JSON"] {
+			t.Fatalf("uppercase reserved target spellings missing: %v", spelling)
+		}
+		for _, item := range []struct{ link string }{{reservedProject}, {reservedLocal}} {
+			actual := physicalProject
+			if item.link == reservedLocal {
+				actual = physicalLocal
+			}
+			actualInfo, actualErr := os.Stat(actual)
+			canonicalInfo, canonicalErr := os.Stat(item.link)
+			if actualErr != nil || canonicalErr != nil || !os.SameFile(actualInfo, canonicalInfo) {
+				t.Fatalf("uppercase reserved config symlink target is not physically verified: alias=%s actual=%s (%v) target=%v", item.link, actual, actualErr, canonicalErr)
 			}
 		}
 	}
@@ -4312,7 +4392,7 @@ func runSeatbeltDevinReservedBasenameCase(t *testing.T, binary, form string, can
 		}
 		marker := filepath.Join(validated.workspace, "reserved-basename-control.json")
 		controlRequest := processRequestFromValidated(validated)
-		controlRequest.Arguments = []string{"-test.run=^TestSeatbeltHelperProcess$", "--", "mcp-feasibility-read", ordinaryJSON, nearReservedName, ordinaryProject, ordinaryLocal, ordinaryWorkspace, rulesPath, reservedProject, reservedLocal, marker}
+		controlRequest.Arguments = []string{"-test.run=^TestSeatbeltHelperProcess$", "--", "mcp-feasibility-read", ordinaryJSON, nearReservedName, ordinaryProject, ordinaryLocal, ordinaryWorkspace, rulesPath, reservedProject, reservedLocal, physicalProject, physicalLocal, marker}
 		controlContext, controlCancel := context.WithTimeout(context.Background(), 15*time.Second)
 		controlProcess, err := sandbox.Prepare(controlContext, controlRequest)
 		if err != nil {
@@ -4335,7 +4415,7 @@ func runSeatbeltDevinReservedBasenameCase(t *testing.T, binary, form string, can
 			Read             string `json:"read"`
 			PermissionDenied bool   `json:"permissionDenied"`
 		}
-		if err := json.Unmarshal(markerBytes, &observations); err != nil || len(observations) != 8 {
+		if err := json.Unmarshal(markerBytes, &observations); err != nil || len(observations) != 10 {
 			t.Fatalf("decode reserved basename control: observations=%+v err=%v", observations, err)
 		}
 		wantReadable := []string{"ordinary neighbor JSON", "near reserved basename", string(projectBytes), string(localBytes), "ordinary workspace content", "ordinary inherited Devin rule"}
@@ -4344,7 +4424,7 @@ func runSeatbeltDevinReservedBasenameCase(t *testing.T, binary, form string, can
 				t.Errorf("ordinary control %d was not readable: %+v want=%q", index, observations[index], expected)
 			}
 		}
-		for index := 6; index < 8; index++ {
+		for index := 6; index < 10; index++ {
 			if !observations[index].PermissionDenied || observations[index].Read != "" {
 				t.Errorf("reserved-name neighbor control %d was not explicitly denied: %+v", index, observations[index])
 			}
@@ -4365,6 +4445,7 @@ func runSeatbeltDevinReservedBasenameCase(t *testing.T, binary, form string, can
 	if !strings.Contains(result, selectedName) {
 		t.Errorf("selected HOME projection missing from %s (candidate=%v): %q", form, candidate, result)
 	}
+	t.Logf("pinned Devin case receipt: form=%s candidate=%v lowercase-project=%s lowercase-local=%s uppercase-project=%s uppercase-local=%s output=%q", form, candidate, reservedProject, reservedLocal, physicalProject, physicalLocal, result)
 	for _, ambient := range []string{projectName, localName} {
 		if candidate && strings.Contains(result, ambient) {
 			t.Errorf("ambient entry %s survived reserved-basename candidate in %s: %q", ambient, form, result)
@@ -4821,9 +4902,11 @@ func seatbeltCandidateMCPBasenameDenySandbox(t *testing.T, selectedConfig string
 		var rules strings.Builder
 		selectedName := "MCP_CANDIDATE_SELECTED_CONFIG"
 		definitions = append(definitions, "-D"+selectedName+"="+selectedConfig)
-		for _, basenamePattern := range []string{`mcp_config[.]json`, `mcp_config[.]local[.]json`} {
+		for _, basenamePattern := range []string{`[mM][cC][pP]_[cC][oO][nN][fF][iI][gG][.][jJ][sS][oO][nN]`, `[mM][cC][pP]_[cC][oO][nN][fF][iI][gG][.][lL][oO][cC][aA][lL][.][jJ][sS][oO][nN]`} {
 			// Deny each reserved basename at every path except the one exact
 			// canonical selected projection, expressed structurally in Seatbelt.
+			// Explicit ASCII case classes cover case-insensitive filesystem names
+			// without broadening the exact-dot near-name boundary.
 			fmt.Fprintf(&rules, "\n(deny file-read* (require-all (regex #\"(^|/)%s$\") (require-not (literal (param %q)))))", basenamePattern, selectedName)
 		}
 		for index, denied := range canonicalWritePaths {
