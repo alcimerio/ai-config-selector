@@ -3872,6 +3872,7 @@ func TestSeatbeltCandidatePinnedDevinNestedDiscoveryGrantScope(t *testing.T) {
 				fixture := newSeatbeltDevinNestedDiscoveryFixture(t, binary, gitMode)
 				output := runSeatbeltDevinTargetList(t, fixture.fixture, NewProcessSandbox(), fixture.request)
 				baselineLoaded = loadedSeatbeltMCPNames(output, fixture.namePaths)
+				t.Logf("nested %s fixture marker paths: %v", gitMode, fixture.namePaths)
 				t.Logf("nested %s baseline loaded ambient IDs: %v", gitMode, baselineLoaded)
 				if len(baselineLoaded) == 0 {
 					t.Fatal("nested baseline did not load any measured ambient marker")
@@ -3879,9 +3880,9 @@ func TestSeatbeltCandidatePinnedDevinNestedDiscoveryGrantScope(t *testing.T) {
 				if !strings.Contains(output, fixture.selectedName) {
 					t.Fatalf("selected HOME entry missing from nested %s baseline: %q", gitMode, output)
 				}
-				requiredIDs := []string{"acs-nested-outer-project", "acs-nested-outer-local"}
-				if gitMode == "non-git" {
-					requiredIDs = append(requiredIDs, "acs-nested-above-git-project", "acs-nested-above-git-local")
+				requiredIDs := []string{"acs-nested-cwd-project", "acs-nested-cwd-local"}
+				if gitMode == "initialized-git" {
+					requiredIDs = append(requiredIDs, "acs-nested-intermediate-project", "acs-nested-intermediate-local", "acs-nested-outer-project", "acs-nested-outer-local")
 				}
 				for _, required := range requiredIDs {
 					if !strings.Contains(output, required) {
@@ -4070,6 +4071,311 @@ func mustStatSeatbeltDir(t *testing.T, path string) os.FileInfo {
 		t.Fatal(err)
 	}
 	return info
+}
+
+func TestSeatbeltCandidatePinnedDevinReservedConfigBasenames(t *testing.T) {
+	if os.Getenv("ACS_RUN_MCP_AMBIENT_FEASIBILITY") != "1" {
+		t.Skip("run through the checksum-locked native MCP ambient feasibility gate")
+	}
+	skipSeatbeltNativeTestBinaryUnderRace(t)
+	binary := os.Getenv("ACS_TEST_DEVIN_BINARY")
+	if binary == "" {
+		t.Fatal("native MCP feasibility requires the checksum-locked Devin binary")
+	}
+	for _, form := range []string{"directory-symlink", "directory-and-file-symlinks"} {
+		form := form
+		t.Run(form, func(t *testing.T) {
+			t.Run("baseline", func(t *testing.T) {
+				runSeatbeltDevinReservedBasenameCase(t, binary, form, false)
+			})
+			t.Run("reserved-basename-candidate", func(t *testing.T) {
+				runSeatbeltDevinReservedBasenameCase(t, binary, form, true)
+			})
+		})
+	}
+}
+
+func runSeatbeltDevinReservedBasenameCase(t *testing.T, binary, form string, candidate bool) {
+	t.Helper()
+	fixture := newSeatbeltMCPTestFixture(t)
+	validated := fixture.request
+	validated.workspaceAccess = WorkspaceAccessReadWrite
+	configDir := filepath.Join(validated.workspace, ".devin")
+	if _, err := os.Lstat(configDir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf(".devin must be absent at Prepare: %v", err)
+	}
+	selectedName := "acs-selected-reserved-basename"
+	projectName := "acs-ambient-reserved-project"
+	localName := "acs-ambient-reserved-local"
+	selectedBytes := seatbeltCandidateDevinConfig(t, selectedName)
+	projectBytes := seatbeltCandidateDevinConfig(t, projectName)
+	localBytes := seatbeltCandidateDevinConfig(t, localName)
+	selectedConfig := filepath.Join(validated.sessionHome, ".config", "devin", "mcp_config.json")
+	selectedConfigDir := filepath.Dir(selectedConfig)
+	if err := os.MkdirAll(selectedConfigDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(selectedConfig, selectedBytes, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	selectedIdentity, err := os.Lstat(selectedConfig)
+	if err != nil || !selectedIdentity.Mode().IsRegular() {
+		t.Fatalf("stat selected HOME config before Prepare: %v", err)
+	}
+	selectedConfigParent := filepath.Dir(selectedConfigDir)
+	selectedDirs := []string{validated.sessionsDirectory, validated.sessionDirectory, validated.sessionHome, selectedConfigParent, selectedConfigDir}
+	selectedDirIdentities := make(map[string]os.FileInfo, len(selectedDirs))
+	for _, path := range selectedDirs {
+		info, statErr := os.Lstat(path)
+		if statErr != nil {
+			t.Fatalf("stat selected config ancestor %q before Prepare: %v", path, statErr)
+		}
+		selectedDirIdentities[path] = info
+	}
+	neighborDir := filepath.Join(validated.workspace, "allowed-neighbor-directory")
+	if err := os.Mkdir(neighborDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	ordinaryProject := filepath.Join(neighborDir, "ordinary-project.json")
+	ordinaryLocal := filepath.Join(neighborDir, "ordinary-local.json")
+	ordinaryJSON := filepath.Join(neighborDir, "ordinary.json")
+	nearReservedName := filepath.Join(neighborDir, "mcp_configXjson")
+	ordinaryWorkspace := filepath.Join(validated.workspace, "ordinary-workspace.txt")
+	rulesPath := filepath.Join(configDir, "rules")
+	reservedProject := filepath.Join(neighborDir, "mcp_config.json")
+	reservedLocal := filepath.Join(neighborDir, "mcp_config.local.json")
+	selectedWriteDenials := []seatbeltCandidateWriteDeny{
+		{path: validated.sessionsDirectory},
+		{path: validated.sessionDirectory},
+		{path: validated.sessionHome},
+		{path: selectedConfigParent},
+		{path: selectedConfigDir, descendants: true},
+	}
+	var sandbox ProcessSandbox = NewProcessSandbox()
+	if candidate {
+		sandbox = seatbeltCandidateMCPBasenameDenySandbox(t, selectedConfig, selectedWriteDenials)
+	}
+	request := ProcessRequest{
+		Workspace: validated.workspace, WorkspaceAccess: WorkspaceAccessReadWrite,
+		SessionsDirectory: validated.sessionsDirectory, SessionDirectory: validated.sessionDirectory,
+		SessionHome: validated.sessionHome, TemporaryDirectory: validated.temporaryDirectory,
+		Executable: binary, RuntimeAuthority: DefaultRuntimeAuthority(), Arguments: []string{"mcp", "list"},
+	}
+	var output bytes.Buffer
+	request.Terminal = Terminal{Output: &output, ErrorOutput: &output}
+	targetContext, targetCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer targetCancel()
+	targetProcess, err := sandbox.Prepare(targetContext, request)
+	if err != nil {
+		t.Fatalf("prepare pinned Devin %s before project config discovery: %v", form, err)
+	}
+	targetStarted := false
+	defer func() {
+		if targetStarted {
+			return
+		}
+		fixture.started, fixture.settled = true, false
+		if startErr := targetProcess.Start(); startErr != nil {
+			settleSeatbeltCandidateStartFailure(t, targetProcess, fixture)
+			t.Errorf("settle prepared pinned Devin after an earlier fixture failure: %v", startErr)
+			return
+		}
+		targetStarted = true
+		waitSeatbeltCandidateProcess(t, targetProcess, fixture)
+	}()
+
+	if form == "directory-and-file-symlinks" {
+		if err := os.WriteFile(ordinaryProject, projectBytes, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(ordinaryLocal, localBytes, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(ordinaryProject, reservedProject); err != nil {
+			t.Fatalf("create project config-file symlink after Prepare: %v", err)
+		}
+		if err := os.Symlink(ordinaryLocal, reservedLocal); err != nil {
+			t.Fatalf("create local config-file symlink after Prepare: %v", err)
+		}
+	} else {
+		if err := os.WriteFile(ordinaryProject, projectBytes, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(ordinaryLocal, localBytes, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(reservedProject, projectBytes, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(reservedLocal, localBytes, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, item := range []struct {
+		path string
+		data []byte
+	}{{ordinaryJSON, []byte("ordinary neighbor JSON")}, {nearReservedName, []byte("near reserved basename")}, {ordinaryWorkspace, []byte("ordinary workspace content")}, {filepath.Join(neighborDir, "rules"), []byte("ordinary inherited Devin rule")}} {
+		if err := os.WriteFile(item.path, item.data, 0o600); err != nil {
+			t.Fatalf("write control file %s after Prepare: %v", item.path, err)
+		}
+	}
+	neighborIdentity, err := os.Lstat(neighborDir)
+	if err != nil || !neighborIdentity.IsDir() {
+		t.Fatalf("stat readable neighboring directory before redirection: %v", err)
+	}
+	projectInfo, err := os.Lstat(reservedProject)
+	if err != nil {
+		t.Fatalf("stat project entry before directory redirection: %v", err)
+	}
+	localInfo, err := os.Lstat(reservedLocal)
+	if err != nil {
+		t.Fatalf("stat local entry before directory redirection: %v", err)
+	}
+	if form == "directory-and-file-symlinks" {
+		for _, link := range []struct{ path, target string }{{reservedProject, ordinaryProject}, {reservedLocal, ordinaryLocal}} {
+			linkInfo, statErr := os.Lstat(link.path)
+			linkTarget, readErr := os.Readlink(link.path)
+			resolvedInfo, resolveErr := os.Stat(link.path)
+			wantInfo := mustStatSeatbeltDir(t, link.target)
+			if statErr != nil || linkInfo.Mode()&os.ModeSymlink == 0 || readErr != nil || linkTarget != link.target || resolveErr != nil || !os.SameFile(wantInfo, resolvedInfo) {
+				t.Fatalf("file redirection receipt for %s: lstat=%v target=%q readlink=%v stat=%v", link.path, statErr, linkTarget, readErr, resolveErr)
+			}
+		}
+	} else {
+		for _, item := range []struct {
+			path string
+			data []byte
+		}{{reservedProject, projectBytes}, {reservedLocal, localBytes}} {
+			actual, readErr := os.ReadFile(item.path)
+			if readErr != nil || !bytes.Equal(actual, item.data) {
+				t.Fatalf("regular reserved config %s bytes = %q, %v", item.path, actual, readErr)
+			}
+		}
+	}
+	if err := os.Symlink(neighborDir, configDir); err != nil {
+		t.Fatalf("redirect .devin after Prepare: %v", err)
+	}
+	configLinkInfo, err := os.Lstat(configDir)
+	if err != nil || configLinkInfo.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("stat .devin symlink: %v", err)
+	}
+	configLinkTarget, err := os.Readlink(configDir)
+	if err != nil || configLinkTarget != neighborDir {
+		t.Fatalf(".devin symlink target = %q, %v", configLinkTarget, err)
+	}
+	resolvedDir, err := os.Stat(configDir)
+	if err != nil || !os.SameFile(neighborIdentity, resolvedDir) {
+		t.Fatalf(".devin does not resolve to the prepared neighbor identity: %v", err)
+	}
+	verifyReservedConfigEntries := func() {
+		t.Helper()
+		currentConfigLink, linkStatErr := os.Lstat(configDir)
+		currentLinkTarget, linkReadErr := os.Readlink(configDir)
+		currentNeighbor, neighborStatErr := os.Stat(configDir)
+		if linkStatErr != nil || !os.SameFile(configLinkInfo, currentConfigLink) || linkReadErr != nil || currentLinkTarget != neighborDir || neighborStatErr != nil || !os.SameFile(neighborIdentity, currentNeighbor) {
+			t.Fatalf(".devin directory redirection changed: lstat=%v target=%q readlink=%v stat=%v", linkStatErr, currentLinkTarget, linkReadErr, neighborStatErr)
+		}
+		for _, expected := range []struct {
+			path string
+			info os.FileInfo
+			data []byte
+		}{{reservedProject, projectInfo, projectBytes}, {reservedLocal, localInfo, localBytes}} {
+			current, statErr := os.Lstat(expected.path)
+			actual, readErr := os.ReadFile(expected.path)
+			if statErr != nil || !os.SameFile(expected.info, current) || readErr != nil || !bytes.Equal(actual, expected.data) {
+				t.Fatalf("reserved entry %s changed after retarget: stat=%v read=%v bytes=%q", expected.path, statErr, readErr, actual)
+			}
+			redirected := filepath.Join(configDir, filepath.Base(expected.path))
+			actual, readErr = os.ReadFile(redirected)
+			if readErr != nil || !bytes.Equal(actual, expected.data) {
+				t.Fatalf("discovered entry %s changed after retarget: %q, %v", redirected, actual, readErr)
+			}
+		}
+		for path, identity := range selectedDirIdentities {
+			current, statErr := os.Lstat(path)
+			if statErr != nil || !os.SameFile(identity, current) {
+				t.Fatalf("selected config ancestor identity changed for %s: %v", path, statErr)
+			}
+		}
+		current, statErr := os.Lstat(selectedConfig)
+		actual, readErr := os.ReadFile(selectedConfig)
+		if statErr != nil || !os.SameFile(selectedIdentity, current) || readErr != nil || !bytes.Equal(actual, selectedBytes) {
+			t.Fatalf("selected config identity/bytes changed: stat=%v read=%v bytes=%q", statErr, readErr, actual)
+		}
+	}
+	verifyReservedConfigEntries()
+
+	runReadControls := func() {
+		t.Helper()
+		if !candidate {
+			return
+		}
+		marker := filepath.Join(validated.workspace, "reserved-basename-control.json")
+		controlRequest := processRequestFromValidated(validated)
+		controlRequest.Arguments = []string{"-test.run=^TestSeatbeltHelperProcess$", "--", "mcp-feasibility-read", ordinaryJSON, nearReservedName, ordinaryProject, ordinaryLocal, ordinaryWorkspace, rulesPath, reservedProject, reservedLocal, marker}
+		controlContext, controlCancel := context.WithTimeout(context.Background(), 15*time.Second)
+		controlProcess, err := sandbox.Prepare(controlContext, controlRequest)
+		if err != nil {
+			controlCancel()
+			t.Fatalf("prepare reserved-name and ordinary-read controls: %v", err)
+		}
+		fixture.started, fixture.settled = true, false
+		if err := controlProcess.Start(); err != nil {
+			settleSeatbeltCandidateStartFailure(t, controlProcess, fixture)
+			controlCancel()
+			t.Fatalf("start reserved-name and ordinary-read controls: %v", err)
+		}
+		waitSeatbeltCandidateProcess(t, controlProcess, fixture)
+		controlCancel()
+		markerBytes, err := os.ReadFile(marker)
+		if err != nil {
+			t.Fatalf("read reserved basename control marker: %v", err)
+		}
+		var observations []struct {
+			Read             string `json:"read"`
+			PermissionDenied bool   `json:"permissionDenied"`
+		}
+		if err := json.Unmarshal(markerBytes, &observations); err != nil || len(observations) != 8 {
+			t.Fatalf("decode reserved basename control: observations=%+v err=%v", observations, err)
+		}
+		wantReadable := []string{"ordinary neighbor JSON", "near reserved basename", string(projectBytes), string(localBytes), "ordinary workspace content", "ordinary inherited Devin rule"}
+		for index, expected := range wantReadable {
+			if observations[index].PermissionDenied || observations[index].Read != expected {
+				t.Errorf("ordinary control %d was not readable: %+v want=%q", index, observations[index], expected)
+			}
+		}
+		for index := 6; index < 8; index++ {
+			if !observations[index].PermissionDenied || observations[index].Read != "" {
+				t.Errorf("reserved-name neighbor control %d was not explicitly denied: %+v", index, observations[index])
+			}
+		}
+	}
+
+	verifyReservedConfigEntries()
+	fixture.started = true
+	fixture.settled = false
+	if err := targetProcess.Start(); err != nil {
+		targetStarted = true
+		settleSeatbeltCandidateStartFailure(t, targetProcess, fixture)
+		t.Fatalf("start pinned Devin %s after directory and file retarget: %v", form, err)
+	}
+	targetStarted = true
+	waitSeatbeltCandidateProcess(t, targetProcess, fixture)
+	result := output.String()
+	if !strings.Contains(result, selectedName) {
+		t.Errorf("selected HOME projection missing from %s (candidate=%v): %q", form, candidate, result)
+	}
+	for _, ambient := range []string{projectName, localName} {
+		if candidate && strings.Contains(result, ambient) {
+			t.Errorf("ambient entry %s survived reserved-basename candidate in %s: %q", ambient, form, result)
+		}
+		if !candidate && !strings.Contains(result, ambient) {
+			t.Errorf("paired baseline did not load ambient entry %s in %s: %q", ambient, form, result)
+		}
+	}
+	verifyReservedConfigEntries()
+	runReadControls()
+	verifyReservedConfigEntries()
 }
 
 type seatbeltDevinNestedDiscoveryFixture struct {
@@ -4480,6 +4786,49 @@ func seatbeltCandidateMCPDenySandbox(t *testing.T, readPaths []string, writePath
 			path := denied.path
 			name := "MCP_CANDIDATE_WRITE_DENY_" + strconv.Itoa(index)
 			definitions = append(definitions, "-D"+name+"="+path)
+			fmt.Fprintf(&rules, "\n(deny file-write* (literal (param %q))", name)
+			if denied.descendants {
+				fmt.Fprintf(&rules, " (subpath (param %q))", name)
+			}
+			rules.WriteString(")")
+		}
+		return policy + rules.String(), definitions, nil
+	}
+	return sandbox
+}
+
+func seatbeltCandidateMCPBasenameDenySandbox(t *testing.T, selectedConfig string, writePaths []seatbeltCandidateWriteDeny) ProcessSandbox {
+	t.Helper()
+	selectedConfig = canonicalSeatbeltCandidatePath(selectedConfig)
+	canonicalWritePaths := make([]seatbeltCandidateWriteDeny, len(writePaths))
+	for index, denied := range writePaths {
+		denied.path = canonicalSeatbeltCandidatePath(denied.path)
+		canonicalWritePaths[index] = denied
+	}
+	sandbox, ok := NewProcessSandbox().(*nativeProcessSandbox)
+	if !ok {
+		t.Fatalf("NewProcessSandbox() = %T, want production native sandbox", sandbox)
+	}
+	backend, ok := sandbox.backends["darwin"].(*seatbeltBackend)
+	if !ok || backend == nil {
+		t.Fatalf("production Darwin backend = %T", sandbox.backends["darwin"])
+	}
+	backend.policy = func(request validatedProcessRequest) (string, []string, error) {
+		policy, definitions, err := buildSeatbeltPolicy(request)
+		if err != nil {
+			return "", nil, err
+		}
+		var rules strings.Builder
+		selectedName := "MCP_CANDIDATE_SELECTED_CONFIG"
+		definitions = append(definitions, "-D"+selectedName+"="+selectedConfig)
+		for _, basenamePattern := range []string{`mcp_config[.]json`, `mcp_config[.]local[.]json`} {
+			// Deny each reserved basename at every path except the one exact
+			// canonical selected projection, expressed structurally in Seatbelt.
+			fmt.Fprintf(&rules, "\n(deny file-read* (require-all (regex #\"(^|/)%s$\") (require-not (literal (param %q)))))", basenamePattern, selectedName)
+		}
+		for index, denied := range canonicalWritePaths {
+			name := "MCP_CANDIDATE_WRITE_DENY_" + strconv.Itoa(index)
+			definitions = append(definitions, "-D"+name+"="+denied.path)
 			fmt.Fprintf(&rules, "\n(deny file-write* (literal (param %q))", name)
 			if denied.descendants {
 				fmt.Fprintf(&rules, " (subpath (param %q))", name)

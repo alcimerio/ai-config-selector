@@ -45,6 +45,7 @@ func TestDevinTargetLockAndNativeProductionGate(t *testing.T) {
 		"TestSeatbeltCandidatePinnedDevinConfigPathReplacementIsolation",
 		"TestSeatbeltCandidatePinnedDevinNestedDiscoveryGrantScope",
 		"TestSeatbeltCandidatePinnedDevinDirectorySymlinkRedirection",
+		"TestSeatbeltCandidatePinnedDevinReservedConfigBasenames",
 		"ACS_RUN_MCP_AMBIENT_FEASIBILITY=1 ACS_TEST_DEVIN_BINARY=\"$devin_binary\" go test ./internal/launch",
 	} {
 		if !strings.Contains(string(gate), want) {
