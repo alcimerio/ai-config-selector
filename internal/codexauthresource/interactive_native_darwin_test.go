@@ -622,7 +622,11 @@ func runInstalledCodexPTY(t *testing.T, candidate, home, tools, workspace, profi
 	select {
 	case err := <-wait:
 		finished = true
-		t.Fatalf("installed ACS or locked target exited before interactive input: %v; terminal=%q", err, output.BoundedString(16<<10))
+		terminalDiagnostic := output.BoundedString(16 << 10)
+		if fixture.mcpScenario != nil {
+			terminalDiagnostic = fixture.targetMCPDiagnostics(output.String())
+		}
+		t.Fatalf("installed ACS or locked target exited before interactive input: %v; terminal-diagnostic=%q", err, terminalDiagnostic)
 	case <-time.After(1500 * time.Millisecond):
 	}
 	if !waitNativeCaptureContainsAfter(&output, 0, "\x1b[1;40r", 10*time.Second) {
@@ -660,7 +664,7 @@ func runInstalledCodexPTY(t *testing.T, candidate, home, tools, workspace, profi
 		t.Fatalf("installed ACS or locked target exited before completing tool work: %v; terminal=%q", err, output.String())
 	case <-time.After(30 * time.Second):
 		_ = command.Process.Kill()
-		t.Fatalf("real Codex did not complete two fixture requests; loopback=%s; target-mcp-diagnostics=%q; terminal-tail=%q", fixture.summary(), fixture.targetMCPDiagnostics(output.String()), output.BoundedString(16<<10))
+		t.Fatalf("real Codex did not complete two fixture requests; loopback=%s; target-mcp-diagnostics=%q", fixture.summary(), fixture.targetMCPDiagnostics(output.String()))
 	}
 	// A normal exit proves the target rendered the completed assistant turn.
 	// The abrupt-settlement case instead stops ACS immediately after the real
@@ -1388,16 +1392,23 @@ func (fixture *nativeResponsesFixture) targetMCPDiagnostics(terminal string) str
 	lines := strings.Split(terminal, "\n")
 	selected := make([]string, 0, 4)
 	for _, line := range lines {
-		if !strings.Contains(strings.ToLower(line), "mcp") {
+		marker := ""
+		for _, candidate := range []string{"MCP startup failed", "acs: MCP server launch failed ("} {
+			if index := strings.Index(line, candidate); index >= 0 {
+				marker = line[index:]
+				break
+			}
+		}
+		if marker == "" {
 			continue
 		}
 		for _, value := range redact {
-			line = strings.ReplaceAll(line, value, "[redacted]")
+			marker = strings.ReplaceAll(marker, value, "[redacted]")
 		}
-		if len(line) > 4096 {
-			line = line[:4096] + "[truncated]"
+		if len(marker) > 4096 {
+			marker = marker[:4096] + "[truncated]"
 		}
-		selected = append(selected, strings.TrimSpace(line))
+		selected = append(selected, strings.TrimSpace(marker))
 		if len(selected) == 4 {
 			break
 		}
