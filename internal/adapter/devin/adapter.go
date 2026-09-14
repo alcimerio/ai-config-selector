@@ -68,6 +68,7 @@ type Adapter struct {
 	pathsCategory        commonprofile.PathsBinding
 	executablesCategory  commonprofile.ExecutablesBinding
 	environmentCategory  commonprofile.EnvironmentBinding
+	mcpCategory          commonprofile.MCPBinding
 	executor             devinExecutor
 	runtimeInputs        []string
 	runtimeInputIDs      []string
@@ -88,6 +89,10 @@ func (adapter *Adapter) SetExecutableSelection(draft *category.Draft, selection 
 
 func (adapter *Adapter) SetEnvironmentSelection(draft *category.Draft, selection commonprofile.EnvironmentSelection) error {
 	return category.SetSelection(draft, adapter.environmentCategory, selection)
+}
+
+func (adapter *Adapter) SetMCPSelection(draft *category.Draft, selection commonprofile.MCPSelection) error {
+	return category.SetSelection(draft, adapter.mcpCategory, selection)
 }
 
 type SkillBundle = skills.SkillBundle

@@ -289,6 +289,37 @@ func (process *seatbeltProcess) Start() error {
 	return errors.Join(err, process.restoreForegroundTerminal())
 }
 
+// AbortPrepared closes setup descriptors without starting an untrusted target
+// when the final Session identity fence fails.
+func (process *seatbeltProcess) AbortPrepared() error {
+	process.startupIdentityMutex.Lock()
+	defer process.startupIdentityMutex.Unlock()
+	var closeErrors []error
+	if process.helperControl != nil {
+		if err := process.helperControl.Close(); err != nil {
+			closeErrors = append(closeErrors, err)
+		}
+		process.helperControl = nil
+	}
+	if process.proxyStatus != nil {
+		if err := process.proxyStatus.Close(); err != nil {
+			closeErrors = append(closeErrors, err)
+		}
+		process.proxyStatus = nil
+	}
+	if err := process.closeControl(); err != nil {
+		closeErrors = append(closeErrors, err)
+	}
+	if err := process.closeStatusControl(); err != nil {
+		closeErrors = append(closeErrors, err)
+	}
+	if err := errors.Join(closeErrors...); err != nil {
+		return err
+	}
+	process.markCleanupDone()
+	return nil
+}
+
 func (process *seatbeltProcess) startSupervisor() error {
 	process.controlStateMutex.Lock()
 	control := process.control
@@ -568,14 +599,15 @@ func (process *seatbeltProcess) writeControl(data []byte) error {
 	return nil
 }
 
-func (process *seatbeltProcess) closeControl() {
+func (process *seatbeltProcess) closeControl() error {
 	process.controlStateMutex.Lock()
 	control := process.control
 	process.control = nil
 	process.controlStateMutex.Unlock()
 	if control != nil {
-		_ = control.Close()
+		return control.Close()
 	}
+	return nil
 }
 
 func (process *seatbeltProcess) writeTargetStatus(data []byte) error {
@@ -598,12 +630,13 @@ func (process *seatbeltProcess) writeTargetStatus(data []byte) error {
 	return nil
 }
 
-func (process *seatbeltProcess) closeStatusControl() {
+func (process *seatbeltProcess) closeStatusControl() error {
 	process.statusControlMutex.Lock()
 	defer process.statusControlMutex.Unlock()
 	if process.statusControl != nil {
-		_ = process.statusControl.Close()
+		return process.statusControl.Close()
 	}
+	return nil
 }
 
 func (process *seatbeltProcess) reapStartedSupervisor() {
@@ -844,10 +877,54 @@ func buildSeatbeltPolicy(request validatedProcessRequest) (string, []string, err
 			}
 		}
 	}
+	var sessionProtectionRules strings.Builder
+	seenSessionProtectionPaths := map[string]bool{}
+	addSessionProtection := func(index int, protection validatedSessionProtection, includeAncestors bool) {
+		if seenSessionProtectionPaths[protection.path] {
+			return
+		}
+		seenSessionProtectionPaths[protection.path] = true
+		name := "SESSION_PROTECTED_" + strconv.Itoa(index)
+		definitions = append(definitions, "-D"+name+"="+protection.path)
+		fmt.Fprintf(&sessionProtectionRules, "\n(deny file-write* (literal (param %q)))", name)
+		if protection.recursive {
+			fmt.Fprintf(&sessionProtectionRules, "\n(deny file-write* (subpath (param %q)))", name)
+		}
+		if includeAncestors {
+			for ancestorIndex, ancestor := range seatbeltPathAncestors(protection.path) {
+				if ancestor == request.sessionHome {
+					break
+				}
+				ancestorName := name + "_ANCESTOR_" + strconv.Itoa(ancestorIndex)
+				definitions = append(definitions, "-D"+ancestorName+"="+ancestor)
+				fmt.Fprintf(&sessionProtectionRules, "\n(deny file-write* (literal (param %q)))", ancestorName)
+			}
+		}
+	}
+	for index, protection := range request.sessionProtections {
+		addSessionProtection(index, protection, true)
+	}
+	addSessionProtection(len(request.sessionProtections), validatedSessionProtection{path: request.sessionHome}, false)
+	addSessionProtection(len(request.sessionProtections)+1, validatedSessionProtection{path: request.sessionDirectory}, false)
 	for index, path := range request.runtimeProbeTraversalPaths {
 		name := "RUNTIME_PROBE_TRAVERSAL_" + strconv.Itoa(index)
 		definitions = append(definitions, "-D"+name+"="+path)
 		fmt.Fprintf(&runtimeProbeRules, "\n  (literal (param %q))", name)
+	}
+	var mcpConfigReadDenials strings.Builder
+	if request.reserveMCPConfigNames || request.selectedMCPConfig != "" {
+		selectedName := ""
+		if request.selectedMCPConfig != "" {
+			selectedName = "MCP_SELECTED_CONFIG"
+			definitions = append(definitions, "-D"+selectedName+"="+request.selectedMCPConfig)
+		}
+		for _, basenamePattern := range []string{`[mM][cC][pP]_[cC][oO][nN][fF][iI][gG][.][jJ][sS][oO][nN]`, `[mM][cC][pP]_[cC][oO][nN][fF][iI][gG][.][lL][oO][cC][aA][lL][.][jJ][sS][oO][nN]`} {
+			if selectedName == "" {
+				fmt.Fprintf(&mcpConfigReadDenials, "\n(deny file-read* (regex #\"(^|/)%s$\"))", basenamePattern)
+			} else {
+				fmt.Fprintf(&mcpConfigReadDenials, "\n(deny file-read* (require-all (regex #\"(^|/)%s$\") (require-not (literal (param %q)))))", basenamePattern, selectedName)
+			}
+		}
 	}
 	var workspaceWriteRule string
 	if workspaceWritable(request.workspaceAccess) {
@@ -908,6 +985,8 @@ func buildSeatbeltPolicy(request validatedProcessRequest) (string, []string, err
 (allow file-write*
 ` + workspaceWriteRule + pathWriteRules.String() + `
   (literal (param "SESSION")) (subpath (param "SESSION")))
+` + sessionProtectionRules.String() + `
+` + mcpConfigReadDenials.String() + `
 
 ; Normal outbound IP traffic and the macOS DNS resolver are available. Other
 ; Unix sockets remain denied by default.

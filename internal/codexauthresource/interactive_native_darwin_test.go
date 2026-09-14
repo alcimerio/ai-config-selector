@@ -213,6 +213,44 @@ func runNativeInstalledACSLockedCodexFixture(t *testing.T) {
 		assertNoNativeSessions(t, filepath.Join(home, ".acs", "sessions"))
 		assertNewRemovedInstalledSessions(t, candidate, home, tools, workspace, before, "codex")
 	})
+	t.Run("locked Codex invokes only the selected MCP tools with referenced argv and environment", func(t *testing.T) {
+		const argumentValue = "native MCP argument with spaces"
+		const secretValue = "native MCP selected secret sentinel"
+		const inputValue = "native MCP input sentinel"
+		t.Setenv("ACS_NATIVE_MCP_ARGUMENT", argumentValue)
+		t.Setenv("ACS_NATIVE_MCP_SECRET", secretValue)
+		inputPath := filepath.Join(workspace, "native-mcp-input.txt")
+		if err := os.WriteFile(inputPath, []byte(inputValue), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		serverPath := filepath.Join(workspace, "native-mcp-server.sh")
+		writeNativeMCPServer(t, serverPath)
+		writeNativeCodexMCPProfile(t, home, "mcp", identities["coding"])
+		markerPath := inputPath + ".mcp-effect"
+		descendantPath := inputPath + ".mcp-descendant"
+		before := installedSessionSnapshot(t, candidate, home, tools, workspace)
+		fixture := newNativeResponsesFixture(t, "", home)
+		fixture.mcpScenario = &nativeMCPResponsesScenario{
+			serverID: "fixture", allowedTool: "allowed", disabledTool: "blocked",
+			callArguments: `{"value":"` + argumentValue + `","input":"` + inputValue + `"}`,
+		}
+		fixture.privateSentinels = []string{secretValue}
+		fixture.descendantReady = descendantPath
+		fixture.mcpStartupReceipt = inputPath + ".mcp-startup"
+		defer fixture.server.Close()
+		buildFixedCodexTrampoline(t, grantedTarget, fixture.server.URL+"/backend-api", filepath.Join(tools, "codex"))
+		runInstalledCodexPTY(t, candidate, home, tools, workspace, "mcp", fixture, false)
+		descendantPID := fixture.assert(t, true)
+		if receipt := readNativeMCPStartupReceipt(fixture.mcpStartupReceipt); receipt != "server-entered,initialize-received,initialize-replied" {
+			t.Fatalf("synthetic MCP startup receipts=%q, want server entry and complete initialize exchange", receipt)
+		}
+		if contents, err := os.ReadFile(markerPath); err != nil || string(contents) != "mcp-fixture-call-ok|mcp-secret-environment-ok" {
+			t.Fatalf("MCP physical server effect=%q err=%v", contents, err)
+		}
+		assertNativeProcessRemoved(t, descendantPID, "Codex MCP server descendant survived target settlement")
+		assertNoNativeSessions(t, filepath.Join(home, ".acs", "sessions"))
+		assertNewRemovedInstalledSessions(t, candidate, home, tools, workspace, before, "codex")
+	})
 	t.Run("missing required environment precedes locked Codex Session", func(t *testing.T) {
 		ready := filepath.Join(workspace, ".acs-codex-missing-environment-started")
 		buildFixedCodexTrampoline(t, grantedTarget, "http://127.0.0.1:1/backend-api", filepath.Join(tools, "codex"), nativeCodexPhaseCoordination{
@@ -489,6 +527,11 @@ func nativeCandidateEnvironment(home, tools string) []string {
 			environment = append(environment, name+"="+value)
 		}
 	}
+	for _, name := range []string{"ACS_NATIVE_MCP_ARGUMENT", "ACS_NATIVE_MCP_SECRET"} {
+		if value, present := os.LookupEnv(name); present {
+			environment = append(environment, name+"="+value)
+		}
+	}
 	return environment
 }
 
@@ -579,7 +622,11 @@ func runInstalledCodexPTY(t *testing.T, candidate, home, tools, workspace, profi
 	select {
 	case err := <-wait:
 		finished = true
-		t.Fatalf("installed ACS or locked target exited before interactive input: %v; terminal=%q", err, output.String())
+		terminalDiagnostic := output.BoundedString(16 << 10)
+		if fixture.mcpScenario != nil {
+			terminalDiagnostic = fixture.targetMCPDiagnostics(output.String())
+		}
+		t.Fatalf("installed ACS or locked target exited before interactive input: %v; terminal-diagnostic=%q", err, terminalDiagnostic)
 	case <-time.After(1500 * time.Millisecond):
 	}
 	if !waitNativeCaptureContainsAfter(&output, 0, "\x1b[1;40r", 10*time.Second) {
@@ -617,7 +664,7 @@ func runInstalledCodexPTY(t *testing.T, candidate, home, tools, workspace, profi
 		t.Fatalf("installed ACS or locked target exited before completing tool work: %v; terminal=%q", err, output.String())
 	case <-time.After(30 * time.Second):
 		_ = command.Process.Kill()
-		t.Fatalf("real Codex did not complete two fixture requests; loopback=%s; terminal=%q", fixture.summary(), output.String())
+		t.Fatalf("real Codex did not complete two fixture requests; loopback=%s; target-mcp-diagnostics=%q", fixture.summary(), fixture.targetMCPDiagnostics(output.String()))
 	}
 	// A normal exit proves the target rendered the completed assistant turn.
 	// The abrupt-settlement case instead stops ACS immediately after the real
@@ -893,6 +940,17 @@ func (capture *nativeSafeCapture) Len() int {
 	return capture.buffer.Len()
 }
 
+func (capture *nativeSafeCapture) BoundedString(limit int) string {
+	capture.mu.Lock()
+	defer capture.mu.Unlock()
+	value := capture.buffer.String()
+	if limit > 0 && len(value) > limit {
+		value = value[len(value)-limit:]
+		value = "[earlier terminal output truncated]" + value
+	}
+	return value
+}
+
 type nativeResponsesFixture struct {
 	server                     *httptest.Server
 	completed                  chan struct{}
@@ -906,11 +964,18 @@ type nativeResponsesFixture struct {
 	websocketFallbacks         int
 	modelRequests              int
 	protocolErr                string
+	mcpStartupReceipt          string
 	preexistingHomes           map[string]struct{}
 	descendantReady            string
 	liveDescendantPID          int
 	coordination               *nativeCodexPhaseCoordination
 	privateSentinels           []string
+	mcpScenario                *nativeMCPResponsesScenario
+}
+
+type nativeMCPResponsesScenario struct {
+	serverID, allowedTool, disabledTool string
+	callArguments                       string
 }
 
 // nativeCodexPhaseCoordination is intentionally fixture-only.  Its literal
@@ -1084,10 +1149,41 @@ func newNativeResponsesFixture(t *testing.T, shellCommand, launcherHome string) 
 		fixture.mu.Unlock()
 		response.Header().Set("Content-Type", "text/event-stream")
 		if index == 1 {
-			arguments, _ := json.Marshal(map[string]any{"command": shellCommand, "timeout_ms": 5000})
+			functionName := "shell_command"
+			functionArguments := ""
+			if fixture.mcpScenario == nil {
+				arguments, _ := json.Marshal(map[string]any{"command": shellCommand, "timeout_ms": 5000})
+				functionArguments = string(arguments)
+			} else {
+				scenario := fixture.mcpScenario
+				functionName, err = nativeMCPInventoryFunction(body, scenario.serverID, scenario.allowedTool)
+				if err != nil {
+					fixture.rejectProtocol(response, err.Error())
+					return
+				}
+				blockedPresent, err := nativeMCPInventoryContains(body, scenario.serverID, scenario.disabledTool)
+				if err != nil {
+					fixture.rejectProtocol(response, err.Error())
+					return
+				}
+				if blockedPresent {
+					fixture.rejectProtocol(response, "disabled MCP tool appeared in the actual Responses tool inventory")
+					return
+				}
+				allowed, err := nativeMCPInventoryFunctionEntry(body, scenario.serverID, scenario.allowedTool)
+				if err != nil {
+					fixture.rejectProtocol(response, err.Error())
+					return
+				}
+				if err := nativeMCPFunctionSchema(allowed, "value", "input"); err != nil {
+					fixture.rejectProtocol(response, err.Error())
+					return
+				}
+				functionArguments = scenario.callArguments
+			}
 			writeSSE(response,
 				map[string]any{"type": "response.created", "response": map[string]any{"id": "resp-1"}},
-				map[string]any{"type": "response.output_item.done", "item": map[string]any{"type": "function_call", "call_id": "acs-call-1", "name": "shell_command", "arguments": string(arguments)}},
+				map[string]any{"type": "response.output_item.done", "item": map[string]any{"type": "function_call", "call_id": "acs-call-1", "name": functionName, "arguments": functionArguments}},
 				completedEvent("resp-1"),
 			)
 			return
@@ -1194,9 +1290,17 @@ func (fixture *nativeResponsesFixture) assert(t *testing.T, wantDescendant bool)
 	if err != nil {
 		t.Fatalf("second request tool output: %v", err)
 	}
-	for _, sentinel := range []string{"codex-native-tool-output", "global-auth-read-denied", "outside-read-denied", "outside-write-denied"} {
-		if !strings.Contains(toolOutput, sentinel) {
-			t.Fatalf("second request omitted real shell result %q", sentinel)
+	if fixture.mcpScenario == nil {
+		for _, sentinel := range []string{"codex-native-tool-output", "global-auth-read-denied", "outside-read-denied", "outside-write-denied"} {
+			if !strings.Contains(toolOutput, sentinel) {
+				t.Fatalf("second request omitted real shell result %q", sentinel)
+			}
+		}
+	} else {
+		for _, sentinel := range []string{"mcp-fixture-call-ok", "mcp-secret-environment-ok"} {
+			if !strings.Contains(toolOutput, sentinel) {
+				t.Fatalf("second request omitted real MCP server result %q", sentinel)
+			}
 		}
 	}
 	if strings.Contains(toolOutput, "global-auth-read-bad") || strings.Contains(toolOutput, "outside-read-bad") || strings.Contains(toolOutput, "outside-write-bad") {
@@ -1263,7 +1367,72 @@ func (fixture *nativeResponsesFixture) summaryLocked() string {
 	for _, observation := range fixture.observations {
 		parts = append(parts, fmt.Sprintf("%s %q auth=%t account=%t", observation.method, observation.path, observation.hasAuthorization, observation.hasAccount))
 	}
+	if fixture.protocolErr != "" {
+		parts = append(parts, "protocol-error="+strconv.Quote(fixture.protocolErr))
+	}
+	if fixture.mcpStartupReceipt != "" {
+		parts = append(parts, "mcp-startup="+readNativeMCPStartupReceipt(fixture.mcpStartupReceipt))
+	}
 	return strings.Join(parts, "; ")
+}
+
+func (fixture *nativeResponsesFixture) targetMCPDiagnostics(terminal string) string {
+	if fixture.mcpScenario == nil {
+		return ""
+	}
+	redact := append([]string(nil), fixture.privateSentinels...)
+	var selectedArguments map[string]any
+	if json.Unmarshal([]byte(fixture.mcpScenario.callArguments), &selectedArguments) == nil {
+		for _, value := range selectedArguments {
+			if text, ok := value.(string); ok && text != "" {
+				redact = append(redact, text)
+			}
+		}
+	}
+	lines := strings.Split(terminal, "\n")
+	selected := make([]string, 0, 4)
+	for _, line := range lines {
+		marker := ""
+		for _, candidate := range []string{"MCP startup failed", "acs: MCP server launch failed ("} {
+			if index := strings.Index(line, candidate); index >= 0 {
+				marker = line[index:]
+				break
+			}
+		}
+		if marker == "" {
+			continue
+		}
+		for _, value := range redact {
+			marker = strings.ReplaceAll(marker, value, "[redacted]")
+		}
+		if len(marker) > 4096 {
+			marker = marker[:4096] + "[truncated]"
+		}
+		selected = append(selected, strings.TrimSpace(marker))
+		if len(selected) == 4 {
+			break
+		}
+	}
+	return strings.Join(selected, " | ")
+}
+
+func readNativeMCPStartupReceipt(path string) string {
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() || info.Size() > 256 {
+		return "none"
+	}
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		return "unreadable"
+	}
+	allowed := map[string]bool{"server-entered": true, "initialize-received": true, "initialize-replied": true}
+	markers := strings.Fields(strings.ReplaceAll(string(contents), "\n", " "))
+	for _, marker := range markers {
+		if !allowed[marker] {
+			return "invalid"
+		}
+	}
+	return strings.Join(markers, ",")
 }
 
 func (fixture *nativeResponsesFixture) summary() string {
@@ -1639,6 +1808,77 @@ func writeNativeCodexEnvironmentProfile(t *testing.T, home, profileName, authRef
 		`{"id":"token","destination":"PROFILE_CODEX_TOKEN","scope":"attached-process-tree","source":{"kind":"secret-reference","provider":"host-environment","reference":"ACS_NATIVE_CODEX_TOKEN"},"required":true,"classification":"secret"}` +
 		`]}}},"overlays":{"codex":{"version":1,"authRef":` + strconv.Quote(authRef) + `}}}`
 	if err := os.WriteFile(filepath.Join(profiles, profileName+".json"), []byte(document), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func writeNativeCodexMCPProfile(t *testing.T, home, profileName, authRef string) {
+	t.Helper()
+	profiles := filepath.Join(home, ".acs", "profiles")
+	if err := os.MkdirAll(profiles, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	document := `{"version":3,"name":` + strconv.Quote(profileName) + `,"common":{
+		"skills":{"version":1,"selection":[{"source":"shared-agents","relativePath":"managed-proof"}]},
+		"workspace":{"version":1,"selection":{"access":"read-write"}},
+		"executables":{"version":1,"selection":{"entries":[{"id":"mcp-server","reference":{"kind":"workspace-relative","path":"native-mcp-server.sh"}}]}},
+		"paths":{"version":1,"selection":{"entries":[{"id":"mcp-input","access":"read-only","type":"file","reference":{"kind":"workspace-relative","path":"native-mcp-input.txt"}}]}},
+		"environment":{"version":1,"selection":{"entries":[
+			{"id":"argument","destination":"PROFILE_MCP_ARGUMENT","scope":"attached-process-tree","source":{"kind":"host-environment","name":"ACS_NATIVE_MCP_ARGUMENT"},"required":true,"classification":"non-secret"},
+			{"id":"secret","destination":"PROFILE_MCP_SECRET","scope":"attached-process-tree","source":{"kind":"secret-reference","provider":"host-environment","reference":"ACS_NATIVE_MCP_SECRET"},"required":true,"classification":"secret"}
+		]}},
+		"mcp":{"version":1,"selection":{"servers":[{"id":"fixture","transport":"stdio","executableRef":"mcp-server","arguments":[{"kind":"environment","ref":"argument"},{"kind":"path","ref":"mcp-input"}],"inputRefs":["mcp-input"],"environmentRefs":["argument","secret"],"disabledTools":["blocked"]}]}}
+	},"overlays":{"codex":{"version":1,"authRef":` + strconv.Quote(authRef) + `}}}`
+	if err := os.WriteFile(filepath.Join(profiles, profileName+".json"), []byte(document), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func writeNativeMCPServer(t *testing.T, path string) {
+	t.Helper()
+	program := `#!/bin/sh
+set -eu
+argument_value=${1-}
+input_path=${2-}
+if [ -z "$argument_value" ] || [ -z "$input_path" ]; then exit 91; fi
+input_value=$(/bin/cat "$input_path")
+receipt_path=$input_path.mcp-startup
+/usr/bin/printf 'server-entered\n' >> "$receipt_path"
+while IFS= read -r request; do
+  request_id=$(/usr/bin/printf '%s' "$request" | /usr/bin/sed -E 's/.*"id":("[^"\\]*"|[0-9][0-9]*).*/\1/')
+  case "$request" in
+    *'"method":"initialize"'*)
+      /usr/bin/printf 'initialize-received\n' >> "$receipt_path"
+      version=$(/usr/bin/printf '%s' "$request" | /usr/bin/sed -E 's/.*"protocolVersion":"([^"]+)".*/\1/')
+      /usr/bin/printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"%s","capabilities":{"tools":{}},"serverInfo":{"name":"acs-native-mcp-fixture","version":"1.0.0"}}}\n' "$request_id" "$version"
+      /usr/bin/printf 'initialize-replied\n' >> "$receipt_path"
+      ;;
+    *'"method":"tools/list"'*)
+      /usr/bin/printf '{"jsonrpc":"2.0","id":%s,"result":{"tools":[{"name":"allowed","description":"Validate selected argv, input and environment","inputSchema":{"type":"object","properties":{"value":{"type":"string"},"input":{"type":"string"}},"required":["value","input"]}},{"name":"blocked","description":"Disabled native fixture tool","inputSchema":{"type":"object","properties":{"value":{"type":"string"}}}}]}}\n' "$request_id"
+      ;;
+    *'"method":"tools/call"'*)
+      if /usr/bin/printf '%s' "$request" | /usr/bin/grep -F '"name":"allowed"' >/dev/null &&
+         /usr/bin/printf '%s' "$request" | /usr/bin/grep -F '"value":"'"$argument_value"'"' >/dev/null &&
+         /usr/bin/printf '%s' "$request" | /usr/bin/grep -F '"input":"'"$input_value"'"' >/dev/null &&
+         [ "${PROFILE_MCP_SECRET-}" = 'native MCP selected secret sentinel' ]; then
+        /usr/bin/printf 'mcp-fixture-call-ok|mcp-secret-environment-ok' > "$input_path.mcp-effect"
+        /bin/sleep 600 </dev/null >/dev/null 2>&1 &
+        descendant=$!
+        /usr/bin/printf '%s' "$descendant" > "$input_path.mcp-descendant"
+        /usr/bin/printf '{"jsonrpc":"2.0","id":%s,"result":{"content":[{"type":"text","text":"mcp-fixture-call-ok mcp-secret-environment-ok descendant-pid:%s"}]}}\n' "$request_id" "$descendant"
+      else
+        /usr/bin/printf '{"jsonrpc":"2.0","id":%s,"error":{"code":-32000,"message":"selected MCP references did not match"}}\n' "$request_id"
+      fi
+      ;;
+    *'"method":"notifications/initialized"'*) ;;
+    *'"method":"ping"'*) /usr/bin/printf '{"jsonrpc":"2.0","id":%s,"result":{}}\n' "$request_id" ;;
+    *)
+      case "$request" in *'"id":'*) /usr/bin/printf '{"jsonrpc":"2.0","id":%s,"error":{"code":-32601,"message":"unsupported fixture method"}}\n' "$request_id" ;; esac
+      ;;
+  esac
+done
+`
+	if err := os.WriteFile(path, []byte(program), 0o700); err != nil {
 		t.Fatal(err)
 	}
 }

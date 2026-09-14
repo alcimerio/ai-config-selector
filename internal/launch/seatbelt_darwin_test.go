@@ -3533,7 +3533,7 @@ func TestSeatbeltCandidatePinnedDevinUsesSelectedHomeMCPConfigOnly(t *testing.T)
 	selected := seatbeltCandidateDevinConfig(t, "acs-selected-feasibility")
 	projectDecoy := seatbeltCandidateDevinConfig(t, "acs-project-ambient-decoy")
 	localDecoy := seatbeltCandidateDevinConfig(t, "acs-local-ambient-decoy")
-	makeFixture := func() (*seatbeltMCPTestFixture, ProcessRequest, string, string) {
+	makeFixture := func(cursorImport, reserveMCPConfig bool) (*seatbeltMCPTestFixture, ProcessRequest, string, string) {
 		t.Helper()
 		fixture := newSeatbeltMCPTestFixture(t)
 		request := fixture.request
@@ -3541,16 +3541,27 @@ func TestSeatbeltCandidatePinnedDevinUsesSelectedHomeMCPConfigOnly(t *testing.T)
 		projectConfig := filepath.Join(request.workspace, ".devin", "mcp_config.json")
 		localConfig := filepath.Join(request.workspace, ".devin", "mcp_config.local.json")
 		userConfig := filepath.Join(request.sessionHome, ".config", "devin", "mcp_config.json")
+		userImportConfig := filepath.Join(request.sessionHome, ".config", "devin", "config.json")
 		if err := os.MkdirAll(filepath.Dir(userConfig), 0o700); err != nil {
 			t.Fatal(err)
 		}
 		if err := os.WriteFile(userConfig, selected, 0o600); err != nil {
 			t.Fatal(err)
 		}
+		importConfig := []byte(`{"read_config_from":{"cursor":false,"windsurf":false,"claude":false,"opencode":false,"zed":false}}`)
+		if cursorImport {
+			importConfig = []byte(`{"read_config_from":{"cursor":true,"windsurf":false,"claude":false,"opencode":false,"zed":false}}`)
+		}
+		if err := os.WriteFile(userImportConfig, importConfig, 0o600); err != nil {
+			t.Fatal(err)
+		}
 		for _, item := range []struct {
 			path string
 			data []byte
-		}{{projectConfig, projectDecoy}, {localConfig, localDecoy}} {
+		}{{projectConfig, projectDecoy}, {localConfig, localDecoy},
+			{filepath.Join(request.workspace, ".devin", "config.json"), []byte(`{"read_config_from":{"cursor":true}}`)},
+			{filepath.Join(request.workspace, ".cursor", "mcp.json"), []byte(`{"mcpServers":{"acs-import-cursor-control":{"command":"/usr/bin/true","args":[]}}}`)},
+		} {
 			if err := os.MkdirAll(filepath.Dir(item.path), 0o700); err != nil {
 				t.Fatal(err)
 			}
@@ -3563,6 +3574,11 @@ func TestSeatbeltCandidatePinnedDevinUsesSelectedHomeMCPConfigOnly(t *testing.T)
 			SessionsDirectory: request.sessionsDirectory, SessionDirectory: request.sessionDirectory,
 			SessionHome: request.sessionHome, TemporaryDirectory: request.temporaryDirectory,
 			Executable: binary, RuntimeAuthority: DefaultRuntimeAuthority(), Arguments: []string{"mcp", "list"},
+			SessionProtections: []SessionProtection{{Path: userConfig}, {Path: userImportConfig}},
+		}
+		if reserveMCPConfig {
+			processRequest.SelectedMCPConfig = userConfig
+			processRequest.ReserveMCPConfigNames = true
 		}
 		return fixture, processRequest, projectConfig, localConfig
 	}
@@ -3587,15 +3603,25 @@ func TestSeatbeltCandidatePinnedDevinUsesSelectedHomeMCPConfigOnly(t *testing.T)
 	}
 	// Paired fresh fixtures prove these exact roots are discovered under the
 	// unmodified production backend before measuring the candidate denial.
-	baselineFixture, baselineRequest, _, _ := makeFixture()
-	baseline := runList(baselineFixture, baselineRequest, "without candidate denial", NewProcessSandbox())
-	for _, expected := range []string{"acs-selected-feasibility", "acs-project-ambient-decoy", "acs-local-ambient-decoy"} {
-		if !strings.Contains(baseline, expected) {
-			t.Fatalf("pinned Devin baseline did not load fixture entry %q: %q", expected, baseline)
+	importFixture, importRequest, _, _ := makeFixture(true, false)
+	importEnabled := runList(importFixture, importRequest, "with Cursor import enabled", NewProcessSandbox())
+	for _, expected := range []string{"acs-selected-feasibility", "acs-project-ambient-decoy", "acs-local-ambient-decoy", "acs-import-cursor-control"} {
+		if !strings.Contains(importEnabled, expected) {
+			t.Fatalf("pinned Devin positive import control did not load fixture entry %q: %q", expected, importEnabled)
 		}
 	}
-	deniedFixture, deniedRequest, projectConfig, localConfig := makeFixture()
-	result := runList(deniedFixture, deniedRequest, "under candidate denial", seatbeltCandidateMCPDenySandbox(t, []string{projectConfig, localConfig}, nil))
+	baselineFixture, baselineRequest, _, _ := makeFixture(false, false)
+	baseline := runList(baselineFixture, baselineRequest, "with vendor MCP imports disabled", NewProcessSandbox())
+	for _, expected := range []string{"acs-selected-feasibility", "acs-project-ambient-decoy", "acs-local-ambient-decoy"} {
+		if !strings.Contains(baseline, expected) {
+			t.Fatalf("pinned Devin import-off control did not load native fixture entry %q: %q", expected, baseline)
+		}
+	}
+	if strings.Contains(baseline, "acs-import-cursor-control") {
+		t.Fatalf("selected user config did not disable Cursor import despite hostile project true: %q", baseline)
+	}
+	deniedFixture, deniedRequest, _, _ := makeFixture(false, true)
+	result := runList(deniedFixture, deniedRequest, "under production reservation policy", NewProcessSandbox())
 	afterInfo, err := os.Lstat(binary)
 	if err != nil || !os.SameFile(binaryInfo, afterInfo) || binaryInfo.Size() != afterInfo.Size() || !binaryInfo.ModTime().Equal(afterInfo.ModTime()) {
 		t.Fatal("pinned Devin identity changed during native config observation")
@@ -3603,7 +3629,7 @@ func TestSeatbeltCandidatePinnedDevinUsesSelectedHomeMCPConfigOnly(t *testing.T)
 	if !strings.Contains(result, "acs-selected-feasibility") {
 		t.Fatalf("selected user projection was not usable: %q", result)
 	}
-	for _, ambient := range []string{"acs-project-ambient-decoy", "acs-local-ambient-decoy"} {
+	for _, ambient := range []string{"acs-project-ambient-decoy", "acs-local-ambient-decoy", "acs-import-cursor-control"} {
 		if strings.Contains(result, ambient) {
 			t.Errorf("ambient Devin MCP entry loaded despite candidate denial: %q", ambient)
 		}

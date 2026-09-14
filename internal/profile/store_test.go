@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/alcimerio/ai-config-selector/internal/adapter/devin"
+	"github.com/alcimerio/ai-config-selector/internal/commonprofile"
 	"github.com/alcimerio/ai-config-selector/internal/profile"
 	"github.com/alcimerio/ai-config-selector/internal/profileinspect"
 	"github.com/alcimerio/ai-config-selector/internal/profilerepo"
@@ -28,6 +29,67 @@ func TestStoreDoesNotWriteWhenCreateContextIsCancelled(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(acsHome, "profiles", "cancelled.json")); !os.IsNotExist(err) {
 		t.Fatalf("cancelled CreateContext wrote a Profile: %v", err)
+	}
+}
+
+func TestMCPReferenceCapabilityRemovalIsRefusedBeforeProfileMutation(t *testing.T) {
+	home := t.TempDir()
+	editor, err := devin.NewProfileEditor(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := profile.NewStore(filepath.Join(home, ".acs"), editor.Categories())
+	valid := devin.NewSkillsProfile("mcp-refs", nil)
+	executableSelection, err := commonprofile.EncodeExecutableSelection(commonprofile.ExecutableSelection{Entries: []commonprofile.ExecutableEntry{{ID: "server-exe", Reference: commonprofile.ExecutableReference{Kind: "fixed-search-name", Name: "true"}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mcpSelection, err := commonprofile.EncodeMCPSelection(commonprofile.MCPSelection{Servers: []commonprofile.MCPServer{{ID: "local-tool", Transport: "stdio", ExecutableRef: "server-exe", Arguments: []commonprofile.MCPArgument{}, InputRefs: []string{}, EnvironmentRefs: []string{}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	valid.Common[commonprofile.ExecutablesCapabilityID] = profile.CommonPayload{Version: commonprofile.ExecutablesCapabilityVersion, Selection: executableSelection}
+	valid.Common[commonprofile.MCPCapabilityID] = profile.CommonPayload{Version: commonprofile.MCPCapabilityVersion, Selection: mcpSelection}
+	path, err := store.Create(valid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repository := profilerepo.New(filepath.Join(home, ".acs"))
+	beforeSnapshot, err := repository.Read(context.Background(), valid.Name)
+	if err != nil || !beforeSnapshot.Exists {
+		t.Fatalf("initial repository snapshot = %#v, %v", beforeSnapshot, err)
+	}
+	missingAuthority := valid
+	missingAuthority.Common = make(map[string]profile.CommonPayload, len(valid.Common))
+	for id, payload := range valid.Common {
+		missingAuthority.Common[id] = payload
+	}
+	emptyExecutables, err := commonprofile.EncodeExecutableSelection(commonprofile.ExecutableSelection{Entries: []commonprofile.ExecutableEntry{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	missingAuthority.Common[commonprofile.ExecutablesCapabilityID] = profile.CommonPayload{Version: commonprofile.ExecutablesCapabilityVersion, Selection: emptyExecutables}
+	if _, err := store.Create(missingAuthority); err == nil || !strings.Contains(err.Error(), "validate mcp category references") || errors.Is(err, profile.ErrProfileExists) {
+		t.Fatalf("profile with dangling MCP executable reference refusal = %v", err)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil || string(after) != string(before) {
+		t.Fatalf("stored profile changed on refusal: err=%v", err)
+	}
+	afterSnapshot, err := repository.Read(context.Background(), valid.Name)
+	if err != nil || afterSnapshot.Revision != beforeSnapshot.Revision || string(afterSnapshot.Bytes) != string(beforeSnapshot.Bytes) {
+		t.Fatalf("repository changed on refusal: before=%#v after=%#v err=%v", beforeSnapshot, afterSnapshot, err)
+	}
+	missingAuthority.Name = "mcp-new-invalid"
+	if _, err := store.Create(missingAuthority); err == nil || !strings.Contains(err.Error(), "validate mcp category references") {
+		t.Fatalf("absent-name create did not report the dangling reference: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".acs", "profiles", "mcp-new-invalid.json")); !os.IsNotExist(err) {
+		t.Fatalf("invalid absent-name create published a profile: %v", err)
 	}
 }
 

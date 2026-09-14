@@ -124,7 +124,7 @@ func inspectExecutableGrant(candidate string) (string, []pathIdentity, pathIdent
 	clean := filepath.Clean(candidate)
 	witness, err := inspectLogicalComponents(clean)
 	if err != nil {
-		return "", nil, pathIdentity{}, [sha256.Size]byte{}, errors.New("selected executable is unsafe")
+		return "", nil, pathIdentity{}, [sha256.Size]byte{}, pathInspectionError("selected executable is unsafe", err)
 	}
 	canonical, err := filepath.EvalSymlinks(clean)
 	if err != nil {
@@ -132,7 +132,7 @@ func inspectExecutableGrant(candidate string) (string, []pathIdentity, pathIdent
 	}
 	fd, err := openCanonicalPath(canonical, PathTypeFile)
 	if err != nil {
-		return "", nil, pathIdentity{}, [sha256.Size]byte{}, errors.New("selected executable is unsafe")
+		return "", nil, pathIdentity{}, [sha256.Size]byte{}, pathInspectionError("selected executable is unsafe", err)
 	}
 	file := os.NewFile(uintptr(fd), "selected executable")
 	if file == nil {
