@@ -74,4 +74,95 @@ func TestSelectedMCPProjectionContainsOnlyReferencesAndToolFilters(t *testing.T)
 	}
 }
 
+func TestDevinMCPProjectionCanonicalizesAliasedSessionParent(t *testing.T) {
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	physicalParent := filepath.Join(root, "physical-parent")
+	if err := os.Mkdir(physicalParent, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	aliasParent := filepath.Join(root, "aliased-parent")
+	if err := os.Symlink(physicalParent, aliasParent); err != nil {
+		t.Fatal(err)
+	}
+	logicalHome := filepath.Join(aliasParent, "session-home")
+	if err := os.Mkdir(logicalHome, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	physicalHome := filepath.Join(physicalParent, "session-home")
+	t.Setenv("HOME", physicalHome)
+	seeded := []launch.MCPRecipe{{ID: "server", Arguments: []launch.MCPRecipeArgument{}, EnvNames: []string{}, Disabled: []string{}}}
+	recipeDirectory, err := launch.WriteMCPRecipes(logicalHome, seeded)
+	if err != nil {
+		t.Fatalf("write recipe through ordinary parent alias: %v", err)
+	}
+	recipeBytes, err := os.ReadFile(filepath.Join(recipeDirectory, "recipes.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var recipes []launch.MCPRecipe
+	if err := json.Unmarshal(recipeBytes, &recipes); err != nil || len(recipes) != 1 || recipes[0].SessionHome != os.Getenv("HOME") {
+		t.Fatalf("recipe Session HOME=%+v err=%v, want canonical runtime HOME %q", recipes, err, os.Getenv("HOME"))
+	}
+	path, err := writeDevinMCPConfig(logicalHome, "/Applications/ACS/acs", recipes)
+	if err != nil {
+		t.Fatalf("write through ordinary parent alias: %v", err)
+	}
+	resolvedPath, err := filepath.EvalSymlinks(path)
+	if err != nil || filepath.Dir(filepath.Dir(filepath.Dir(resolvedPath))) != physicalHome {
+		t.Fatalf("projected MCP config resolved outside canonical Session HOME: path=%q resolved=%q err=%v", path, resolvedPath, err)
+	}
+	var projected map[string]any
+	contents, err := os.ReadFile(path)
+	if err != nil || json.Unmarshal(contents, &projected) != nil {
+		t.Fatalf("read aliased projection: err=%v", err)
+	}
+	servers := projected["mcpServers"].(map[string]any)
+	args := servers["server"].(map[string]any)["args"].([]any)
+	if args[1] != os.Getenv("HOME") {
+		t.Fatalf("helper Session HOME argument=%v, want canonical runtime HOME %q", args[1], os.Getenv("HOME"))
+	}
+	semantics := authority.CodexSemantics()
+	for index := range semantics.Configuration {
+		if semantics.Configuration[index].ID == "codex.mcp" {
+			semantics.Configuration[index].Mode = "selected-session-stdio"
+		}
+	}
+	codexConfig, err := writeCodexExecutionConfigForSemanticsAndMCP(logicalHome, "", root, semantics, recipes, "/Applications/ACS/acs")
+	if err != nil {
+		t.Fatalf("write Codex MCP projection through parent alias: %v", err)
+	}
+	codexBytes, err := os.ReadFile(codexConfig)
+	if err != nil || !strings.Contains(string(codexBytes), `args = ["--acs-mcp-launch", `+strconvQuote(os.Getenv("HOME"))+`, "server"]`) {
+		t.Fatalf("Codex projection does not use canonical runtime HOME: err=%v config=%s", err, codexBytes)
+	}
+
+	maliciousHome := filepath.Join(root, "malicious-home")
+	if err := os.Mkdir(maliciousHome, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(root, "outside")
+	if err := os.Mkdir(outside, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(maliciousHome, ".config")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writeDevinUserConfig(maliciousHome); err == nil {
+		t.Fatal("projection followed a malicious generated config directory symlink")
+	}
+	maliciousDevinHome := filepath.Join(root, "malicious-devin-home")
+	if err := os.MkdirAll(filepath.Join(maliciousDevinHome, ".config"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(maliciousDevinHome, ".config", "devin")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writeDevinMCPConfig(maliciousDevinHome, "/Applications/ACS/acs", seeded); err == nil {
+		t.Fatal("MCP projection followed a malicious generated .config/devin symlink")
+	}
+}
+
 func strconvQuote(value string) string { return strconv.Quote(value) }

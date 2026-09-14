@@ -106,7 +106,15 @@ func writeCodexExecutionConfigForSemantics(home, chatGPTWorkspace, workingDirect
 }
 
 func writeCodexExecutionConfigForSemanticsAndMCP(home, chatGPTWorkspace, workingDirectory string, semantics authority.TargetSemantics, recipes []launch.MCPRecipe, launcher string) (string, error) {
-	codexHome := filepath.Join(home, ".codex")
+	projectionHome := home
+	if len(recipes) != 0 {
+		canonicalHome, err := canonicalMCPProjectionHome(home)
+		if err != nil {
+			return "", err
+		}
+		projectionHome = canonicalHome
+	}
+	codexHome := filepath.Join(projectionHome, ".codex")
 	if err := os.MkdirAll(codexHome, 0o700); err != nil {
 		return "", err
 	}
@@ -136,7 +144,7 @@ func writeCodexExecutionConfigForSemanticsAndMCP(home, chatGPTWorkspace, working
 		if !filepath.IsAbs(launcher) {
 			return "", errors.New("MCP launcher executable is unavailable")
 		}
-		configuration += codexMCPConfiguration(recipes, launcher, home)
+		configuration += codexMCPConfiguration(recipes, launcher, projectionHome)
 	}
 	configuration += "[features]\nplugins = " + disabledBoolean(plugins) + "\napps = " + disabledBoolean(apps) + "\n[projects." + strconv.Quote(filepath.Clean(workingDirectory)) + "]\ntrust_level = " + strconv.Quote(trust) + "\n"
 	if chatGPTWorkspace != "" {

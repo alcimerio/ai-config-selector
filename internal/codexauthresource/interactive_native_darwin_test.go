@@ -236,10 +236,14 @@ func runNativeInstalledACSLockedCodexFixture(t *testing.T) {
 		}
 		fixture.privateSentinels = []string{secretValue}
 		fixture.descendantReady = descendantPath
+		fixture.mcpStartupReceipt = inputPath + ".mcp-startup"
 		defer fixture.server.Close()
 		buildFixedCodexTrampoline(t, grantedTarget, fixture.server.URL+"/backend-api", filepath.Join(tools, "codex"))
 		runInstalledCodexPTY(t, candidate, home, tools, workspace, "mcp", fixture, false)
 		descendantPID := fixture.assert(t, true)
+		if receipt := readNativeMCPStartupReceipt(fixture.mcpStartupReceipt); receipt != "server-entered,initialize-received,initialize-replied" {
+			t.Fatalf("synthetic MCP startup receipts=%q, want server entry and complete initialize exchange", receipt)
+		}
 		if contents, err := os.ReadFile(markerPath); err != nil || string(contents) != "mcp-fixture-call-ok|mcp-secret-environment-ok" {
 			t.Fatalf("MCP physical server effect=%q err=%v", contents, err)
 		}
@@ -618,7 +622,7 @@ func runInstalledCodexPTY(t *testing.T, candidate, home, tools, workspace, profi
 	select {
 	case err := <-wait:
 		finished = true
-		t.Fatalf("installed ACS or locked target exited before interactive input: %v; terminal=%q", err, output.String())
+		t.Fatalf("installed ACS or locked target exited before interactive input: %v; terminal=%q", err, output.BoundedString(16<<10))
 	case <-time.After(1500 * time.Millisecond):
 	}
 	if !waitNativeCaptureContainsAfter(&output, 0, "\x1b[1;40r", 10*time.Second) {
@@ -656,7 +660,7 @@ func runInstalledCodexPTY(t *testing.T, candidate, home, tools, workspace, profi
 		t.Fatalf("installed ACS or locked target exited before completing tool work: %v; terminal=%q", err, output.String())
 	case <-time.After(30 * time.Second):
 		_ = command.Process.Kill()
-		t.Fatalf("real Codex did not complete two fixture requests; loopback=%s; terminal=%q", fixture.summary(), output.String())
+		t.Fatalf("real Codex did not complete two fixture requests; loopback=%s; target-mcp-diagnostics=%q; terminal-tail=%q", fixture.summary(), fixture.targetMCPDiagnostics(output.String()), output.BoundedString(16<<10))
 	}
 	// A normal exit proves the target rendered the completed assistant turn.
 	// The abrupt-settlement case instead stops ACS immediately after the real
@@ -932,6 +936,17 @@ func (capture *nativeSafeCapture) Len() int {
 	return capture.buffer.Len()
 }
 
+func (capture *nativeSafeCapture) BoundedString(limit int) string {
+	capture.mu.Lock()
+	defer capture.mu.Unlock()
+	value := capture.buffer.String()
+	if limit > 0 && len(value) > limit {
+		value = value[len(value)-limit:]
+		value = "[earlier terminal output truncated]" + value
+	}
+	return value
+}
+
 type nativeResponsesFixture struct {
 	server                     *httptest.Server
 	completed                  chan struct{}
@@ -945,6 +960,7 @@ type nativeResponsesFixture struct {
 	websocketFallbacks         int
 	modelRequests              int
 	protocolErr                string
+	mcpStartupReceipt          string
 	preexistingHomes           map[string]struct{}
 	descendantReady            string
 	liveDescendantPID          int
@@ -1347,7 +1363,65 @@ func (fixture *nativeResponsesFixture) summaryLocked() string {
 	for _, observation := range fixture.observations {
 		parts = append(parts, fmt.Sprintf("%s %q auth=%t account=%t", observation.method, observation.path, observation.hasAuthorization, observation.hasAccount))
 	}
+	if fixture.protocolErr != "" {
+		parts = append(parts, "protocol-error="+strconv.Quote(fixture.protocolErr))
+	}
+	if fixture.mcpStartupReceipt != "" {
+		parts = append(parts, "mcp-startup="+readNativeMCPStartupReceipt(fixture.mcpStartupReceipt))
+	}
 	return strings.Join(parts, "; ")
+}
+
+func (fixture *nativeResponsesFixture) targetMCPDiagnostics(terminal string) string {
+	if fixture.mcpScenario == nil {
+		return ""
+	}
+	redact := append([]string(nil), fixture.privateSentinels...)
+	var selectedArguments map[string]any
+	if json.Unmarshal([]byte(fixture.mcpScenario.callArguments), &selectedArguments) == nil {
+		for _, value := range selectedArguments {
+			if text, ok := value.(string); ok && text != "" {
+				redact = append(redact, text)
+			}
+		}
+	}
+	lines := strings.Split(terminal, "\n")
+	selected := make([]string, 0, 4)
+	for _, line := range lines {
+		if !strings.Contains(strings.ToLower(line), "mcp") {
+			continue
+		}
+		for _, value := range redact {
+			line = strings.ReplaceAll(line, value, "[redacted]")
+		}
+		if len(line) > 4096 {
+			line = line[:4096] + "[truncated]"
+		}
+		selected = append(selected, strings.TrimSpace(line))
+		if len(selected) == 4 {
+			break
+		}
+	}
+	return strings.Join(selected, " | ")
+}
+
+func readNativeMCPStartupReceipt(path string) string {
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() || info.Size() > 256 {
+		return "none"
+	}
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		return "unreadable"
+	}
+	allowed := map[string]bool{"server-entered": true, "initialize-received": true, "initialize-replied": true}
+	markers := strings.Fields(strings.ReplaceAll(string(contents), "\n", " "))
+	for _, marker := range markers {
+		if !allowed[marker] {
+			return "invalid"
+		}
+	}
+	return strings.Join(markers, ",")
 }
 
 func (fixture *nativeResponsesFixture) summary() string {
@@ -1757,12 +1831,16 @@ argument_value=${1-}
 input_path=${2-}
 if [ -z "$argument_value" ] || [ -z "$input_path" ]; then exit 91; fi
 input_value=$(/bin/cat "$input_path")
+receipt_path=$input_path.mcp-startup
+/usr/bin/printf 'server-entered\n' >> "$receipt_path"
 while IFS= read -r request; do
-  request_id=$(/usr/bin/printf '%s' "$request" | /usr/bin/sed -E 's/.*"id":([0-9]+).*/\1/')
+  request_id=$(/usr/bin/printf '%s' "$request" | /usr/bin/sed -E 's/.*"id":("[^"\\]*"|[0-9][0-9]*).*/\1/')
   case "$request" in
     *'"method":"initialize"'*)
+      /usr/bin/printf 'initialize-received\n' >> "$receipt_path"
       version=$(/usr/bin/printf '%s' "$request" | /usr/bin/sed -E 's/.*"protocolVersion":"([^"]+)".*/\1/')
       /usr/bin/printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"%s","capabilities":{"tools":{}},"serverInfo":{"name":"acs-native-mcp-fixture","version":"1.0.0"}}}\n' "$request_id" "$version"
+      /usr/bin/printf 'initialize-replied\n' >> "$receipt_path"
       ;;
     *'"method":"tools/list"'*)
       /usr/bin/printf '{"jsonrpc":"2.0","id":%s,"result":{"tools":[{"name":"allowed","description":"Validate selected argv, input and environment","inputSchema":{"type":"object","properties":{"value":{"type":"string"},"input":{"type":"string"}},"required":["value","input"]}},{"name":"blocked","description":"Disabled native fixture tool","inputSchema":{"type":"object","properties":{"value":{"type":"string"}}}}]}}\n' "$request_id"

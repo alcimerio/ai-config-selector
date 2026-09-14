@@ -155,8 +155,17 @@ func WriteMCPRecipes(home string, recipes []MCPRecipe) (string, error) {
 	if len(recipes) == 0 || !filepath.IsAbs(home) {
 		return "", errors.New("MCP recipe input is invalid")
 	}
-	root := filepath.Join(filepath.Clean(home), ".acs", "mcp")
-	for _, directory := range []string{filepath.Join(home, ".acs"), root} {
+	canonicalHome, err := filepath.EvalSymlinks(filepath.Clean(home))
+	if err != nil {
+		return "", errors.New("MCP recipe Session HOME is unavailable")
+	}
+	info, err := os.Stat(canonicalHome)
+	if err != nil || !info.IsDir() {
+		return "", errors.New("MCP recipe Session HOME is unavailable")
+	}
+	canonicalHome = filepath.Clean(canonicalHome)
+	root := filepath.Join(canonicalHome, ".acs", "mcp")
+	for _, directory := range []string{filepath.Join(canonicalHome, ".acs"), root} {
 		if err := os.Mkdir(directory, 0o700); err != nil && !errors.Is(err, os.ErrExist) {
 			return "", errors.New("MCP recipe directory could not be created")
 		}
@@ -166,7 +175,7 @@ func WriteMCPRecipes(home string, recipes []MCPRecipe) (string, error) {
 		}
 	}
 	for index := range recipes {
-		recipes[index].SessionHome = filepath.Clean(home)
+		recipes[index].SessionHome = canonicalHome
 	}
 	encoded, err := json.Marshal(recipes)
 	if err != nil || len(encoded)+1 > 1<<20 {
@@ -196,60 +205,65 @@ func RunMCPHelper(arguments []string) (bool, error) {
 		return false, nil
 	}
 	if len(arguments) != 3 || !filepath.IsAbs(arguments[1]) || arguments[2] == "" {
-		return true, errors.New("MCP launcher invocation is invalid")
+		return true, mcpFailure("invalid-invocation", "MCP launcher invocation is invalid")
 	}
 	home := os.Getenv("HOME")
 	if !filepath.IsAbs(home) || filepath.Clean(home) != filepath.Clean(arguments[1]) {
-		return true, errors.New("MCP launcher Session HOME is unavailable")
+		return true, mcpFailure("session-home-unavailable", "MCP launcher Session HOME is unavailable")
 	}
 	path := filepath.Join(filepath.Clean(home), ".acs", "mcp", "recipes.json")
 	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0)
 	if err != nil {
-		return true, errors.New("MCP launcher recipe is unavailable")
+		return true, mcpFailure("recipe-unavailable", "MCP launcher recipe is unavailable")
 	}
 	file := os.NewFile(uintptr(fd), path)
 	info, err := file.Stat()
 	if err != nil || !info.Mode().IsRegular() || info.Size() > 1<<20 {
 		_ = file.Close()
-		return true, errors.New("MCP launcher recipe is invalid")
+		return true, mcpFailure("recipe-invalid", "MCP launcher recipe is invalid")
 	}
 	encoded, readErr := io.ReadAll(io.LimitReader(file, (1<<20)+1))
 	closeErr := file.Close()
 	if readErr != nil || closeErr != nil {
-		return true, errors.New("MCP launcher recipe is invalid")
+		return true, mcpFailure("recipe-invalid", "MCP launcher recipe is invalid")
 	}
 	recipes, err := decodeMCPRecipes(encoded)
 	if err != nil || len(recipes) == 0 {
-		return true, errors.New("MCP launcher recipe is invalid")
+		return true, mcpFailure("recipe-invalid", "MCP launcher recipe is invalid")
 	}
 	var selected *MCPRecipe
 	for index := range recipes {
 		if recipes[index].ID == arguments[2] {
 			if selected != nil {
-				return true, errors.New("MCP launcher recipe is invalid")
+				return true, mcpFailure("recipe-invalid", "MCP launcher recipe is invalid")
 			}
 			selected = &recipes[index]
 		}
 	}
 	if selected == nil || !filepath.IsAbs(selected.Executable) || len(selected.Arguments) > 128 {
-		return true, errors.New("MCP launcher recipe is invalid")
+		return true, mcpFailure("recipe-invalid", "MCP launcher recipe is invalid")
 	}
 	if selected.SessionHome != filepath.Clean(home) || len(selected.ExecutableWitness) == 0 {
-		return true, errors.New("MCP launcher recipe identity is invalid")
+		return true, mcpFailure("recipe-invalid", "MCP launcher recipe identity is invalid")
 	}
 	executable, witness, identity, digest, err := inspectExecutableGrant(selected.ExecutableLogicalPath)
 	if err != nil || executable != selected.Executable || identity != selected.ExecutableIdentity.pathIdentity() || !equalPathWitness(witness, recipePathWitness(selected.ExecutableWitness)) || hex.EncodeToString(digest[:]) != selected.ExecutableSHA256 {
-		return true, errors.New("MCP executable identity changed")
+		if err != nil {
+			if diagnostic := mcpPathOpenFailureDiagnostic(err, "executable"); diagnostic != nil {
+				return true, diagnostic
+			}
+		}
+		return true, mcpFailure("executable-identity", "MCP executable identity changed")
 	}
 	if selected.WorkspacePath != "" && !recipeWorkspaceIdentityMatches(selected.WorkspacePath, selected.WorkspaceCanonicalPath, selected.WorkspaceIdentity, selected.WorkspaceWitness) {
-		return true, errors.New("MCP executable workspace identity changed")
+		return true, mcpFailure("workspace-identity", "MCP executable workspace identity changed")
 	}
 	argv := []string{executable}
 	for _, argument := range selected.Arguments {
 		switch argument.Kind {
 		case "path":
 			if !filepath.IsAbs(argument.Value) || argument.LogicalPath == "" {
-				return true, errors.New("MCP path argument is invalid")
+				return true, mcpFailure("path-argument", "MCP path argument is invalid")
 			}
 			kind := PathTypeFile
 			if os.FileMode(argument.Identity.Mode).IsDir() {
@@ -257,31 +271,108 @@ func RunMCPHelper(arguments []string) (bool, error) {
 			}
 			canonical, pathWitness, pathIdentityValue, pathErr := inspectGrantPath(argument.LogicalPath, kind, PathAccessReadOnly)
 			if pathErr != nil || canonical != argument.Value || pathIdentityValue != argument.Identity.pathIdentity() || !equalPathWitness(pathWitness, recipePathWitness(argument.Witness)) {
-				return true, errors.New("MCP path argument identity changed")
+				if pathErr != nil {
+					if diagnostic := mcpPathOpenFailureDiagnostic(pathErr, "path"); diagnostic != nil {
+						return true, diagnostic
+					}
+				}
+				return true, mcpFailure("path-argument", "MCP path argument identity changed")
 			}
 			if argument.WorkspacePath != "" && !recipeWorkspaceIdentityMatches(argument.WorkspacePath, argument.WorkspaceCanonicalPath, argument.WorkspaceIdentity, argument.WorkspaceWitness) {
-				return true, errors.New("MCP input workspace identity changed")
+				return true, mcpFailure("workspace-identity", "MCP input workspace identity changed")
 			}
 			argv = append(argv, argument.Value)
 		case "environment":
 			if !environmentintent.ValidName(argument.Value) {
-				return true, errors.New("MCP environment argument is invalid")
+				return true, mcpFailure("selected-argument", "MCP environment argument is invalid")
 			}
 			value, ok := os.LookupEnv(argument.Value)
 			if !ok {
-				return true, errors.New("MCP selected argument is unavailable")
+				return true, mcpFailure("selected-argument", "MCP selected argument is unavailable")
 			}
 			argv = append(argv, value)
 		default:
-			return true, errors.New("MCP argument recipe is invalid")
+			return true, mcpFailure("recipe-invalid", "MCP argument recipe is invalid")
 		}
 	}
 	// Recipe descriptors are closed before exec; stdin/stdout/stderr stay
 	// attached so the target's MCP stdio protocol remains unchanged.
 	if err := syscall.Exec(executable, argv, os.Environ()); err != nil {
-		return true, errors.New("MCP server could not be started")
+		return true, mcpFailure("exec-failed", "MCP server could not be started")
 	}
 	return true, nil
+}
+
+type mcpHelperDiagnostic struct {
+	category string
+	message  string
+}
+
+func (diagnostic *mcpHelperDiagnostic) Error() string { return diagnostic.message }
+
+func mcpFailure(category, message string) error {
+	return &mcpHelperDiagnostic{category: category, message: message}
+}
+
+func mcpPathOpenFailureDiagnostic(err error, subject string) error {
+	var failure *pathOpenFailure
+	if !errors.As(err, &failure) {
+		return nil
+	}
+	if subject != "path" && subject != "executable" {
+		return mcpFailure("launch-failed", "MCP launcher failed")
+	}
+	stage := "other"
+	switch failure.stage {
+	case "root", "ancestor", "leaf", "logical-root", "logical-metadata", "logical-ancestor":
+		stage = failure.stage
+	}
+	errnoName := "other"
+	switch {
+	case errors.Is(failure.cause, syscall.EACCES):
+		errnoName = "eacces"
+	case errors.Is(failure.cause, syscall.EPERM):
+		errnoName = "eperm"
+	case errors.Is(failure.cause, syscall.ENOENT):
+		errnoName = "enoent"
+	case errors.Is(failure.cause, syscall.ELOOP):
+		errnoName = "eloop"
+	case errors.Is(failure.cause, syscall.ENOTDIR):
+		errnoName = "enotdir"
+	}
+	return mcpFailure(subject+"-open-"+stage+"-"+errnoName, "MCP "+subject+" traversal open failed")
+}
+
+// MCPHelperFailureCategory returns a stable, sanitized diagnostic label. It
+// deliberately does not expose the underlying error, which could contain a
+// path or another selected reference.
+func MCPHelperFailureCategory(err error) string {
+	if err == nil {
+		return "unknown"
+	}
+	var diagnostic *mcpHelperDiagnostic
+	if !errors.As(err, &diagnostic) {
+		return "launch-failed"
+	}
+	return safeMCPHelperCategory(diagnostic.category)
+}
+
+func safeMCPHelperCategory(category string) string {
+	switch category {
+	case "invalid-invocation", "session-home-unavailable", "recipe-unavailable", "recipe-invalid", "executable-identity", "workspace-identity", "path-argument", "selected-argument", "exec-failed":
+		return category
+	}
+	for _, subject := range []string{"path", "executable"} {
+		for _, stage := range []string{"root", "ancestor", "leaf", "logical-root", "logical-metadata", "logical-ancestor", "other"} {
+			for _, errnoName := range []string{"eacces", "eperm", "enoent", "eloop", "enotdir", "other"} {
+				candidate := subject + "-open-" + stage + "-" + errnoName
+				if category == candidate {
+					return candidate
+				}
+			}
+		}
+	}
+	return "launch-failed"
 }
 
 func decodeMCPRecipes(encoded []byte) ([]MCPRecipe, error) {

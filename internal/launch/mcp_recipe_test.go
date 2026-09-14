@@ -3,16 +3,45 @@ package launch
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/alcimerio/ai-config-selector/internal/environmentintent"
 	"github.com/alcimerio/ai-config-selector/internal/mcpintent"
 )
+
+func TestMCPHelperFailureCategoryIsStableAndSanitized(t *testing.T) {
+	for _, test := range []struct{ err, want string }{
+		{"MCP launcher recipe is invalid at /private/selected/path", "launch-failed"},
+		{"MCP executable identity changed: secret-value", "launch-failed"},
+		{"MCP path argument identity changed at /private/input", "launch-failed"},
+		{"MCP selected argument is unavailable: PRIVATE_VALUE", "launch-failed"},
+	} {
+		if got := MCPHelperFailureCategory(errors.New(test.err)); got != test.want {
+			t.Errorf("category(%q)=%q, want %q", test.err, got, test.want)
+		}
+	}
+	if got := MCPHelperFailureCategory(nil); got != "unknown" {
+		t.Fatalf("nil category=%q, want unknown", got)
+	}
+	openFailure := &pathOpenFailure{stage: "logical-ancestor", cause: syscall.EACCES}
+	produced := mcpPathOpenFailureDiagnostic(openFailure, "path")
+	if got := MCPHelperFailureCategory(produced); got != "path-open-logical-ancestor-eacces" {
+		t.Fatalf("producer-to-public traversal category=%q, want path-open-logical-ancestor-eacces", got)
+	}
+	if got := MCPHelperFailureCategory(mcpFailure("private-value /tmp/credential", "failure at /tmp/credential")); got != "launch-failed" {
+		t.Fatalf("unrecognized private diagnostic category=%q, want generic launch-failed", got)
+	}
+	if got := MCPHelperFailureCategory(mcpFailure("recipe-invalid", "private value /tmp/credential")); got != "recipe-invalid" {
+		t.Fatalf("typed category was not preserved: %q", got)
+	}
+}
 
 func TestMCPRecipeHelperSubprocess(t *testing.T) {
 	if os.Getenv("ACS_MCP_HELPER_TEST_CHILD") != "1" {

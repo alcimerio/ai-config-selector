@@ -26,7 +26,7 @@ var releaseVersion string
 func main() {
 	if handled, err := launch.RunMCPHelper(os.Args[1:]); handled {
 		if err != nil {
-			fmt.Fprintln(os.Stderr, "acs: MCP server launch failed")
+			fmt.Fprintf(os.Stderr, "acs: MCP server launch failed (%s)\n", launch.MCPHelperFailureCategory(err))
 			os.Exit(1)
 		}
 		return

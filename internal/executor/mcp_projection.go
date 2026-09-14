@@ -48,11 +48,15 @@ func writeDevinMCPConfig(home, launcher string, recipes []launch.MCPRecipe) (str
 	if !filepath.IsAbs(home) || !filepath.IsAbs(launcher) {
 		return "", errors.New("MCP projection inputs are invalid")
 	}
+	canonicalHome, err := canonicalMCPProjectionHome(home)
+	if err != nil {
+		return "", err
+	}
 	servers := make(map[string]any, len(recipes))
 	for _, recipe := range recipes {
 		servers[recipe.ID] = map[string]any{
 			"type": "stdio", "command": launcher,
-			"args":          []string{"--acs-mcp-launch", filepath.Clean(home), recipe.ID},
+			"args":          []string{"--acs-mcp-launch", canonicalHome, recipe.ID},
 			"disabledTools": append([]string{}, recipe.Disabled...),
 		}
 	}
@@ -60,8 +64,8 @@ func writeDevinMCPConfig(home, launcher string, recipes []launch.MCPRecipe) (str
 	if err != nil {
 		return "", errors.New("MCP target config could not be encoded")
 	}
-	path := filepath.Join(home, ".config", "devin", "mcp_config.json")
-	if err := mkdirSessionConfigParents(home, filepath.Dir(path)); err != nil {
+	path := filepath.Join(canonicalHome, ".config", "devin", "mcp_config.json")
+	if err := mkdirSessionConfigParents(canonicalHome, filepath.Dir(path)); err != nil {
 		return "", err
 	}
 	if err := writeSessionProjection(path, append(encoded, '\n')); err != nil {
@@ -77,8 +81,12 @@ func writeDevinUserConfig(home string) (string, error) {
 	if !filepath.IsAbs(home) {
 		return "", errors.New("Devin user config Session HOME is invalid")
 	}
-	path := filepath.Join(home, ".config", "devin", "config.json")
-	if err := mkdirSessionConfigParents(home, filepath.Dir(path)); err != nil {
+	canonicalHome, err := canonicalMCPProjectionHome(home)
+	if err != nil {
+		return "", err
+	}
+	path := filepath.Join(canonicalHome, ".config", "devin", "config.json")
+	if err := mkdirSessionConfigParents(canonicalHome, filepath.Dir(path)); err != nil {
 		return "", err
 	}
 	configuration := map[string]any{"read_config_from": map[string]bool{
@@ -94,10 +102,22 @@ func writeDevinUserConfig(home string) (string, error) {
 	return path, nil
 }
 
+func canonicalMCPProjectionHome(home string) (string, error) {
+	canonical, err := filepath.EvalSymlinks(filepath.Clean(home))
+	if err != nil || !filepath.IsAbs(canonical) {
+		return "", errors.New("MCP Session HOME identity is unavailable")
+	}
+	info, err := os.Stat(canonical)
+	if err != nil || !info.IsDir() {
+		return "", errors.New("MCP Session HOME identity is unavailable")
+	}
+	return filepath.Clean(canonical), nil
+}
+
 func mkdirSessionConfigParents(home, directory string) error {
-	cleanHome, err := filepath.EvalSymlinks(filepath.Clean(home))
-	if err != nil || cleanHome != filepath.Clean(home) {
-		return errors.New("MCP Session HOME identity is unavailable")
+	cleanHome, err := canonicalMCPProjectionHome(home)
+	if err != nil {
+		return err
 	}
 	relative, err := filepath.Rel(cleanHome, directory)
 	if err != nil || relative == "." || relative == ".." || filepath.IsAbs(relative) || len(relative) > 512 {
