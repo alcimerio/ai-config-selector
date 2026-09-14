@@ -586,8 +586,8 @@ type preparedProtectionProcess struct {
 	cleanupDone chan struct{}
 }
 
-func (process *preparedProtectionProcess) Start() error { process.started = true; return nil }
-func (*preparedProtectionProcess) Wait() error           { return nil }
+func (process *preparedProtectionProcess) Start() error   { process.started = true; return nil }
+func (*preparedProtectionProcess) Wait() error            { return nil }
 func (*preparedProtectionProcess) Signal(os.Signal) error { return nil }
 func (process *preparedProtectionProcess) AbortPrepared() error {
 	process.aborts++
