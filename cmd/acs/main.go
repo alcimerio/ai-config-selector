@@ -24,6 +24,13 @@ var releaseVersionPattern = regexp.MustCompile(`^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]
 var releaseVersion string
 
 func main() {
+	if handled, err := launch.RunMCPHelper(os.Args[1:]); handled {
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "acs: MCP server launch failed")
+			os.Exit(1)
+		}
+		return
+	}
 	handled, err := launch.RunBubblewrapHelper(os.Args[1:])
 	if handled {
 		if err != nil {

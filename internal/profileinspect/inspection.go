@@ -17,6 +17,7 @@ import (
 	"github.com/alcimerio/ai-config-selector/internal/environmentintent"
 	"github.com/alcimerio/ai-config-selector/internal/executableintent"
 	"github.com/alcimerio/ai-config-selector/internal/instructions"
+	"github.com/alcimerio/ai-config-selector/internal/mcpintent"
 	"github.com/alcimerio/ai-config-selector/internal/pathintent"
 	"github.com/alcimerio/ai-config-selector/internal/profile"
 	"github.com/alcimerio/ai-config-selector/internal/skills"
@@ -269,6 +270,11 @@ func decodeVersionThree(entry Entry, envelope map[string]json.RawMessage) Entry 
 	}
 	entry.Workspace = &access
 	entry.Categories = append(entry.Categories, Category{ID: "workspace", SchemaVersion: &workspaceVersion, Selection: []skills.SkillReference{}})
+	selectedPaths := pathintent.Empty()
+	selectedExecutables := executableintent.Empty()
+	selectedEnvironment := environmentintent.Empty()
+	selectedMCP := mcpintent.Empty()
+	var err error
 	if pathsPayload, exists := common["paths"]; exists {
 		pathsVersion, pathsSelection, code := decodeCommonPayload(pathsPayload)
 		if code != "" || pathsVersion != 1 {
@@ -277,7 +283,8 @@ func decodeVersionThree(entry Entry, envelope map[string]json.RawMessage) Entry 
 			}
 			return entry.failed(code)
 		}
-		if _, err := pathintent.Decode(pathsSelection); err != nil {
+		selectedPaths, err = pathintent.Decode(pathsSelection)
+		if err != nil {
 			return entry.failed("invalid_structure")
 		}
 		entry.Categories = append(entry.Categories, Category{ID: "paths", SchemaVersion: &pathsVersion})
@@ -290,7 +297,8 @@ func decodeVersionThree(entry Entry, envelope map[string]json.RawMessage) Entry 
 			}
 			return entry.failed(code)
 		}
-		if _, err := executableintent.Decode(executableSelection); err != nil {
+		selectedExecutables, err = executableintent.Decode(executableSelection)
+		if err != nil {
 			return entry.failed("invalid_structure")
 		}
 		entry.Categories = append(entry.Categories, Category{ID: "executables", SchemaVersion: &executablesVersion})
@@ -303,10 +311,28 @@ func decodeVersionThree(entry Entry, envelope map[string]json.RawMessage) Entry 
 			}
 			return entry.failed(code)
 		}
-		if _, err := environmentintent.Decode(environmentSelection); err != nil {
+		selectedEnvironment, err = environmentintent.Decode(environmentSelection)
+		if err != nil {
 			return entry.failed("invalid_structure")
 		}
 		entry.Categories = append(entry.Categories, Category{ID: "environment", SchemaVersion: &environmentVersion})
+	}
+	if mcpPayload, exists := common["mcp"]; exists {
+		mcpVersion, mcpSelection, code := decodeCommonPayload(mcpPayload)
+		if code != "" || mcpVersion != 1 {
+			if code == "" {
+				code = "unsupported_content"
+			}
+			return entry.failed(code)
+		}
+		selectedMCP, err = mcpintent.Decode(mcpSelection)
+		if err != nil {
+			return entry.failed("invalid_structure")
+		}
+		entry.Categories = append(entry.Categories, Category{ID: "mcp", SchemaVersion: &mcpVersion})
+	}
+	if err := mcpintent.ValidateReferences(selectedMCP, selectedExecutables, selectedPaths, selectedEnvironment); err != nil {
+		return entry.failed("invalid_structure")
 	}
 	if instructionsPayload, exists := common["instructions"]; exists {
 		iv, raw, code := decodeCommonPayload(instructionsPayload)

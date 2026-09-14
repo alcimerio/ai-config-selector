@@ -93,7 +93,18 @@ func (value TargetSemantics) Supports(recipe Recipe) bool {
 	case RecipeDevin:
 		return reflect.DeepEqual(value, DevinSemantics())
 	case RecipeCodex:
-		return reflect.DeepEqual(value, CodexSemantics())
+		if reflect.DeepEqual(value, CodexSemantics()) {
+			return true
+		}
+		selectedMCP := value.Clone()
+		found := false
+		for index := range selectedMCP.Configuration {
+			if selectedMCP.Configuration[index].ID == "codex.mcp" && selectedMCP.Configuration[index].Mode == "selected-session-stdio" {
+				selectedMCP.Configuration[index].Mode = "disabled"
+				found = true
+			}
+		}
+		return found && reflect.DeepEqual(selectedMCP, CodexSemantics())
 	default:
 		return value.Version == 0 && value.AuthenticationMode == "" && len(value.Configuration) == 0 && len(value.Preflights) == 0 && len(value.Unsupported) == 0 && len(value.Inheritance) == 0 && value.CredentialProjection == ""
 	}
@@ -133,21 +144,30 @@ type SkillIdentity struct {
 	RelativePath string `json:"relativePath"`
 }
 
+type MCPArgumentReference struct {
+	Kind      string `json:"kind"`
+	Reference string `json:"reference"`
+}
+
 type FactValue struct {
-	Access           string         `json:"access,omitempty"`
-	Mode             string         `json:"mode,omitempty"`
-	LogicalLocation  string         `json:"logicalLocation,omitempty"`
-	LogicalReference string         `json:"logicalReference,omitempty"`
-	RequirementID    string         `json:"requirementId,omitempty"`
-	Identity         *SkillIdentity `json:"identity,omitempty"`
-	Names            []string       `json:"names,omitempty"`
-	Count            *int           `json:"count,omitempty"`
-	Destination      string         `json:"destination,omitempty"`
-	Scope            string         `json:"scope,omitempty"`
-	SourceKind       string         `json:"sourceKind,omitempty"`
-	Provider         string         `json:"provider,omitempty"`
-	Classification   string         `json:"classification,omitempty"`
-	Required         *bool          `json:"required,omitempty"`
+	Access                   string                 `json:"access,omitempty"`
+	Mode                     string                 `json:"mode,omitempty"`
+	LogicalLocation          string                 `json:"logicalLocation,omitempty"`
+	LogicalReference         string                 `json:"logicalReference,omitempty"`
+	RequirementID            string                 `json:"requirementId,omitempty"`
+	Identity                 *SkillIdentity         `json:"identity,omitempty"`
+	Names                    []string               `json:"names,omitempty"`
+	Count                    *int                   `json:"count,omitempty"`
+	Destination              string                 `json:"destination,omitempty"`
+	Scope                    string                 `json:"scope,omitempty"`
+	SourceKind               string                 `json:"sourceKind,omitempty"`
+	Provider                 string                 `json:"provider,omitempty"`
+	Classification           string                 `json:"classification,omitempty"`
+	Required                 *bool                  `json:"required,omitempty"`
+	MCPArguments             []MCPArgumentReference `json:"mcpArguments,omitempty"`
+	MCPEnvironmentReferences []string               `json:"mcpEnvironmentReferences,omitempty"`
+	MCPDisabledTools         []string               `json:"mcpDisabledTools,omitempty"`
+	MCPPresent               bool                   `json:"mcpPresent,omitempty"`
 }
 
 type Fact struct {
@@ -193,6 +213,7 @@ type Plan struct {
 	pathGrantIntents       []launch.PathGrantIntent
 	executableGrantIntents []launch.ExecutableGrantIntent
 	environmentIntents     []launch.EnvironmentIntent
+	mcpServerIntents       []launch.MCPServerIntent
 }
 
 type pathGrantContributor interface {
@@ -203,6 +224,9 @@ type executableGrantContributor interface {
 }
 type environmentContributor interface {
 	EnvironmentIntents() []launch.EnvironmentIntent
+}
+type mcpServerContributor interface {
+	MCPServerIntents() []launch.MCPServerIntent
 }
 
 func New(contributions []Contribution, workspaceAccess launch.WorkspaceAccess, sourceVersion int, overlay string, supplied ...TargetRequirements) Plan {
@@ -236,6 +260,18 @@ func New(contributions []Contribution, workspaceAccess launch.WorkspaceAccess, s
 		}
 		if environment, ok := contribution.Value.(environmentContributor); ok {
 			plan.environmentIntents = append(plan.environmentIntents, environment.EnvironmentIntents()...)
+		}
+		if servers, ok := contribution.Value.(mcpServerContributor); ok {
+			plan.mcpServerIntents = cloneMCPIntents(servers.MCPServerIntents())
+		}
+	}
+	// Selected MCP declarations change Codex's generated target recipe. Leave
+	// the no-MCP semantics and digest exactly as they were before this capability.
+	if requirements.Recipe == RecipeCodex && len(plan.mcpServerIntents) != 0 {
+		for index := range plan.requirements.Semantics.Configuration {
+			if plan.requirements.Semantics.Configuration[index].ID == "codex.mcp" {
+				plan.requirements.Semantics.Configuration[index].Mode = "selected-session-stdio"
+			}
 		}
 	}
 	plan.explanation = buildExplanation(plan)
@@ -322,6 +358,24 @@ func (plan Plan) EnvironmentIntents() []launch.EnvironmentIntent {
 	return append([]launch.EnvironmentIntent(nil), plan.environmentIntents...)
 }
 
+// MCPServerIntents returns immutable reference-only declarations. It resolves
+// no executable, filesystem path, or environment value.
+func (plan Plan) MCPServerIntents() []launch.MCPServerIntent {
+	return cloneMCPIntents(plan.mcpServerIntents)
+}
+
+func cloneMCPIntents(values []launch.MCPServerIntent) []launch.MCPServerIntent {
+	result := make([]launch.MCPServerIntent, len(values))
+	for index, value := range values {
+		result[index] = value
+		result[index].Arguments = append([]launch.MCPArgumentIntent{}, value.Arguments...)
+		result[index].InputRefs = append([]string{}, value.InputRefs...)
+		result[index].EnvironmentRefs = append([]string{}, value.EnvironmentRefs...)
+		result[index].DisabledTools = append([]string{}, value.DisabledTools...)
+	}
+	return result
+}
+
 // ResolveFilesystemGrantsForPreflight validates selected paths before an
 // operation has acquired or resolved its executable. An operation that finds
 // a writable grant must subsequently call ResolveFilesystemGrantsForExecutable
@@ -362,6 +416,9 @@ func cloneFacts(values []Fact) []Fact {
 	result := append([]Fact(nil), values...)
 	for index := range result {
 		result[index].Value.Names = append([]string(nil), result[index].Value.Names...)
+		result[index].Value.MCPArguments = append([]MCPArgumentReference(nil), result[index].Value.MCPArguments...)
+		result[index].Value.MCPEnvironmentReferences = append([]string(nil), result[index].Value.MCPEnvironmentReferences...)
+		result[index].Value.MCPDisabledTools = append([]string(nil), result[index].Value.MCPDisabledTools...)
 		if result[index].Value.Count != nil {
 			count := *result[index].Value.Count
 			result[index].Value.Count = &count
@@ -497,9 +554,17 @@ func recipeFacts(plan Plan) Facts {
 	for _, decision := range semantics.Configuration {
 		fact := Fact{ID: decision.ID, Kind: "generated-configuration", Value: FactValue{Mode: decision.Mode}, Reason: "fixed_target_recipe", Source: FactSource{Kind: "target", ID: recipe, Version: semantics.Version}}
 		result.TargetAdded = append(result.TargetAdded, fact)
-		if decision.ID == "codex.apps" || decision.ID == "codex.mcp" || decision.ID == "codex.plugins" {
+		if decision.ID == "codex.apps" || decision.ID == "codex.plugins" || (decision.ID == "codex.mcp" && decision.Mode == "disabled") {
 			result.Unsupported = append(result.Unsupported, fact)
 		}
+	}
+	if len(plan.mcpServerIntents) != 0 && (plan.requirements.Recipe == RecipeDevin || plan.requirements.Recipe == RecipeCodex) {
+		serverIDs := make([]string, 0, len(plan.mcpServerIntents))
+		for _, server := range plan.mcpServerIntents {
+			serverIDs = append(serverIDs, server.ID)
+		}
+		count := len(serverIDs)
+		result.TargetAdded = append(result.TargetAdded, Fact{ID: "target.mcp-servers", Kind: "target-configuration", Value: FactValue{Mode: "selected-session-stdio-projection", Count: &count, Names: serverIDs}, Reason: "fixed_target_recipe", Source: FactSource{Kind: "target", ID: recipe, Version: semantics.Version}})
 	}
 	for _, preflight := range semantics.Preflights {
 		result.TargetAdded = append(result.TargetAdded, Fact{ID: preflight.ID, Kind: "target-preflight", Value: FactValue{Mode: preflight.Mode}, Reason: "fixed_target_recipe", Source: FactSource{Kind: "target", ID: recipe, Version: semantics.Version}})
@@ -603,6 +668,22 @@ func canonicalFactEncoding(fact Fact) []byte {
 	putUint(uint64(len(fact.Value.Names)))
 	for _, name := range fact.Value.Names {
 		putString(name)
+	}
+	if fact.Value.MCPPresent {
+		putString("mcp-reference-fact-v1")
+		putUint(uint64(len(fact.Value.MCPArguments)))
+		for _, argument := range fact.Value.MCPArguments {
+			putString(argument.Kind)
+			putString(argument.Reference)
+		}
+		putUint(uint64(len(fact.Value.MCPEnvironmentReferences)))
+		for _, reference := range fact.Value.MCPEnvironmentReferences {
+			putString(reference)
+		}
+		putUint(uint64(len(fact.Value.MCPDisabledTools)))
+		for _, name := range fact.Value.MCPDisabledTools {
+			putString(name)
+		}
 	}
 	if fact.Value.LogicalReference != "" {
 		putString("logical-reference-v1")

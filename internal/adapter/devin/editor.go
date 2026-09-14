@@ -51,7 +51,11 @@ func NewProfileEditor(home string) (*Adapter, error) {
 	if err != nil {
 		return nil, err
 	}
-	a.editors, err = builder.NewEditorRegistry(a.categories, skillsRegistration, instructionsRegistration, workspaceRegistration, pathsRegistration, executablesRegistration, environmentRegistration)
+	mcpRegistration, err := builder.RegisterMCPEditor(a.mcpCategory)
+	if err != nil {
+		return nil, err
+	}
+	a.editors, err = builder.NewEditorRegistry(a.categories, skillsRegistration, instructionsRegistration, workspaceRegistration, pathsRegistration, executablesRegistration, environmentRegistration, mcpRegistration)
 	return a, err
 }
 
@@ -92,7 +96,11 @@ func newEditorRegistry(adapter *Adapter) (*builder.EditorRegistry, error) {
 	if err != nil {
 		return nil, err
 	}
-	return builder.NewEditorRegistry(adapter.categories, skillsRegistration, instructionsRegistration, workspaceRegistration, pathsRegistration, executablesRegistration, environmentRegistration)
+	mcpRegistration, err := builder.RegisterMCPEditor(adapter.mcpCategory)
+	if err != nil {
+		return nil, err
+	}
+	return builder.NewEditorRegistry(adapter.categories, skillsRegistration, instructionsRegistration, workspaceRegistration, pathsRegistration, executablesRegistration, environmentRegistration, mcpRegistration)
 }
 
 // EditProfileDraft presents the current line-oriented Skills editor. The

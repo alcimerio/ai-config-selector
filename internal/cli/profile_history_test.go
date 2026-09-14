@@ -136,6 +136,10 @@ func environmentHistoryDocument(name, id, destination, reference string) []byte 
 	return []byte(`{"version":3,"name":"` + name + `","common":{"skills":{"version":1,"selection":[]},"workspace":{"version":1,"selection":{"access":"read-only"}},"environment":{"version":1,"selection":{"entries":[{"id":"` + id + `","destination":"` + destination + `","scope":"attached-process-tree","source":{"kind":"secret-reference","provider":"host-environment","reference":"` + reference + `"},"required":true,"classification":"secret"}]}}},"overlays":{"devin":{"version":1}}}`)
 }
 
+func mcpHistoryDocument(name, selectedExecutable, executableID string) []byte {
+	return []byte(`{"version":3,"name":"` + name + `","common":{"skills":{"version":1,"selection":[]},"workspace":{"version":1,"selection":{"access":"read-only"}},"executables":{"version":1,"selection":{"entries":[{"id":"` + executableID + `","reference":{"kind":"fixed-search-name","name":"tool"}}]}},"mcp":{"version":1,"selection":{"servers":[{"id":"server","transport":"stdio","executableRef":"` + selectedExecutable + `","arguments":[],"inputRefs":[],"environmentRefs":[]}]}}},"overlays":{"devin":{"version":1}}}`)
+}
+
 func historyApp(t *testing.T) (cli.App, *profilerepo.Repository, string) {
 	t.Helper()
 	home := t.TempDir()
@@ -955,5 +959,28 @@ func TestProfileRestoreRequiresDeclarativeChoicesCurrentCannotSupply(t *testing.
 	var preview restorePreviewResult
 	if err := json.Unmarshal(out.Bytes(), &preview); err != nil || preview.Bindings != "preserved_current_and_explicit_declarative" {
 		t.Fatalf("preview=%s err=%v", out.String(), err)
+	}
+}
+
+func TestMCPRestoreRefusesRemovedExecutableBindingWithoutChangingRevision(t *testing.T) {
+	app, repository, home := historyApp(t)
+	applyHistory(t, repository, "alpha", mcpHistoryDocument("alpha", "removed-bin", "current-bin"), mcpHistoryDocument("alpha", "current-bin", "current-bin"))
+	history, err := repository.History(context.Background(), profilerepo.HistorySelector{Name: "alpha"}, 100)
+	if err != nil || len(history.Events) != 2 {
+		t.Fatalf("history=%+v err=%v", history, err)
+	}
+	before, err := repository.Read(context.Background(), "alpha")
+	if err != nil || !before.Exists {
+		t.Fatalf("before snapshot=%#v err=%v", before, err)
+	}
+	var output, errorOutput bytes.Buffer
+	app.Output, app.ErrorOutput = &output, &errorOutput
+	_, code := app.RunProfileHistory(context.Background(), []string{"profile", "restore", "alpha", "--revision", history.Events[1].EventID, "--expect", "hg_" + strings.Repeat("0", 64), "--confirm", "alpha", "--json"}, func() (string, error) { return home, nil })
+	if code != 1 || !strings.Contains(output.String(), `"code":"incompatible"`) {
+		t.Fatalf("restore code=%d output=%s stderr=%s", code, output.String(), errorOutput.String())
+	}
+	after, err := repository.Read(context.Background(), "alpha")
+	if err != nil || after.Revision != before.Revision || !bytes.Equal(after.Bytes, before.Bytes) {
+		t.Fatalf("invalid MCP restore mutated current state: before=%#v after=%#v err=%v", before, after, err)
 	}
 }

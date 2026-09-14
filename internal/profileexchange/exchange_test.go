@@ -8,11 +8,83 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/alcimerio/ai-config-selector/internal/adapter/devin"
 	"github.com/alcimerio/ai-config-selector/internal/commonprofile"
 	"github.com/alcimerio/ai-config-selector/internal/instructions"
 	"github.com/alcimerio/ai-config-selector/internal/launch"
 	"github.com/alcimerio/ai-config-selector/internal/profile"
 )
+
+func TestSelectedMCPReferencesRoundTripThroughPortableExchangeAndNormalize(t *testing.T) {
+	candidate := fixtureProfile(t)
+	paths, err := commonprofile.EncodePathSelection(commonprofile.PathSelection{Entries: []commonprofile.PathEntry{{ID: "settings", Access: launch.PathAccessReadOnly, Type: launch.PathTypeFile, Reference: commonprofile.PathReference{Kind: string(launch.PathReferenceWorkspaceRelative), Path: "config/settings.json"}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	executables, err := commonprofile.EncodeExecutableSelection(commonprofile.ExecutableSelection{Entries: []commonprofile.ExecutableEntry{{ID: "server-bin", Reference: commonprofile.ExecutableReference{Kind: string(launch.ExecutableReferenceFixedSearchName), Name: "mcp-tool"}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	environment, err := commonprofile.EncodeEnvironmentSelection(commonprofile.EnvironmentSelection{Entries: []commonprofile.EnvironmentEntry{
+		{ID: "mode", Destination: "MCP_MODE", Scope: "attached-process-tree", Source: commonprofile.EnvironmentSource{Kind: "host-environment", Name: "HOST_MCP_MODE"}, Classification: "non-secret"},
+		{ID: "credential", Destination: "MCP_TOKEN", Scope: "attached-process-tree", Source: commonprofile.EnvironmentSource{Kind: "secret-reference", Provider: "host-environment", Reference: "HOST_MCP_TOKEN"}, Required: true, Classification: "secret"},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mcpSelection := commonprofile.MCPSelection{Servers: []commonprofile.MCPServer{{ID: "local-tool", Transport: "stdio", ExecutableRef: "server-bin", Arguments: []commonprofile.MCPArgument{{Kind: "environment", Ref: "mode"}, {Kind: "path", Ref: "settings"}}, InputRefs: []string{"settings"}, EnvironmentRefs: []string{"credential", "mode"}, DisabledTools: []string{"remove_issue"}}}}
+	mcp, err := commonprofile.EncodeMCPSelection(mcpSelection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate.Common[commonprofile.PathsCapabilityID] = profile.CommonPayload{Version: commonprofile.PathsCapabilityVersion, Selection: paths}
+	candidate.Common[commonprofile.ExecutablesCapabilityID] = profile.CommonPayload{Version: commonprofile.ExecutablesCapabilityVersion, Selection: executables}
+	candidate.Common[commonprofile.EnvironmentCapabilityID] = profile.CommonPayload{Version: commonprofile.EnvironmentCapabilityVersion, Selection: environment}
+	candidate.Common[commonprofile.MCPCapabilityID] = profile.CommonPayload{Version: commonprofile.MCPCapabilityVersion, Selection: mcp}
+	document, _, err := Export(candidate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bindings := []byte(`{"bindingVersion":3,"sources":{"source-1":"devin-config","source-2":"shared-agents"},"authentications":{"authentication-1":"personal"},"paths":{},"executables":{},"environment":{"environment-1":"HOST_MCP_TOKEN"}}`)
+	for _, field := range []string{"mcp", "version", "selection", "array-element-key"} {
+		mutated := string(document)
+		if field == "mcp" {
+			mutated = strings.Replace(mutated, `"mcp": {`, `"MCP": {`, 1)
+		} else if field == "array-element-key" {
+			mutated = strings.Replace(mutated, `"id": "source-1"`, `"ID": "source-1"`, 1)
+		} else {
+			start := strings.Index(mutated, `"mcp": {`)
+			if start < 0 {
+				t.Fatal("export omitted canonical MCP field")
+			}
+			tail := mutated[start:]
+			mutated = mutated[:start] + strings.Replace(tail, `"`+field+`":`, `"`+strings.ToUpper(field)+`":`, 1)
+		}
+		refused := Decode([]byte(mutated), bindings, "refused")
+		if refused.Code == CodeValid || refused.Candidate != nil {
+			t.Errorf("noncanonical MCP exchange field %q was accepted: %#v", field, refused)
+		}
+	}
+	result := Decode(document, bindings, "restored")
+	if result.Code != CodeValid || result.Candidate == nil {
+		t.Fatalf("exchange decode = %#v\n%s", result, document)
+	}
+	got, err := commonprofile.DecodeMCPSelection(result.Candidate.Common[commonprofile.MCPCapabilityID].Selection)
+	if err != nil || len(got.Servers) != 1 || got.Servers[0].ID != "local-tool" || len(got.Servers[0].Arguments) != 2 || got.Servers[0].Arguments[0] != mcpSelection.Servers[0].Arguments[0] || got.Servers[0].Arguments[1] != mcpSelection.Servers[0].Arguments[1] || strings.Join(got.Servers[0].DisabledTools, ",") != "remove_issue" || strings.Join(got.Servers[0].EnvironmentRefs, ",") != "credential,mode" {
+		t.Fatalf("MCP exchange round trip = %#v, %v", got, err)
+	}
+	registry, err := devin.NewProfileEditor(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	projected, err := registry.Categories().Normalize(*result.Candidate)
+	if err != nil {
+		t.Fatalf("exchange candidate could not be normalized for restore: %v", err)
+	}
+	if _, err := commonprofile.DecodeMCPSelection(projected.Common[commonprofile.MCPCapabilityID].Selection); err != nil {
+		t.Fatalf("restored MCP projection lost intent: %v", err)
+	}
+}
 
 func TestExportIsDeterministicAndRemovesLocalBindings(t *testing.T) {
 	candidate := fixtureProfile(t)

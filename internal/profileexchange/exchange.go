@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"path"
+	"reflect"
 	"regexp"
 	"sort"
 	"strings"
@@ -19,6 +20,7 @@ import (
 	"github.com/alcimerio/ai-config-selector/internal/commonprofile"
 	"github.com/alcimerio/ai-config-selector/internal/instructions"
 	"github.com/alcimerio/ai-config-selector/internal/launch"
+	"github.com/alcimerio/ai-config-selector/internal/mcpintent"
 	"github.com/alcimerio/ai-config-selector/internal/profile"
 	"github.com/alcimerio/ai-config-selector/internal/profileinspect"
 	"github.com/alcimerio/ai-config-selector/internal/skills"
@@ -93,7 +95,12 @@ type commonIntent struct {
 	Paths        exchangePaths         `json:"paths,omitempty"`
 	Executables  exchangeExecutables   `json:"executables,omitempty"`
 	Environment  exchangeEnvironment   `json:"environment,omitempty"`
+	MCP          *exchangeMCP          `json:"mcp,omitempty"`
 	Instructions *exchangeInstructions `json:"instructions,omitempty"`
+}
+type exchangeMCP struct {
+	Version   int             `json:"version"`
+	Selection json.RawMessage `json:"selection"`
 }
 type exchangeInstructions struct {
 	Version   int                            `json:"version"`
@@ -251,6 +258,21 @@ func Export(candidate profile.Profile) ([]byte, Report, error) {
 		}
 		environmentSelection = decoded
 	}
+	mcpSelection := commonprofile.MCPSelection{Servers: []commonprofile.MCPServer{}}
+	mcpPresent := false
+	if payload, ok := candidate.Common[commonprofile.MCPCapabilityID]; ok {
+		if payload.Version != commonprofile.MCPCapabilityVersion {
+			return nil, Report{}, errors.New("unsupported MCP capability")
+		}
+		decoded, decodeErr := commonprofile.DecodeMCPSelection(payload.Selection)
+		if decodeErr != nil {
+			return nil, Report{}, errors.New("invalid MCP intent")
+		}
+		mcpSelection, mcpPresent = decoded, true
+	}
+	if err := mcpintent.ValidateReferences(mcpSelection, executableSelection, pathSelection, environmentSelection); err != nil {
+		return nil, Report{}, errors.New("invalid MCP references")
+	}
 	references, err := commonprofile.DecodeSkillSelection(skillsPayload.Selection)
 	if err != nil || len(references) > maxArray {
 		return nil, Report{}, errors.New("invalid Skills intent")
@@ -388,6 +410,13 @@ func Export(candidate profile.Profile) ([]byte, Report, error) {
 		Executables: exchangeExecutables{Version: commonprofile.ExecutablesCapabilityVersion, Selection: exchangeExecutableEntries},
 		Environment: exchangeEnvironment{Version: commonprofile.EnvironmentCapabilityVersion, Selection: exchangeEnvironmentEntries},
 	}, Overlays: overlays}, Requirements: reqs}
+	if mcpPresent {
+		selection, encodeErr := commonprofile.EncodeMCPSelection(mcpSelection)
+		if encodeErr != nil {
+			return nil, Report{}, errors.New("invalid MCP intent")
+		}
+		doc.Profile.Common.MCP = &exchangeMCP{Version: commonprofile.MCPCapabilityVersion, Selection: selection}
+	}
 	if instructionsPresent {
 		doc.Profile.Common.Instructions = &exchangeInstructions{Version: 1, Selection: exchangeInstructionRefs}
 	}
@@ -415,6 +444,10 @@ func Decode(data, bindingData []byte, name string) Result {
 		return result
 	}
 	var doc document
+	if err := validateExactJSONFieldNames(data, reflect.TypeOf(doc)); err != nil {
+		result.Code = CodeUnsupportedContent
+		return result
+	}
 	if err := decodeStrict(data, &doc); err != nil {
 		result.Code = CodeUnsupportedContent
 		return result
@@ -423,6 +456,7 @@ func Decode(data, bindingData []byte, name string) Result {
 	executablesPresent := exchangeCommonFieldPresent(data, "executables")
 	environmentPresent := exchangeCommonFieldPresent(data, "environment")
 	instructionsPresent := exchangeCommonFieldPresent(data, "instructions")
+	mcpPresent := exchangeCommonFieldPresent(data, "mcp")
 	executableRequirementsPresent := exchangeRequirementsFieldPresent(data, "executables")
 	environmentRequirementsPresent := exchangeRequirementsFieldPresent(data, "environment")
 	if executableRequirementsPresent && exchangeRequirementsFieldNull(data, "executables") {
@@ -469,6 +503,16 @@ func Decode(data, bindingData []byte, name string) Result {
 	if doc.ExchangeVersion == ExchangeVersion && !validExchangeEnvironmentSourceShapes(data) {
 		result.Code = CodeInvalidStructure
 		return result
+	}
+	if mcpPresent {
+		if doc.ExchangeVersion != ExchangeVersion || doc.Profile.Common.MCP == nil || doc.Profile.Common.MCP.Version != commonprofile.MCPCapabilityVersion {
+			result.Code = CodeUnsupportedContent
+			return result
+		}
+		if _, err := commonprofile.DecodeMCPSelection(doc.Profile.Common.MCP.Selection); err != nil {
+			result.Code = CodeInvalidStructure
+			return result
+		}
 	}
 	if instructionsPresent && (doc.ExchangeVersion != ExchangeVersion || doc.Profile.Common.Instructions == nil || doc.Profile.Common.Instructions.Version != 1 || doc.Profile.Common.Instructions.Selection == nil || len(doc.Profile.Common.Instructions.Selection) > instructions.MaxEntries) {
 		result.Code = CodeUnsupportedContent
@@ -665,6 +709,26 @@ func Decode(data, bindingData []byte, name string) Result {
 		result.Code = CodeBindingInvalid
 		return result
 	}
+	var encodedMCP json.RawMessage
+	if mcpPresent {
+		mcpSelection, decodeErr := commonprofile.DecodeMCPSelection(doc.Profile.Common.MCP.Selection)
+		if decodeErr != nil {
+			result.Code = CodeInvalidStructure
+			return result
+		}
+		localExecutables := commonprofile.ExecutableSelection{Entries: localExecutableEntries}
+		localPaths := commonprofile.PathSelection{Entries: localPathEntries}
+		localEnvironment := commonprofile.EnvironmentSelection{Entries: localEnvironmentEntries}
+		if err := mcpintent.ValidateReferences(mcpSelection, localExecutables, localPaths, localEnvironment); err != nil {
+			result.Code = CodeInvalidStructure
+			return result
+		}
+		encodedMCP, err = commonprofile.EncodeMCPSelection(mcpSelection)
+		if err != nil {
+			result.Code = CodeInvalidStructure
+			return result
+		}
+	}
 	overlays := make(map[string]profile.OverlayPayload, len(doc.Profile.Overlays))
 	for id, payload := range doc.Profile.Overlays {
 		switch id {
@@ -718,11 +782,87 @@ func Decode(data, bindingData []byte, name string) Result {
 	if doc.ExchangeVersion == 3 {
 		candidate.Common[commonprofile.EnvironmentCapabilityID] = profile.CommonPayload{Version: commonprofile.EnvironmentCapabilityVersion, Selection: encodedEnvironment}
 	}
+	if mcpPresent {
+		candidate.Common[commonprofile.MCPCapabilityID] = profile.CommonPayload{Version: commonprofile.MCPCapabilityVersion, Selection: encodedMCP}
+	}
 	if doc.Profile.Common.Instructions != nil {
 		candidate.Common[commonprofile.InstructionsCapabilityID] = profile.CommonPayload{Version: commonprofile.InstructionsCapabilityVersion, Selection: encodedInstructions}
 	}
 	result.Code, result.Bindings, result.Candidate = CodeValid, "complete", &candidate
 	return result
+}
+
+// encoding/json accepts case-insensitive matches for struct fields. Exchange
+// keys are a canonical wire format, so reject aliases before typed decoding;
+// otherwise (for example) `MCP` can overwrite/masquerade as `mcp` while the
+// presence checks below only see the canonical spelling.
+func validateExactJSONFieldNames(data []byte, expected reflect.Type) error {
+	return validateExactJSONValue(bytes.TrimSpace(data), expected)
+}
+
+func validateExactJSONValue(data []byte, expected reflect.Type) error {
+	for expected.Kind() == reflect.Pointer {
+		expected = expected.Elem()
+	}
+	if expected == reflect.TypeOf(json.RawMessage{}) || expected.Kind() != reflect.Struct && expected.Kind() != reflect.Map {
+		if expected.Kind() != reflect.Slice && expected.Kind() != reflect.Array {
+			return nil
+		}
+		var values []json.RawMessage
+		if err := json.Unmarshal(data, &values); err != nil {
+			return nil // The normal strict decoder reports the shape error.
+		}
+		for _, value := range values {
+			if err := validateExactJSONValue(value, expected.Elem()); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	var members map[string]json.RawMessage
+	if expected.Kind() == reflect.Struct {
+		if err := json.Unmarshal(data, &members); err != nil || members == nil {
+			return nil // The normal strict decoder reports the shape error.
+		}
+		fields := make(map[string]reflect.Type, expected.NumField())
+		for i := 0; i < expected.NumField(); i++ {
+			field := expected.Field(i)
+			name := strings.Split(field.Tag.Get("json"), ",")[0]
+			if name == "" {
+				name = field.Name
+			}
+			if name != "-" {
+				fields[name] = field.Type
+			}
+		}
+		for name, raw := range members {
+			fieldType, ok := fields[name]
+			if !ok {
+				for canonical := range fields {
+					if strings.EqualFold(name, canonical) {
+						return errors.New("noncanonical exchange field name")
+					}
+				}
+				continue
+			}
+			if err := validateExactJSONValue(raw, fieldType); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	if expected.Kind() == reflect.Map {
+		var values map[string]json.RawMessage
+		if err := json.Unmarshal(data, &values); err != nil {
+			return nil
+		}
+		for _, raw := range values {
+			if err := validateExactJSONValue(raw, expected.Elem()); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func exchangeCommonFieldPresent(data []byte, field string) bool {
