@@ -150,7 +150,7 @@ func TestNativeCandidateGatesPropagateFailureRecoverAndProtectIdentity(t *testin
 		fixture.run(t, "success", true, "")
 		calls := fixture.calls(t)
 		for _, required := range []string{
-			"go test ./...",
+			"go test -v ./...",
 			"TestPromotedArtifactSharedTargetConformance",
 			"generic_literal_command_uses_candidate_containment",
 			"effective_explanation_is_linked_and_narrowly_observed",
@@ -175,8 +175,8 @@ func TestNativeCandidateGatesPropagateFailureRecoverAndProtectIdentity(t *testin
 			}
 		}
 		for _, scoped := range []string{
-			"auth= promoted= version= backend= recovery= go test ./...",
-			"go test ./... mcp=\n",
+			"auth= promoted= version= backend= recovery= go test -v ./...",
+			"go test -v ./... mcp=\n",
 			"go test -race ./... mcp=\n",
 			"go test ./internal/launch -run ^TestSeatbeltCandidate(MCPAmbientReadDenialWithAbsentAtPrepareAndAliases|MCPRecipeWriteAndAncestorDenialsPreserveOrdinaryHome|PinnedDevinUsesSelectedHomeMCPConfigOnly|PinnedDevinConfigPathReplacementIsolation|PinnedDevinNestedDiscoveryGrantScope|PinnedDevinDirectorySymlinkRedirection|PinnedDevinReservedConfigBasenames)$ -count=1 -v mcp=1\n",
 			"auth=1 promoted=" + fixture.candidate + " version= backend= recovery= go test ./internal/codexauthresource -run ^TestNativeKeychainCredentialFreeContract$",

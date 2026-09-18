@@ -138,7 +138,7 @@ run_auth_test ./internal/codexauthresource -run '^TestNativeInstalledACSExecutes
 
 # These broad suites deliberately remain unfiltered so new restoration, Session
 # recovery and installed-artifact coverage enters the release gate automatically.
-go test ./...
+go test -v ./...
 
 require_test ./acceptance TestPromotedArtifactSharedTargetConformance
 run_acceptance_test ./acceptance -run '^TestPromotedArtifactSharedTargetConformance$' -count=1 -v

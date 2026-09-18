@@ -666,8 +666,9 @@ func runInstalledCodexPTY(t *testing.T, candidate, home, tools, workspace, profi
 		finished = true
 		t.Fatalf("installed ACS or locked target exited before completing tool work: %v; terminal=%q", err, output.String())
 	case <-time.After(30 * time.Second):
+		diagnostic := fixture.targetMCPDiagnostics(output.String())
 		_ = command.Process.Kill()
-		t.Fatalf("real Codex did not complete two fixture requests; loopback=%s; target-mcp-diagnostics=%q", fixture.summary(), fixture.targetMCPDiagnostics(output.String()))
+		t.Fatalf("real Codex did not complete two fixture requests; loopback=%s; target-mcp-diagnostics=%q", fixture.summary(), diagnostic)
 	}
 	// A normal exit proves the target rendered the completed assistant turn.
 	// The abrupt-settlement case instead stops ACS immediately after the real
@@ -1413,15 +1414,11 @@ func (fixture *nativeResponsesFixture) targetMCPDiagnostics(terminal string) str
 			break
 		}
 	}
-	if categories := readNewSessionMCPHelperCategories(fixture.launcherHome, fixture.preexistingHomes); categories != "none" {
-		selected = append(selected, "helper-categories="+categories)
-	} else {
-		selected = append(selected, "helper-categories=none")
-	}
+	selected = append(selected, "helper-state="+readNewSessionMCPHelperState(fixture.launcherHome, fixture.preexistingHomes))
 	return strings.Join(selected, " | ")
 }
 
-func readNewSessionMCPHelperCategories(launcherHome string, preexisting map[string]struct{}) string {
+func readNewSessionMCPHelperState(launcherHome string, preexisting map[string]struct{}) string {
 	var homes []string
 	for _, home := range nativeSessionHomes(launcherHome) {
 		if _, existed := preexisting[home]; !existed {
@@ -1429,31 +1426,37 @@ func readNewSessionMCPHelperCategories(launcherHome string, preexisting map[stri
 		}
 	}
 	if len(homes) != 1 {
-		return "none"
+		if len(homes) == 0 {
+			return "no-new-session-home"
+		}
+		return "multiple-new-session-homes"
 	}
 	homeFD, err := unix.Open(homes[0], unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_DIRECTORY, 0)
 	if err != nil {
-		return "none"
+		return mcpDiagnosticOpenState("home", err)
 	}
 	defer unix.Close(homeFD)
 	codexFD, err := unix.Openat(homeFD, ".codex", unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_DIRECTORY, 0)
 	if err != nil {
-		return "none"
+		return mcpDiagnosticOpenState("codex", err)
 	}
 	defer unix.Close(codexFD)
 	logFD, err := unix.Openat(codexFD, "log", unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_DIRECTORY, 0)
 	if err != nil {
-		return "none"
+		return mcpDiagnosticOpenState("log", err)
 	}
 	defer unix.Close(logFD)
 	fd, err := unix.Openat(logFD, "codex-tui.log", unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0)
 	if err != nil {
-		return "none"
+		return mcpDiagnosticOpenState("log-file", err)
 	}
 	defer unix.Close(fd)
 	var before unix.Stat_t
 	if err := unix.Fstat(fd, &before); err != nil || before.Mode&unix.S_IFMT != unix.S_IFREG || before.Size < 0 || before.Size > 1<<20 {
-		return "none"
+		return "log-invalid"
+	}
+	if before.Size == 0 {
+		return "log-empty"
 	}
 	contents := make([]byte, int(before.Size))
 	for offset := 0; offset < len(contents); {
@@ -1462,16 +1465,16 @@ func readNewSessionMCPHelperCategories(launcherHome string, preexisting map[stri
 			continue
 		}
 		if err != nil || count == 0 {
-			return "none"
+			return "log-unreadable"
 		}
 		offset += count
 	}
 	if len(contents) > 1<<20 {
-		return "none"
+		return "log-invalid"
 	}
 	var after unix.Stat_t
 	if err := unix.Fstat(fd, &after); err != nil || before.Dev != after.Dev || before.Ino != after.Ino || after.Mode&unix.S_IFMT != unix.S_IFREG {
-		return "none"
+		return "log-invalid"
 	}
 	allowed := map[string]bool{
 		"invalid-invocation": true, "session-home-unavailable": true, "recipe-unavailable": true,
@@ -1494,7 +1497,7 @@ func readNewSessionMCPHelperCategories(launcherHome string, preexisting map[stri
 		}
 	}
 	if len(seen) == 0 {
-		return "none"
+		return "log-no-allowlisted-category"
 	}
 	categories := make([]string, 0, len(seen))
 	for category := range seen {
@@ -1504,7 +1507,23 @@ func readNewSessionMCPHelperCategories(launcherHome string, preexisting map[stri
 	return strings.Join(categories, ",")
 }
 
-func TestReadNewSessionMCPHelperCategoriesUsesOnlyAllowlistedLogTokens(t *testing.T) {
+func mcpDiagnosticOpenState(stage string, err error) string {
+	if errors.Is(err, unix.ENOENT) {
+		return stage + "-missing"
+	}
+	errno := "other"
+	for candidate, name := range map[error]string{
+		unix.EACCES: "eacces", unix.ELOOP: "eloop", unix.ENOTDIR: "enotdir", unix.EPERM: "eperm",
+	} {
+		if errors.Is(err, candidate) {
+			errno = name
+			break
+		}
+	}
+	return "open-failed-" + stage + "-" + errno
+}
+
+func TestReadNewSessionMCPHelperStateUsesOnlyAllowlistedLogTokens(t *testing.T) {
 	launcherHome := t.TempDir()
 	sessionHome := filepath.Join(launcherHome, ".acs", "sessions", "session-new", "home")
 	logDirectory := filepath.Join(sessionHome, ".codex", "log")
@@ -1515,10 +1534,10 @@ func TestReadNewSessionMCPHelperCategoriesUsesOnlyAllowlistedLogTokens(t *testin
 	if err := os.WriteFile(logPath, []byte("private /Users/runner/secret\nacs: MCP server launch failed (path-open-logical-ancestor-eacces)\nacs: MCP server launch failed (launch-failed)\nacs: MCP server launch failed (private-token)\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if got := readNewSessionMCPHelperCategories(launcherHome, nil); got != "launch-failed,path-open-logical-ancestor-eacces" {
+	if got := readNewSessionMCPHelperState(launcherHome, nil); got != "launch-failed,path-open-logical-ancestor-eacces" {
 		t.Fatalf("sanitized categories=%q", got)
 	}
-	if got := readNewSessionMCPHelperCategories(launcherHome, map[string]struct{}{sessionHome: {}}); got != "none" {
+	if got := readNewSessionMCPHelperState(launcherHome, map[string]struct{}{sessionHome: {}}); got != "no-new-session-home" {
 		t.Fatalf("preexisting Session log was inspected: %q", got)
 	}
 }
@@ -1529,13 +1548,81 @@ func TestTargetMCPDiagnosticsUsesFixedAllowlistedMarkers(t *testing.T) {
 		"acs: MCP server launch failed (launch-failed) /private/fixture/secret secret-value\n" +
 		"acs: MCP server launch failed (private-token) secret-value\n"
 	got := fixture.targetMCPDiagnostics(terminal)
-	if got != "MCP startup failed | acs: MCP server launch failed (launch-failed) | helper-categories=none" {
+	if got != "MCP startup failed | acs: MCP server launch failed (launch-failed) | helper-state=no-new-session-home" {
 		t.Fatalf("diagnostics=%q", got)
 	}
 	for _, forbidden := range []string{"/private/fixture/secret", "secret-value", "private-token"} {
 		if strings.Contains(got, forbidden) {
 			t.Fatalf("diagnostics leaked %q: %q", forbidden, got)
 		}
+	}
+}
+
+func TestReadNewSessionMCPHelperStateDistinguishesSafeMissingStates(t *testing.T) {
+	launcherHome := t.TempDir()
+	if got := readNewSessionMCPHelperState(launcherHome, nil); got != "no-new-session-home" {
+		t.Fatalf("missing Session home state=%q", got)
+	}
+	sessionHome := filepath.Join(launcherHome, ".acs", "sessions", "session-new", "home")
+	if err := os.MkdirAll(sessionHome, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(sessionHome, ".codex", "log"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if got := readNewSessionMCPHelperState(launcherHome, nil); got != "log-file-missing" {
+		t.Fatalf("missing log state=%q", got)
+	}
+	if got := readNewSessionMCPHelperState(launcherHome, map[string]struct{}{sessionHome: {}}); got != "no-new-session-home" {
+		t.Fatalf("preexisting Session state=%q", got)
+	}
+}
+
+func TestReadNewSessionMCPHelperStateClassifiesBoundedLogCases(t *testing.T) {
+	launcherHome := t.TempDir()
+	newLog := func(t *testing.T) (string, string) {
+		t.Helper()
+		home := filepath.Join(launcherHome, ".acs", "sessions", fmt.Sprintf("session-%d", time.Now().UnixNano()), "home")
+		logDirectory := filepath.Join(home, ".codex", "log")
+		if err := os.MkdirAll(logDirectory, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		return home, filepath.Join(logDirectory, "codex-tui.log")
+	}
+	_, logPath := newLog(t)
+	if err := os.WriteFile(logPath, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := readNewSessionMCPHelperState(launcherHome, nil); got != "log-empty" {
+		t.Fatalf("empty log state=%q", got)
+	}
+	if err := os.WriteFile(logPath, []byte("unrelated\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := readNewSessionMCPHelperState(launcherHome, nil); got != "log-no-allowlisted-category" {
+		t.Fatalf("no-category state=%q", got)
+	}
+	if err := os.WriteFile(logPath, make([]byte, 1<<20+1), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := readNewSessionMCPHelperState(launcherHome, nil); got != "log-invalid" {
+		t.Fatalf("oversize log state=%q", got)
+	}
+	if err := os.Remove(logPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(filepath.Dir(logPath), "missing"), logPath); err != nil {
+		t.Fatal(err)
+	}
+	if got := readNewSessionMCPHelperState(launcherHome, nil); got != "open-failed-log-file-eloop" {
+		t.Fatalf("symlink log state=%q", got)
+	}
+	secondHome := filepath.Join(launcherHome, ".acs", "sessions", "session-second", "home")
+	if err := os.MkdirAll(secondHome, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if got := readNewSessionMCPHelperState(launcherHome, nil); got != "multiple-new-session-homes" {
+		t.Fatalf("multiple homes state=%q", got)
 	}
 }
 
@@ -1813,10 +1900,14 @@ static int ready_and_wait(const char *ready, const char *release) {
   return 125;
 }
 int main(int argc, char **argv) {
-  char **next = calloc((size_t)argc + 5, sizeof(char *));
-  if (!next) return 120;
-  next[0] = %s;
-  int version = 0;
+	char **next = calloc((size_t)argc + 7, sizeof(char *));
+	if (!next) return 120;
+	next[0] = %s;
+	int version = 0;
+	const char *home = getenv("HOME");
+	char log_override[4096];
+	int log_override_length = home ? snprintf(log_override, sizeof(log_override), "log_dir=\"%%s/.codex/log\"", home) : -1;
+	if (log_override_length < 0 || (size_t)log_override_length >= sizeof(log_override)) return 127;
 	for (int i = 1; i < argc; i++) {
     next[i] = argv[i];
 		if (strcmp(argv[i], "--version") == 0) version = 1;
@@ -1827,6 +1918,8 @@ int main(int argc, char **argv) {
     next[argc + 1] = %s;
 		next[argc + 2] = "-c";
 		next[argc + 3] = %s;
+		next[argc + 4] = "-c";
+		next[argc + 5] = log_override;
 	}
 	if (ready_and_wait(version ? %s : %s, version ? %s : %s) != 0) return 126;
   execv(next[0], next);
