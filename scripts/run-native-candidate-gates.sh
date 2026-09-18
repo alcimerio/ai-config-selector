@@ -144,6 +144,8 @@ go test -v ./...
 
 require_test ./acceptance TestPromotedArtifactSharedTargetConformance
 run_acceptance_test ./acceptance -run '^TestPromotedArtifactSharedTargetConformance$' -count=1 -v
+require_test ./acceptance TestPromotedArtifactNativeProductionMCPProtection
+run_acceptance_test ./acceptance -run '^TestPromotedArtifactNativeProductionMCPProtection$' -count=1 -v
 require_test ./acceptance TestPromotedArtifactNativeInstructionRules
 run_acceptance_test ./acceptance -run '^TestPromotedArtifactNativeInstructionRules$' -count=1 -v
 require_test ./internal/executor TestNativeProductionInstructionRulesReceipts

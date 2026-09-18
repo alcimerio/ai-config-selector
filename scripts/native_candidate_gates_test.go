@@ -232,12 +232,14 @@ for argument do
   if [ "$previous" = -list ]; then
     case "$ACS_TEST_MODE:$argument" in
       missing-recovery:'^TestNativeKeychainRecoveryEntrypoint$') ;;
+      missing-mcp-protection:'^TestPromotedArtifactNativeProductionMCPProtection$') ;;
       *) printf '%s\n' "$argument" | tr -d '^$' ;;
     esac
   fi
   previous="$argument"
 done
 case "$ACS_TEST_MODE:$*" in
+  fail-mcp-protection:*"-run ^TestPromotedArtifactNativeProductionMCPProtection$"*) exit 31 ;;
   fail-primary*:*"-run ^TestNativeInstalledACSExecutesLockedCodexToolThroughNamedIdentity$"*) printf '%s\n' 'primary gate failed' >&2; exit 23 ;;
   fail-*recovery:*"-run ^TestNativeKeychainRecoveryEntrypoint$"*) printf '%s\n' 'recovery failed' >&2; exit 29 ;;
   mutate-candidate:*"-run ^TestNativeInstalledACSExecutesLockedCodexToolThroughNamedIdentity$"*) printf '%s\n' replacement >"$ACS_PROMOTED_BINARY"; chmod 0700 "$ACS_PROMOTED_BINARY" ;;
@@ -309,4 +311,44 @@ func (fixture nativeGateFixture) calls(t *testing.T) string {
 		t.Fatal(err)
 	}
 	return string(contents)
+}
+
+func TestNativeCandidateRequiresExplicitMCPProtectionGate(t *testing.T) {
+	const name = "TestPromotedArtifactNativeProductionMCPProtection"
+	t.Run("supplied candidate and verbose invocation", func(t *testing.T) {
+		fixture := newNativeGateFixture(t)
+		fixture.run(t, "success", true, "")
+		calls := fixture.calls(t)
+		discovery := "go test ./acceptance -list ^" + name + "$"
+		execution := "auth= promoted=" + fixture.candidate + " version=v0.4.0 backend=available recovery= go test ./acceptance -run ^" + name + "$ -count=1 -v"
+		if !strings.Contains(calls, discovery) || !strings.Contains(calls, execution) {
+			t.Fatalf("required scoped MCP gate absent: %s", calls)
+		}
+	})
+	t.Run("missing declaration refuses and recovers", func(t *testing.T) {
+		fixture := newNativeGateFixture(t)
+		fixture.run(t, "missing-mcp-protection", false, "required test "+name+" is unavailable")
+		calls := fixture.calls(t)
+		if strings.Contains(calls, "-run ^"+name+"$") || strings.Contains(calls, "-run ^TestPromotedArtifactNativeInstructionRules$") {
+			t.Fatal("continued after missing required test")
+		}
+		if !strings.Contains(calls, "-run ^TestNativeKeychainRecoveryEntrypoint$") {
+			t.Fatal("recovery omitted")
+		}
+	})
+	t.Run("witness failure preserves status and recovers", func(t *testing.T) {
+		fixture := newNativeGateFixture(t)
+		output, err := fixture.command("fail-mcp-protection").CombinedOutput()
+		exit, ok := err.(*exec.ExitError)
+		if !ok || exit.ExitCode() != 31 {
+			t.Fatalf("got %v output=%q", err, output)
+		}
+		calls := fixture.calls(t)
+		if strings.Contains(calls, "-run ^TestPromotedArtifactNativeInstructionRules$") {
+			t.Fatal("continued after failed witness")
+		}
+		if !strings.Contains(calls, "-run ^TestNativeKeychainRecoveryEntrypoint$") {
+			t.Fatal("recovery omitted")
+		}
+	})
 }
