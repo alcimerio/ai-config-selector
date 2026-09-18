@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -11,11 +12,16 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
+	"testing"
+	"time"
 
 	"golang.org/x/sys/unix"
 )
 
 const devinSelectedSecret = "acs selected synthetic secret"
+
+var errDevinTerminalEvidenceCap = errors.New("terminal evidence cap")
 
 func devinRejectSecret(b []byte) error {
 	if bytes.Contains(b, []byte(devinSelectedSecret)) {
@@ -145,6 +151,194 @@ func (s *devinSecretStream) feed(b []byte) error {
 	}
 	s.tail = append(s.tail[:0], combined...)
 	return nil
+}
+
+// devinTerminalEvidence drains terminal bytes while retaining only a bounded,
+// sanitized diagnostic excerpt. Secret detection runs before appending each
+// chunk, including across chunk boundaries.
+type devinTerminalEvidence struct {
+	mu              sync.Mutex
+	secret          devinSecretStream
+	sanitizedSecret devinSecretStream
+	bytes           int
+	chunks          int
+	unsafe          bool
+	text            []byte
+}
+
+func (e *devinTerminalEvidence) feed(b []byte) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if err := e.secret.feed(b); err != nil {
+		e.unsafe = true
+		return err
+	}
+	clean := make([]byte, 0, len(b))
+	for _, c := range b {
+		if c >= 0x20 && c != 0x7f || c == '\n' || c == '\r' || c == '\t' {
+			clean = append(clean, c)
+		}
+	}
+	if err := e.sanitizedSecret.feed(clean); err != nil {
+		e.unsafe = true
+		return err
+	}
+	if len(b) > (1<<20)-e.bytes {
+		e.bytes = 1 << 20
+		e.unsafe = true
+		return errDevinTerminalEvidenceCap
+	}
+	e.bytes += len(b)
+	e.chunks++
+	if len(clean) > (16<<10)-len(e.text) {
+		clean = clean[:(16<<10)-len(e.text)]
+	}
+	e.text = append(e.text, clean...)
+	return nil
+}
+
+func (e *devinTerminalEvidence) snapshot() (bytes, chunks int, unsafe bool, text string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.bytes, e.chunks, e.unsafe, string(e.text)
+}
+
+// drainDevinFailureTerminal consumes both the read result and every queued
+// chunk. A read EOF/EIO can be queued before the reader's final bytes, so it
+// is status, not permission to stop consuming. The caller supplies the
+// platform-specific natural-read predicate.
+func drainDevinFailureTerminal(chunks <-chan []byte, readDone <-chan error, evidence *devinTerminalEvidence, naturalRead func(error) bool) string {
+	deadline := time.NewTimer(500 * time.Millisecond)
+	defer deadline.Stop()
+	readStatus := ""
+	for chunks != nil {
+		select {
+		case chunk, ok := <-chunks:
+			if !ok {
+				if readStatus != "" {
+					return readStatus
+				}
+				return "closed"
+			}
+			if e := evidence.feed(chunk); e != nil {
+				if errors.Is(e, errDevinTerminalEvidenceCap) {
+					return "terminal-cap"
+				}
+				return "secret-detected"
+			}
+		case e := <-readDone:
+			if readStatus == "" {
+				if naturalRead(e) {
+					readStatus = "eof"
+				} else {
+					readStatus = "read-failed"
+				}
+			}
+			readDone = nil
+		case <-deadline.C:
+			return "drain-timeout"
+		}
+	}
+	return readStatus
+}
+
+func TestDevinTerminalEvidenceIsBoundedAndSecretSafe(t *testing.T) {
+	var evidence devinTerminalEvidence
+	if err := evidence.feed([]byte("prefix-acs selected ")); err != nil {
+		t.Fatal(err)
+	}
+	if err := evidence.feed([]byte("synthetic secret-suffix")); err == nil {
+		t.Fatal("split secret was accepted")
+	}
+	bytes, chunks, unsafe, _ := evidence.snapshot()
+	if bytes != len("prefix-acs selected ") || chunks != 1 || !unsafe {
+		t.Fatalf("evidence=%d bytes/%d chunks unsafe=%v", bytes, chunks, unsafe)
+	}
+}
+
+func TestDevinTerminalEvidenceSuppressesSecretReconstructedBySanitizing(t *testing.T) {
+	var evidence devinTerminalEvidence
+	if err := evidence.feed([]byte("acs selected \x01synthetic secret")); err == nil {
+		t.Fatal("sanitized secret was accepted")
+	}
+	_, _, unsafe, text := evidence.snapshot()
+	if !unsafe || strings.Contains(text, devinSelectedSecret) {
+		t.Fatalf("unsafe=%v text=%q", unsafe, text)
+	}
+}
+
+func TestDevinTerminalEvidenceUsesSameSanitizedBytesInFormattedDiagnostic(t *testing.T) {
+	var evidence devinTerminalEvidence
+	if err := evidence.feed([]byte("acs selected\n")); err != nil {
+		t.Fatal(err)
+	}
+	if err := evidence.feed([]byte("\tsynthetic\r secret")); err != nil {
+		t.Fatal(err)
+	}
+	_, _, unsafe, text := evidence.snapshot()
+	formatted := fmt.Sprintf("terminal=%q", text)
+	if unsafe || strings.Contains(formatted, devinSelectedSecret) || !strings.Contains(formatted, `\n`) || !strings.Contains(formatted, `\t`) || !strings.Contains(formatted, `\r`) {
+		t.Fatalf("unsafe=%v text=%q formatted=%q", unsafe, text, formatted)
+	}
+}
+
+func TestDevinTerminalEvidenceCapsFailedDrain(t *testing.T) {
+	chunks := make(chan []byte, 1)
+	readDone := make(chan error, 1)
+	chunks <- bytes.Repeat([]byte{'x'}, (1<<20)+1)
+	close(chunks)
+	var evidence devinTerminalEvidence
+	if got := drainDevinFailureTerminal(chunks, readDone, &evidence, func(error) bool { return true }); got != "terminal-cap" {
+		t.Fatalf("drain status=%q", got)
+	}
+	bytes, _, unsafe, _ := evidence.snapshot()
+	if bytes != 1<<20 || !unsafe {
+		t.Fatalf("bytes=%d unsafe=%v", bytes, unsafe)
+	}
+}
+
+func TestDevinTerminalEvidenceSupportsConcurrentQueuedOutput(t *testing.T) {
+	var evidence devinTerminalEvidence
+	const writers = 8
+	const writes = 64
+	var wg sync.WaitGroup
+	for i := 0; i < writers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < writes; j++ {
+				if err := evidence.feed([]byte("safe terminal progress")); err != nil {
+					t.Errorf("feed: %v", err)
+					return
+				}
+			}
+		}()
+	}
+	for i := 0; i < 16; i++ {
+		_, _, _, _ = evidence.snapshot()
+	}
+	wg.Wait()
+	bytes, chunks, unsafe, _ := evidence.snapshot()
+	if unsafe || chunks != writers*writes || bytes != chunks*len("safe terminal progress") {
+		t.Fatalf("evidence=%d bytes/%d chunks unsafe=%v", bytes, chunks, unsafe)
+	}
+}
+
+func TestDevinFailureDrainConsumesQueuedOutputAfterEOF(t *testing.T) {
+	chunks := make(chan []byte, 3)
+	readDone := make(chan error, 1)
+	chunks <- []byte("prefix-acs selected ")
+	readDone <- io.EOF
+	chunks <- []byte("synthetic secret-suffix")
+	close(chunks)
+	var evidence devinTerminalEvidence
+	if got := drainDevinFailureTerminal(chunks, readDone, &evidence, func(e error) bool { return errors.Is(e, io.EOF) }); got != "secret-detected" {
+		t.Fatalf("drain status=%q", got)
+	}
+	bytes, chunksSeen, unsafe, _ := evidence.snapshot()
+	if bytes != len("prefix-acs selected ") || chunksSeen != 1 || !unsafe {
+		t.Fatalf("evidence=%d bytes/%d chunks unsafe=%v", bytes, chunksSeen, unsafe)
+	}
 }
 
 func devinRequestMetadata(r *http.Request) error {

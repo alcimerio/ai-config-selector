@@ -50,6 +50,18 @@ func devinReadJSON(path string, value any) error {
 	return nil
 }
 
+func devinPublicACSFailure(cause error, phase int, released bool, stage, drain string, evidence *devinTerminalEvidence, driverFailure bool) error {
+	bytes, chunks, unsafe, text := evidence.snapshot()
+	driver := "none"
+	if driverFailure {
+		driver = "driver-failed"
+	}
+	if unsafe {
+		text = ""
+	}
+	return fmt.Errorf("%w: public ACS diagnostic phase=%d released=%t input-stage=%s drain=%s driver=%s terminal-bytes=%d terminal-chunks=%d secret=%t terminal=%q", cause, phase, released, stage, drain, driver, bytes, chunks, unsafe, text)
+}
+
 // runPublicDevinPTY invokes the installed ACS public interface. It is not a
 // print-mode target launcher. Any timeout/forced teardown returns failure.
 func runPublicDevinPTY(r devinNativeRun) (err error) {
@@ -132,8 +144,12 @@ func runPublicDevinPTY(r devinNativeRun) (err error) {
 	}()
 	screen := newDevinScreen()
 	var secretStream devinSecretStream
+	var evidence devinTerminalEvidence
 	feed := func(b []byte) error {
 		if e := secretStream.feed(b); e != nil {
+			return e
+		}
+		if e := evidence.feed(b); e != nil {
 			return e
 		}
 		return screen.feed(b)
@@ -234,7 +250,13 @@ func runPublicDevinPTY(r devinNativeRun) (err error) {
 		case e := <-done:
 			reaped = true
 			if e != nil {
-				return fmt.Errorf("public ACS exit: %w", e)
+				r.Driver.mu.Lock()
+				driverFailure := r.Driver.failure != nil
+				r.Driver.mu.Unlock()
+				drain := drainDevinFailureTerminal(chunks, readDone, &evidence, func(e error) bool {
+					return errors.Is(e, io.EOF) || errors.Is(e, syscall.EIO)
+				})
+				return devinPublicACSFailure(fmt.Errorf("public ACS exit: %w", e), phase, released, progress.stage, drain, &evidence, driverFailure)
 			}
 			// Drain terminal only after the actual process settles. EIO is Darwin PTY
 			// EOF, not permission to infer descendant settlement.
