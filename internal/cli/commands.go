@@ -5,6 +5,7 @@ import (
 	"github.com/alcimerio/ai-config-selector/internal/codexauth"
 	"github.com/alcimerio/ai-config-selector/internal/profile"
 	"github.com/alcimerio/ai-config-selector/internal/runcommand"
+	"github.com/alcimerio/ai-config-selector/internal/selfupdate"
 	"github.com/alcimerio/ai-config-selector/internal/sessionops"
 	"strings"
 )
@@ -69,6 +70,7 @@ var commands = []commandSpec{
 	{path: "codex auth recover", syntax: "acs codex auth recover --name <name>", description: "Recover a quarantined identity after proving its protected Session is inactive.", example: "acs codex auth recover --name work", valueFlag: "--name"},
 	{path: "codex auth logout", syntax: "acs codex auth logout --name <name>", description: "Remove an ACS-owned identity. An absent valid name succeeds; global Codex login is untouched.", example: "acs codex auth logout --name work", valueFlag: "--name"},
 	{path: "version", syntax: "acs version", description: "Print the ACS build version.", example: "acs version"},
+	{path: "update", syntax: "acs update [--check | vMAJOR.MINOR.PATCH]", description: "Check or install a published stable ACS release for macOS 26 Apple Silicon.\n--check only reads release metadata. An explicit version permits reinstall or downgrade; stored data is never changed.", example: "acs update --check\n  acs update\n  acs update v0.4.0", boolFlag: "--check", nameOperand: true},
 }
 
 type invocation struct {
@@ -190,7 +192,18 @@ func parseCommand(args []string) (inv invocation, problem string) {
 		return inv, "missing command"
 	}
 	if inv.command.nameOperand && inv.operand == "" {
+		if inv.command.path == "update" {
+			return inv, ""
+		}
 		return inv, "missing required name operand"
+	}
+	if inv.command.path == "update" && inv.enabled && inv.operand != "" {
+		return inv, "--check cannot be combined with a version"
+	}
+	if inv.command.path == "update" && inv.operand != "" {
+		if _, err := selfupdate.ParseVersion(inv.operand); err != nil {
+			return inv, "invalid release version"
+		}
 	}
 	if inv.command.valueFlag != "" && !inv.command.optionalValue && inv.value == "" {
 		return inv, "missing required flag " + inv.command.valueFlag
@@ -262,6 +275,12 @@ func validAuthorityDigest(value string) bool {
 func GenericRunRequested(args []string) bool {
 	inv, problem := parseCommand(args)
 	return problem == "" && !inv.help && inv.command.path == "run"
+}
+
+// UpdateRequested keeps signal handling and network access out of other paths.
+func UpdateRequested(args []string) bool {
+	inv, problem := parseCommand(args)
+	return problem == "" && !inv.help && inv.command.path == "update"
 }
 
 // CodexDryRunRequested identifies the already syntax-validated early path used
@@ -369,6 +388,9 @@ func (app App) printHelp(command commandSpec) {
 	}
 	if command.boolFlag != "" {
 		description := map[string]string{"--dry-run": "Inspect without launching", "--device-auth": "Use device login", "--json": "Emit versioned JSON format 1"}[command.boolFlag]
+		if command.path == "update" {
+			description = "Report release availability without downloading or changing files"
+		}
 		if command.path == "profile create" {
 			description = "Validate and preview without changing Profile storage"
 		} else if command.path == "profile import" {
@@ -382,6 +404,8 @@ func (app App) printHelp(command commandSpec) {
 	fmt.Fprintln(app.Output, "  --help  Show this help without runtime access")
 	if command.path == "run" || command.path == "explain run" {
 		fmt.Fprintln(app.Output, "\nGrammar: --profile and --dry-run may be reordered before exactly one required -- boundary.\nEverything after that boundary is one literal child argv; a later -- belongs to the child.\nNo target pass-through, backend selection, sandbox bypass, or implicit shell is supported.")
+	} else if command.path == "update" {
+		fmt.Fprintln(app.Output, "\nGrammar: --check or one numeric version, never both. No other flags or operands are accepted.")
 	} else if command.nameOperand {
 		fmt.Fprintln(app.Output, "\nGrammar: command words first, then exactly one NAME and flags in any order. Values use a separate token.\nEach flag may occur once. No extra operands, '=' syntax, '--' separator,\ntarget pass-through, backend selection, or sandbox bypass is supported.")
 	} else {

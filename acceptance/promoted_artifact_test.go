@@ -4,6 +4,7 @@ package acceptance_test
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -19,6 +20,46 @@ import (
 	"github.com/alcimerio/ai-config-selector/internal/codexauth"
 	"github.com/creack/pty"
 )
+
+func TestPromotedArtifactUpdaterHelpAndRejectedSyntaxArePassive(t *testing.T) {
+	binary := promotedBinary(t)
+	home := realTemporaryDirectory(t)
+	profiles := filepath.Join(home, ".acs", "profiles")
+	if e := os.MkdirAll(profiles, 0700); e != nil {
+		t.Fatal(e)
+	}
+	sentinel := filepath.Join(profiles, "sentinel.json")
+	original := []byte("private-data-sentinel\n")
+	if e := os.WriteFile(sentinel, original, 0600); e != nil {
+		t.Fatal(e)
+	}
+	for _, item := range []struct {
+		args    []string
+		success bool
+		want    string
+	}{{[]string{"update", "--help"}, true, "Usage: acs update"}, {[]string{"update", "--check", "v0.4.0"}, false, "--check cannot be combined"}, {[]string{"update", "--unknown"}, false, "unsupported flag"}} {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		command := exec.CommandContext(ctx, binary, item.args...)
+		command.Env = promotedEnvironment(home, os.Getenv("PATH"))
+		output, e := command.CombinedOutput()
+		deadlineErr := ctx.Err()
+		cancel()
+		if deadlineErr != nil {
+			t.Fatalf("updater grammar timed out: %v", item.args)
+		}
+		if (e == nil) != item.success || !strings.Contains(string(output), item.want) {
+			t.Fatalf("updater grammar %v: %v %q", item.args, e, output)
+		}
+		current, e := os.ReadFile(sentinel)
+		if e != nil || !bytes.Equal(current, original) {
+			t.Fatal("updater help or rejected syntax changed Profile bytes")
+		}
+		entries, e := os.ReadDir(profiles)
+		if e != nil || len(entries) != 1 || entries[0].Name() != "sentinel.json" {
+			t.Fatal("updater help or rejected syntax changed Profile directory")
+		}
+	}
+}
 
 const (
 	explanationStoredAuthRef   = "private-stored-auth-canary"
