@@ -244,8 +244,8 @@ func runNativeInstalledACSLockedCodexFixture(t *testing.T) {
 		buildFixedCodexTrampoline(t, grantedTarget, fixture.server.URL+"/backend-api", filepath.Join(tools, "codex"))
 		runInstalledCodexPTY(t, candidate, home, tools, workspace, "mcp", fixture, false)
 		descendantPID := fixture.assert(t, true)
-		if receipt := readNativeMCPStartupReceipt(fixture.mcpStartupReceipt); receipt != "server-entered,initialize-received,initialize-replied" {
-			t.Fatalf("synthetic MCP startup receipts=%q, want server entry and complete initialize exchange", receipt)
+		if receipt := readNativeMCPStartupReceipt(fixture.mcpStartupReceipt); receipt != "server-entered,initialize-received,initialize-replied,tools-list-received,tools-list-replied" {
+			t.Fatalf("synthetic MCP startup receipts=%q, want server entry and complete initialize/tools-list exchange", receipt)
 		}
 		if contents, err := os.ReadFile(markerPath); err != nil || string(contents) != "mcp-fixture-call-ok|mcp-secret-environment-ok" {
 			t.Fatalf("MCP physical server effect=%q err=%v", contents, err)
@@ -1635,7 +1635,7 @@ func readNativeMCPStartupReceipt(path string) string {
 	if err != nil {
 		return "unreadable"
 	}
-	allowed := map[string]bool{"server-entered": true, "initialize-received": true, "initialize-replied": true}
+	allowed := map[string]bool{"server-entered": true, "initialize-received": true, "initialize-replied": true, "tools-list-received": true, "tools-list-replied": true}
 	markers := strings.Fields(strings.ReplaceAll(string(contents), "\n", " "))
 	for _, marker := range markers {
 		if !allowed[marker] {
@@ -2070,7 +2070,9 @@ while IFS= read -r request; do
       /usr/bin/printf 'initialize-replied\n' >> "$receipt_path"
       ;;
     *'"method":"tools/list"'*)
+      /usr/bin/printf 'tools-list-received\n' >> "$receipt_path"
       /usr/bin/printf '{"jsonrpc":"2.0","id":%s,"result":{"tools":[{"name":"allowed","description":"Validate selected argv, input and environment","inputSchema":{"type":"object","properties":{"value":{"type":"string"},"input":{"type":"string"}},"required":["value","input"]}},{"name":"blocked","description":"Disabled native fixture tool","inputSchema":{"type":"object","properties":{"value":{"type":"string"}}}}]}}\n' "$request_id"
+      /usr/bin/printf 'tools-list-replied\n' >> "$receipt_path"
       ;;
     *'"method":"tools/call"'*)
       if /usr/bin/printf '%s' "$request" | /usr/bin/grep -F '"name":"allowed"' >/dev/null &&
