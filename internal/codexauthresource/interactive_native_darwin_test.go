@@ -57,6 +57,11 @@ func runNativeInstalledACSLockedCodexFixture(t *testing.T) {
 		t.Fatal("ACS_PROMOTED_BINARY, ACS_TEST_CODEX_BINARY and ACS_TEST_CODEX_ARCHIVE must be absolute")
 	}
 	assertLockedCodexIdentity(t, archive, target)
+	// The separately locked companion is a sibling in the official installation.
+	hostTarget := filepath.Join(filepath.Dir(target), "codex-code-mode-host")
+	hostArchive := filepath.Join(filepath.Dir(archive), "codex_code_mode_host_0.149.1_darwin_arm64.tar.gz")
+	assertLockedCodexHostIdentity(t, hostArchive, hostTarget)
+	defer assertLockedCodexHostIdentity(t, hostArchive, hostTarget)
 	codexauthresource.UseIsolatedTestKeychainForComposition(t)
 
 	runnerHome, err := os.UserHomeDir()
@@ -124,6 +129,11 @@ func runNativeInstalledACSLockedCodexFixture(t *testing.T) {
 	restoredCoding := restoreDeletedNativeCodexProfile(t, candidate, home, tools, workspace, identities["coding"])
 	grantedTarget := filepath.Join(workspace, "locked-codex-target")
 	copyLockedTarget(t, target, grantedTarget)
+	// This trampoline execs the real CLI in the workspace. Its companion must
+	// be adjacent; production operation-snapshot companion proof is separate.
+	grantedHost := filepath.Join(workspace, "codex-code-mode-host")
+	copyLockedTarget(t, hostTarget, grantedHost)
+	defer assertLockedCodexHostIdentity(t, hostArchive, grantedHost)
 	outside, err := os.MkdirTemp("/tmp", "acs-codex-unrelated-")
 	if err != nil {
 		t.Fatal(err)
@@ -2469,6 +2479,50 @@ func assertLockedCodexIdentity(t *testing.T, archivePath, installedPath string) 
 	}
 	if output, err := exec.Command(installedPath, "--version").Output(); err != nil || strings.TrimSpace(string(output)) != "codex-cli 0.149.1" {
 		t.Fatal("installed Codex member reports an unsupported version")
+	}
+}
+
+func assertLockedCodexHostIdentity(t *testing.T, archivePath, installedPath string) {
+	t.Helper()
+	const archiveDigest = "aae1c0c9459700a2e897adadd647351140ae7933ad73bd8d3af6505c69a4f3fd"
+	const memberDigest = "c9340c2cc50c86193cc670aa9130980d6982059a0965aeae41bf4e85952fc43e"
+	for _, path := range []string{archivePath, installedPath} {
+		info, err := os.Lstat(path)
+		if err != nil || !info.Mode().IsRegular() {
+			t.Fatal("locked code-mode host artifact is not a regular file")
+		}
+	}
+	if runtime.GOARCH != "arm64" || fileSHA256(t, archivePath) != archiveDigest {
+		t.Fatal("code-mode host archive differs from reviewed lock")
+	}
+	archive, err := os.Open(archivePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer archive.Close()
+	compressed, err := gzip.NewReader(archive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer compressed.Close()
+	reader := tar.NewReader(compressed)
+	header, err := reader.Next()
+	if err != nil || header.Typeflag != tar.TypeReg || header.Name != "codex-code-mode-host-aarch64-apple-darwin" || header.Size != 57149920 {
+		t.Fatal("locked code-mode host member is invalid")
+	}
+	digest := sha256.New()
+	if _, err := io.Copy(digest, reader); err != nil {
+		t.Fatal(err)
+	}
+	if hex.EncodeToString(digest.Sum(nil)) != memberDigest {
+		t.Fatal("locked code-mode host member digest differs")
+	}
+	if _, err := reader.Next(); err != io.EOF {
+		t.Fatal("code-mode host archive has extra members")
+	}
+	info, err := os.Stat(installedPath)
+	if err != nil || info.Mode().Perm() != 0o500 || fileSHA256(t, installedPath) != memberDigest {
+		t.Fatal("installed code-mode host bytes or mode differ from locked member")
 	}
 }
 

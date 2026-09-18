@@ -454,6 +454,34 @@ func nativeMCPRequireCustomOutput(body, callID string) error {
 	return err
 }
 
+// nativeMCPExecFailureCategory inspects only the bounded first text part from
+// the correlated output. It never returns the target's path, error, or payload.
+func nativeMCPExecFailureCategory(first string) string {
+	if len(first) > 16384 {
+		return "exec-output-invalid"
+	}
+	if strings.HasPrefix(first, "failed to spawn code-mode host ") {
+		if strings.HasSuffix(first, ": host executable was not found") || strings.HasSuffix(first, " (os error 2)") {
+			return "exec-host-missing"
+		}
+		return "exec-host-spawn-failed"
+	}
+	if first == "code-mode host is disabled" {
+		return "exec-host-disabled"
+	}
+	line, _, _ := strings.Cut(first, "\n")
+	switch {
+	case strings.HasPrefix(line, "Script running with cell ID "):
+		return "exec-running"
+	case line == "Script failed":
+		return "exec-failed"
+	case line == "Script terminated":
+		return "exec-terminated"
+	default:
+		return "exec-output-invalid"
+	}
+}
+
 // Code mode prepends a status text item, not an envelope success boolean. This
 // bounded fixture deliberately fails a yielded script; it never treats running
 // output as completion. Native evidence will determine whether waits are needed.
@@ -495,7 +523,7 @@ func nativeMCPRequireCustomOutputText(body, callID string) (string, error) {
 	first := parts[0]
 	lines := strings.SplitN(first, "\n", 4)
 	if len(lines) != 4 || lines[0] != "Script completed" || lines[2] != "Output:" {
-		return "", errors.New("exec did not complete (yield/failure/invalid status)")
+		return "", errors.New(nativeMCPExecFailureCategory(first))
 	}
 	if !regexp.MustCompile(`^Wall time [0-9]+\.[0-9] seconds$`).MatchString(lines[1]) {
 		return "", errors.New("invalid exec wall time header")
@@ -1268,5 +1296,35 @@ func TestNativeMCPCodeModeOutputBoundaries(t *testing.T) {
 	body := nativeMCPTestOutput(nativeMCPTestParts("Script completed", nativeMCPTestCounts))
 	if _, _, err := nativeMCPCustomDiscoveryIdentity(strings.Replace(body, "custom_tool_call_output", "function_call_output", 1), "pending", "fixture", "allowed", "blocked"); err == nil {
 		t.Fatal("wrong result type accepted")
+	}
+}
+
+func TestNativeMCPExecFailureDiagnosticsAreFixedAndCorrelated(t *testing.T) {
+	for _, tc := range []struct{ output, category string }{
+		{"failed to spawn code-mode host /private/secret-token/codex-code-mode-host: No such file or directory (os error 2)", "exec-host-missing"},
+		{"failed to spawn code-mode host /private/secret-token/codex-code-mode-host: host executable was not found", "exec-host-missing"},
+		{"failed to spawn code-mode host /private/secret-token/codex-code-mode-host: Permission denied (os error 13)", "exec-host-spawn-failed"},
+		{"code-mode host is disabled", "exec-host-disabled"},
+		{"Script running with cell ID secret-token\nWall time 1.0 seconds\nOutput:\n", "exec-running"},
+		{"Script failed\nWall time 0.0 seconds\nOutput:\nsecret-token", "exec-failed"},
+		{"Script terminated\nWall time 0.0 seconds\nOutput:\nsecret-token", "exec-terminated"},
+		{"prefix failed to spawn code-mode host secret-token (os error 2)", "exec-output-invalid"},
+		{"Code Mode is unavailable because secret-token", "exec-output-invalid"},
+	} {
+		for _, output := range []any{tc.output, []any{map[string]any{"type": "input_text", "text": tc.output}}} {
+			body := nativeMCPTestOutput(output, map[string]any{"type": "custom_tool_call_output", "call_id": "old", "output": "Script failed\nsecret-token"})
+			_, err := nativeMCPRequireCustomOutputText(body, "pending")
+			if err == nil || err.Error() != tc.category {
+				t.Fatalf("category=%v want=%s", err, tc.category)
+			}
+			if strings.Contains(err.Error(), "secret-token") || strings.Contains(err.Error(), "/private") {
+				t.Fatal("diagnostic leaked payload")
+			}
+		}
+	}
+	// A success payload mentioning an error is never classified as a host failure.
+	payload := "failed to spawn code-mode host secret-token (os error 2)"
+	if got, err := nativeMCPRequireCustomOutputText(nativeMCPTestOutput(nativeMCPTestParts("Script completed", payload)), "pending"); err != nil || got != payload {
+		t.Fatal("classifier searched successful payload")
 	}
 }
