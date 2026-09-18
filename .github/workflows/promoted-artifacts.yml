@@ -152,6 +152,25 @@ jobs:
             "${RUNNER_TEMP}/acs-native-auth-recovery" \
             "${{ matrix.sandbox_backend }}"
 
+      - name: Run opt-in Devin SessionStart hook assessment
+        env:
+          ACS_RUN_NATIVE_DEVIN_HOOK_ASSESSMENT: "1"
+          ACS_PROMOTED_VERSION: ${{ env.ACS_CANDIDATE_VERSION }}
+          ACS_PROMOTED_BINARY: ${{ runner.temp }}/acs-promoted-${{ matrix.os }}-${{ matrix.arch }}/bin/acs
+          ACS_PROMOTED_SANDBOX_BACKEND: ${{ matrix.sandbox_backend }}
+          ACS_TEST_DEVIN_BINARY: ${{ runner.temp }}/devin-target-${{ matrix.os }}-${{ matrix.arch }}/bin/devin
+          ACS_TEST_DEVIN_ARCHIVE: ${{ runner.temp }}/devin-target-${{ matrix.os }}-${{ matrix.arch }}/devin-3000.10.21-darwin-arm64.tar.gz
+        shell: bash
+        run: |
+          set -euo pipefail
+          test_name='TestPromotedArtifactNativeDevinSessionStartHook'
+          listed="$(go test ./acceptance -list "^${test_name}$")"
+          if ! grep -Fxq "${test_name}" <<<"${listed}"; then
+            echo "required hook assessment test was not discovered"
+            exit 1
+          fi
+          go test ./acceptance -run "^${test_name}$" -count=1 -v -timeout=12m
+
       - name: Record sanitized native candidate observation
         shell: bash
         run: |

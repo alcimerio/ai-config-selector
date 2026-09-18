@@ -24,8 +24,9 @@ type devinNativeRun struct {
 	Input func(frame devinInputFrame, stage string) ([]byte, error)
 	// Observe validates actual sandbox Session/process identity from public ACS
 	// state and the independently built trampoline before releasing a phase.
-	Observe       func(phase string, receipt devinPhaseReceipt) error
-	VerifyEffects func() error
+	Observe                  func(phase string, receipt devinPhaseReceipt) error
+	VerifyEffects            func() error
+	BeforeAttachedInspection func() error
 }
 
 func devinReadJSON(path string, value any) error {
@@ -298,7 +299,9 @@ func runPublicDevinPTY(r devinNativeRun) (err error) {
 					r.Driver.mu.Unlock()
 					return devinPublicACSFailure(e, phase, released, progress.stage, "already-drained", &evidence, driverFailure)
 				}
-				if e = inspectDevinCompletedPhase(r.Coordination, phases[phase], r.Driver.home, r.Candidate); e != nil {
+				if e = acknowledgeDevinPhase(phases[phase], r.BeforeAttachedInspection, func() error {
+					return inspectDevinCompletedPhase(r.Coordination, phases[phase], r.Driver.home, r.Candidate)
+				}); e != nil {
 					return e
 				}
 				if e = r.Driver.end(true); e != nil {
@@ -365,7 +368,9 @@ func runPublicDevinPTY(r devinNativeRun) (err error) {
 			}
 			e = verifyDevinPhaseDone(r.Coordination, name, readyPIDs[name])
 			if e == nil {
-				if e = inspectDevinCompletedPhase(r.Coordination, phases[phase], r.Driver.home, r.Candidate); e != nil {
+				if e = acknowledgeDevinPhase(phases[phase], r.BeforeAttachedInspection, func() error {
+					return inspectDevinCompletedPhase(r.Coordination, phases[phase], r.Driver.home, r.Candidate)
+				}); e != nil {
 					return e
 				}
 				if e = r.Driver.end(true); e != nil {
