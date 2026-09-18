@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strconv"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -20,13 +21,36 @@ import (
 // assembleNativeDevinProof is the complete public-ACS composition. Its two
 // protocol contracts are supplied only after pinned-target observation; absence
 // is failure, never a skipped/green proof. No test invokes this until review.
+type devinNativeAssessmentOptions struct {
+	seed             func(home, workspace, hookPath, receiptPath string) error
+	beforeFirstInput func() error
+	verify           func() error
+	onPhase          func(string, devinPhaseReceipt) error
+	onBuilt          func(string, string) error
+}
+
 func assembleNativeDevinProof(t *testing.T, input func(devinInputFrame, string) ([]byte, error), listing func(int, string) error) {
+	assembleNativeDevinProofWithOptions(t, input, listing, nil)
+}
+
+func assembleNativeDevinProofWithOptions(t *testing.T, input func(devinInputFrame, string) ([]byte, error), listing func(int, string) error, options *devinNativeAssessmentOptions) {
+	assembleNativeDevinProofWithAssessment(t, input, listing, options, nil)
+}
+
+func assembleNativeDevinProofWithAgent(t *testing.T, input func(devinInputFrame, string) ([]byte, error), listing func(int, string) error, agentPresent *bool) {
+	assembleNativeDevinProofWithAssessment(t, input, listing, nil, agentPresent)
+}
+
+func assembleNativeDevinProofWithAssessment(t *testing.T, input func(devinInputFrame, string) ([]byte, error), listing func(int, string) error, options *devinNativeAssessmentOptions, agentPresent *bool) {
 	t.Helper()
 	if runtime.GOARCH != "arm64" {
 		t.Fatal("locked target is Darwin arm64")
 	}
 	if input == nil || listing == nil {
 		t.Fatal("observed terminal/listing contracts required")
+	}
+	if options != nil && (options.seed == nil || options.beforeFirstInput == nil || options.verify == nil || options.onPhase == nil || options.onBuilt == nil) {
+		t.Fatal("hook assessment options require seed, first-input gate, and verification")
 	}
 	candidate := promotedBinary(t)
 	if promotedSandboxCapability(t) != "available" {
@@ -39,6 +63,11 @@ func assembleNativeDevinProof(t *testing.T, input func(devinInputFrame, string) 
 	}
 	home := realTemporaryDirectory(t)
 	workspace := realTemporaryDirectory(t)
+	if agentPresent != nil {
+		if e := seedDevinAgentDefinition(workspace, *agentPresent); e != nil {
+			t.Fatal(e)
+		}
+	}
 	tools := filepath.Join(workspace, "tools")
 	coord := filepath.Join(workspace, "coordination")
 	for _, p := range []string{tools, coord} {
@@ -59,8 +88,20 @@ func assembleNativeDevinProof(t *testing.T, input func(devinInputFrame, string) 
 	}
 	inputPath := filepath.Join(inputRoot, "native-mcp-input.txt")
 	evidenceBase := filepath.Join(workspace, "mcp-evidence")
-	if e = writeDevinNativeProfile(home, inputPath); e != nil {
+	hookPath := filepath.Join(workspace, "devin-session-start-hook")
+	receiptPath := filepath.Join(workspace, "devin-session-start-hook.receipt")
+	if options != nil {
+		e = writeDevinNativeHookProfile(home, inputPath)
+	} else {
+		e = writeDevinNativeProfile(home, inputPath)
+	}
+	if e != nil {
 		t.Fatal(e)
+	}
+	if options != nil && options.seed != nil {
+		if e = options.seed(home, workspace, hookPath, receiptPath); e != nil {
+			t.Fatal(e)
+		}
 	}
 	if e = os.WriteFile(inputPath, []byte("acs selected input\n"), 0600); e != nil {
 		t.Fatal(e)
@@ -86,6 +127,12 @@ func assembleNativeDevinProof(t *testing.T, input func(devinInputFrame, string) 
 		t.Fatal(e)
 	}
 	buildDevinResearchHelper(t, "devin-native-mcp-server", filepath.Join(workspace, "native-mcp-server"), map[string]string{"forbiddenPath": forbidden, "evidenceBase": evidenceBase})
+	if options != nil {
+		buildDevinResearchHelper(t, "devin-session-start-hook", hookPath, map[string]string{"receipt": receiptPath, "diagnostic": receiptPath + ".diagnostic", "invoked": receiptPath + ".invoked", "inputPath": inputPath, "outsidePath": forbidden, "expectedInput": "acs selected input\n"})
+		if e = options.onBuilt(hookPath, inputPath); e != nil {
+			t.Fatal(e)
+		}
+	}
 	// Keep the byte-identical locked target within the already selected workspace
 	// so the trampoline needs no additional production filesystem authority.
 	realTarget := filepath.Join(tools, "devin-real")
@@ -110,6 +157,16 @@ func assembleNativeDevinProof(t *testing.T, input func(devinInputFrame, string) 
 	trampoline := filepath.Join(tools, "devin")
 	buildDevinResearchHelper(t, "devin-trampoline", trampoline, map[string]string{"target": realTarget, "memberDigest": digest, "endpoint": "http://" + endpoint, "coordination": coord})
 	d := &devinDriver{member: digest, listingProof: listing}
+	var catalogChecked atomic.Bool
+	if agentPresent != nil {
+		d.initialCatalog = func(body []byte) error {
+			e := assertDevinAgentCatalog(body, *agentPresent)
+			if e == nil {
+				catalogChecked.Store(true)
+			}
+			return e
+		}
+	}
 	var observedLive *devinLiveDescendant
 	d.serverProof = func(stage int) error {
 		deadline := time.Now().Add(500 * time.Millisecond)
@@ -140,7 +197,32 @@ func assembleNativeDevinProof(t *testing.T, input func(devinInputFrame, string) 
 		}
 	}()
 	before := promotedSessionSnapshot(t, candidate, home, tools+":/usr/bin:/bin")
-	run := devinNativeRun{Candidate: candidate, Home: home, Tools: tools, Workspace: workspace, Profile: "devin-native-mcp", Coordination: coord, Driver: d, Input: input, Observe: devinPhaseObserver(candidate, home, tools, workspace, trampoline, d)}
+	firstInput := true
+	wrappedInput := func(frame devinInputFrame, stage string) ([]byte, error) {
+		if options == nil {
+			return input(frame, stage)
+		}
+		if options.beforeFirstInput == nil {
+			return nil, errors.New("hook assessment input gate missing")
+		}
+		return devinHookFirstInputGate(&firstInput, stage, options.beforeFirstInput, func() ([]byte, error) {
+			return input(frame, stage)
+		})
+	}
+	observe := devinPhaseObserver(candidate, home, tools, workspace, trampoline, d)
+	if options != nil {
+		baseObserve := observe
+		observe = func(phase string, receipt devinPhaseReceipt) error {
+			if err := baseObserve(phase, receipt); err != nil {
+				return err
+			}
+			return options.onPhase(phase, receipt)
+		}
+	}
+	run := devinNativeRun{Candidate: candidate, Home: home, Tools: tools, Workspace: workspace, Profile: "devin-native-mcp", Coordination: coord, Driver: d, Input: wrappedInput, Observe: observe}
+	if options != nil {
+		run.BeforeAttachedInspection = options.verify
+	}
 	run.VerifyEffects = func() error {
 		if _, e := os.Stat(forbidden + ".descendant-effect"); !os.IsNotExist(e) {
 			return errors.New("forbidden descendant marker exists")
@@ -170,6 +252,9 @@ func assembleNativeDevinProof(t *testing.T, input func(devinInputFrame, string) 
 	closed = true
 	if e != nil {
 		t.Fatal(e)
+	}
+	if agentPresent != nil && !catalogChecked.Load() {
+		t.Fatal("actual initial profile catalog was not checked")
 	}
 	if e = d.finalSuccess(); e != nil {
 		t.Fatal(e)

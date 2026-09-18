@@ -1,0 +1,35 @@
+{
+  "catalog": "Available subagent profiles for the `run_subagent` tool. Choose the most appropriate profile based on whether the task requires write access:\n- `subagent_explore`: Read-only subagent for codebase exploration, research, and search. Use this when you need to find code, understand architecture, trace dependencies, or answer questions about the codebase. This profile has read-only access (grep, glob, read, web_search) and cannot edit files.\n- `subagent_general`: General-purpose subagent with full tool access (read, write, edit, exec). Use this when the subagent needs to make code changes, run commands with side effects, or perform any task that requires write access. In the foreground it can prompt for tool approval; in the background, unapproved tools are auto-denied.",
+  "toolSchema": {
+    "required": [
+      "title",
+      "task",
+      "profile"
+    ],
+    "properties": {
+      "title": {
+        "description": "A short, human-readable title for this subagent.",
+        "type": "string"
+      },
+      "task": {
+        "description": "The task or prompt to give the subagent. Be specific and detailed.",
+        "type": "string"
+      },
+      "profile": {
+        "description": "The id of the profile to use for this subagent.",
+        "type": "string"
+      },
+      "is_background": {
+        "description": "If true, the subagent runs in the background and returns its ID\nimmediately. You will be automatically woken up with the result\nwhen it completes. You can check progress with read_subagent if\nneeded, but do not poll in a loop \u2014 just continue with other work\nor end your turn.",
+        "type": "boolean",
+        "default": false
+      },
+      "resume": {
+        "description": "If set to an agent id (which you can get from the response of a previous\nrun_subagent invocation), your prompt will be sent to that agent, so it can\nrespond using its existing execution transcript as context.",
+        "type": "string"
+      }
+    },
+    "type": "object",
+    "additionalProperties": false
+  }
+}

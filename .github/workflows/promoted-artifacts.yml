@@ -143,6 +143,7 @@ jobs:
           echo "ACS_TEST_DEVIN_ARCHIVE=$target_root/devin-3000.10.21-darwin-arm64.tar.gz" >> "$GITHUB_ENV"
 
       - name: Run shared native release candidate gates
+        id: baseline
         run: |
           scripts/run-native-candidate-gates.sh \
             "$ACS_CANDIDATE_VERSION" \
@@ -151,6 +152,112 @@ jobs:
             "${GITHUB_WORKSPACE}/dist/codex-test-targets/codex_0.149.1_${{ matrix.os }}_${{ matrix.arch }}.tar.gz" \
             "${RUNNER_TEMP}/acs-native-auth-recovery" \
             "${{ matrix.sandbox_backend }}"
+
+      - name: Run opt-in installed extension discovery assessment
+        if: ${{ !cancelled() && steps.baseline.outcome == 'success' }}
+        env:
+          ACS_RUN_NATIVE_EXTENSION_DISCOVERY: "1"
+          ACS_PROMOTED_VERSION: ${{ env.ACS_CANDIDATE_VERSION }}
+          ACS_PROMOTED_BINARY: ${{ runner.temp }}/acs-promoted-${{ matrix.os }}-${{ matrix.arch }}/bin/acs
+          ACS_PROMOTED_SANDBOX_BACKEND: ${{ matrix.sandbox_backend }}
+          ACS_TEST_CODEX_BINARY: ${{ runner.temp }}/codex-target-${{ matrix.os }}-${{ matrix.arch }}/bin/codex
+          ACS_TEST_CODEX_ARCHIVE: ${{ github.workspace }}/dist/codex-test-targets/codex_0.149.1_${{ matrix.os }}_${{ matrix.arch }}.tar.gz
+          ACS_TEST_DEVIN_BINARY: ${{ runner.temp }}/devin-target-${{ matrix.os }}-${{ matrix.arch }}/bin/devin
+          ACS_TEST_DEVIN_ARCHIVE: ${{ runner.temp }}/devin-target-${{ matrix.os }}-${{ matrix.arch }}/devin-3000.10.21-darwin-arm64.tar.gz
+        shell: bash
+        run: |
+          set -euo pipefail
+          test_name='TestNativeInstalledExtensionDiscovery'
+          listed="$(go test ./acceptance -list "^${test_name}$")"
+          if ! grep -Fxq "${test_name}" <<<"${listed}"; then
+            echo "required extension discovery test was not discovered"
+            exit 1
+          fi
+          go test ./acceptance -run "^${test_name}$" -count=1 -v -timeout=2m
+
+      - name: Run opt-in installed Codex agent discovery assessment
+        if: ${{ !cancelled() && steps.baseline.outcome == 'success' }}
+        env:
+          ACS_RUN_NATIVE_AGENT_DISCOVERY: "1"
+          ACS_RUN_NATIVE_AUTH_GATE: "1"
+          ACS_PROMOTED_VERSION: ${{ env.ACS_CANDIDATE_VERSION }}
+          ACS_PROMOTED_BINARY: ${{ runner.temp }}/acs-promoted-${{ matrix.os }}-${{ matrix.arch }}/bin/acs
+          ACS_PROMOTED_SANDBOX_BACKEND: ${{ matrix.sandbox_backend }}
+          ACS_NATIVE_AUTH_RECOVERY_ROOT: ${{ runner.temp }}/acs-native-auth-recovery
+          ACS_TEST_CODEX_BINARY: ${{ runner.temp }}/codex-target-${{ matrix.os }}-${{ matrix.arch }}/bin/codex
+          ACS_TEST_CODEX_ARCHIVE: ${{ github.workspace }}/dist/codex-test-targets/codex_0.149.1_${{ matrix.os }}_${{ matrix.arch }}.tar.gz
+        shell: bash
+        run: |
+          set -euo pipefail
+          primary_status=0
+          finish() {
+            primary_status=$?
+            trap - EXIT HUP INT TERM
+            set +e
+            ACS_RUN_NATIVE_AUTH_RECOVERY=1 \
+              ACS_NATIVE_AUTH_RECOVERY_ROOT="$ACS_NATIVE_AUTH_RECOVERY_ROOT" \
+              go test ./internal/codexauthresource -run '^TestNativeKeychainRecoveryEntrypoint$' -count=1 -timeout=2m
+            recovery_status=$?
+            if [ "$primary_status" -ne 0 ]; then exit "$primary_status"; fi
+            exit "$recovery_status"
+          }
+          recovery_name='TestNativeKeychainRecoveryEntrypoint'
+          recovery_listed="$(go test ./internal/codexauthresource -list "^${recovery_name}$")"
+          if ! grep -Fxq "${recovery_name}" <<<"${recovery_listed}"; then
+            echo "required Codex keychain recovery test was not discovered"
+            exit 1
+          fi
+          trap finish EXIT
+          trap 'exit 129' HUP
+          trap 'exit 130' INT
+          trap 'exit 143' TERM
+          test_name='TestNativeInstalledCustomCodexAgentDiscovery'
+          listed="$(go test ./internal/codexauthresource -list "^${test_name}$")"
+          if ! grep -Fxq "${test_name}" <<<"${listed}"; then
+            echo "required Codex agent discovery test was not discovered"
+            exit 1
+          fi
+          go test ./internal/codexauthresource -run "^${test_name}$" -count=1 -v -timeout=2m
+
+      - name: Run opt-in installed Devin agent discovery assessment
+        if: ${{ !cancelled() && steps.baseline.outcome == 'success' }}
+        env:
+          ACS_RUN_NATIVE_AGENT_DISCOVERY: "1"
+          ACS_PROMOTED_VERSION: ${{ env.ACS_CANDIDATE_VERSION }}
+          ACS_PROMOTED_BINARY: ${{ runner.temp }}/acs-promoted-${{ matrix.os }}-${{ matrix.arch }}/bin/acs
+          ACS_PROMOTED_SANDBOX_BACKEND: ${{ matrix.sandbox_backend }}
+          ACS_TEST_DEVIN_BINARY: ${{ runner.temp }}/devin-target-${{ matrix.os }}-${{ matrix.arch }}/bin/devin
+          ACS_TEST_DEVIN_ARCHIVE: ${{ runner.temp }}/devin-target-${{ matrix.os }}-${{ matrix.arch }}/devin-3000.10.21-darwin-arm64.tar.gz
+        shell: bash
+        run: |
+          set -euo pipefail
+          test_name='TestPromotedArtifactNativeCustomDevinAgentDiscovery'
+          listed="$(go test ./acceptance -list "^${test_name}$")"
+          if ! grep -Fxq "${test_name}" <<<"${listed}"; then
+            echo "required Devin agent discovery test was not discovered"
+            exit 1
+          fi
+          go test ./acceptance -run "^${test_name}$" -count=1 -v -timeout=2m
+
+      - name: Run opt-in Devin SessionStart hook assessment
+        if: ${{ !cancelled() && steps.baseline.outcome == 'success' }}
+        env:
+          ACS_RUN_NATIVE_DEVIN_HOOK_ASSESSMENT: "1"
+          ACS_PROMOTED_VERSION: ${{ env.ACS_CANDIDATE_VERSION }}
+          ACS_PROMOTED_BINARY: ${{ runner.temp }}/acs-promoted-${{ matrix.os }}-${{ matrix.arch }}/bin/acs
+          ACS_PROMOTED_SANDBOX_BACKEND: ${{ matrix.sandbox_backend }}
+          ACS_TEST_DEVIN_BINARY: ${{ runner.temp }}/devin-target-${{ matrix.os }}-${{ matrix.arch }}/bin/devin
+          ACS_TEST_DEVIN_ARCHIVE: ${{ runner.temp }}/devin-target-${{ matrix.os }}-${{ matrix.arch }}/devin-3000.10.21-darwin-arm64.tar.gz
+        shell: bash
+        run: |
+          set -euo pipefail
+          test_name='TestPromotedArtifactNativeDevinSessionStartHook'
+          listed="$(go test ./acceptance -list "^${test_name}$")"
+          if ! grep -Fxq "${test_name}" <<<"${listed}"; then
+            echo "required hook assessment test was not discovered"
+            exit 1
+          fi
+          go test ./acceptance -run "^${test_name}$" -count=3 -v -timeout=12m
 
       - name: Record sanitized native candidate observation
         shell: bash

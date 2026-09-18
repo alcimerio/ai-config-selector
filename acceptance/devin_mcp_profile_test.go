@@ -3,6 +3,7 @@ package acceptance_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -28,6 +29,24 @@ func writeDevinNativeProfile(home, inputPath string) error {
 	return os.WriteFile(filepath.Join(dir, "devin-native-mcp.json"), []byte(document), 0600)
 }
 
+func writeDevinNativeHookProfile(home, inputPath string) error {
+	if err := writeDevinNativeProfile(home, inputPath); err != nil {
+		return err
+	}
+	path := filepath.Join(home, ".acs", "profiles", "devin-native-mcp.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	old := `"id":"mcp-server","reference":{"kind":"workspace-relative","path":"native-mcp-server"}`
+	newValue := old + `},{"id":"session-start-hook","reference":{"kind":"workspace-relative","path":"devin-session-start-hook"}`
+	updated := strings.Replace(string(data), old, newValue, 1)
+	if updated == string(data) {
+		return errors.New("hook executable profile insertion point missing")
+	}
+	return os.WriteFile(path, []byte(updated), 0600)
+}
+
 func TestDevinNativeProfileFixtureLoadsAndResolvesThroughProductionRegistry(t *testing.T) {
 	home := t.TempDir()
 	input := filepath.Join(home, "native-mcp-input.txt")
@@ -51,5 +70,44 @@ func TestDevinNativeProfileFixtureLoadsAndResolvesThroughProductionRegistry(t *t
 	}
 	if _, err = adapter.Categories().ResolveFor(context.Background(), candidate, "devin"); err != nil {
 		t.Fatalf("production registry could not resolve generated Devin fixture: %v", err)
+	}
+}
+
+func TestDevinHookProfileResolvesBothExecutableReferences(t *testing.T) {
+	home := t.TempDir()
+	input := filepath.Join(home, "native-mcp-input.txt")
+	if err := os.WriteFile(input, []byte("fixture input\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"native-mcp-server", "devin-session-start-hook"} {
+		if err := os.WriteFile(filepath.Join(home, name), []byte("#!/bin/sh\n"), 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := writeDevinNativeHookProfile(home, input); err != nil {
+		t.Fatal(err)
+	}
+	adapter, err := devin.New(devin.Config{BinaryPath: "/bin/sh", ExistingHomeDir: home})
+	if err != nil {
+		t.Fatal(err)
+	}
+	document, err := os.ReadFile(filepath.Join(home, ".acs", "profiles", "devin-native-mcp.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate, err := adapter.Categories().Decode(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := adapter.Categories().ResolveSyntaxFor(context.Background(), candidate, "devin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	grants, err := plan.ResolveExecutableGrants(home, filepath.Join(home, "sessions"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(grants) != 2 {
+		t.Fatalf("resolved executable grants=%d, want both MCP and hook references", len(grants))
 	}
 }
