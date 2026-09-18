@@ -4,43 +4,18 @@ package acceptance_test
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
-	"strings"
 	"syscall"
 	"testing"
 	"time"
 )
-
-func buildDevinResearchHelper(t *testing.T, relative, destination string, values map[string]string) {
-	t.Helper()
-	_, source, _, _ := runtime.Caller(0)
-	packagePath := filepath.Join(filepath.Dir(source), "testdata", relative)
-	args := []string{"build", "-trimpath", "-o", destination}
-	var flags []string
-	for k, v := range values {
-		flags = append(flags, strconv.Quote("-X=main."+k+"="+v))
-	}
-	if len(flags) > 0 {
-		args = append(args, "-ldflags", strings.Join(flags, " "))
-	}
-	args = append(args, packagePath)
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, "go", args...)
-	b, e := cmd.CombinedOutput()
-	if e != nil || ctx.Err() != nil {
-		t.Fatalf("build isolated Devin helper: %v: %.4096s", e, b)
-	}
-}
 
 // assembleNativeDevinProof is the complete public-ACS composition. Its two
 // protocol contracts are supplied only after pinned-target observation; absence
