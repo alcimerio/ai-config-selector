@@ -47,8 +47,9 @@ that a workspace grant hides all unselected workspace files.
 
 The adapter deliberately has no generic argument or configuration passthrough,
 backend selector, dynamic plugin authority, credential import, or API-key mode.
-ACS does not configure or manage MCP servers in this delivery. Its isolated
-home, default-deny outer sandbox, disabled stock plugin/app features, and fixed
+Current source can project explicitly selected local STDIO MCP server references.
+Its isolated home, default-deny outer sandbox, disabled stock plugin/app features,
+and fixed
 untrusted-project decision prevent ordinary host-local and project-local MCP
 configuration from becoming launch input; ACS does not claim to override every
 account-service enterprise policy selected by the authenticated ChatGPT
