@@ -89,9 +89,18 @@ func writeDevinUserConfig(home string) (string, error) {
 	if err := mkdirSessionConfigParents(canonicalHome, filepath.Dir(path)); err != nil {
 		return "", err
 	}
-	configuration := map[string]any{"read_config_from": map[string]bool{
-		"cursor": false, "windsurf": false, "claude": false, "opencode": false, "zed": false,
-	}}
+	// Devin performs an atomic startup save of these defaults before accepting
+	// interactive input. Project them up front so the protected file already
+	// contains the pinned target's complete startup shape; import controls stay
+	// explicitly disabled and immutable for the Session lifetime.
+	configuration := map[string]any{
+		"version":    1,
+		"shell":      map[string]bool{"setup_complete": true},
+		"theme_mode": "dark",
+		"read_config_from": map[string]bool{
+			"cursor": false, "windsurf": false, "claude": false, "opencode": false, "zed": false,
+		},
+	}
 	encoded, err := json.Marshal(configuration)
 	if err != nil {
 		return "", errors.New("Devin user config could not be encoded")

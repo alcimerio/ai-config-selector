@@ -133,7 +133,7 @@ func TestDevinProtocolRequestMetadataSecrecy(t *testing.T) {
 func TestDevinProtocolGeneratedSemantics(t *testing.T) {
 	root := t.TempDir()
 	files := map[string]any{
-		".config/devin/config.json":     map[string]any{"read_config_from": map[string]bool{"cursor": false, "windsurf": false, "claude": false, "opencode": false, "zed": false}},
+		".config/devin/config.json":     map[string]any{"version": 1, "shell": map[string]bool{"setup_complete": true}, "theme_mode": "dark", "read_config_from": map[string]bool{"cursor": false, "windsurf": false, "claude": false, "opencode": false, "zed": false}},
 		".config/devin/mcp_config.json": map[string]any{"mcpServers": map[string]any{"fixture": map[string]any{"command": "/fixed/acs", "type": "stdio", "args": []string{"--acs-mcp-launch", root, "fixture"}, "disabledTools": []string{"acs_blocked_echo"}}}},
 		".acs/mcp/recipes.json":         []any{map[string]any{"id": "fixture", "sessionHome": root, "environmentNames": []string{"PROFILE_MCP_ARGUMENT", "PROFILE_MCP_SECRET"}, "disabledTools": []string{"acs_blocked_echo"}, "arguments": []any{map[string]string{"kind": "environment", "value": "PROFILE_MCP_ARGUMENT"}, map[string]string{"kind": "path", "value": "/selected/input"}}}},
 	}

@@ -402,7 +402,7 @@ func devinGeneratedSemantics(home string, launchers ...string) error {
 	if e := read(".config/devin/config.json", &user); e != nil {
 		return e
 	}
-	expected := map[string]any{"read_config_from": map[string]any{"cursor": false, "windsurf": false, "claude": false, "opencode": false, "zed": false}}
+	expected := map[string]any{"version": float64(1), "shell": map[string]any{"setup_complete": true}, "theme_mode": "dark", "read_config_from": map[string]any{"cursor": false, "windsurf": false, "claude": false, "opencode": false, "zed": false}}
 	if !reflect.DeepEqual(user, expected) {
 		return errors.New("generated import controls mismatch")
 	}

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -75,6 +76,33 @@ func TestSelectedMCPProjectionContainsOnlyReferencesAndToolFilters(t *testing.T)
 	}
 	if strings.Contains(string(codexBytes), "MCP_TOKEN=") || strings.Contains(string(codexBytes), "secret-value") {
 		t.Fatal("Codex MCP projection persisted an environment value")
+	}
+}
+
+func TestDevinUserConfigIncludesPinnedStartupDefaultsAndImportControls(t *testing.T) {
+	home := t.TempDir()
+	path, err := writeDevinUserConfig(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var config map[string]any
+	if err := json.Unmarshal(data, &config); err != nil {
+		t.Fatal(err)
+	}
+	expected := map[string]any{
+		"version":    float64(1),
+		"shell":      map[string]any{"setup_complete": true},
+		"theme_mode": "dark",
+		"read_config_from": map[string]any{
+			"cursor": false, "windsurf": false, "claude": false, "opencode": false, "zed": false,
+		},
+	}
+	if !reflect.DeepEqual(config, expected) {
+		t.Fatalf("startup Devin config = %+v", config)
 	}
 }
 

@@ -170,8 +170,14 @@ and [effective capability explanation](effective-capability-explanation.md).
 
 To suppress documented ambient MCP imports, the Devin Session user config sets
 `read_config_from.cursor`, `windsurf`, `claude`, `opencode`, and `zed` to
-`false`, while leaving `agents_standard` and `copilot` unchanged. The pinned
-CLI observation showed that a selected user `cursor: false` setting excludes
+`false`, while leaving `agents_standard` and `copilot` unchanged. ACS seeds
+Devin's deterministic first-run state (`version: 1`, shell setup marked
+complete, and `theme_mode: "dark"`) inside the isolated Session. This avoids
+the first-run configuration rewrite and suppresses shell/PATH bootstrap and
+keeps that config immutable for the Session lifetime. The contained Profile
+launch uses dark theme presentation and does not perform host shell
+integration; the shell flag records only the target's own setup state. The
+pinned CLI observation showed that a selected user `cursor: false` setting excludes
 Cursor MCP configuration even when the project asks to enable it. The same
 switches also suppress their documented non-MCP imports: Cursor rules;
 Windsurf rules and Skills; and Claude rules, Skills and commands. OpenCode and
