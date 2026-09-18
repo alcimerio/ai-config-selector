@@ -268,7 +268,7 @@ func inspectLogicalComponents(path string) ([]pathIdentity, error) {
 		return nil, errors.New("path must be absolute")
 	}
 	components := strings.Split(strings.TrimPrefix(filepath.Clean(path), string(filepath.Separator)), string(filepath.Separator))
-	current, err := unix.Open(string(filepath.Separator), unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_DIRECTORY, 0)
+	current, err := unix.Open(string(filepath.Separator), directoryTraversalOpenFlags(), 0)
 	if err != nil {
 		return nil, &pathOpenFailure{stage: "logical-root", cause: err}
 	}
@@ -313,7 +313,7 @@ func inspectLogicalComponents(path string) ([]pathIdentity, error) {
 		}
 		prefix = logicalComponent
 		if index < len(components)-1 {
-			next, err := unix.Openat(current, component, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_DIRECTORY, 0)
+			next, err := unix.Openat(current, component, directoryTraversalOpenFlags(), 0)
 			if err != nil {
 				return nil, &pathOpenFailure{stage: "logical-ancestor", cause: err}
 			}
@@ -329,7 +329,7 @@ func inspectLogicalComponents(path string) ([]pathIdentity, error) {
 
 func openCanonicalPath(path string, want PathType) (int, error) {
 	components := strings.Split(strings.TrimPrefix(filepath.Clean(path), string(filepath.Separator)), string(filepath.Separator))
-	current, err := unix.Open(string(filepath.Separator), unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_DIRECTORY, 0)
+	current, err := unix.Open(string(filepath.Separator), directoryTraversalOpenFlags(), 0)
 	if err != nil {
 		return -1, &pathOpenFailure{stage: "root", cause: err}
 	}
@@ -339,7 +339,7 @@ func openCanonicalPath(path string, want PathType) (int, error) {
 	for index, component := range components {
 		flags := unix.O_RDONLY | unix.O_CLOEXEC | unix.O_NOFOLLOW | unix.O_NONBLOCK
 		if index < len(components)-1 || want == PathTypeDirectory {
-			flags |= unix.O_DIRECTORY
+			flags = directoryTraversalOpenFlags()
 		}
 		next, err := unix.Openat(current, component, flags, 0)
 		if err != nil {

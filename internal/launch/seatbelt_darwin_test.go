@@ -6,6 +6,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -168,17 +169,19 @@ func TestSeatbeltPolicyKeepsValidSessionRootsProtectedWithoutExtraProtections(t 
 }
 
 func TestSeatbeltPolicyOmitsEmptySessionRootProtectionParameters(t *testing.T) {
-	policy, definitions, err := buildSeatbeltPolicy(validatedProcessRequest{workspace: "/private/tmp/workspace", executable: "/usr/bin/true"})
+	request := validatedProcessRequest{workspace: "/private/tmp/workspace", sessionDirectory: "/private/tmp/session", executable: "/usr/bin/true"}
+	policy, definitions, err := buildSeatbeltPolicy(request)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, definition := range definitions {
-		if strings.HasPrefix(definition, "-DSESSION_PROTECTED_") {
-			t.Fatalf("empty Session root produced a protection parameter: %q", definition)
-		}
+	if !strings.Contains(strings.Join(definitions, "\n"), "-DSESSION_PROTECTED_1="+request.sessionDirectory) {
+		t.Fatalf("valid Session directory protection parameter missing: %#v", definitions)
 	}
 	if strings.Contains(policy, `(literal (param "SESSION_PROTECTED_0"))`) {
-		t.Fatal("empty Session root produced a denial using a missing parameter")
+		t.Fatal("empty Session home produced a denial using a missing parameter")
+	}
+	if !strings.Contains(policy, `(deny file-write* (literal (param "SESSION_PROTECTED_1")))`) {
+		t.Fatal("valid Session directory protection denial missing")
 	}
 }
 
@@ -276,6 +279,85 @@ func TestSeatbeltPolicyKeepsValidatedExecutableSymlinkTraversalNarrow(t *testing
 	}
 	if !strings.Contains(policy, `(literal (param "PROFILE_EXECUTABLE_0_LOGICAL_ANCESTOR_0"))`) || strings.Contains(policy, `(subpath (param "PROFILE_EXECUTABLE_0_LOGICAL_ANCESTOR_0"))`) {
 		t.Fatalf("logical symlink ancestor metadata is not literal-only: %s", policy)
+	}
+}
+
+func TestSeatbeltExecutableGrantSearchMetadataDoesNotExposeDirectoryContents(t *testing.T) {
+	skipSeatbeltNativeTestBinaryUnderRace(t)
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonicalDirectory := filepath.Join(root, "cellar", "tool", "1.0", "bin")
+	logicalDirectory := filepath.Join(root, "logical", "bin")
+	if err := os.MkdirAll(canonicalDirectory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(root, "cellar", "tool", "1.0"), filepath.Join(root, "logical")); err != nil {
+		t.Fatal(err)
+	}
+	selectedBytes := []byte("#!/bin/sh\nexit 0\n")
+	selected := filepath.Join(canonicalDirectory, "tool")
+	logicalSelected := filepath.Join(logicalDirectory, "tool")
+	sibling := filepath.Join(canonicalDirectory, "sibling-secret")
+	if err := os.WriteFile(selected, selectedBytes, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(sibling, []byte("private"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	request := seatbeltTestRequest(t)
+	request.executableGrants = []ExecutableGrant{{ID: "selected", logicalPath: logicalSelected, path: selected}}
+	request.arguments = []string{"-test.run=TestSeatbeltHelperProcess", "--", "executable-grant-search", logicalSelected, canonicalDirectory, sibling}
+	var output bytes.Buffer
+	request.terminal = Terminal{Output: &output, ErrorOutput: &output}
+	prepareContext, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	process, err := newSeatbeltBackend(seatbeltExecutable).prepare(prepareContext, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := process.Start(); err != nil {
+		t.Fatal(err)
+	}
+	wait := make(chan error, 1)
+	go func() { wait <- process.Wait() }()
+	var waitErr error
+	timedOut := false
+	select {
+	case waitErr = <-wait:
+	case <-time.After(10 * time.Second):
+		timedOut = true
+		_ = process.Signal(syscall.SIGKILL)
+		select {
+		case waitErr = <-wait:
+		case <-time.After(10 * time.Second):
+			t.Fatal("executable grant search process did not terminate")
+		}
+	}
+	cleanup, ok := process.(ProcessCleanup)
+	if !ok || cleanup.CleanupDone() == nil {
+		t.Fatal("executable grant search backend did not expose cleanup completion")
+	}
+	select {
+	case <-cleanup.CleanupDone():
+	case <-time.After(10 * time.Second):
+		t.Fatal("executable grant search cleanup did not complete")
+	}
+	if timedOut {
+		t.Fatalf("executable grant search exceeded bounded wait; wait after forced signal=%v; output=%q", waitErr, output.String())
+	}
+	if waitErr != nil {
+		t.Fatalf("executable grant search regression: %v; output=%q", waitErr, output.String())
+	}
+	if got := strings.TrimSpace(output.String()); got != "executable-grant-search" {
+		t.Fatalf("executable grant search output=%q", got)
+	}
+	if got, err := os.ReadFile(selected); err != nil || !bytes.Equal(got, selectedBytes) {
+		t.Fatalf("selected executable changed: err=%v bytes=%q", err, got)
+	}
+	if got, err := os.ReadFile(sibling); err != nil || string(got) != "private" {
+		t.Fatalf("sibling changed: err=%v bytes=%q", err, got)
 	}
 }
 
@@ -5175,6 +5257,32 @@ func TestSeatbeltHelperProcess(t *testing.T) {
 			os.Exit(124)
 		}
 		fmt.Fprintln(os.Stdout, "session-prefix-metadata")
+		os.Exit(0)
+	case "executable-grant-search":
+		if len(arguments) != 4 {
+			fmt.Fprintf(os.Stderr, "executable grant argument count=%d\n", len(arguments))
+			os.Exit(124)
+		}
+		_, _, _, digest, err := inspectExecutableGrant(arguments[1])
+		expected := [sha256.Size]byte{}
+		_, decodeErr := hex.Decode(expected[:], []byte("306c6ca7407560340797866e077e053627ad409277d1b9da58106fce4cf717cb"))
+		if err != nil || decodeErr != nil || digest != expected {
+			fmt.Fprintln(os.Stderr, "executable grant inspection failed")
+			os.Exit(125)
+		}
+		if _, err := os.ReadDir(arguments[2]); !isSeatbeltPermission(err) {
+			fmt.Fprintln(os.Stderr, "executable ancestor contents exposed")
+			os.Exit(126)
+		}
+		if _, err := os.ReadFile(arguments[3]); !isSeatbeltPermission(err) {
+			fmt.Fprintln(os.Stderr, "executable sibling contents exposed")
+			os.Exit(127)
+		}
+		if err := os.WriteFile(arguments[3], []byte("bad"), 0o600); !isSeatbeltPermission(err) {
+			fmt.Fprintln(os.Stderr, "executable sibling write exposed")
+			os.Exit(128)
+		}
+		fmt.Fprintln(os.Stdout, "executable-grant-search")
 		os.Exit(0)
 	case "grandchild":
 		if _, err := os.ReadFile(arguments[1]); !isSeatbeltPermission(err) {
