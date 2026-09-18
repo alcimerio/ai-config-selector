@@ -241,7 +241,7 @@ func runNativeInstalledACSLockedCodexFixture(t *testing.T) {
 		fixture.descendantReady = descendantPath
 		fixture.mcpStartupReceipt = inputPath + ".mcp-startup"
 		defer fixture.server.Close()
-		buildFixedCodexTrampoline(t, grantedTarget, fixture.server.URL+"/backend-api", filepath.Join(tools, "codex"))
+		buildFixedCodexTrampoline(t, grantedTarget, fixture.server.URL+"/backend-api", filepath.Join(tools, "codex"), nativeCodexPhaseCoordination{requireMCPStartup: true})
 		runInstalledCodexPTY(t, candidate, home, tools, workspace, "mcp", fixture, false)
 		descendantPID := fixture.assert(t, true)
 		if receipt := readNativeMCPStartupReceipt(fixture.mcpStartupReceipt); receipt != "server-entered,initialize-received,initialize-replied,tools-list-received,tools-list-replied" {
@@ -992,6 +992,7 @@ type nativeCodexPhaseCoordination struct {
 	versionReady, versionRelease, interactiveReady, interactiveRelease string
 	versionCapability                                                  *nativeCodexCapability
 	expectEnvironment                                                  bool
+	requireMCPStartup                                                  bool
 }
 
 type nativeCodexCapability struct {
@@ -1162,6 +1163,7 @@ func newNativeResponsesFixture(t *testing.T, shellCommand, launcherHome string) 
 		if index == 1 {
 			functionName := "shell_command"
 			functionArguments := ""
+			namespace := ""
 			if fixture.mcpScenario == nil {
 				arguments, _ := json.Marshal(map[string]any{"command": shellCommand, "timeout_ms": 5000})
 				functionArguments = string(arguments)
@@ -1191,7 +1193,8 @@ func newNativeResponsesFixture(t *testing.T, shellCommand, launcherHome string) 
 					)
 					return
 				}
-				allowed, err := nativeMCPExactNamespaceFunctionEntry(body, scenario.serverID, scenario.allowedTool)
+				var allowed map[string]any
+				namespace, allowed, err = nativeMCPExactNamespaceFunction(body, scenario.serverID, scenario.allowedTool)
 				if err != nil {
 					fixture.rejectProtocol(response, err.Error())
 					return
@@ -1205,7 +1208,7 @@ func newNativeResponsesFixture(t *testing.T, shellCommand, launcherHome string) 
 			}
 			call := map[string]any{"type": "function_call", "call_id": "acs-call-1", "name": functionName, "arguments": functionArguments}
 			if fixture.mcpScenario != nil {
-				call["namespace"] = "mcp__" + fixture.mcpScenario.serverID
+				call["namespace"] = namespace
 			}
 			writeSSE(response,
 				map[string]any{"type": "response.created", "response": map[string]any{"id": "resp-1"}},
@@ -1223,9 +1226,14 @@ func newNativeResponsesFixture(t *testing.T, shellCommand, launcherHome string) 
 				fixture.rejectProtocol(response, err.Error())
 				return
 			}
+			namespace, err := nativeMCPToolSearchOutputNamespace(body, fixture.mcpScenario.searchCallID, fixture.mcpScenario.serverID, fixture.mcpScenario.allowedTool)
+			if err != nil {
+				fixture.rejectProtocol(response, "discovered MCP namespace is invalid")
+				return
+			}
 			writeSSE(response,
 				map[string]any{"type": "response.created", "response": map[string]any{"id": "resp-1"}},
-				map[string]any{"type": "response.output_item.done", "item": map[string]any{"type": "function_call", "call_id": "acs-call-1", "namespace": "mcp__" + fixture.mcpScenario.serverID, "name": fixture.mcpScenario.allowedTool, "arguments": fixture.mcpScenario.callArguments}},
+				map[string]any{"type": "response.output_item.done", "item": map[string]any{"type": "function_call", "call_id": "acs-call-1", "namespace": namespace, "name": fixture.mcpScenario.allowedTool, "arguments": fixture.mcpScenario.callArguments}},
 				completedEvent("resp-1"),
 			)
 			return
@@ -1931,6 +1939,7 @@ func buildFixedCodexTrampoline(t *testing.T, target, baseURL, destination string
 	chatGPTOverride := fmt.Sprintf("chatgpt_base_url=%q", baseURL)
 	var versionReady, versionRelease, interactiveReady, interactiveRelease string
 	environmentCheck := ""
+	mcpStartupOverride := ""
 	if len(coordination) > 0 {
 		versionReady, versionRelease = coordination[0].versionReady, coordination[0].versionRelease
 		interactiveReady, interactiveRelease = coordination[0].interactiveReady, coordination[0].interactiveRelease
@@ -1941,6 +1950,17 @@ func buildFixedCodexTrampoline(t *testing.T, target, baseURL, destination string
 	} else {
 		if (!getenv("PROFILE_CODEX_MODE") || !getenv("PROFILE_CODEX_TOKEN") || getenv("PROFILE_CODEX_UNSELECTED") || getenv("ACS_NATIVE_CODEX_MODE") || getenv("ACS_NATIVE_CODEX_TOKEN") || getenv("ACS_NATIVE_CODEX_UNSELECTED")) return 128;
 	}`
+		}
+		if coordination[0].requireMCPStartup {
+			// Fixture-only required startup makes the pinned optional MCP
+			// registration wait for the real client-ready seam. This proves
+			// production composition with required fixture startup; it does not
+			// change ACS or Codex product defaults or claim an optional latency SLA.
+			mcpStartupOverride = `
+		if (!version) {
+			next[argc + 6] = "-c";
+			next[argc + 7] = "mcp_servers.fixture.required=true";
+		}`
 		}
 	}
 	program := fmt.Sprintf(`#include <fcntl.h>
@@ -1971,7 +1991,7 @@ static int ready_and_wait(const char *ready, const char *release) {
   return 125;
 }
 int main(int argc, char **argv) {
-	char **next = calloc((size_t)argc + 7, sizeof(char *));
+	char **next = calloc((size_t)argc + 9, sizeof(char *));
 	if (!next) return 120;
 	next[0] = %s;
 	int version = 0;
@@ -1992,11 +2012,12 @@ int main(int argc, char **argv) {
 		next[argc + 4] = "-c";
 		next[argc + 5] = log_override;
 	}
+	%s
 	if (ready_and_wait(version ? %s : %s, version ? %s : %s) != 0) return 126;
   execv(next[0], next);
   return 121;
 }
-`, strconv.Quote(target), environmentCheck, strconv.Quote(openAIOverride), strconv.Quote(chatGPTOverride), strconv.Quote(versionReady), strconv.Quote(interactiveReady), strconv.Quote(versionRelease), strconv.Quote(interactiveRelease))
+`, strconv.Quote(target), environmentCheck, strconv.Quote(openAIOverride), strconv.Quote(chatGPTOverride), mcpStartupOverride, strconv.Quote(versionReady), strconv.Quote(interactiveReady), strconv.Quote(versionRelease), strconv.Quote(interactiveRelease))
 	if err := os.WriteFile(source, []byte(program), 0o600); err != nil {
 		t.Fatal(err)
 	}

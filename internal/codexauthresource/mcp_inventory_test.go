@@ -32,9 +32,14 @@ func nativeMCPInventoryFunctionEntry(body, serverID, toolName string) (map[strin
 }
 
 func nativeMCPExactNamespaceFunctionEntry(body, serverID, toolName string) (map[string]any, error) {
+	_, entry, err := nativeMCPExactNamespaceFunction(body, serverID, toolName)
+	return entry, err
+}
+
+func nativeMCPExactNamespaceFunction(body, serverID, toolName string) (string, map[string]any, error) {
 	var request map[string]any
 	if err := json.Unmarshal([]byte(body), &request); err != nil {
-		return nil, errors.New("Responses request is invalid JSON")
+		return "", nil, errors.New("Responses request is invalid JSON")
 	}
 	var inventories [][]any
 	if tools, ok := request["tools"].([]any); ok {
@@ -48,23 +53,25 @@ func nativeMCPExactNamespaceFunctionEntry(body, serverID, toolName string) (map[
 			}
 			tools, ok := item["tools"].([]any)
 			if !ok {
-				return nil, errors.New("Responses AdditionalTools inventory is malformed")
+				return "", nil, errors.New("Responses AdditionalTools inventory is malformed")
 			}
 			inventories = append(inventories, tools)
 		}
 	}
-	wantNamespace := "mcp__" + serverID
+	allowedNamespaces := map[string]bool{"mcp__" + serverID: true, serverID: true}
 	var found map[string]any
+	foundNamespace := ""
 	count := 0
 	for _, inventory := range inventories {
 		for _, raw := range inventory {
 			entry, ok := raw.(map[string]any)
-			if !ok || entry["type"] != "namespace" || entry["name"] != wantNamespace {
+			namespace, _ := entry["name"].(string)
+			if !ok || entry["type"] != "namespace" || !allowedNamespaces[namespace] {
 				continue
 			}
 			nested, ok := entry["tools"].([]any)
 			if !ok {
-				return nil, errors.New("MCP namespace inventory is malformed")
+				return "", nil, errors.New("MCP namespace inventory is malformed")
 			}
 			for _, nestedRaw := range nested {
 				function, ok := nestedRaw.(map[string]any)
@@ -72,14 +79,15 @@ func nativeMCPExactNamespaceFunctionEntry(body, serverID, toolName string) (map[
 					continue
 				}
 				found = function
+				foundNamespace = namespace
 				count++
 			}
 		}
 	}
 	if count != 1 {
-		return nil, fmt.Errorf("Responses request contains %d exact MCP namespace functions, want one", count)
+		return "", nil, fmt.Errorf("Responses request contains %d exact MCP namespace functions, want one", count)
 	}
-	return found, nil
+	return foundNamespace, found, nil
 }
 
 func nativeMCPInventoryContains(body, serverID, toolName string) (bool, error) {
@@ -255,6 +263,34 @@ func nativeMCPToolSearchOutput(body, callID, serverID, allowedTool, disabledTool
 	return nil
 }
 
+func nativeMCPToolSearchOutputNamespace(body, callID, serverID, allowedTool string) (string, error) {
+	var request map[string]any
+	if err := json.Unmarshal([]byte(body), &request); err != nil {
+		return "", errors.New("Responses request is invalid JSON")
+	}
+	input, ok := request["input"].([]any)
+	if !ok {
+		return "", errors.New("tool search output request has no input array")
+	}
+	for _, raw := range input {
+		item, ok := raw.(map[string]any)
+		if !ok || item["type"] != "tool_search_output" || item["call_id"] != callID {
+			continue
+		}
+		tools, ok := item["tools"].([]any)
+		if !ok {
+			return "", errors.New("tool search output tools are malformed")
+		}
+		encoded, err := json.Marshal(map[string]any{"tools": tools})
+		if err != nil {
+			return "", errors.New("tool search output could not be inspected")
+		}
+		namespace, _, err := nativeMCPExactNamespaceFunction(string(encoded), serverID, allowedTool)
+		return namespace, err
+	}
+	return "", errors.New("tool search output is missing")
+}
+
 func nativeMCPFunctionCallOutputEnvelope(body, callID string) error {
 	var request map[string]any
 	if err := json.Unmarshal([]byte(body), &request); err != nil {
@@ -309,6 +345,9 @@ func nativeMCPInventoryStructure(body, serverID, toolName string) string {
 	allowedPresent, blockedPresent := false, false
 	mcpAllowedPresent, mcpBlockedPresent := false, false
 	mcpNamespacePresent := false
+	namespaceCounts := map[string]int{"functions": 0, "fixture": 0, "mcp__fixture": 0, "other": 0}
+	namespaceAllowed := map[string]bool{"functions": false, "fixture": false, "mcp__fixture": false, "other": false}
+	namespaceBlocked := map[string]bool{"functions": false, "fixture": false, "mcp__fixture": false, "other": false}
 	wantAllowed := "mcp__" + serverID + "__" + toolName
 	wantBlocked := "mcp__" + serverID + "__" + "blocked"
 	wantNamespace := "mcp__" + serverID
@@ -323,6 +362,12 @@ func nativeMCPInventoryStructure(body, serverID, toolName string) string {
 			case "function":
 				functionCount++
 				name, _ := entry["name"].(string)
+				class := namespace
+				if _, ok := namespaceCounts[class]; !ok {
+					class = "other"
+				}
+				namespaceAllowed[class] = namespaceAllowed[class] || name == toolName || name == wantAllowed
+				namespaceBlocked[class] = namespaceBlocked[class] || name == "blocked" || name == wantBlocked
 				if namespace == wantNamespace {
 					mcpAllowedPresent = mcpAllowedPresent || name == toolName
 					mcpBlockedPresent = mcpBlockedPresent || name == "blocked"
@@ -336,11 +381,14 @@ func nativeMCPInventoryStructure(body, serverID, toolName string) string {
 			case "namespace":
 				namespaceCount++
 				nestedNamespace, _ := entry["name"].(string)
+				class := nestedNamespace
+				if _, ok := namespaceCounts[class]; !ok {
+					class = "other"
+				}
+				namespaceCounts[class]++
 				mcpNamespacePresent = mcpNamespacePresent || nestedNamespace == wantNamespace
-				if nestedNamespace == "functions" || nestedNamespace == wantNamespace {
-					if nested, ok := entry["tools"].([]any); ok {
-						visit(nested, nestedNamespace)
-					}
+				if nested, ok := entry["tools"].([]any); ok {
+					visit(nested, class)
 				}
 			case "tool_search":
 				toolSearchCount++
@@ -369,7 +417,7 @@ func nativeMCPInventoryStructure(body, serverID, toolName string) string {
 			inputState = "array"
 		}
 	}
-	return fmt.Sprintf("legacy=%s input=%s additional-developer=%d functions=%d namespaces=%d tool-search=%d deferred=%d legacy-allowed=%t legacy-blocked=%t mcp-namespace=%t mcp-allowed=%t mcp-blocked=%t", legacyState, inputState, len(additional), functionCount, namespaceCount, toolSearchCount, deferredCount, allowedPresent, blockedPresent, mcpNamespacePresent, mcpAllowedPresent, mcpBlockedPresent)
+	return fmt.Sprintf("legacy=%s input=%s additional-developer=%d functions=%d namespaces=%d tool-search=%d deferred=%d legacy-allowed=%t legacy-blocked=%t mcp-namespace=%t mcp-allowed=%t mcp-blocked=%t ns-functions=%d/%t/%t ns-fixture=%d/%t/%t ns-mcp-fixture=%d/%t/%t ns-other=%d/%t/%t", legacyState, inputState, len(additional), functionCount, namespaceCount, toolSearchCount, deferredCount, allowedPresent, blockedPresent, mcpNamespacePresent, mcpAllowedPresent, mcpBlockedPresent, namespaceCounts["functions"], namespaceAllowed["functions"], namespaceBlocked["functions"], namespaceCounts["fixture"], namespaceAllowed["fixture"], namespaceBlocked["fixture"], namespaceCounts["mcp__fixture"], namespaceAllowed["mcp__fixture"], namespaceBlocked["mcp__fixture"], namespaceCounts["other"], namespaceAllowed["other"], namespaceBlocked["other"])
 }
 
 func nativeMCPInventoryLookup(body, serverID, toolName string) (map[string]any, bool, error) {
@@ -411,6 +459,7 @@ func nativeMCPInventoryLookup(body, serverID, toolName string) (map[string]any, 
 	}
 	wantName := "mcp__" + serverID + "__" + toolName
 	wantNamespace := "mcp__" + serverID
+	allowedNamespaces := map[string]bool{wantNamespace: true, serverID: true}
 	var found map[string]any
 	count := 0
 	namespaceCount := 0
@@ -424,7 +473,7 @@ func nativeMCPInventoryLookup(body, serverID, toolName string) (map[string]any, 
 			}
 			if entry["type"] == "namespace" {
 				nestedNamespace, _ := entry["name"].(string)
-				if nestedNamespace != "functions" && nestedNamespace != wantNamespace {
+				if nestedNamespace != "functions" && !allowedNamespaces[nestedNamespace] {
 					continue
 				}
 				namespaceCount++
@@ -443,7 +492,7 @@ func nativeMCPInventoryLookup(body, serverID, toolName string) (map[string]any, 
 			}
 			name, _ := entry["name"].(string)
 			matchesLegacy := (namespace == "" || namespace == "functions") && name == wantName
-			matchesMCP := namespace == wantNamespace && name == toolName
+			matchesMCP := allowedNamespaces[namespace] && name == toolName
 			if entry["type"] != "function" || (!matchesLegacy && !matchesMCP) {
 				continue
 			}
@@ -516,6 +565,10 @@ func TestNativeMCPInventorySeparatesIdentityFromAllowedSchema(t *testing.T) {
 	if present, err := nativeMCPInventoryContains(customNamespaceBody, "fixture", "blocked"); err != nil || !present {
 		t.Fatalf("custom namespace blocked lookup = (%t, %v), want present", present, err)
 	}
+	unprefixedBody := `{"tools":[{"type":"namespace","name":"fixture","tools":[{"type":"function","name":"allowed","parameters":{"type":"object","properties":{"value":{},"input":{}}}},{"type":"function","name":"blocked","parameters":{"type":"object","properties":{"value":{}}}}]}]}`
+	if present, err := nativeMCPInventoryContains(unprefixedBody, "fixture", "blocked"); err != nil || !present {
+		t.Fatalf("unprefixed namespace blocked lookup = (%t, %v), want present", present, err)
+	}
 	if present, err := nativeMCPInventoryContains(allowedBody, "fixture", "blocked"); err != nil || present {
 		t.Fatalf("absent blocked tool lookup = (%t, %v), want absent", present, err)
 	}
@@ -533,16 +586,18 @@ func TestNativeMCPInventorySeparatesIdentityFromAllowedSchema(t *testing.T) {
 	}
 
 	for name, body := range map[string]string{
-		"duplicate blocked entries":         `{"tools":[{"type":"function","name":"mcp__fixture__blocked","parameters":{"properties":{"value":{}}}},{"type":"function","name":"mcp__fixture__blocked","parameters":{"properties":{"value":{}}}}]}`,
-		"server identity outside inventory": `{"metadata":"fixture","tools":[{"type":"function","name":"mcp__other__blocked","parameters":{"properties":{"value":{}}}}]}`,
-		"substring tool name":               `{"tools":[{"type":"function","name":"mcp__fixture__blocked_extra","parameters":{"properties":{"value":{}}}}]}`,
-		"malformed default namespace":       `{"tools":[{"type":"namespace","name":"functions","tools":{}}]}`,
-		"duplicate namespace function":      `{"tools":[{"type":"namespace","name":"functions","tools":[{"type":"function","name":"mcp__fixture__blocked","parameters":{}}]},{"type":"function","name":"mcp__fixture__blocked","parameters":{}}]}`,
-		"mixed legacy and lite inventory":   `{"tools":[{"type":"function","name":"mcp__fixture__blocked","parameters":{}}],"input":[{"type":"additional_tools","role":"developer","tools":[{"type":"function","name":"mcp__fixture__blocked","parameters":{}}]}]}`,
-		"additional tools wrong role":       `{"input":[{"type":"additional_tools","role":"user","tools":[]}]}`,
-		"additional tools malformed":        `{"input":[{"type":"additional_tools","role":"developer","tools":{}}]}`,
-		"duplicate default namespaces":      `{"tools":[{"type":"namespace","name":"functions","tools":[]},{"type":"namespace","name":"functions","tools":[]}]}`,
-		"nested metadata decoy":             `{"metadata":{"tools":[{"type":"function","name":"mcp__fixture__blocked"}]},"tools":[]}`,
+		"duplicate blocked entries":                        `{"tools":[{"type":"function","name":"mcp__fixture__blocked","parameters":{"properties":{"value":{}}}},{"type":"function","name":"mcp__fixture__blocked","parameters":{"properties":{"value":{}}}}]}`,
+		"server identity outside inventory":                `{"metadata":"fixture","tools":[{"type":"function","name":"mcp__other__blocked","parameters":{"properties":{"value":{}}}}]}`,
+		"substring tool name":                              `{"tools":[{"type":"function","name":"mcp__fixture__blocked_extra","parameters":{"properties":{"value":{}}}}]}`,
+		"malformed default namespace":                      `{"tools":[{"type":"namespace","name":"functions","tools":{}}]}`,
+		"duplicate namespace function":                     `{"tools":[{"type":"namespace","name":"functions","tools":[{"type":"function","name":"mcp__fixture__blocked","parameters":{}}]},{"type":"function","name":"mcp__fixture__blocked","parameters":{}}]}`,
+		"mixed legacy and lite inventory":                  `{"tools":[{"type":"function","name":"mcp__fixture__blocked","parameters":{}}],"input":[{"type":"additional_tools","role":"developer","tools":[{"type":"function","name":"mcp__fixture__blocked","parameters":{}}]}]}`,
+		"additional tools wrong role":                      `{"input":[{"type":"additional_tools","role":"user","tools":[]}]}`,
+		"additional tools malformed":                       `{"input":[{"type":"additional_tools","role":"developer","tools":{}}]}`,
+		"duplicate default namespaces":                     `{"tools":[{"type":"namespace","name":"functions","tools":[]},{"type":"namespace","name":"functions","tools":[]}]}`,
+		"duplicate unprefixed MCP namespaces":              `{"tools":[{"type":"namespace","name":"fixture","tools":[{"type":"function","name":"blocked","parameters":{}}]},{"type":"namespace","name":"fixture","tools":[{"type":"function","name":"blocked","parameters":{}}]}]}`,
+		"ambiguous prefixed and unprefixed MCP namespaces": `{"tools":[{"type":"namespace","name":"fixture","tools":[{"type":"function","name":"blocked","parameters":{}}]},{"type":"namespace","name":"mcp__fixture","tools":[{"type":"function","name":"blocked","parameters":{}}]}]}`,
+		"nested metadata decoy":                            `{"metadata":{"tools":[{"type":"function","name":"mcp__fixture__blocked"}]},"tools":[]}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := nativeMCPInventoryFunctionEntry(body, "fixture", "blocked"); err == nil {
@@ -565,6 +620,10 @@ func TestNativeMCPDeferredSearchProtocolShapes(t *testing.T) {
 	outputBody := `{"input":[{"type":"tool_search_output","call_id":"acs-search-1","status":"completed","execution":"client","tools":[{"type":"namespace","name":"mcp__fixture","tools":[{"type":"function","name":"allowed","defer_loading":true,"parameters":{"type":"object","properties":{"value":{},"input":{}}}}]}]}]}`
 	if err := nativeMCPToolSearchOutput(outputBody, "acs-search-1", "fixture", "allowed", "blocked"); err != nil {
 		t.Fatalf("tool search output rejected: %v", err)
+	}
+	unprefixedOutput := `{"input":[{"type":"tool_search_output","call_id":"acs-search-1","status":"completed","execution":"client","tools":[{"type":"namespace","name":"fixture","tools":[{"type":"function","name":"allowed","parameters":{"type":"object","properties":{"value":{},"input":{}}}},{"type":"function","name":"blocked","parameters":{"type":"object","properties":{"value":{}}}}]}]}]}`
+	if err := nativeMCPToolSearchOutput(unprefixedOutput, "acs-search-1", "fixture", "allowed", "blocked"); err == nil {
+		t.Fatal("unprefixed disabled tool appeared to be absent from deferred output")
 	}
 	if err := nativeMCPFunctionCallOutputEnvelope(`{"input":[{"type":"function_call_output","call_id":"acs-call-1","output":"fixture-complete"}]}`, "acs-call-1"); err != nil {
 		t.Fatalf("function output envelope rejected: %v", err)
@@ -633,7 +692,7 @@ func TestNativeMCPDeferredGatesRejectIdentityAndLifecycleDecoys(t *testing.T) {
 
 func TestNativeMCPInventoryStructureIsBoundedAndClassifiesDiscovery(t *testing.T) {
 	body := `{"input":[{"type":"additional_tools","role":"developer","tools":[{"type":"tool_search","execution":"server","description":"secret description","parameters":{}},{"type":"namespace","name":"functions","tools":[{"type":"function","name":"mcp__fixture__blocked","defer_loading":true},{"type":"function","name":"mcp__fixture__other"}]}]}],"tools":null,"metadata":{"mcp__fixture__allowed":"private value"}}`
-	want := "legacy=null input=array additional-developer=1 functions=2 namespaces=1 tool-search=1 deferred=1 legacy-allowed=false legacy-blocked=true mcp-namespace=false mcp-allowed=false mcp-blocked=false"
+	want := "legacy=null input=array additional-developer=1 functions=2 namespaces=1 tool-search=1 deferred=1 legacy-allowed=false legacy-blocked=true mcp-namespace=false mcp-allowed=false mcp-blocked=false ns-functions=1/false/true ns-fixture=0/false/false ns-mcp-fixture=0/false/false ns-other=0/false/false"
 	if got := nativeMCPInventoryStructure(body, "fixture", "allowed"); got != want {
 		t.Fatalf("bounded inventory structure=%q, want %q", got, want)
 	}
