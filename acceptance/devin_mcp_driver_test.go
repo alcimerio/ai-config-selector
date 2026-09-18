@@ -212,6 +212,7 @@ type devinHTTPReceipt struct {
 	ResponseBytes, WrittenBytes                      int
 }
 type devinDriver struct {
+	initialCatalog                                                      func([]byte) error
 	mu                                                                  sync.Mutex
 	member, home                                                        string
 	phase                                                               string
@@ -380,6 +381,13 @@ func (d *devinDriver) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			if _, err = devinWire(body[5:]); err != nil {
 				d.fail(err)
 				http.Error(w, "protobuf", 400)
+				return
+			}
+		}
+		if n == 1 && d.initialCatalog != nil {
+			if e := d.initialCatalog(body); e != nil {
+				d.fail(e)
+				http.Error(w, "agent catalog refusal", 400)
 				return
 			}
 		}

@@ -46,6 +46,9 @@ func TestNativeInstalledACSExecutesLockedCodexToolThroughNamedIdentity(t *testin
 }
 
 func runNativeInstalledACSLockedCodexFixture(t *testing.T) {
+	runNativeInstalledACSLockedCodexFixtureWithAgent(t, nil)
+}
+func runNativeInstalledACSLockedCodexFixtureWithAgent(t *testing.T, agentPresent *bool) {
 	t.Helper()
 	if os.Getenv("ACS_RUN_NATIVE_AUTH_GATE") != "1" {
 		t.Skip("set ACS_RUN_NATIVE_AUTH_GATE=1 to use an isolated temporary Keychain")
@@ -144,6 +147,10 @@ func runNativeInstalledACSLockedCodexFixture(t *testing.T) {
 		t.Fatal(err)
 	}
 	isolationProbe := fmt.Sprintf(`; if cat %s >/dev/null 2>&1; then printf 'global-auth-read-bad\n'; else printf 'global-auth-read-denied\n'; fi; if cat %s >/dev/null 2>&1; then printf 'outside-read-bad\n'; else printf 'outside-read-denied\n'; fi; if printf bad > %s 2>/dev/null; then printf 'outside-write-bad\n'; else printf 'outside-write-denied\n'; fi`, strconv.Quote(globalAuth), strconv.Quote(outsideSecret), strconv.Quote(outsideWrite))
+	if agentPresent != nil {
+		runNativeCodexMCPAgentCase(t, candidate, home, tools, workspace, grantedTarget, identities["coding"], agentPresent)
+		return
+	}
 	pathFixture := prepareNativeCodexPathGrantFixture(t, home, workspace)
 	writeNativeCodexPathGrantProfile(t, home, identities["coding"], pathFixture)
 	t.Run("Codex filesystem grants govern matching parent and child operations", func(t *testing.T) {
@@ -227,42 +234,7 @@ func runNativeInstalledACSLockedCodexFixture(t *testing.T) {
 		assertNewRemovedInstalledSessions(t, candidate, home, tools, workspace, before, "codex")
 	})
 	t.Run("locked Codex invokes only the selected MCP tools with referenced argv and environment", func(t *testing.T) {
-		const argumentValue = "native MCP argument with spaces"
-		const secretValue = "native MCP selected secret sentinel"
-		const inputValue = "native MCP input sentinel"
-		t.Setenv("ACS_NATIVE_MCP_ARGUMENT", argumentValue)
-		t.Setenv("ACS_NATIVE_MCP_SECRET", secretValue)
-		inputPath := filepath.Join(workspace, "native-mcp-input.txt")
-		if err := os.WriteFile(inputPath, []byte(inputValue), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		serverPath := filepath.Join(workspace, "native-mcp-server.sh")
-		writeNativeMCPServer(t, serverPath)
-		writeNativeCodexMCPProfile(t, home, "mcp", identities["coding"])
-		markerPath := inputPath + ".mcp-effect"
-		descendantPath := inputPath + ".mcp-descendant"
-		before := installedSessionSnapshot(t, candidate, home, tools, workspace)
-		fixture := newNativeResponsesFixture(t, "", home)
-		fixture.mcpScenario = &nativeMCPResponsesScenario{
-			serverID: "fixture", allowedTool: "allowed", disabledTool: "blocked",
-			callArguments: `{"value":"` + argumentValue + `","input":"` + inputValue + `"}`,
-		}
-		fixture.privateSentinels = []string{secretValue}
-		fixture.descendantReady = descendantPath
-		fixture.mcpStartupReceipt = inputPath + ".mcp-startup"
-		defer fixture.server.Close()
-		buildFixedCodexTrampoline(t, grantedTarget, fixture.server.URL+"/backend-api", filepath.Join(tools, "codex"), nativeCodexPhaseCoordination{requireMCPStartup: true})
-		runInstalledCodexPTY(t, candidate, home, tools, workspace, "mcp", fixture, false)
-		descendantPID := fixture.assert(t, true)
-		if receipt := readNativeMCPStartupReceipt(fixture.mcpStartupReceipt); receipt != "server-entered,initialize-received,initialize-replied,tools-list-received,tools-list-replied" {
-			t.Fatalf("synthetic MCP startup receipts=%q, want server entry and complete initialize/tools-list exchange", receipt)
-		}
-		if contents, err := os.ReadFile(markerPath); err != nil || string(contents) != "mcp-fixture-call-ok|mcp-secret-environment-ok" {
-			t.Fatalf("MCP physical server effect=%q err=%v", contents, err)
-		}
-		assertNativeProcessRemoved(t, descendantPID, "Codex MCP server descendant survived target settlement")
-		assertNoNativeSessions(t, filepath.Join(home, ".acs", "sessions"))
-		assertNewRemovedInstalledSessions(t, candidate, home, tools, workspace, before, "codex")
+		runNativeCodexMCPAgentCase(t, candidate, home, tools, workspace, grantedTarget, identities["coding"], nil)
 	})
 	t.Run("missing required environment precedes locked Codex Session", func(t *testing.T) {
 		ready := filepath.Join(workspace, ".acs-codex-missing-environment-started")
@@ -630,7 +602,11 @@ func runInstalledCodexPTY(t *testing.T, candidate, home, tools, workspace, profi
 	if fixture.coordination != nil {
 		versionCapability := observeNativeCodexPhase(t, candidate, home, tools, workspace, fixture.coordination.versionReady, fixture.coordination.versionRelease, nil)
 		fixture.coordination.versionCapability = &versionCapability
-		observeNativeCodexPhase(t, candidate, home, tools, workspace, fixture.coordination.interactiveReady, fixture.coordination.interactiveRelease, fixture.coordination.versionCapability)
+		var seed []func(string) error
+		if fixture.agentCatalog != nil {
+			seed = append(seed, func(home string) error { return seedNativeAgentRole(home, *fixture.agentCatalog) })
+		}
+		observeNativeCodexPhase(t, candidate, home, tools, workspace, fixture.coordination.interactiveReady, fixture.coordination.interactiveRelease, fixture.coordination.versionCapability, seed...)
 	}
 	select {
 	case err := <-wait:
@@ -986,6 +962,8 @@ type nativeResponsesFixture struct {
 	coordination               *nativeCodexPhaseCoordination
 	privateSentinels           []string
 	mcpScenario                *nativeMCPResponsesScenario
+	agentCatalog               *bool
+	agentCatalogChecked        bool
 }
 
 type nativeMCPResponsesScenario struct {
@@ -1014,7 +992,7 @@ type nativeCodexCapability struct {
 	Generation              uint64
 }
 
-func observeNativeCodexPhase(t *testing.T, candidate, home, tools, workspace, ready, release string, previous *nativeCodexCapability) nativeCodexCapability {
+func observeNativeCodexPhase(t *testing.T, candidate, home, tools, workspace, ready, release string, previous *nativeCodexCapability, seed ...func(string) error) nativeCodexCapability {
 	t.Helper()
 	if !waitForNativeCodexMarker(ready, 15*time.Second) {
 		t.Fatalf("locked Codex phase did not become ready: %s", filepath.Base(ready))
@@ -1048,6 +1026,14 @@ func observeNativeCodexPhase(t *testing.T, candidate, home, tools, workspace, re
 	}
 	if _, err := os.Stat(root); err != nil {
 		t.Fatalf("public recovery did not preserve the live locked Codex Session root: %v", err)
+	}
+	if len(seed) > 1 {
+		t.Fatal("duplicate phase seed hook")
+	}
+	if len(seed) == 1 {
+		if err := seed[0](wantHome); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if err := os.WriteFile(release, []byte("release\n"), 0o600); err != nil {
 		t.Fatalf("release locked Codex phase: %v", err)
@@ -1173,6 +1159,15 @@ func newNativeResponsesFixture(t *testing.T, shellCommand, launcherHome string) 
 		if index > observationIndex {
 			fixture.rejectProtocol(response, "Responses fixture request limit exceeded")
 			return
+		}
+		if index == 1 && fixture.agentCatalog != nil {
+			if err := assertNativeAgentCatalog(body, *fixture.agentCatalog); err != nil {
+				fixture.rejectProtocol(response, err.Error())
+				return
+			}
+			fixture.mu.Lock()
+			fixture.agentCatalogChecked = true
+			fixture.mu.Unlock()
 		}
 		response.Header().Set("Content-Type", "text/event-stream")
 		if index == 1 {

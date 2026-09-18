@@ -40,6 +40,25 @@ environment/secrets, network, project inheritance, failure precedence and
 descendant cleanup remain separate questions. Compile-only or parser results do
 not establish runtime containment.
 
+## Installed-evidence ledger
+
+Direct contained installed-target discovery and ACS compiler composition are
+separate evidence classes. Discovering a target definition does not make it an
+ACS Profile capability. The rows distinguish prepared cases from observed runs.
+
+| Target / concept | Observable and negative case | Status and limit |
+| --- | --- | --- |
+| Codex plugin | `TestNativeInstalledExtensionDiscovery` adds a local marketplace, checks available and installed package identity, and checks missing-plugin refusal with unchanged inventory. | Prepared, not executed; no plugin tool execution or runtime authority claim. |
+| Devin plugin | `TestNativeInstalledExtensionDiscovery` installs a local package, checks its identity and Skill inventory, and checks malformed-package refusal with unchanged inventory. | Prepared, not executed; no plugin tool execution, update, or persistent-data contract is established. |
+| Codex hook | `TestNativeInstalledExtensionDiscovery` checks untrusted hook discovery metadata and normalized hash, absence of the execution tripwire, and malformed-definition reporting in a fresh Session. | Prepared, not executed; no hook execution or child lifecycle claim. |
+| Devin hook | `TestPromotedArtifactNativeDevinSessionStartHook` observes a selected project hook, receipt, selected-input read, protected/outside write denials, and existing MCP/Session checks. | One native run passed; an earlier receipt-unavailable run remains unexplained. Three fresh repetitions are planned. Receipt or diagnostic absence cannot prove non-invocation; MCP cleanup is not hook-child cleanup proof. |
+| Codex role/agent | `TestNativeInstalledCustomCodexAgentDiscovery` checks the initial Responses request for the exact custom role catalog entry in selected and absent cases. | Prepared, not executed; no child-agent invocation, custom-instruction execution, or independent agent authority claim. |
+| Devin custom agent | `TestPromotedArtifactNativeCustomDevinAgentDiscovery` checks the initial request system catalog for the exact Markdown profile entry in selected and absent cases. | Prepared, not executed; no child-agent invocation or child lifecycle claim. |
+
+The installed discovery definition is deliberately narrower than the product
+matrix: it is a bounded black-box observation of target discovery and request
+metadata, not public Profile activation or a general extension capability.
+
 ## Field-level decisions
 
 ### Codex plugins
@@ -87,8 +106,10 @@ not establish runtime containment.
   command shell ABI, event JSON, timeout and hook decision/output handling.
 - Defer: complete cross-source merge precedence, prompt hooks, exit-2 versus
   other-error policy beyond the documented table, detached-child cleanup and
-  fail-open behavior as ACS enforcement. The first CI experiment failed with
-  no valid hook receipt; invocation and physical grant effects remain unproven.
+  fail-open behavior as ACS enforcement. One native observation passed and
+  established the selected hook's observed physical effects; an earlier
+  receipt-unavailable failure remains unexplained. Diagnostic absence is
+  best-effort and cannot prove non-invocation.
 
 ### Codex roles/agents
 
@@ -187,11 +208,11 @@ lease. Unknown or unsupported extension fields must fail closed rather than
 disappear.
 
 The native hook test is enabled only in the separate promoted-artifacts CI
-step with explicit opt-in. The first promoted
-run reached the assessment but failed before a valid hook receipt was
-available; a fixed-code diagnostic sidecar now distinguishes invocation and
-bounded witness stages without exposing event data or paths. No successful
-native hook observation is claimed here.
+step with explicit opt-in. One promoted run passed and established the
+selected hook's observed physical effects; an earlier run failed before a
+valid receipt and remains unexplained. A fixed-code diagnostic sidecar offers
+best-effort invocation/stage context without exposing event data or paths;
+absence of a diagnostic or receipt cannot prove non-invocation.
 
 ## Native hook assessment status
 
@@ -201,9 +222,10 @@ protected-config/outside write-denial attempts, atomic exclusive receipt
 publication, PID/PPID/session/executable/input evidence, and a first-input gate.
 Existing MCP, public ACS, live-session, natural-exit and descendant checks remain
 unchanged. The native glue now validates the receipt before successful
-completion acknowledgement. The experiment is currently a failed native
-observation, not a passing gate; independently reviewed source is not runtime
-evidence. MCP evidence is not presented as hook-child cleanup evidence.
+completion acknowledgement. One native run passed, while an earlier failure
+before a valid receipt remains unexplained; this is not yet stable evidence.
+Independently reviewed source is not runtime evidence. MCP evidence is not
+presented as hook-child cleanup evidence.
 
 The planned invocation is deliberately separate from normal gates:
 
@@ -214,7 +236,7 @@ ACS_RUN_NATIVE_DEVIN_HOOK_ASSESSMENT=1 \
   ACS_PROMOTED_BINARY=<promoted ACS> \
   ACS_PROMOTED_VERSION=<version> \
   ACS_PROMOTED_SANDBOX_BACKEND=available \
-  go test ./acceptance -run '^TestPromotedArtifactNativeDevinSessionStartHook$' -count=1 -v -timeout=12m
+  go test ./acceptance -run '^TestPromotedArtifactNativeDevinSessionStartHook$' -count=3 -v -timeout=12m
 ```
 
 This command is the exact separate CI invocation; it is not part of the release

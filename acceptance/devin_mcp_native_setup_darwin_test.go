@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strconv"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -33,6 +34,14 @@ func assembleNativeDevinProof(t *testing.T, input func(devinInputFrame, string) 
 }
 
 func assembleNativeDevinProofWithOptions(t *testing.T, input func(devinInputFrame, string) ([]byte, error), listing func(int, string) error, options *devinNativeAssessmentOptions) {
+	assembleNativeDevinProofWithAssessment(t, input, listing, options, nil)
+}
+
+func assembleNativeDevinProofWithAgent(t *testing.T, input func(devinInputFrame, string) ([]byte, error), listing func(int, string) error, agentPresent *bool) {
+	assembleNativeDevinProofWithAssessment(t, input, listing, nil, agentPresent)
+}
+
+func assembleNativeDevinProofWithAssessment(t *testing.T, input func(devinInputFrame, string) ([]byte, error), listing func(int, string) error, options *devinNativeAssessmentOptions, agentPresent *bool) {
 	t.Helper()
 	if runtime.GOARCH != "arm64" {
 		t.Fatal("locked target is Darwin arm64")
@@ -54,6 +63,11 @@ func assembleNativeDevinProofWithOptions(t *testing.T, input func(devinInputFram
 	}
 	home := realTemporaryDirectory(t)
 	workspace := realTemporaryDirectory(t)
+	if agentPresent != nil {
+		if e := seedDevinAgentDefinition(workspace, *agentPresent); e != nil {
+			t.Fatal(e)
+		}
+	}
 	tools := filepath.Join(workspace, "tools")
 	coord := filepath.Join(workspace, "coordination")
 	for _, p := range []string{tools, coord} {
@@ -143,6 +157,16 @@ func assembleNativeDevinProofWithOptions(t *testing.T, input func(devinInputFram
 	trampoline := filepath.Join(tools, "devin")
 	buildDevinResearchHelper(t, "devin-trampoline", trampoline, map[string]string{"target": realTarget, "memberDigest": digest, "endpoint": "http://" + endpoint, "coordination": coord})
 	d := &devinDriver{member: digest, listingProof: listing}
+	var catalogChecked atomic.Bool
+	if agentPresent != nil {
+		d.initialCatalog = func(body []byte) error {
+			e := assertDevinAgentCatalog(body, *agentPresent)
+			if e == nil {
+				catalogChecked.Store(true)
+			}
+			return e
+		}
+	}
 	var observedLive *devinLiveDescendant
 	d.serverProof = func(stage int) error {
 		deadline := time.Now().Add(500 * time.Millisecond)
@@ -229,6 +253,9 @@ func assembleNativeDevinProofWithOptions(t *testing.T, input func(devinInputFram
 	closed = true
 	if e != nil {
 		t.Fatal(e)
+	}
+	if agentPresent != nil && !catalogChecked.Load() {
+		t.Fatal("actual initial profile catalog was not checked")
 	}
 	if e = d.finalSuccess(); e != nil {
 		t.Fatal(e)
