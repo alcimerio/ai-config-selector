@@ -1,0 +1,48 @@
+[1mWelcome to Devin CLI![0m
+
+ [32m✓[0m Logged in.
+
+]10;?]11;?[cRestart your shell or run: [1msource /tmp/acs-devin-driver/external-mcp-interactive-approve-once-nt_zckaq/home/.bashrc[0m. Then run [1mdevin[0m to get started.
+[22;0t]0;devin: work]30;devin: work[?u[c[?2004h[>1u[?1004h[6n[?2026h
+⠀⣴⣾⣶⡄⠀⠀⠀⠀
+⠀⠛⠿⠟⠻⣶⣾⣶⡄  Devin CLI
+⠀⣤⣶⣦⣴⠿⢿⠿⠃  [38;5;244mv3000.10.21[0m
+⠀⠻⢿⠿⠃⠀⠀⠀⠀
+
+[38;5;238m────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────[0m
+❭ [38;5;244mAsk Devin to build features, fix bugs, or work on your code[0m
+[38;5;238m────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────[0m
+SWE 1.6 Fast                                                        [38;5;244mUse /bug to report a bug to the Devin CLI developers[0m[2A[2C[?25h[?2026l[?2026h[7A[7B[2CUse mcp_call_tool once with server_name acs-synthetic, tool_name[67Crecord_receipt,[83Carguments[93C{},[97Cthen[102Crespond[110CREADY.[117CDo[1B  not use any other tool.                                                                                               [25C[K[1B[38;5;238m────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────[0m
+SWE 1.6 Fast                                                        [38;5;244mUse /bug to report a bug to the Devin CLI developers[0m[2A[25C[?25h[?2026l[?2026h[2B[2A[25C[?25h[?2026l[?2026h[8A[J
+⠀⣴⣾⣶⡄⠀⠀⠀⠀
+⠀⠛⠿⠟⠻⣶⣾⣶⡄  Devin CLI
+⠀⣤⣶⣦⣴⠿⢿⠿⠃  [38;5;244mv3000.10.21[0m
+⠀⠻⢿⠿⠃⠀⠀⠀⠀
+
+]133;A;k=i[38;5;231m[48;5;235m❭[0m[48;5;235m [0m[38;5;231m[48;5;235mUse mcp_call_tool once with server_name acs-synthetic, tool_name record_receipt, arguments {}, then respond READY. Do [0m
+[48;5;235m  [0m[38;5;231m[48;5;235mnot use any other tool.[0m[48;5;235m[K[0m]133;B]133;C
+
+[38;5;210m⡆⠀[0m[38;5;244m Thinking · 0s (esc twice to interrupt)[0m
+[38;5;238m────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────[0m
+❭ [38;5;244mGuide Devin while it works[0m
+[38;5;238m────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────[0m
+SWE 1.6 Fast                                                        [38;5;244mUse /bug to report a bug to the Devin CLI developers[0m[2A[2C[?25h[?2026l[?2026h[2B[2A[2C[?25h[?2026l[?2026h[2A [38;5;78m⏺ [0mmcp__acs-synthetic__record_receipt(…) [40C[K[1B                                                                                                                        [K[1B[1m[38;5;81m[48;5;234m❭[0m[48;5;234m [0m[38;5;244m[48;5;234m1[0m[48;5;234m [0m[1m[38;5;81m[48;5;234mYes[0m[48;5;234m  [0m[38;5;244m[48;5;234m(Approve once)[0m[48;5;234m                                                                                                 [1B[0m[38;5;244m·[0m [38;5;244m2[0m Yes, allow calling record_receipt on the acs-synthetic MCP server                                                   [69C[K[1B[38;5;244m·[0m [38;5;244m3[4C[0mYes, [10Clways[16Callow[22Ccalling[30Crecord_receipt[45Con[48Cthe[52Cacs-synthetic[66CMCP server                                            [76C[K
+[38;5;244m·[0m [38;5;244m4[0m Yes, allow calling all tools on the acs-synthetic MCP server
+[38;5;244m·[0m [38;5;244m5[0m Yes, always allow calling tools on the acs-synthetic MCP server
+[38;5;244m·[0m [38;5;244m6[0m Yes, switch to bypass mode
+[38;5;244m·[0m [38;5;244m7[0m No
+[38;5;244m↑↓[0m [38;5;244mselect[0m [38;5;244m·[0m [38;5;244m↵[0m [38;5;244mconfirm[0m [38;5;244m·[0m [38;5;244mesc[0m [38;5;244mcancel[0m[?25l[?2026l[?2026h[9A[1C[38;5;187m○ [2B[0m[38;5;210m⡆⠀[0m[38;5;244m Running tools · 0s (esc twice to interrupt)[0m                                                                          [46C[K[46C[K[1B[38;5;238m────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────[1B[0m❭[2C[38;5;244mGuide Devin while it works[0m [30C              [45C  [48C   [52C             [66C   [70C      [28C[K[1B[38;5;238m────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────[1B[0mSWE[4C1.6 F[10Cst   [16C     [22C       [30C     [36C  [39C   [43C             [57C   [61C      [68C[38;5;244mUse /bug to report a bug to the Devin CLI developers[0m[1B[J[1A[2A[2C[?25h[?2026l[?2026h[2B[2A[2C[?25h[?2026l[?2026h[4A[J [38;5;78m⏺ [0mCalled record_receipt from acs-synthetic
+ [38;5;238m└[0m [38;5;244mACS_MCP_TOOL_OK[0m
+
+[38;5;210m⠇⠀[0m[38;5;244m Thinking · 0s (esc twice to interrupt)[0m
+[38;5;238m────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────[0m
+❭ [38;5;244mGuide Devin while it works[0m
+[38;5;238m────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────[0m
+SWE 1.6 Fast                                                        [38;5;244mUse /bug to report a bug to the Devin CLI developers[0m[2A[2C[?25h[?2026l[?2026h[2A REA                                     [4C[K[1B                                                                                                                        [K[1B[38;5;210m⠇⠀[0m[38;5;244m Typing · 0s (esc[20Ctwice to interrupt)[2B[0m❭ [38;5;244mGuide Devin while it works[68C[0m                                                    [28C[K
+[38;5;238m────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────[0m
+SWE 1.6 Fast                                                        [38;5;244mUse /bug to report a bug to the Devin CLI developers[0m[2A[2C[?25h[?2026l[?2026h[4A[J READY
+
+]133;D;0[38;5;238m────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────[0m
+❭ [38;5;244mAsk Devin to build features, fix bugs, or work on your code[0m
+[38;5;238m────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────[0m
+SWE 1.6 Fast                                                        [38;5;244mUse /bug to report a bug to the Devin CLI developers[0m[2A[2C[?25h[?2026l

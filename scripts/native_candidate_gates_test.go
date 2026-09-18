@@ -191,28 +191,30 @@ func TestNativeCandidateGatesPropagateFailureRecoverAndProtectIdentity(t *testin
 }
 
 type nativeGateFixture struct {
-	root      string
-	bin       string
-	candidate string
-	target    string
-	archive   string
-	devin     string
-	callsPath string
-	hashCalls string
+	root         string
+	bin          string
+	candidate    string
+	target       string
+	archive      string
+	devin        string
+	devinArchive string
+	callsPath    string
+	hashCalls    string
 }
 
 func newNativeGateFixture(t *testing.T) nativeGateFixture {
 	t.Helper()
 	root := t.TempDir()
 	fixture := nativeGateFixture{
-		root:      root,
-		bin:       filepath.Join(root, "bin"),
-		candidate: filepath.Join(root, "acs"),
-		target:    filepath.Join(root, "codex"),
-		archive:   filepath.Join(root, "codex.tar.gz"),
-		devin:     filepath.Join(root, "devin"),
-		callsPath: filepath.Join(root, "calls"),
-		hashCalls: filepath.Join(root, "hash-calls"),
+		root:         root,
+		bin:          filepath.Join(root, "bin"),
+		candidate:    filepath.Join(root, "acs"),
+		target:       filepath.Join(root, "codex"),
+		archive:      filepath.Join(root, "codex.tar.gz"),
+		devin:        filepath.Join(root, "devin"),
+		devinArchive: filepath.Join(root, "devin.tar.gz"),
+		callsPath:    filepath.Join(root, "calls"),
+		hashCalls:    filepath.Join(root, "hash-calls"),
 	}
 	if err := os.Mkdir(fixture.bin, 0o700); err != nil {
 		t.Fatal(err)
@@ -225,13 +227,18 @@ func newNativeGateFixture(t *testing.T) nativeGateFixture {
 	if err := os.WriteFile(fixture.archive, []byte("locked archive"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(fixture.devinArchive, []byte("locked Devin archive"), 0600); err != nil {
+		t.Fatal(err)
+	}
 	fakeGo := `#!/bin/sh
 printf 'auth=%s promoted=%s version=%s backend=%s recovery=%s go %s mcp=%s\n' "${ACS_RUN_NATIVE_AUTH_GATE:-}" "${ACS_PROMOTED_BINARY:-}" "${ACS_PROMOTED_VERSION:-}" "${ACS_PROMOTED_SANDBOX_BACKEND:-}" "${ACS_RUN_NATIVE_AUTH_RECOVERY:-}" "$*" "${ACS_RUN_MCP_AMBIENT_FEASIBILITY:-}" >>"$ACS_TEST_CALLS"
+printf 'devin-mcp=%s devin-archive=%s go %s\n' "${ACS_RUN_NATIVE_DEVIN_MCP:-}" "${ACS_TEST_DEVIN_ARCHIVE:-}" "$*" >>"$ACS_TEST_CALLS"
 previous=
 for argument do
   if [ "$previous" = -list ]; then
     case "$ACS_TEST_MODE:$argument" in
       missing-recovery:'^TestNativeKeychainRecoveryEntrypoint$') ;;
+ missing-real-devin-mcp:'^TestPromotedArtifactNativeRealDevinMCP$') ;;
       missing-mcp-protection:'^TestPromotedArtifactNativeProductionMCPProtection$') ;;
       *) printf '%s\n' "$argument" | tr -d '^$' ;;
     esac
@@ -239,6 +246,7 @@ for argument do
   previous="$argument"
 done
 case "$ACS_TEST_MODE:$*" in
+ fail-real-devin-mcp:*"-run ^TestPromotedArtifactNativeRealDevinMCP$"*) exit 37 ;;
   fail-mcp-protection:*"-run ^TestPromotedArtifactNativeProductionMCPProtection$"*) exit 31 ;;
   fail-primary*:*"-run ^TestNativeInstalledACSExecutesLockedCodexToolThroughNamedIdentity$"*) printf '%s\n' 'primary gate failed' >&2; exit 23 ;;
   fail-*recovery:*"-run ^TestNativeKeychainRecoveryEntrypoint$"*) printf '%s\n' 'recovery failed' >&2; exit 29 ;;
@@ -300,6 +308,8 @@ func (fixture nativeGateFixture) command(mode string) *exec.Cmd {
 		"ACS_TEST_CODEX_BINARY=/ambient/codex",
 		"ACS_TEST_CODEX_ARCHIVE=/ambient/codex.tar.gz",
 		"ACS_TEST_DEVIN_BINARY="+fixture.devin,
+		"ACS_TEST_DEVIN_ARCHIVE="+fixture.devinArchive,
+		"ACS_RUN_NATIVE_DEVIN_MCP=ambient-enable",
 	)
 	return command
 }
@@ -351,4 +361,84 @@ func TestNativeCandidateRequiresExplicitMCPProtectionGate(t *testing.T) {
 			t.Fatal("recovery omitted")
 		}
 	})
+}
+
+func TestNativeCandidateRequiredRealDevinMCPGate(t *testing.T) {
+	const name = "TestPromotedArtifactNativeRealDevinMCP"
+	t.Run("exact scoped invocation and broad isolation", func(t *testing.T) {
+		f := newNativeGateFixture(t)
+		f.run(t, "success", true, "")
+		calls := f.calls(t)
+		for _, want := range []string{
+			"go test ./acceptance -list ^" + name + "$",
+			"auth= promoted=" + f.candidate + " version=v0.4.0 backend=available recovery= go test ./acceptance -run ^" + name + "$ -count=1 -v",
+			"devin-mcp=1 devin-archive=" + f.devinArchive + " go test ./acceptance -run ^" + name + "$ -count=1 -v",
+			"devin-mcp= devin-archive= go test -v ./...",
+			"devin-mcp= devin-archive= go test -race ./...",
+			"devin-mcp= devin-archive= go test ./acceptance -count=1",
+		} {
+			if !strings.Contains(calls, want) {
+				t.Fatalf("missing %q in %s", want, calls)
+			}
+		}
+		if strings.Count(calls, "devin-mcp=1 ") != 1 {
+			t.Fatal("native proof enabled outside exact gate")
+		}
+	})
+	t.Run("missing required declaration", func(t *testing.T) {
+		f := newNativeGateFixture(t)
+		f.run(t, "missing-real-devin-mcp", false, "required test "+name+" is unavailable")
+		calls := f.calls(t)
+		if strings.Contains(calls, "-run ^"+name+"$") || strings.Contains(calls, "-run ^TestPromotedArtifactNativeInstructionRules$") {
+			t.Fatal("missing test did not halt")
+		}
+		if !strings.Contains(calls, "-run ^TestNativeKeychainRecoveryEntrypoint$") {
+			t.Fatal("missing recovery")
+		}
+	})
+	t.Run("failure preserves status and recovers", func(t *testing.T) {
+		f := newNativeGateFixture(t)
+		out, err := f.command("fail-real-devin-mcp").CombinedOutput()
+		exit, ok := err.(*exec.ExitError)
+		if !ok || exit.ExitCode() != 37 {
+			t.Fatalf("exit=%v output=%q", err, out)
+		}
+		calls := f.calls(t)
+		if strings.Contains(calls, "-run ^TestPromotedArtifactNativeInstructionRules$") {
+			t.Fatal("continued after failure")
+		}
+		if !strings.Contains(calls, "-run ^TestNativeKeychainRecoveryEntrypoint$") {
+			t.Fatal("missing recovery")
+		}
+	})
+	for _, kind := range []string{"absent", "relative", "symlink"} {
+		t.Run("archive "+kind, func(t *testing.T) {
+			f := newNativeGateFixture(t)
+			archive := f.devinArchive
+			switch kind {
+			case "absent":
+				if err := os.Remove(archive); err != nil {
+					t.Fatal(err)
+				}
+			case "relative":
+				archive = "relative.tar.gz"
+			case "symlink":
+				if err := os.Remove(archive); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(f.archive, archive); err != nil {
+					t.Fatal(err)
+				}
+			}
+			cmd := f.command("success")
+			cmd.Env = append(cmd.Env, "ACS_TEST_DEVIN_ARCHIVE="+archive)
+			out, err := cmd.CombinedOutput()
+			if err == nil || !strings.Contains(string(out), "Devin archive") {
+				t.Fatalf("archive refusal=%v %q", err, out)
+			}
+			if _, err := os.Stat(f.callsPath); !os.IsNotExist(err) {
+				t.Fatal("invalid archive reached Go/native work")
+			}
+		})
+	}
 }
