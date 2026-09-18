@@ -11,6 +11,10 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+type devinHookMarkerLeafPending struct{}
+
+func (devinHookMarkerLeafPending) Error() string { return "fixed marker leaf pending" }
+
 func TestHookFixedMarkerRejectsUnsafeOrUnknownFiles(t *testing.T) {
 	dir, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
@@ -22,6 +26,14 @@ func TestHookFixedMarkerRejectsUnsafeOrUnknownFiles(t *testing.T) {
 	}
 	if _, err := readHookFixedMarker(valid); err != nil {
 		t.Fatal(err)
+	}
+	if _, err := readHookFixedMarker(filepath.Join(dir, "missing")); err == nil {
+		t.Fatal("missing marker unexpectedly accepted as valid")
+	} else {
+		var pending devinHookMarkerLeafPending
+		if !errors.As(err, &pending) {
+			t.Fatalf("missing marker not classified as pending: %v", err)
+		}
 	}
 	for name, data := range map[string]string{"unknown": "raw-event\n", "oversize": strings.Repeat("x", 65)} {
 		p := filepath.Join(dir, name)
@@ -78,6 +90,9 @@ func readHookFixedMarker(path string) (string, error) {
 		next, openErr := unix.Openat(fd, part, flags, 0)
 		_ = unix.Close(fd)
 		if openErr != nil {
+			if i == len(parts)-1 && openErr == unix.ENOENT {
+				return "", devinHookMarkerLeafPending{}
+			}
 			return "", errors.New("fixed marker unavailable")
 		}
 		fd = next

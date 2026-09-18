@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"github.com/alcimerio/ai-config-selector/internal/environmentresource"
 	"github.com/alcimerio/ai-config-selector/internal/launch"
 	"io"
@@ -507,5 +508,181 @@ func TestDiscoveryRevisionGuards(t *testing.T) {
 		if label != test.want || code != -1 || strings.Contains(label, "private") {
 			t.Fatal("diagnostic classification")
 		}
+	}
+}
+
+// Diagnostic labels are fixed vocabulary. Never render an error, output excerpt,
+// path, URL, header or body supplied by a target.
+func discoveryOutputFamily(body []byte) string {
+	text := strings.ToLower(string(body))
+	families := []struct {
+		label   string
+		needles []string
+	}{
+		{"config-load", []string{"failed to load configuration", "failed to parse user config", "error loading config"}},
+		{"marketplace-manifest", []string{"marketplace root does not contain a supported manifest", "failed to parse marketplace"}},
+		{"marketplace-write", []string{"failed to add marketplace", "failed to create marketplace install directory"}},
+		{"permission", []string{"permission denied", "operation not permitted"}},
+		{"auth", []string{"not logged in", "not signed in", "authentication required", "please log in", "please login"}},
+		{"plugin-manifest", []string{"invalid plugin manifest", "failed to parse plugin", "no plugin manifest"}},
+	}
+	for _, family := range families {
+		for _, needle := range family.needles {
+			if strings.Contains(text, needle) {
+				return family.label
+			}
+		}
+	}
+	if len(body) == 0 {
+		return "empty"
+	}
+	return "other"
+}
+func discoveryCaptureDiagnostic(out, stderr *discoveryCapture) string {
+	o, oe := out.bytes()
+	e, ee := stderr.bytes()
+	return fmt.Sprintf("stdout_bytes=%d stderr_bytes=%d stdout_overflow=%t stderr_overflow=%t stdout_family=%s stderr_family=%s", len(o), len(e), oe != nil, ee != nil, discoveryOutputFamily(o), discoveryOutputFamily(e))
+}
+func discoveryProtocolStage(stage int32) string {
+	switch stage {
+	case 0:
+		return "prepare"
+	case 1:
+		return "start"
+	case 2:
+		return "initialize-write"
+	case 3:
+		return "initialize-response"
+	case 4:
+		return "list-write"
+	case 5:
+		return "list-response"
+	case 6:
+		return "stdin-close"
+	}
+	return "unknown"
+}
+func discoveryProtocolClass(err error) string {
+	if err == nil {
+		return "ok"
+	}
+	switch err.Error() {
+	case "discovery wire JSON":
+		return "invalid-json"
+	case "discovery response correlation":
+		return "response-correlation"
+	case "discovery wire deadline", "discovery exchange deadline":
+		return "response-deadline"
+	}
+	return "io-or-other"
+}
+func discoveryHookDiagnostic(stage int32, initialized, listed, deadline, waited bool, exchangeErr, waitErr, cleanupErr error, out, stderr *discoveryCapture) string {
+	waitClass, exit := "not-run", 0
+	if waited {
+		waitClass = "ok"
+	}
+	if waitErr != nil {
+		waitClass, exit = discoveryFailureClass(waitErr)
+	}
+	return fmt.Sprintf("stage=%s initialized=%t listed=%t deadline=%t exchange=%s wait=%s exit=%d cleanup_ok=%t %s", discoveryProtocolStage(stage), initialized, listed, deadline, discoveryProtocolClass(exchangeErr), waitClass, exit, cleanupErr == nil, discoveryCaptureDiagnostic(out, stderr))
+}
+
+// Record only the first eight requests; extra requests still fail the existing
+// request cap. No attacker-controlled text survives this classifier.
+type discoveryHTTPDiagnostics struct {
+	mu       sync.Mutex
+	recorded int
+	methods  [3]int
+	routes   [5]int
+	query    int
+}
+
+func (d *discoveryHTTPDiagnostics) record(method, path string, hasQuery bool) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.recorded >= 8 {
+		return
+	}
+	d.recorded++
+	m := 2
+	if method == "POST" {
+		m = 0
+	} else if method == "GET" {
+		m = 1
+	}
+	d.methods[m]++
+	r := 4
+	switch path {
+	case "/exa.seat_management_pb.SeatManagementService/GetCliTeamSettings":
+		r = 0
+	case "/exa.seat_management_pb.SeatManagementService/GetUserStatus":
+		r = 1
+	case "/exa.product_analytics_pb.ProductAnalyticsService/BatchRecordAnalyticsEvents":
+		r = 2
+	case devinModel:
+		r = 3
+	}
+	d.routes[r]++
+	if hasQuery {
+		d.query++
+	}
+}
+func (d *discoveryHTTPDiagnostics) summary() string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return fmt.Sprintf("recorded=%d post=%d get=%d other_method=%d team=%d user_status=%d analytics=%d model=%d unknown_route=%d query_present=%d", d.recorded, d.methods[0], d.methods[1], d.methods[2], d.routes[0], d.routes[1], d.routes[2], d.routes[3], d.routes[4], d.query)
+}
+func TestDiscoverySafeDiagnostics(t *testing.T) {
+	secret := "DO_NOT_PRINT_SECRET/private/sentinel"
+	for _, tc := range []struct{ input, want string }{
+		{"failed to load configuration: " + secret, "config-load"},
+		{"failed to add marketplace '" + secret + "' to user config.toml", "marketplace-write"},
+		{"Permission denied " + secret, "permission"}, {secret, "other"}, {"", "empty"},
+	} {
+		if got := discoveryOutputFamily([]byte(tc.input)); got != tc.want {
+			t.Fatalf("family %q", got)
+		}
+	}
+	var out, stderr discoveryCapture
+	for _, chunk := range []string{"failed to load ", "configuration: ", secret[:9], secret[9:]} {
+		_, _ = stderr.Write([]byte(chunk))
+	}
+	for _, tc := range []struct {
+		stage                         int32
+		initialized, listed, deadline bool
+		exchange                      error
+		want                          string
+	}{
+		{3, false, false, true, errors.New("discovery wire deadline"), "stage=initialize-response initialized=false listed=false deadline=true exchange=response-deadline"},
+		{5, true, false, false, errors.New("discovery response correlation"), "stage=list-response initialized=true listed=false deadline=false exchange=response-correlation"},
+		{6, true, true, true, nil, "stage=stdin-close initialized=true listed=true deadline=true exchange=ok"},
+	} {
+		got := discoveryHookDiagnostic(tc.stage, tc.initialized, tc.listed, tc.deadline, true, tc.exchange, errDiscoveryTimeout, errors.New(secret), &out, &stderr)
+		if !strings.Contains(got, tc.want) || !strings.Contains(got, "cleanup_ok=false") || strings.Contains(got, secret) || strings.Contains(got, "/private/") {
+			t.Fatal("diagnostic contract")
+		}
+	}
+	if discoveryProtocolStage(999) != "unknown" || discoveryProtocolClass(errors.New(secret)) != "io-or-other" {
+		t.Fatal("untrusted label")
+	}
+	var full discoveryCapture
+	_, _ = full.Write(make([]byte, discoveryOutputLimit+1))
+	if !strings.Contains(discoveryCaptureDiagnostic(&full, &stderr), "stdout_overflow=true") {
+		t.Fatal("overflow lost")
+	}
+}
+func TestDiscoveryHTTPDiagnosticBounds(t *testing.T) {
+	var d discoveryHTTPDiagnostics
+	d.record("POST", "/exa.seat_management_pb.SeatManagementService/GetCliTeamSettings", false)
+	d.record("POST", "/exa.seat_management_pb.SeatManagementService/GetUserStatus", false)
+	d.record("POST", "/exa.product_analytics_pb.ProductAnalyticsService/BatchRecordAnalyticsEvents", false)
+	d.record("POST", devinModel, false)
+	d.record("GET", "/secret", true)
+	for i := 0; i < 20; i++ {
+		d.record("SECRET_METHOD", "/SECRET_PATH", true)
+	}
+	want := "recorded=8 post=4 get=1 other_method=3 team=1 user_status=1 analytics=1 model=1 unknown_route=4 query_present=4"
+	if got := d.summary(); got != want {
+		t.Fatalf("fixed counts %s", got)
 	}
 }

@@ -36,6 +36,7 @@ type discoverySession struct {
 	calls             int
 	label             string
 	environment       *environmentresource.Lease
+	diagnostic        string
 }
 
 func newDiscoverySession(t *testing.T, ctx context.Context, target, label string) *discoverySession {
@@ -100,6 +101,7 @@ func discoverySettle(p launch.Process) error {
 	return e
 }
 func (s *discoverySession) command(args ...string) ([]byte, error) {
+	s.diagnostic = "stage=prepare"
 	ctx, cancel := context.WithTimeout(s.ctx, 10*time.Second)
 	defer cancel()
 	var out, stderr discoveryCapture
@@ -108,6 +110,7 @@ func (s *discoverySession) command(args ...string) ([]byte, error) {
 		return nil, e
 	}
 	runErr := discoverySettle(p)
+	s.diagnostic = discoveryCaptureDiagnostic(&out, &stderr)
 	body, e := out.bytes()
 	_, se := stderr.bytes()
 	if errors.Is(runErr, errDiscoveryCleanup) {
@@ -126,7 +129,7 @@ func (s *discoverySession) success(args ...string) []byte {
 	b, e := s.command(args...)
 	if e != nil {
 		category, code := discoveryFailureClass(e)
-		s.t.Fatalf("contained discovery %s call=%d failed category=%s exit=%d", s.label, s.calls, category, code)
+		s.t.Fatalf("contained discovery %s call=%d failed category=%s exit=%d %s", s.label, s.calls, category, code, s.diagnostic)
 	}
 	return b
 }
@@ -215,7 +218,7 @@ func TestNativeInstalledExtensionDiscovery(t *testing.T) {
 		keepDiscoveryFixtures(t, source)
 		result, e := s.hooksList()
 		if e != nil {
-			t.Fatal("contained hook discovery failed (output withheld)")
+			t.Fatalf("contained hook discovery failed %s", s.diagnostic)
 		}
 		if e = checkDiscoveryHooks(result, s.workspace, source, command); e != nil {
 			t.Fatal(e)
@@ -232,7 +235,7 @@ func TestNativeInstalledExtensionDiscovery(t *testing.T) {
 		keepDiscoveryFixtures(t, negativeSource)
 		negative, e := negativeSession.hooksList()
 		if e != nil {
-			t.Fatal("malformed hook discovery protocol failed")
+			t.Fatalf("malformed hook discovery protocol failed %s", negativeSession.diagnostic)
 		}
 		var invalid struct {
 			Data []struct {
@@ -266,12 +269,14 @@ func TestNativeInstalledExtensionDiscovery(t *testing.T) {
 			t.Fatal("synthetic endpoint unavailable")
 		}
 		var requests atomic.Int64
+		var httpDiagnostic discoveryHTTPDiagnostics
 		var server *http.Server
 		server = &http.Server{ReadHeaderTimeout: time.Second, ReadTimeout: time.Second, WriteTimeout: time.Second, MaxHeaderBytes: 8192, Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if requests.Add(1) > 8 {
 				_ = server.Close()
 				return
 			}
+			httpDiagnostic.record(r.Method, r.URL.Path, r.URL.RawQuery != "")
 			defer r.Body.Close()
 			_, _ = io.Copy(io.Discard, io.LimitReader(r.Body, 65537))
 			w.WriteHeader(http.StatusNotImplemented)
@@ -289,7 +294,7 @@ func TestNativeInstalledExtensionDiscovery(t *testing.T) {
 				t.Error("synthetic listener did not settle")
 			}
 			if requests.Load() != 0 {
-				t.Error("plugin management required an unmodeled backend route; no success inferred")
+				t.Errorf("plugin management observed backend requests; no success inferred %s", httpDiagnostic.summary())
 			}
 		})
 		pkg := filepath.Join(s.workspace, "package")
@@ -328,31 +333,51 @@ func (s *discoverySession) hooksList() (json.RawMessage, error) {
 	defer writer.Close()
 	wire := &discoveryWire{lines: make(chan []byte, 32)}
 	var stderr discoveryCapture
+	var stage atomic.Int32
+	var initialized, listed atomic.Bool
+	var exchangeErr, waitErr, cleanupErr error
+	waited := false
+	defer func() {
+		s.diagnostic = discoveryHookDiagnostic(stage.Load(), initialized.Load(), listed.Load(), ctx.Err() != nil, waited, exchangeErr, waitErr, cleanupErr, &wire.capture, &stderr)
+	}()
 	p, e := s.prepare(ctx, []string{"app-server"}, reader, wire, &stderr)
 	if e != nil {
+		exchangeErr = e
 		return nil, e
 	}
+	stage.Store(1)
 	if e = p.Start(); e != nil {
-		return nil, errors.Join(e, launch.AwaitRetainedSessionCleanup(p))
+		waitErr = e
+		cleanupErr = launch.AwaitRetainedSessionCleanup(p)
+		return nil, errors.Join(e, cleanupErr)
 	}
-	wait := make(chan error, 1)
-	go func() { wait <- errors.Join(p.Wait(), launch.AwaitRetainedSessionCleanup(p)) }()
+	type settlement struct{ wait, cleanup error }
+	wait := make(chan settlement, 1)
+	go func() { waitErr := p.Wait(); wait <- settlement{waitErr, launch.AwaitRetainedSessionCleanup(p)} }()
 	exchange := func() (json.RawMessage, error) {
+		stage.Store(2)
 		if _, e := io.WriteString(writer, "{\"id\":1,\"method\":\"initialize\",\"params\":{\"clientInfo\":{\"name\":\"acs_assessment\",\"version\":\"0.1.0\"},\"capabilities\":{\"experimentalApi\":true}}}\n"); e != nil {
 			return nil, e
 		}
+		stage.Store(3)
 		if _, e := wire.response(ctx, 1); e != nil {
 			return nil, e
 		}
+		initialized.Store(true)
+		stage.Store(4)
 		request, _ := json.Marshal(map[string]any{"id": 2, "method": "hooks/list", "params": map[string]any{"cwds": []string{s.workspace}}})
 		if _, e := io.WriteString(writer, "{\"method\":\"initialized\",\"params\":{}}\n"+string(request)+"\n"); e != nil {
 			return nil, e
 		}
-		return wire.response(ctx, 2)
+		stage.Store(5)
+		result, err := wire.response(ctx, 2)
+		if err == nil {
+			listed.Store(true)
+		}
+		return result, err
 	}
 	exchangeDone := make(chan struct{})
 	var result json.RawMessage
-	var exchangeErr error
 	go func() { result, exchangeErr = exchange(); close(exchangeDone) }()
 	select {
 	case <-exchangeDone:
@@ -362,10 +387,18 @@ func (s *discoverySession) hooksList() (json.RawMessage, error) {
 		<-exchangeDone
 		exchangeErr = errors.New("discovery exchange deadline")
 	}
+	if exchangeErr == nil {
+		stage.Store(6)
+	}
 	_ = writer.Close()
-	waitErr := <-wait
+	settled := <-wait
+	waitErr, cleanupErr = settled.wait, settled.cleanup
+	waited = true
 	_, captureErr := wire.capture.bytes()
 	_, stderrErr := stderr.bytes()
+	if cleanupErr != nil {
+		return nil, errDiscoveryCleanup
+	}
 	if ctx.Err() != nil {
 		return nil, errors.New("app-server did not naturally settle")
 	}

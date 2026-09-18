@@ -199,16 +199,15 @@ func assembleNativeDevinProofWithAssessment(t *testing.T, input func(devinInputF
 	before := promotedSessionSnapshot(t, candidate, home, tools+":/usr/bin:/bin")
 	firstInput := true
 	wrappedInput := func(frame devinInputFrame, stage string) ([]byte, error) {
-		if options != nil && firstInput && stage == "paste" {
-			if options.beforeFirstInput == nil {
-				return nil, errors.New("hook assessment input gate missing")
-			}
-			if e := options.beforeFirstInput(); e != nil {
-				return nil, e
-			}
-			firstInput = false
+		if options == nil {
+			return input(frame, stage)
 		}
-		return input(frame, stage)
+		if options.beforeFirstInput == nil {
+			return nil, errors.New("hook assessment input gate missing")
+		}
+		return devinHookFirstInputGate(&firstInput, stage, options.beforeFirstInput, func() ([]byte, error) {
+			return input(frame, stage)
+		})
 	}
 	observe := devinPhaseObserver(candidate, home, tools, workspace, trampoline, d)
 	if options != nil {

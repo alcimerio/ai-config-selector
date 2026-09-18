@@ -55,10 +55,23 @@ func TestPromotedArtifactNativeDevinSessionStartHook(t *testing.T) {
 			var err error
 			first, err = readDevinHookReceipt(receipt, expected, nil)
 			if err != nil {
-				if code, readErr := readHookFixedMarker(diagnostic); readErr == nil {
+				code, diagnosticErr := readHookFixedMarker(diagnostic)
+				if diagnosticErr == nil {
 					return fmt.Errorf("hook witness fixed failure=%s: %w", code, err)
 				}
-				if _, readErr := readHookFixedMarker(invoked); readErr == nil {
+				var diagnosticMissing devinHookMarkerLeafPending
+				if !errors.As(diagnosticErr, &diagnosticMissing) {
+					return errors.New("hook diagnostic marker unsafe")
+				}
+				_, invokedErr := readHookFixedMarker(invoked)
+				var invokedMissing devinHookMarkerLeafPending
+				if invokedErr != nil && !errors.As(invokedErr, &invokedMissing) {
+					return errors.New("hook invocation marker unsafe")
+				}
+				if devinHookReceiptGateDecision(err, diagnosticErr, invokedErr) == "pending" {
+					return devinHookReceiptPending{}
+				}
+				if invokedErr == nil {
 					return fmt.Errorf("hook witness invoked without receipt: %w", err)
 				}
 				return err

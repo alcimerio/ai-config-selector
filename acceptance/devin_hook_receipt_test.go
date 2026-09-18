@@ -37,6 +37,42 @@ type devinHookReceiptSnapshot struct {
 	// Only records a successful caller-supplied verifier; never means natural exit.
 	ProcessVerified bool
 }
+type devinHookReceiptLeafPending struct{}
+
+func (devinHookReceiptLeafPending) Error() string { return "hook receipt leaf pending" }
+
+type devinHookReceiptPending struct{}
+
+func (devinHookReceiptPending) Error() string { return "hook receipt pending" }
+
+// devinHookReceiptGateDecision is portable policy for the native callback:
+// fixed diagnostics win, then a genuine missing receipt leaf may remain
+// pending; invocation publication is advisory because it can race the read.
+func devinHookReceiptGateDecision(receiptErr, diagnosticErr, invokedErr error) string {
+	_ = invokedErr // Invocation publication is advisory and may race the first read.
+	if diagnosticErr == nil {
+		return "diagnostic"
+	}
+	var pending devinHookReceiptLeafPending
+	if errors.As(receiptErr, &pending) {
+		return "pending"
+	}
+	return "fatal"
+}
+
+func devinHookFirstInputGate(first *bool, stage string, before func() error, produce func() ([]byte, error)) ([]byte, error) {
+	if *first && stage == "paste" {
+		if err := before(); err != nil {
+			var pending devinHookReceiptPending
+			if errors.As(err, &pending) {
+				return nil, nil
+			}
+			return nil, err
+		}
+		*first = false
+	}
+	return produce()
+}
 
 func validDevinHookDigest(s string) bool {
 	b, e := hex.DecodeString(s)
@@ -62,6 +98,9 @@ func openDevinHookReceipt(path string) (*os.File, error) {
 		next, err := unix.Openat(fd, name, flags, 0)
 		_ = unix.Close(fd)
 		if err != nil {
+			if i == len(parts)-1 && err == unix.ENOENT {
+				return nil, devinHookReceiptLeafPending{}
+			}
 			return nil, errors.New("hook receipt unavailable")
 		}
 		fd = next
@@ -229,6 +268,23 @@ func TestDevinHookReceiptIntegrity(t *testing.T) {
 			t.Fatal("symlink accepted")
 		}
 	})
+	t.Run("missing-leaf-is-pending", func(t *testing.T) {
+		p := path(t)
+		if _, e := readDevinHookReceipt(p, want, nil); e == nil {
+			t.Fatal("missing receipt accepted")
+		} else {
+			var pending devinHookReceiptLeafPending
+			if !errors.As(e, &pending) {
+				t.Fatalf("missing leaf was not classified as pending: %v", e)
+			}
+		}
+		// A later exclusive publication is the only transition that makes the
+		// same bounded reader eligible; the old one-shot gate could not do this.
+		put(t, p, body)
+		if _, e := readDevinHookReceipt(p, want, nil); e != nil {
+			t.Fatal("published receipt was not accepted", e)
+		}
+	})
 	t.Run("fifo", func(t *testing.T) {
 		p := path(t)
 		if e := unix.Mkfifo(p, 0600); e != nil {
@@ -325,4 +381,74 @@ func TestDevinHookReceiptIntegrity(t *testing.T) {
 			t.Fatal("wrong executable accepted")
 		}
 	})
+}
+
+func TestDevinHookReceiptGateDecision(t *testing.T) {
+	missing := devinHookReceiptLeafPending{}
+	if got := devinHookReceiptGateDecision(missing, errors.New("absent"), errors.New("marker not observed")); got != "pending" {
+		t.Fatalf("missing invoked receipt decision=%s", got)
+	}
+	if got := devinHookReceiptGateDecision(missing, nil, nil); got != "diagnostic" {
+		t.Fatalf("diagnostic precedence decision=%s", got)
+	}
+	if got := devinHookReceiptGateDecision(errors.New("unsafe ancestor"), errors.New("absent"), nil); got != "fatal" {
+		t.Fatalf("unsafe receipt decision=%s", got)
+	}
+}
+
+func TestDevinHookFirstInputGateRetriesWithoutInputUntilReceipt(t *testing.T) {
+	home, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := filepath.Join(home, "receipt")
+	exe := sha256.Sum256([]byte("independent helper"))
+	in := sha256.Sum256([]byte("independent input"))
+	want := devinHookReceiptExpected{home, filepath.Join(home, "hook-witness"), hex.EncodeToString(exe[:]), hex.EncodeToString(in[:])}
+	body, err := json.Marshal(devinHookReceipt{"SessionStart", "vendor-session", home, 41, 40, want.Executable, want.ExecutableSHA256, want.InputSHA256, "permission-denied", "permission-denied", "permission-denied"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := true
+	produced := 0
+	before := func() error {
+		_, err := readDevinHookReceipt(p, want, nil)
+		if err != nil {
+			var pending devinHookReceiptLeafPending
+			if errors.As(err, &pending) {
+				return devinHookReceiptPending{}
+			}
+		}
+		return err
+	}
+	produce := func() ([]byte, error) {
+		produced++
+		return []byte("first-input"), nil
+	}
+	if b, err := devinHookFirstInputGate(&first, "paste", before, produce); err != nil || b != nil || produced != 0 || !first {
+		t.Fatalf("pending gate emitted input: bytes=%q err=%v produced=%d", b, err, produced)
+	}
+	if err := os.WriteFile(p, body, 0600); err != nil {
+		t.Fatal(err)
+	}
+	b, err := devinHookFirstInputGate(&first, "paste", before, produce)
+	if err != nil || string(b) != "first-input" || produced != 1 || first {
+		t.Fatalf("published gate did not proceed once: bytes=%q err=%v produced=%d first=%t", b, err, produced, first)
+	}
+}
+
+func TestDevinHookFirstInputGateAbortsDiagnosticOrUnsafeReceipt(t *testing.T) {
+	for name, failure := range map[string]error{"diagnostic": errors.New("fixed diagnostic"), "unsafe": errors.New("unsafe receipt")} {
+		t.Run(name, func(t *testing.T) {
+			first := true
+			produced := false
+			_, err := devinHookFirstInputGate(&first, "paste", func() error { return failure }, func() ([]byte, error) {
+				produced = true
+				return []byte("unexpected"), nil
+			})
+			if err == nil || produced || !first {
+				t.Fatalf("failure did not abort before input: err=%v produced=%t first=%t", err, produced, first)
+			}
+		})
+	}
 }
