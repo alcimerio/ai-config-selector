@@ -11,6 +11,26 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+type pathOpenFailure struct {
+	stage string
+	cause error
+}
+
+func (failure *pathOpenFailure) Error() string { return "path traversal open failed" }
+func (failure *pathOpenFailure) Unwrap() error { return failure.cause }
+
+type pathInspectionFailure struct {
+	message string
+	cause   error
+}
+
+func (failure *pathInspectionFailure) Error() string { return failure.message }
+func (failure *pathInspectionFailure) Unwrap() error { return failure.cause }
+
+func pathInspectionError(message string, cause error) error {
+	return &pathInspectionFailure{message: message, cause: cause}
+}
+
 type pathIdentity struct {
 	device, inode uint64
 	mode          os.FileMode
@@ -200,7 +220,7 @@ func protectedWritableRoot(candidate string) bool {
 func inspectGrantPath(path string, want PathType, access PathAccess) (string, []pathIdentity, pathIdentity, error) {
 	logicalWitness, err := inspectLogicalComponents(filepath.Clean(path))
 	if err != nil {
-		return "", nil, pathIdentity{}, errors.New("selected path is unsafe")
+		return "", nil, pathIdentity{}, pathInspectionError("selected path is unsafe", err)
 	}
 	canonical, err := filepath.EvalSymlinks(filepath.Clean(path))
 	if err != nil {
@@ -208,7 +228,7 @@ func inspectGrantPath(path string, want PathType, access PathAccess) (string, []
 	}
 	fd, err := openCanonicalPath(canonical, want)
 	if err != nil {
-		return "", nil, pathIdentity{}, errors.New("selected path is unsafe")
+		return "", nil, pathIdentity{}, pathInspectionError("selected path is unsafe", err)
 	}
 	file := os.NewFile(uintptr(fd), "selected path")
 	if file == nil {
@@ -248,9 +268,9 @@ func inspectLogicalComponents(path string) ([]pathIdentity, error) {
 		return nil, errors.New("path must be absolute")
 	}
 	components := strings.Split(strings.TrimPrefix(filepath.Clean(path), string(filepath.Separator)), string(filepath.Separator))
-	current, err := unix.Open(string(filepath.Separator), unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_DIRECTORY, 0)
+	current, err := unix.Open(string(filepath.Separator), directoryTraversalOpenFlags(), 0)
 	if err != nil {
-		return nil, err
+		return nil, &pathOpenFailure{stage: "logical-root", cause: err}
 	}
 	defer func() { _ = unix.Close(current) }()
 	prefix := string(filepath.Separator)
@@ -258,7 +278,7 @@ func inspectLogicalComponents(path string) ([]pathIdentity, error) {
 	for index, component := range components {
 		var stat unix.Stat_t
 		if err := unix.Fstatat(current, component, &stat, unix.AT_SYMLINK_NOFOLLOW); err != nil {
-			return nil, err
+			return nil, &pathOpenFailure{stage: "logical-metadata", cause: err}
 		}
 		// Directory link counts change when an unrelated sibling directory is
 		// created or removed. Logical traversal identity is the component's
@@ -282,7 +302,7 @@ func inspectLogicalComponents(path string) ([]pathIdentity, error) {
 			}
 			next, err := openCanonicalPath(resolved, PathTypeDirectory)
 			if err != nil {
-				return nil, errors.New("symlink target is not a directory")
+				return nil, pathInspectionError("symlink target is not a directory", err)
 			}
 			if err := unix.Close(current); err != nil {
 				_ = unix.Close(next)
@@ -293,9 +313,9 @@ func inspectLogicalComponents(path string) ([]pathIdentity, error) {
 		}
 		prefix = logicalComponent
 		if index < len(components)-1 {
-			next, err := unix.Openat(current, component, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_DIRECTORY, 0)
+			next, err := unix.Openat(current, component, directoryTraversalOpenFlags(), 0)
 			if err != nil {
-				return nil, errors.New("path parent is not a directory")
+				return nil, &pathOpenFailure{stage: "logical-ancestor", cause: err}
 			}
 			if err := unix.Close(current); err != nil {
 				_ = unix.Close(next)
@@ -309,9 +329,9 @@ func inspectLogicalComponents(path string) ([]pathIdentity, error) {
 
 func openCanonicalPath(path string, want PathType) (int, error) {
 	components := strings.Split(strings.TrimPrefix(filepath.Clean(path), string(filepath.Separator)), string(filepath.Separator))
-	current, err := unix.Open(string(filepath.Separator), unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_DIRECTORY, 0)
+	current, err := unix.Open(string(filepath.Separator), directoryTraversalOpenFlags(), 0)
 	if err != nil {
-		return -1, err
+		return -1, &pathOpenFailure{stage: "root", cause: err}
 	}
 	if len(components) == 1 && components[0] == "" {
 		return current, nil
@@ -319,12 +339,16 @@ func openCanonicalPath(path string, want PathType) (int, error) {
 	for index, component := range components {
 		flags := unix.O_RDONLY | unix.O_CLOEXEC | unix.O_NOFOLLOW | unix.O_NONBLOCK
 		if index < len(components)-1 || want == PathTypeDirectory {
-			flags |= unix.O_DIRECTORY
+			flags = directoryTraversalOpenFlags()
 		}
 		next, err := unix.Openat(current, component, flags, 0)
 		if err != nil {
 			_ = unix.Close(current)
-			return -1, err
+			stage := "ancestor"
+			if index == len(components)-1 && want != PathTypeDirectory {
+				stage = "leaf"
+			}
+			return -1, &pathOpenFailure{stage: stage, cause: err}
 		}
 		if err := unix.Close(current); err != nil {
 			_ = unix.Close(next)

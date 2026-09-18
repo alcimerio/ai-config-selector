@@ -67,6 +67,9 @@ type DevinRequest struct {
 	RuntimeAuthority      launch.RuntimeAuthority
 	FilesystemGrants      []launch.FilesystemGrant
 	ExecutableGrants      []launch.ExecutableGrant
+	sessionProtections    []launch.SessionProtection
+	selectedMCPConfig     string
+	reserveMCPConfigNames bool
 }
 
 // CommandRequest contains one already-resolved literal command and the common
@@ -410,6 +413,40 @@ func (e *Executor) RunDevin(ctx context.Context, request DevinRequest) (exitCode
 			exitCode = 1
 		}
 	}()
+	servers := []launch.MCPServerIntent{}
+	environmentIntents := []launch.EnvironmentIntent{}
+	if request.ResolvedPlan != nil {
+		servers = request.ResolvedPlan.MCPServerIntents()
+		environmentIntents = request.ResolvedPlan.EnvironmentIntents()
+	}
+	recipes, recipeDirectory, launcher, err := prepareMCPRecipes(created.HomeDirectory(), servers, request.ExecutableGrants, request.FilesystemGrants, environmentIntents)
+	if err != nil {
+		return 1, errors.New("selected MCP bindings could not be compiled")
+	}
+	if launcher == "" {
+		launcher, err = os.Executable()
+		if err == nil {
+			launcher, err = filepath.EvalSymlinks(launcher)
+		}
+		if err != nil {
+			return 1, errors.New("MCP target projection is unavailable")
+		}
+	}
+	devinUserConfig, err := writeDevinUserConfig(created.HomeDirectory())
+	if err != nil {
+		return 1, err
+	}
+	selectedMCPConfig := ""
+	if len(recipes) != 0 {
+		selectedMCPConfig, err = writeDevinMCPConfig(created.HomeDirectory(), launcher, recipes)
+		if err != nil {
+			return 1, err
+		}
+	}
+	request.selectedMCPConfig = selectedMCPConfig
+	request.reserveMCPConfigNames = true
+	request.sessionProtections = mcpSessionProtections(recipeDirectory, selectedMCPConfig)
+	request.sessionProtections = append(request.sessionProtections, launch.SessionProtection{Path: devinUserConfig})
 	if requirements.Semantics.CredentialProjection != "optional-allowlisted-value-omitted" {
 		return 1, errors.New("resolved authority has unsupported Devin credential projection")
 	}
@@ -509,6 +546,40 @@ func (e *Executor) VerifyDevin(ctx context.Context, request DevinRequest) (resul
 			resultErr = cleanupPrecedence(resultErr, removeErr)
 		}
 	}()
+	servers := []launch.MCPServerIntent{}
+	environmentIntents := []launch.EnvironmentIntent{}
+	if request.ResolvedPlan != nil {
+		servers = request.ResolvedPlan.MCPServerIntents()
+		environmentIntents = request.ResolvedPlan.EnvironmentIntents()
+	}
+	recipes, recipeDirectory, launcher, err := prepareMCPRecipes(created.HomeDirectory(), servers, request.ExecutableGrants, request.FilesystemGrants, environmentIntents)
+	if err != nil {
+		return errors.New("selected MCP bindings could not be compiled")
+	}
+	if launcher == "" {
+		launcher, err = os.Executable()
+		if err == nil {
+			launcher, err = filepath.EvalSymlinks(launcher)
+		}
+		if err != nil {
+			return errors.New("MCP target projection is unavailable")
+		}
+	}
+	devinUserConfig, err := writeDevinUserConfig(created.HomeDirectory())
+	if err != nil {
+		return err
+	}
+	selectedMCPConfig := ""
+	if len(recipes) != 0 {
+		selectedMCPConfig, err = writeDevinMCPConfig(created.HomeDirectory(), launcher, recipes)
+		if err != nil {
+			return err
+		}
+	}
+	request.selectedMCPConfig = selectedMCPConfig
+	request.reserveMCPConfigNames = true
+	request.sessionProtections = mcpSessionProtections(recipeDirectory, selectedMCPConfig)
+	request.sessionProtections = append(request.sessionProtections, launch.SessionProtection{Path: devinUserConfig})
 	if requirements.Semantics.CredentialProjection != "optional-allowlisted-value-omitted" {
 		return errors.New("resolved authority has unsupported Devin credential projection")
 	}
@@ -923,7 +994,7 @@ func (e *Executor) prepareDevin(ctx context.Context, created *session.Session, r
 	if len(selected) != 0 {
 		environment = selected[0]
 	}
-	return e.prepareRetainedProcess(ctx, created, launch.ProcessRequest{Workspace: created.WorkingDirectory(), WorkspaceAccess: request.WorkspaceAccess, SessionsDirectory: created.SessionsDirectory(), SessionDirectory: created.RootDirectory(), SessionHome: created.HomeDirectory(), TemporaryDirectory: created.TemporaryDirectory(), Executable: request.Executable, RuntimeInputs: request.RuntimeInputs, Arguments: arguments, Terminal: terminal, RuntimeAuthority: request.RuntimeAuthority, FilesystemGrants: request.FilesystemGrants, ExecutableGrants: request.ExecutableGrants, Environment: environment})
+	return e.prepareRetainedProcess(ctx, created, launch.ProcessRequest{Workspace: created.WorkingDirectory(), WorkspaceAccess: request.WorkspaceAccess, SessionsDirectory: created.SessionsDirectory(), SessionDirectory: created.RootDirectory(), SessionHome: created.HomeDirectory(), TemporaryDirectory: created.TemporaryDirectory(), Executable: request.Executable, RuntimeInputs: request.RuntimeInputs, Arguments: arguments, Terminal: terminal, RuntimeAuthority: request.RuntimeAuthority, FilesystemGrants: request.FilesystemGrants, ExecutableGrants: request.ExecutableGrants, SessionProtections: request.sessionProtections, SelectedMCPConfig: request.selectedMCPConfig, ReserveMCPConfigNames: request.reserveMCPConfigNames, Environment: environment})
 }
 
 // prepareDevinInteractive commits the handoff before a process reference can

@@ -46,7 +46,11 @@ hostile-input limits, and unchecked readiness boundary.
 
 New development-source Profiles use independently versioned common Skills,
 workspace intent, explicit filesystem paths, additive executable visibility,
-scoped environment mappings, and explicit target overlays. Environment entries
+scoped environment mappings, reference-only local MCP server selections, and
+explicit target overlays. MCP argv items resolve only from selected path or
+non-secret environment references; selected secret environment entries remain
+available to the attached process tree. See the [MCP Profile contract](docs/mcp-profiles.md)
+for the schema, launch behavior and verification limits. Environment entries
 map exact host names or host-backed secret references into the final attached
 process tree without persisting values. Executable entries support fixed ACS search names,
 workspace-relative paths, and private local bindings; they do not form an

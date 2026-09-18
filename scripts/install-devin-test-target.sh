@@ -25,6 +25,14 @@ while IFS='|' read -r locked_version target_os target_arch locked_digest locked_
 done <"$lock_file"
 [ "$count" -eq 1 ] && [ "$version" = 3000.10.21 ] || fail "lock must contain exactly one supported Apple Silicon target"
 archive="$output_directory/devin-${version}-darwin-arm64.tar.gz"
+[ ! -e "$archive" ] && [ ! -L "$archive" ] || fail "archive destination already exists"
+workspace=""
+retain_archive=0
+cleanup() {
+  if [ -n "$workspace" ]; then rm -rf "$workspace"; fi
+  if [ "$retain_archive" -ne 1 ]; then rm -f "$archive"; fi
+}
+trap cleanup EXIT HUP INT TERM
 curl --fail --location --proto '=https' --tlsv1.2 --output "$archive" "$url" || fail "locked archive download failed"
 [ -f "$archive" ] && [ ! -L "$archive" ] || fail "downloaded archive is unsafe"
 actual="$(shasum -a 256 "$archive" | awk '{print $1}')"
@@ -37,11 +45,10 @@ printf '%s\n' "$entries" | grep -qx 'bin/devin' || fail "archive does not contai
 details="$(tar -tvzf "$archive" bin/devin)" || fail "target metadata could not be inspected"
 [ "$(printf '%s' "$details" | cut -c 1)" = '-' ] || fail "target member is not a regular file"
 workspace="$(mktemp -d "$output_directory/.devin-target.XXXXXX")" || fail "temporary extraction directory could not be created"
-cleanup() { rm -rf "$workspace"; rm -f "$archive"; }
-trap cleanup EXIT HUP INT TERM
 tar -xzf "$archive" -C "$workspace" bin/devin || fail "target extraction failed"
 [ -f "$workspace/bin/devin" ] && [ ! -L "$workspace/bin/devin" ] || fail "extracted target is unsafe"
 chmod 0500 "$workspace/bin/devin" || fail "target permissions could not be secured"
 mv "$workspace/bin/devin" "$output_binary" || fail "verified target could not be installed"
 version_output="$("$output_binary" --version 2>/dev/null)" || fail "installed target version check failed"
 case "$version_output" in *"$version"*) ;; *) fail "installed target reported an unexpected version" ;; esac
+retain_archive=1

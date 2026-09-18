@@ -2,6 +2,7 @@ package executor
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"os"
@@ -691,7 +692,26 @@ func TestRunDevinProjectsOnlyAllowlistedCredentialAndSelectedFiles(t *testing.T)
 		if err != nil || info.Mode().Perm() != 0600 {
 			t.Fatalf("credential mode was not private: %v", err)
 		}
-		for _, relative := range []string{"config.json", "mcp_config.json", "hooks", "AGENTS.md"} {
+		userConfig := filepath.Join(request.SessionHome, ".config", "devin", "config.json")
+		configBytes, err := os.ReadFile(userConfig)
+		if err != nil {
+			t.Fatalf("selected Devin user configuration was not projected: %v", err)
+		}
+		var config struct {
+			ReadConfigFrom map[string]bool `json:"read_config_from"`
+		}
+		if err := json.Unmarshal(configBytes, &config); err != nil {
+			t.Fatal(err)
+		}
+		for _, source := range []string{"cursor", "windsurf", "claude", "opencode", "zed"} {
+			if enabled, exists := config.ReadConfigFrom[source]; !exists || enabled {
+				t.Fatalf("Devin import %q remained enabled: %s", source, configBytes)
+			}
+		}
+		if _, exists := config.ReadConfigFrom["agents_standard"]; exists {
+			t.Fatalf("standard project instruction import override was introduced: %s", configBytes)
+		}
+		for _, relative := range []string{"mcp_config.json", "hooks", "AGENTS.md"} {
 			if _, err := os.Lstat(filepath.Join(request.SessionHome, ".config", "devin", relative)); !os.IsNotExist(err) {
 				t.Fatalf("unrestricted state %s was projected: %v", relative, err)
 			}

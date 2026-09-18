@@ -84,6 +84,23 @@ type ExecutableGrantIntent struct {
 	Path          string
 }
 
+// MCPServerIntent is the reference-only local stdio declaration carried from
+// a resolved Profile into the fixed target executor.
+type MCPArgumentIntent struct {
+	Kind string
+	Ref  string
+}
+
+type MCPServerIntent struct {
+	ID              string
+	Transport       string
+	ExecutableRef   string
+	Arguments       []MCPArgumentIntent
+	InputRefs       []string
+	EnvironmentRefs []string
+	DisabledTools   []string
+}
+
 // ExecutableGrant is an operation-scoped private witness. Public explanations
 // use only its logical ID and reference form.
 type ExecutableGrant struct {
@@ -298,10 +315,20 @@ type ProcessRequest struct {
 	RuntimeAuthority       RuntimeAuthority
 	FilesystemGrants       []FilesystemGrant
 	ExecutableGrants       []ExecutableGrant
+	SessionProtections     []SessionProtection
+	SelectedMCPConfig      string
+	ReserveMCPConfigNames  bool
 	Environment            *environmentresource.Lease
 	RecoveryProofChallenge []byte
 	Arguments              []string
 	Terminal               Terminal
+}
+
+// SessionProtection is a typed mutation denial for app-owned Session data.
+// Recursive protection is reserved for dedicated immutable subtrees.
+type SessionProtection struct {
+	Path      string
+	Recursive bool
 }
 
 // RuntimeAuthority is the typed intrinsic grant set consumed by environment
@@ -568,6 +595,9 @@ func (sandbox *nativeProcessSandbox) Prepare(ctx context.Context, request Proces
 	if err != nil {
 		return nil, err
 	}
+	if err := revalidateSessionProtections(validated); err != nil {
+		return nil, sandboxError(SandboxUnsafePath, err)
+	}
 	process, err := backend.prepare(ctx, validated)
 	if err != nil {
 		var classified *SandboxError
@@ -579,7 +609,7 @@ func (sandbox *nativeProcessSandbox) Prepare(ctx context.Context, request Proces
 	if process == nil {
 		return nil, sandboxError(SandboxSetupFailed, nil)
 	}
-	return sanitizedProcess{process: process}, nil
+	return sanitizedProcess{process: process, startValidation: revalidateSessionProtections, validated: validated}, nil
 }
 
 func (sandbox *nativeProcessSandbox) checkEnvironmentTransport() error {
@@ -597,10 +627,22 @@ func (sandbox *nativeProcessSandbox) checkEnvironmentTransport() error {
 }
 
 type sanitizedProcess struct {
-	process Process
+	process         Process
+	startValidation func(validatedProcessRequest) error
+	validated       validatedProcessRequest
 }
 
 func (process sanitizedProcess) Start() error {
+	if process.startValidation != nil && len(process.validated.sessionProtections) != 0 {
+		if err := process.startValidation(process.validated); err != nil {
+			if aborter, ok := process.process.(interface{ AbortPrepared() error }); ok {
+				if abortErr := aborter.AbortPrepared(); abortErr != nil {
+					return sandboxError(SandboxUnsafePath, errors.Join(err, abortErr))
+				}
+			}
+			return sandboxError(SandboxUnsafePath, err)
+		}
+	}
 	if err := process.process.Start(); err != nil {
 		return sandboxError(SandboxProcessStartFailed, err)
 	}
@@ -739,11 +781,25 @@ type validatedProcessRequest struct {
 	runtimeAuthority           RuntimeAuthority
 	filesystemGrants           []FilesystemGrant
 	executableGrants           []ExecutableGrant
+	sessionProtections         []validatedSessionProtection
+	selectedMCPConfig          string
+	reserveMCPConfigNames      bool
+	sessionRootWitness         []pathIdentity
+	sessionRootIdentity        pathIdentity
+	sessionHomeWitness         []pathIdentity
+	sessionHomeIdentity        pathIdentity
 	environmentProjection      *environmentresource.Lease
 	recoveryProofChallenge     []byte
 	arguments                  []string
 	environment                []string
 	terminal                   Terminal
+}
+
+type validatedSessionProtection struct {
+	path      string
+	recursive bool
+	witness   []pathIdentity
+	identity  pathIdentity
 }
 
 func validateProcessRequest(request ProcessRequest) (validatedProcessRequest, error) {
@@ -774,6 +830,46 @@ func validateProcessRequest(request ProcessRequest) (validatedProcessRequest, er
 	if len(request.RecoveryProofChallenge) != 0 && len(request.RecoveryProofChallenge) != RecoveryProofChallengeSize {
 		return validatedProcessRequest{}, sandboxError(SandboxInvalidEnvironment, nil)
 	}
+	_, rootWitness, rootIdentity, rootErr := inspectGrantPath(sessionDirectory, PathTypeDirectory, PathAccessReadWrite)
+	_, homeWitness, homeIdentity, homeErr := inspectGrantPath(sessionHome, PathTypeDirectory, PathAccessReadWrite)
+	if rootErr != nil || homeErr != nil {
+		return validatedProcessRequest{}, sandboxError(SandboxUnsafePath, errors.Join(rootErr, homeErr))
+	}
+	protections := make([]validatedSessionProtection, 0, len(request.SessionProtections))
+	seenProtections := map[string]bool{}
+	for _, protection := range request.SessionProtections {
+		resolved, resolveErr := resolveExistingPath(protection.Path, false, false)
+		if resolveErr != nil || filepath.Clean(protection.Path) != resolved || !pathWithin(sessionHome, resolved) || resolved == sessionHome || seenProtections[resolved] {
+			return validatedProcessRequest{}, sandboxError(SandboxUnsafePath, resolveErr)
+		}
+		info, statErr := os.Stat(resolved)
+		if statErr != nil || protection.Recursive && !info.IsDir() {
+			return validatedProcessRequest{}, sandboxError(SandboxUnsafePath, statErr)
+		}
+		kind := PathTypeFile
+		if info.IsDir() {
+			kind = PathTypeDirectory
+		}
+		canonical, witness, identity, inspectErr := inspectGrantPath(resolved, kind, PathAccessReadOnly)
+		if inspectErr != nil || canonical != resolved {
+			return validatedProcessRequest{}, sandboxError(SandboxUnsafePath, inspectErr)
+		}
+		seenProtections[resolved] = true
+		protections = append(protections, validatedSessionProtection{path: resolved, recursive: protection.Recursive, witness: witness, identity: identity})
+	}
+	selectedMCPConfig := ""
+	if request.SelectedMCPConfig != "" {
+		selectedMCPConfig, err = resolveExistingPath(request.SelectedMCPConfig, false, false)
+		if err != nil || !pathWithin(sessionHome, selectedMCPConfig) || filepath.Clean(request.SelectedMCPConfig) != selectedMCPConfig {
+			return validatedProcessRequest{}, sandboxError(SandboxUnsafePath, err)
+		}
+		if filepath.Base(selectedMCPConfig) != "mcp_config.json" && filepath.Base(selectedMCPConfig) != "mcp_config.local.json" {
+			return validatedProcessRequest{}, sandboxError(SandboxUnsafePath, nil)
+		}
+		if !seenProtections[selectedMCPConfig] {
+			return validatedProcessRequest{}, sandboxError(SandboxUnsafePath, nil)
+		}
+	}
 	return validatedProcessRequest{
 		workspace: checked.workspace, workspaceAccess: checked.workspaceAccess, sessionsDirectory: checked.sessionsDirectory,
 		sessionDirectory: sessionDirectory, sessionHome: sessionHome,
@@ -783,11 +879,46 @@ func validateProcessRequest(request ProcessRequest) (validatedProcessRequest, er
 		runtimeAuthority:           checked.runtimeAuthority,
 		filesystemGrants:           checked.filesystemGrants,
 		executableGrants:           checked.executableGrants,
+		sessionProtections:         protections,
+		selectedMCPConfig:          selectedMCPConfig,
+		reserveMCPConfigNames:      request.ReserveMCPConfigNames,
+		sessionRootWitness:         rootWitness,
+		sessionRootIdentity:        rootIdentity,
+		sessionHomeWitness:         homeWitness,
+		sessionHomeIdentity:        homeIdentity,
 		environmentProjection:      request.Environment,
 		recoveryProofChallenge:     append([]byte(nil), request.RecoveryProofChallenge...),
 		arguments:                  append([]string(nil), request.Arguments...),
 		terminal:                   request.Terminal,
 	}, nil
+}
+
+func revalidateSessionProtections(request validatedProcessRequest) error {
+	for _, root := range []struct {
+		path     string
+		witness  []pathIdentity
+		identity pathIdentity
+	}{{request.sessionDirectory, request.sessionRootWitness, request.sessionRootIdentity}, {request.sessionHome, request.sessionHomeWitness, request.sessionHomeIdentity}} {
+		canonical, witness, identity, err := inspectGrantPath(root.path, PathTypeDirectory, PathAccessReadWrite)
+		if err != nil || canonical != root.path || identity != root.identity || !equalPathWitness(witness, root.witness) {
+			return errors.New("Session boundary identity changed")
+		}
+	}
+	for _, protection := range request.sessionProtections {
+		info, err := os.Stat(protection.path)
+		if err != nil {
+			return errors.New("protected Session path identity changed")
+		}
+		kind := PathTypeFile
+		if info.IsDir() {
+			kind = PathTypeDirectory
+		}
+		canonical, witness, identity, err := inspectGrantPath(protection.path, kind, PathAccessReadOnly)
+		if err != nil || canonical != protection.path || identity != protection.identity || !equalPathWitness(witness, protection.witness) {
+			return errors.New("protected Session path identity changed")
+		}
+	}
+	return nil
 }
 
 func resolveExecutable(path string) (string, error) {

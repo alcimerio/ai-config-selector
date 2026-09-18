@@ -379,6 +379,38 @@ func (process *bubblewrapProcess) Start() (result error) {
 	return nil
 }
 
+// AbortPrepared settles owned descriptors when the final Session identity
+// fence refuses a not-yet-started process.
+func (process *bubblewrapProcess) AbortPrepared() error {
+	process.startupIdentityMutex.Lock()
+	defer process.startupIdentityMutex.Unlock()
+	var closeErrors []error
+	if process.information != nil {
+		if err := process.information.Close(); err != nil {
+			closeErrors = append(closeErrors, err)
+		}
+		process.information = nil
+	}
+	if process.release != nil {
+		if err := process.release.Close(); err != nil {
+			closeErrors = append(closeErrors, err)
+		}
+		process.release = nil
+	}
+	for _, descriptor := range process.childDescriptors {
+		if err := descriptor.Close(); err != nil {
+			closeErrors = append(closeErrors, err)
+		}
+	}
+	process.childDescriptors = nil
+	process.closeIdentityDescriptors()
+	if err := errors.Join(closeErrors...); err != nil {
+		return err
+	}
+	process.markCleanupDone()
+	return nil
+}
+
 func bubblewrapTargetBlocked(pid, descriptor int) error {
 	runsBubblewrap, err := stableBubblewrapTarget(pid, descriptor)
 	if err != nil {

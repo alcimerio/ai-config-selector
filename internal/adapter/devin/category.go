@@ -170,6 +170,11 @@ func newCategoryRegistry(adapter *Adapter) (*category.Registry, commonprofile.Sk
 	if err != nil {
 		return nil, commonprofile.SkillsBinding{}, commonprofile.InstructionsBinding{}, commonprofile.WorkspaceBinding{}, commonprofile.PathsBinding{}, commonprofile.ExecutablesBinding{}, commonprofile.EnvironmentBinding{}, err
 	}
+	mcpBinding, err := commonprofile.NewMCPBinding()
+	if err != nil {
+		return nil, commonprofile.SkillsBinding{}, commonprofile.InstructionsBinding{}, commonprofile.WorkspaceBinding{}, commonprofile.PathsBinding{}, commonprofile.ExecutablesBinding{}, commonprofile.EnvironmentBinding{}, err
+	}
+	adapter.mcpCategory = mcpBinding
 	registry, err := category.NewRegistryWithRequirements("devin", authority.TargetRequirements{
 		Recipe:                  authority.RecipeDevin,
 		Executable:              adapter.binaryPath,
@@ -180,7 +185,7 @@ func newCategoryRegistry(adapter *Adapter) (*category.Registry, commonprofile.Sk
 		ProtectedPaths:          []string{filepath.Join(adapter.existingHomeDir, ".acs"), filepath.Join(adapter.existingHomeDir, ".codex"), filepath.Join(adapter.existingHomeDir, credentialsRelativePath)},
 		ProtectedPathIDs:        []string{"acs-private", "codex-private", "devin-credential"},
 		Semantics:               authority.DevinSemantics(),
-	}, []category.Registration{skillsBinding.Registration(), instructionsBinding.Registration(), workspaceBinding.Registration(), pathsBinding.Registration(), executablesBinding.Registration(), environmentBinding.Registration()}, category.LegacyDecoder{Version: 1, Decode: decodeVersionOneProfile})
+	}, []category.Registration{skillsBinding.Registration(), instructionsBinding.Registration(), workspaceBinding.Registration(), pathsBinding.Registration(), executablesBinding.Registration(), environmentBinding.Registration(), mcpBinding.Registration()}, category.LegacyDecoder{Version: 1, Decode: decodeVersionOneProfile})
 	if err != nil {
 		return nil, commonprofile.SkillsBinding{}, commonprofile.InstructionsBinding{}, commonprofile.WorkspaceBinding{}, commonprofile.PathsBinding{}, commonprofile.ExecutablesBinding{}, commonprofile.EnvironmentBinding{}, err
 	}

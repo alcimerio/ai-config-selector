@@ -6,6 +6,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -130,6 +131,7 @@ func TestSeatbeltPolicyIsDefaultDenyAndUsesParametersForValidatedPaths(t *testin
 		"-DSESSION_ANCESTOR_2=/",
 		"-DRUNTIME_0=" + request.runtimeInputs[0],
 		"-DRUNTIME_PROBE_0=" + request.runtimeProbePaths[0],
+		"-DSESSION_PROTECTED_1=" + request.sessionDirectory,
 		"-DRUNTIME_PROBE_TRAVERSAL_0=" + request.runtimeProbeTraversalPaths[0],
 	}
 	if strings.Join(definitions, "\n") != strings.Join(wantDefinitions, "\n") {
@@ -140,6 +142,46 @@ func TestSeatbeltPolicyIsDefaultDenyAndUsesParametersForValidatedPaths(t *testin
 	}
 	if strings.Contains(policy, `(subpath (param "RUNTIME_PROBE_TRAVERSAL_0"))`) {
 		t.Fatal("runtime probe traversal path grants descendant reads")
+	}
+}
+
+func TestSeatbeltPolicyKeepsValidSessionRootsProtectedWithoutExtraProtections(t *testing.T) {
+	request := validatedProcessRequest{
+		workspace:        "/private/tmp/workspace",
+		sessionDirectory: "/private/tmp/session",
+		sessionHome:      "/private/tmp/session/home",
+		executable:       "/usr/bin/true",
+	}
+	policy, definitions, err := buildSeatbeltPolicy(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, definition := range []string{"-DSESSION_PROTECTED_0=" + request.sessionHome, "-DSESSION_PROTECTED_1=" + request.sessionDirectory} {
+		if !strings.Contains(strings.Join(definitions, "\n"), definition) {
+			t.Fatalf("valid Session root protection missing %q from %#v", definition, definitions)
+		}
+	}
+	for _, rule := range []string{`(deny file-write* (literal (param "SESSION_PROTECTED_0")))`, `(deny file-write* (literal (param "SESSION_PROTECTED_1")))`} {
+		if !strings.Contains(policy, rule) {
+			t.Fatalf("valid Session root denial missing %q", rule)
+		}
+	}
+}
+
+func TestSeatbeltPolicyOmitsEmptySessionRootProtectionParameters(t *testing.T) {
+	request := validatedProcessRequest{workspace: "/private/tmp/workspace", sessionDirectory: "/private/tmp/session", executable: "/usr/bin/true"}
+	policy, definitions, err := buildSeatbeltPolicy(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(strings.Join(definitions, "\n"), "-DSESSION_PROTECTED_1="+request.sessionDirectory) {
+		t.Fatalf("valid Session directory protection parameter missing: %#v", definitions)
+	}
+	if strings.Contains(policy, `(literal (param "SESSION_PROTECTED_0"))`) {
+		t.Fatal("empty Session home produced a denial using a missing parameter")
+	}
+	if !strings.Contains(policy, `(deny file-write* (literal (param "SESSION_PROTECTED_1")))`) {
+		t.Fatal("valid Session directory protection denial missing")
 	}
 }
 
@@ -237,6 +279,85 @@ func TestSeatbeltPolicyKeepsValidatedExecutableSymlinkTraversalNarrow(t *testing
 	}
 	if !strings.Contains(policy, `(literal (param "PROFILE_EXECUTABLE_0_LOGICAL_ANCESTOR_0"))`) || strings.Contains(policy, `(subpath (param "PROFILE_EXECUTABLE_0_LOGICAL_ANCESTOR_0"))`) {
 		t.Fatalf("logical symlink ancestor metadata is not literal-only: %s", policy)
+	}
+}
+
+func TestSeatbeltExecutableGrantSearchMetadataDoesNotExposeDirectoryContents(t *testing.T) {
+	skipSeatbeltNativeTestBinaryUnderRace(t)
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonicalDirectory := filepath.Join(root, "cellar", "tool", "1.0", "bin")
+	logicalDirectory := filepath.Join(root, "logical", "bin")
+	if err := os.MkdirAll(canonicalDirectory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(root, "cellar", "tool", "1.0"), filepath.Join(root, "logical")); err != nil {
+		t.Fatal(err)
+	}
+	selectedBytes := []byte("#!/bin/sh\nexit 0\n")
+	selected := filepath.Join(canonicalDirectory, "tool")
+	logicalSelected := filepath.Join(logicalDirectory, "tool")
+	sibling := filepath.Join(canonicalDirectory, "sibling-secret")
+	if err := os.WriteFile(selected, selectedBytes, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(sibling, []byte("private"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	request := seatbeltTestRequest(t)
+	request.executableGrants = []ExecutableGrant{{ID: "selected", logicalPath: logicalSelected, path: selected}}
+	request.arguments = []string{"-test.run=TestSeatbeltHelperProcess", "--", "executable-grant-search", logicalSelected, canonicalDirectory, sibling}
+	var output bytes.Buffer
+	request.terminal = Terminal{Output: &output, ErrorOutput: &output}
+	prepareContext, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	process, err := newSeatbeltBackend(seatbeltExecutable).prepare(prepareContext, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := process.Start(); err != nil {
+		t.Fatal(err)
+	}
+	wait := make(chan error, 1)
+	go func() { wait <- process.Wait() }()
+	var waitErr error
+	timedOut := false
+	select {
+	case waitErr = <-wait:
+	case <-time.After(10 * time.Second):
+		timedOut = true
+		_ = process.Signal(syscall.SIGKILL)
+		select {
+		case waitErr = <-wait:
+		case <-time.After(10 * time.Second):
+			t.Fatal("executable grant search process did not terminate")
+		}
+	}
+	cleanup, ok := process.(ProcessCleanup)
+	if !ok || cleanup.CleanupDone() == nil {
+		t.Fatal("executable grant search backend did not expose cleanup completion")
+	}
+	select {
+	case <-cleanup.CleanupDone():
+	case <-time.After(10 * time.Second):
+		t.Fatal("executable grant search cleanup did not complete")
+	}
+	if timedOut {
+		t.Fatalf("executable grant search exceeded bounded wait; wait after forced signal=%v; output=%q", waitErr, output.String())
+	}
+	if waitErr != nil {
+		t.Fatalf("executable grant search regression: %v; output=%q", waitErr, output.String())
+	}
+	if got := strings.TrimSpace(output.String()); got != "executable-grant-search" {
+		t.Fatalf("executable grant search output=%q", got)
+	}
+	if got, err := os.ReadFile(selected); err != nil || !bytes.Equal(got, selectedBytes) {
+		t.Fatalf("selected executable changed: err=%v bytes=%q", err, got)
+	}
+	if got, err := os.ReadFile(sibling); err != nil || string(got) != "private" {
+		t.Fatalf("sibling changed: err=%v bytes=%q", err, got)
 	}
 }
 
@@ -3533,7 +3654,7 @@ func TestSeatbeltCandidatePinnedDevinUsesSelectedHomeMCPConfigOnly(t *testing.T)
 	selected := seatbeltCandidateDevinConfig(t, "acs-selected-feasibility")
 	projectDecoy := seatbeltCandidateDevinConfig(t, "acs-project-ambient-decoy")
 	localDecoy := seatbeltCandidateDevinConfig(t, "acs-local-ambient-decoy")
-	makeFixture := func() (*seatbeltMCPTestFixture, ProcessRequest, string, string) {
+	makeFixture := func(cursorImport, reserveMCPConfig bool) (*seatbeltMCPTestFixture, ProcessRequest, string, string) {
 		t.Helper()
 		fixture := newSeatbeltMCPTestFixture(t)
 		request := fixture.request
@@ -3541,16 +3662,27 @@ func TestSeatbeltCandidatePinnedDevinUsesSelectedHomeMCPConfigOnly(t *testing.T)
 		projectConfig := filepath.Join(request.workspace, ".devin", "mcp_config.json")
 		localConfig := filepath.Join(request.workspace, ".devin", "mcp_config.local.json")
 		userConfig := filepath.Join(request.sessionHome, ".config", "devin", "mcp_config.json")
+		userImportConfig := filepath.Join(request.sessionHome, ".config", "devin", "config.json")
 		if err := os.MkdirAll(filepath.Dir(userConfig), 0o700); err != nil {
 			t.Fatal(err)
 		}
 		if err := os.WriteFile(userConfig, selected, 0o600); err != nil {
 			t.Fatal(err)
 		}
+		importConfig := []byte(`{"read_config_from":{"cursor":false,"windsurf":false,"claude":false,"opencode":false,"zed":false}}`)
+		if cursorImport {
+			importConfig = []byte(`{"read_config_from":{"cursor":true,"windsurf":false,"claude":false,"opencode":false,"zed":false}}`)
+		}
+		if err := os.WriteFile(userImportConfig, importConfig, 0o600); err != nil {
+			t.Fatal(err)
+		}
 		for _, item := range []struct {
 			path string
 			data []byte
-		}{{projectConfig, projectDecoy}, {localConfig, localDecoy}} {
+		}{{projectConfig, projectDecoy}, {localConfig, localDecoy},
+			{filepath.Join(request.workspace, ".devin", "config.json"), []byte(`{"read_config_from":{"cursor":true}}`)},
+			{filepath.Join(request.workspace, ".cursor", "mcp.json"), []byte(`{"mcpServers":{"acs-import-cursor-control":{"command":"/usr/bin/true","args":[]}}}`)},
+		} {
 			if err := os.MkdirAll(filepath.Dir(item.path), 0o700); err != nil {
 				t.Fatal(err)
 			}
@@ -3563,6 +3695,11 @@ func TestSeatbeltCandidatePinnedDevinUsesSelectedHomeMCPConfigOnly(t *testing.T)
 			SessionsDirectory: request.sessionsDirectory, SessionDirectory: request.sessionDirectory,
 			SessionHome: request.sessionHome, TemporaryDirectory: request.temporaryDirectory,
 			Executable: binary, RuntimeAuthority: DefaultRuntimeAuthority(), Arguments: []string{"mcp", "list"},
+			SessionProtections: []SessionProtection{{Path: userConfig}, {Path: userImportConfig}},
+		}
+		if reserveMCPConfig {
+			processRequest.SelectedMCPConfig = userConfig
+			processRequest.ReserveMCPConfigNames = true
 		}
 		return fixture, processRequest, projectConfig, localConfig
 	}
@@ -3587,15 +3724,25 @@ func TestSeatbeltCandidatePinnedDevinUsesSelectedHomeMCPConfigOnly(t *testing.T)
 	}
 	// Paired fresh fixtures prove these exact roots are discovered under the
 	// unmodified production backend before measuring the candidate denial.
-	baselineFixture, baselineRequest, _, _ := makeFixture()
-	baseline := runList(baselineFixture, baselineRequest, "without candidate denial", NewProcessSandbox())
-	for _, expected := range []string{"acs-selected-feasibility", "acs-project-ambient-decoy", "acs-local-ambient-decoy"} {
-		if !strings.Contains(baseline, expected) {
-			t.Fatalf("pinned Devin baseline did not load fixture entry %q: %q", expected, baseline)
+	importFixture, importRequest, _, _ := makeFixture(true, false)
+	importEnabled := runList(importFixture, importRequest, "with Cursor import enabled", NewProcessSandbox())
+	for _, expected := range []string{"acs-selected-feasibility", "acs-project-ambient-decoy", "acs-local-ambient-decoy", "acs-import-cursor-control"} {
+		if !strings.Contains(importEnabled, expected) {
+			t.Fatalf("pinned Devin positive import control did not load fixture entry %q: %q", expected, importEnabled)
 		}
 	}
-	deniedFixture, deniedRequest, projectConfig, localConfig := makeFixture()
-	result := runList(deniedFixture, deniedRequest, "under candidate denial", seatbeltCandidateMCPDenySandbox(t, []string{projectConfig, localConfig}, nil))
+	baselineFixture, baselineRequest, _, _ := makeFixture(false, false)
+	baseline := runList(baselineFixture, baselineRequest, "with vendor MCP imports disabled", NewProcessSandbox())
+	for _, expected := range []string{"acs-selected-feasibility", "acs-project-ambient-decoy", "acs-local-ambient-decoy"} {
+		if !strings.Contains(baseline, expected) {
+			t.Fatalf("pinned Devin import-off control did not load native fixture entry %q: %q", expected, baseline)
+		}
+	}
+	if strings.Contains(baseline, "acs-import-cursor-control") {
+		t.Fatalf("selected user config did not disable Cursor import despite hostile project true: %q", baseline)
+	}
+	deniedFixture, deniedRequest, _, _ := makeFixture(false, true)
+	result := runList(deniedFixture, deniedRequest, "under production reservation policy", NewProcessSandbox())
 	afterInfo, err := os.Lstat(binary)
 	if err != nil || !os.SameFile(binaryInfo, afterInfo) || binaryInfo.Size() != afterInfo.Size() || !binaryInfo.ModTime().Equal(afterInfo.ModTime()) {
 		t.Fatal("pinned Devin identity changed during native config observation")
@@ -3603,7 +3750,7 @@ func TestSeatbeltCandidatePinnedDevinUsesSelectedHomeMCPConfigOnly(t *testing.T)
 	if !strings.Contains(result, "acs-selected-feasibility") {
 		t.Fatalf("selected user projection was not usable: %q", result)
 	}
-	for _, ambient := range []string{"acs-project-ambient-decoy", "acs-local-ambient-decoy"} {
+	for _, ambient := range []string{"acs-project-ambient-decoy", "acs-local-ambient-decoy", "acs-import-cursor-control"} {
 		if strings.Contains(result, ambient) {
 			t.Errorf("ambient Devin MCP entry loaded despite candidate denial: %q", ambient)
 		}
@@ -5110,6 +5257,32 @@ func TestSeatbeltHelperProcess(t *testing.T) {
 			os.Exit(124)
 		}
 		fmt.Fprintln(os.Stdout, "session-prefix-metadata")
+		os.Exit(0)
+	case "executable-grant-search":
+		if len(arguments) != 4 {
+			fmt.Fprintf(os.Stderr, "executable grant argument count=%d\n", len(arguments))
+			os.Exit(124)
+		}
+		_, _, _, digest, err := inspectExecutableGrant(arguments[1])
+		expected := [sha256.Size]byte{}
+		_, decodeErr := hex.Decode(expected[:], []byte("306c6ca7407560340797866e077e053627ad409277d1b9da58106fce4cf717cb"))
+		if err != nil || decodeErr != nil || digest != expected {
+			fmt.Fprintln(os.Stderr, "executable grant inspection failed")
+			os.Exit(125)
+		}
+		if _, err := os.ReadDir(arguments[2]); !isSeatbeltPermission(err) {
+			fmt.Fprintln(os.Stderr, "executable ancestor contents exposed")
+			os.Exit(126)
+		}
+		if _, err := os.ReadFile(arguments[3]); !isSeatbeltPermission(err) {
+			fmt.Fprintln(os.Stderr, "executable sibling contents exposed")
+			os.Exit(127)
+		}
+		if err := os.WriteFile(arguments[3], []byte("bad"), 0o600); !isSeatbeltPermission(err) {
+			fmt.Fprintln(os.Stderr, "executable sibling write exposed")
+			os.Exit(128)
+		}
+		fmt.Fprintln(os.Stdout, "executable-grant-search")
 		os.Exit(0)
 	case "grandchild":
 		if _, err := os.ReadFile(arguments[1]); !isSeatbeltPermission(err) {

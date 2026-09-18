@@ -525,6 +525,77 @@ func TestProcessSandboxSelectsBackendAndPassesOnlyValidatedInputs(t *testing.T) 
 	}
 }
 
+func TestPreparedSessionProtectionIsRevalidatedBeforeStart(t *testing.T) {
+	for _, replace := range []bool{false, true} {
+		name := "unchanged"
+		if replace {
+			name = "replacement"
+		}
+		t.Run(name, func(t *testing.T) {
+			request := validProcessRequest(t)
+			protected := filepath.Join(request.SessionHome, ".acs", "mcp")
+			if err := os.MkdirAll(protected, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(protected, "recipes.json"), []byte("original"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			request.SessionProtections = []SessionProtection{{Path: protected, Recursive: true}}
+			child := &preparedProtectionProcess{cleanupDone: make(chan struct{})}
+			backend := &capturingBackend{process: child}
+			sandbox := newNativeProcessSandbox(
+				func() (Platform, error) { return Platform{OS: "darwin", Architecture: "arm64", Release: "26.1"}, nil },
+				map[string]sandboxBackend{"darwin": backend},
+			)
+			process, err := sandbox.Prepare(context.Background(), request)
+			if err != nil {
+				t.Fatalf("prepare protected Session process: %v", err)
+			}
+			if replace {
+				moved := protected + ".old"
+				if err := os.Rename(protected, moved); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Mkdir(protected, 0o700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			err = process.Start()
+			if replace {
+				assertSandboxCategory(t, err, SandboxUnsafePath)
+				if child.started || child.aborts != 1 {
+					t.Fatalf("replaced recipe path reached child or was not aborted: %#v", child)
+				}
+				select {
+				case <-process.(ProcessCleanup).CleanupDone():
+				default:
+					t.Fatal("no-start abort did not settle cleanup")
+				}
+				return
+			}
+			if err != nil || !child.started || child.aborts != 0 {
+				t.Fatalf("unchanged protected path start = %v, child=%#v", err, child)
+			}
+		})
+	}
+}
+
+type preparedProtectionProcess struct {
+	started     bool
+	aborts      int
+	cleanupDone chan struct{}
+}
+
+func (process *preparedProtectionProcess) Start() error   { process.started = true; return nil }
+func (*preparedProtectionProcess) Wait() error            { return nil }
+func (*preparedProtectionProcess) Signal(os.Signal) error { return nil }
+func (process *preparedProtectionProcess) AbortPrepared() error {
+	process.aborts++
+	close(process.cleanupDone)
+	return nil
+}
+func (process *preparedProtectionProcess) CleanupDone() <-chan struct{} { return process.cleanupDone }
+
 func TestProcessSandboxSanitizesBackendFailures(t *testing.T) {
 	secret := "PRIVATE_BACKEND_OUTPUT policy=(allow default)"
 	backend := &capturingBackend{checkErr: errors.New(secret)}
@@ -750,7 +821,10 @@ func (process *stubLifecycleProcess) Signal(os.Signal) error { return nil }
 
 func validProcessRequest(t *testing.T) ProcessRequest {
 	t.Helper()
-	root := t.TempDir()
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	workspace := filepath.Join(root, "workspace")
 	sessions := filepath.Join(root, "sessions")
 	session := filepath.Join(sessions, "session-one")

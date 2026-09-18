@@ -140,6 +140,7 @@ jobs:
             "$target_root" \
             "$target_root/bin/devin"
           echo "ACS_TEST_DEVIN_BINARY=$target_root/bin/devin" >> "$GITHUB_ENV"
+          echo "ACS_TEST_DEVIN_ARCHIVE=$target_root/devin-3000.10.21-darwin-arm64.tar.gz" >> "$GITHUB_ENV"
 
       - name: Run shared native release candidate gates
         run: |

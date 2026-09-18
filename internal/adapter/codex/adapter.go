@@ -41,6 +41,7 @@ type Adapter struct {
 	categories *category.Registry
 	editors    *builder.EditorRegistry
 	auth       codexExecutor
+	mcp        commonprofile.MCPBinding
 }
 
 type codexInstructionProjection struct{}
@@ -91,12 +92,17 @@ func New(config Config) (*Adapter, error) {
 	if err != nil {
 		return nil, err
 	}
+	mcpBinding, err := commonprofile.NewMCPBinding()
+	if err != nil {
+		return nil, err
+	}
+	a.mcp = mcpBinding
 	a.categories, err = category.NewRegistryWithRequirements("codex", authority.TargetRequirements{
 		Recipe: authority.RecipeCodex, Executable: config.BinaryPath, ExecutableRequirementID: "codex-cli-0.149.1",
 		RuntimeInputs: append([]string(nil), config.RuntimeInputs...), RuntimeInputIDs: append([]string(nil), config.RuntimeInputIDs...),
 		ProtectedPaths:   []string{filepath.Join(a.home, ".acs"), filepath.Join(a.home, ".codex"), filepath.Join(a.home, ".local", "share", "devin", "credentials.toml")},
 		ProtectedPathIDs: []string{"acs-private", "codex-private", "devin-credential"}, Semantics: authority.CodexSemantics(),
-	}, []category.Registration{skillsBinding.Registration(), instructionsBinding.Registration(), workspaceBinding.Registration(), pathsBinding.Registration(), executablesBinding.Registration(), environmentBinding.Registration()})
+	}, []category.Registration{skillsBinding.Registration(), instructionsBinding.Registration(), workspaceBinding.Registration(), pathsBinding.Registration(), executablesBinding.Registration(), environmentBinding.Registration(), mcpBinding.Registration()})
 	if err != nil {
 		return nil, err
 	}
@@ -126,7 +132,11 @@ func New(config Config) (*Adapter, error) {
 	if err != nil {
 		return nil, err
 	}
-	a.editors, err = builder.NewEditorRegistry(a.categories, skillsEditor, instructionsEditor, workspaceEditor, pathsEditor, executablesEditor, environmentEditor)
+	mcpEditor, err := builder.RegisterMCPEditor(mcpBinding)
+	if err != nil {
+		return nil, err
+	}
+	a.editors, err = builder.NewEditorRegistry(a.categories, skillsEditor, instructionsEditor, workspaceEditor, pathsEditor, executablesEditor, environmentEditor, mcpEditor)
 	if err != nil {
 		return nil, err
 	}
@@ -134,6 +144,10 @@ func New(config Config) (*Adapter, error) {
 }
 
 func (a *Adapter) Categories() *category.Registry { return a.categories }
+
+func (a *Adapter) SetMCPSelection(draft *category.Draft, selection commonprofile.MCPSelection) error {
+	return category.SetSelection(draft, a.mcp, selection)
+}
 
 func (a *Adapter) BuildProfile(ctx context.Context, name string, draft category.Draft, save builder.SaveFunc, input io.Reader, output io.Writer) (builder.Outcome, error) {
 	model, err := builder.NewModel(name, draft, a.editors)

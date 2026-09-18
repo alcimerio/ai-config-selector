@@ -5,6 +5,8 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"os"
+	"path/filepath"
 	"sync"
 
 	"github.com/alcimerio/ai-config-selector/internal/launch"
@@ -89,6 +91,13 @@ func prepareContainedOperationWithAccessAndGrantsUsingExecutable(
 	}
 	preparedConfig := config
 	preparedConfig.BinaryPath = executable
+	companion := filepath.Join(filepath.Dir(executable), "codex-code-mode-host")
+	if _, companionErr := os.Stat(companion); companionErr == nil {
+		preparedConfig.RuntimeInputs = append(append([]string(nil), config.RuntimeInputs...), companion)
+	} else if !os.IsNotExist(companionErr) {
+		cleanup()
+		return nil, operationFailure
+	}
 	runtimeAuthority := launch.DefaultRuntimeAuthority()
 	if len(runtimeAuthorities) != 0 {
 		runtimeAuthority = runtimeAuthorities[0]
@@ -96,7 +105,7 @@ func prepareContainedOperationWithAccessAndGrantsUsingExecutable(
 	preparation := &containedOperationPreparation{config: preparedConfig, cleanup: cleanup, runtimeAuthority: runtimeAuthority}
 	if err := sandbox.Check(ctx, launch.SandboxCheck{
 		Workspace: config.WorkingDirectory, WorkspaceAccess: workspaceAccess, SessionsDirectory: config.SessionsDirectory,
-		Executable: executable, RuntimeInputs: config.RuntimeInputs,
+		Executable: executable, RuntimeInputs: preparedConfig.RuntimeInputs,
 		RuntimeProbePaths: config.RuntimeProbePaths, RuntimeAuthority: runtimeAuthority, FilesystemGrants: filesystemGrants, ExecutableGrants: executableGrants,
 		RequiresEnvironment: requiresEnvironment,
 	}); err != nil {

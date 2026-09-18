@@ -101,9 +101,18 @@ func writeCodexExecutionConfig(home, chatGPTWorkspace, workingDirectory string) 
 }
 
 func writeCodexExecutionConfigForSemantics(home, chatGPTWorkspace, workingDirectory string, semantics authority.TargetSemantics) error {
-	codexHome := filepath.Join(home, ".codex")
+	_, err := writeCodexExecutionConfigForSemanticsAndMCP(home, chatGPTWorkspace, workingDirectory, semantics, nil, "")
+	return err
+}
+
+func writeCodexExecutionConfigForSemanticsAndMCP(home, chatGPTWorkspace, workingDirectory string, semantics authority.TargetSemantics, recipes []launch.MCPRecipe, launcher string) (string, error) {
+	projectionHome, err := canonicalMCPProjectionHome(home)
+	if err != nil {
+		return "", err
+	}
+	codexHome := filepath.Join(projectionHome, ".codex")
 	if err := os.MkdirAll(codexHome, 0o700); err != nil {
-		return err
+		return "", err
 	}
 	provider, _ := semantics.ConfigurationMode("codex.provider")
 	authStorage, _ := semantics.ConfigurationMode("codex.auth-storage")
@@ -124,11 +133,24 @@ func writeCodexExecutionConfigForSemantics(home, chatGPTWorkspace, workingDirect
 	plugins, _ := semantics.ConfigurationMode("codex.plugins")
 	apps, _ := semantics.ConfigurationMode("codex.apps")
 	mcp, _ := semantics.ConfigurationMode("codex.mcp")
-	configuration := "cli_auth_credentials_store = " + strconv.Quote(authStorage) + "\nforced_login_method = " + strconv.Quote(login) + "\nmodel_provider = " + strconv.Quote(provider) + "\nchatgpt_base_url = " + strconv.Quote(endpoint) + "\nsandbox_mode = " + strconv.Quote(sandboxMode) + "\napproval_policy = " + strconv.Quote(approval) + "\nmcp_servers = " + disabledMap(mcp) + "\n[features]\nplugins = " + disabledBoolean(plugins) + "\napps = " + disabledBoolean(apps) + "\n[projects." + strconv.Quote(filepath.Clean(workingDirectory)) + "]\ntrust_level = " + strconv.Quote(trust) + "\n"
+	configuration := "cli_auth_credentials_store = " + strconv.Quote(authStorage) + "\nforced_login_method = " + strconv.Quote(login) + "\nmodel_provider = " + strconv.Quote(provider) + "\nchatgpt_base_url = " + strconv.Quote(endpoint) + "\nsandbox_mode = " + strconv.Quote(sandboxMode) + "\napproval_policy = " + strconv.Quote(approval) + "\n"
+	if len(recipes) == 0 {
+		configuration += "mcp_servers = " + disabledMap(mcp) + "\n"
+	} else {
+		if !filepath.IsAbs(launcher) {
+			return "", errors.New("MCP launcher executable is unavailable")
+		}
+		configuration += codexMCPConfiguration(recipes, launcher, projectionHome)
+	}
+	configuration += "[features]\nplugins = " + disabledBoolean(plugins) + "\napps = " + disabledBoolean(apps) + "\n[projects." + strconv.Quote(filepath.Clean(workingDirectory)) + "]\ntrust_level = " + strconv.Quote(trust) + "\n"
 	if chatGPTWorkspace != "" {
 		configuration = "forced_chatgpt_workspace_id = " + strconv.Quote(chatGPTWorkspace) + "\n" + configuration
 	}
-	return os.WriteFile(filepath.Join(codexHome, "config.toml"), []byte(configuration), 0o600)
+	path := filepath.Join(codexHome, "config.toml")
+	if err := os.WriteFile(path, []byte(configuration), 0o600); err != nil {
+		return "", err
+	}
+	return path, nil
 }
 
 func disabledBoolean(mode string) string {
@@ -138,13 +160,13 @@ func disabledBoolean(mode string) string {
 	return "true"
 }
 func disabledMap(mode string) string {
-	if mode == "disabled" {
+	if mode == "disabled" || mode == "selected-session-stdio" {
 		return "{}"
 	}
 	return "{unsupported=true}"
 }
 
-func (runner *codexExecutionRunner) run(ctx context.Context, config codexLoginConfig, created *session.Session, metadata IdentityMetadata, access launch.WorkspaceAccess, challenge string, binding loginResourceBinding, arguments []string, terminal launch.Terminal, supervisor *devinSignalSupervisor, semantics authority.TargetSemantics, runtimeAuthority launch.RuntimeAuthority, filesystemGrants []launch.FilesystemGrant, executableGrants []launch.ExecutableGrant, environment *environmentresource.Lease) containedRunResult {
+func (runner *codexExecutionRunner) run(ctx context.Context, config codexLoginConfig, created *session.Session, metadata IdentityMetadata, access launch.WorkspaceAccess, challenge string, binding loginResourceBinding, arguments []string, terminal launch.Terminal, supervisor *devinSignalSupervisor, semantics authority.TargetSemantics, runtimeAuthority launch.RuntimeAuthority, filesystemGrants []launch.FilesystemGrant, executableGrants []launch.ExecutableGrant, sessionProtections []launch.SessionProtection, environment *environmentresource.Lease) containedRunResult {
 	mode := retainedProbe
 	reserved := false
 	if supervisor != nil {
@@ -191,9 +213,10 @@ func (runner *codexExecutionRunner) run(ctx context.Context, config codexLoginCo
 		SessionDirectory: created.RootDirectory(), SessionHome: created.HomeDirectory(), TemporaryDirectory: created.TemporaryDirectory(),
 		Executable: config.BinaryPath, RuntimeInputs: config.RuntimeInputs, RuntimeProbePaths: config.RuntimeProbePaths,
 		RecoveryProofChallenge: proof, Arguments: targetArguments, Terminal: terminal, RuntimeAuthority: runtimeAuthority,
-		FilesystemGrants: filesystemGrants,
-		ExecutableGrants: executableGrants,
-		Environment:      environment,
+		FilesystemGrants:   filesystemGrants,
+		ExecutableGrants:   executableGrants,
+		SessionProtections: sessionProtections,
+		Environment:        environment,
 	})
 	if err != nil {
 		cancelReservation()
@@ -331,13 +354,24 @@ func (service *CodexAuthService) ExecuteCodex(ctx context.Context, request Codex
 		}
 		return 1, ErrCodexFailed
 	}
-	if err := writeCodexExecutionConfigForSemantics(created.HomeDirectory(), metadata.Workspace, created.WorkingDirectory(), requirements.Semantics); err != nil {
+	servers := request.ResolvedPlan.MCPServerIntents()
+	recipes, recipeDirectory, launcher, err := prepareMCPRecipes(created.HomeDirectory(), servers, executableGrants, filesystemGrants, request.ResolvedPlan.EnvironmentIntents())
+	if err != nil {
 		_ = binding.MarkRecoverable(ctx)
 		if cleanupErr := remove(); cleanupErr != nil {
 			return 1, cleanupErr
 		}
 		return 1, ErrCodexFailed
 	}
+	codexConfig, configErr := writeCodexExecutionConfigForSemanticsAndMCP(created.HomeDirectory(), metadata.Workspace, created.WorkingDirectory(), requirements.Semantics, recipes, launcher)
+	if configErr != nil {
+		_ = binding.MarkRecoverable(ctx)
+		if cleanupErr := remove(); cleanupErr != nil {
+			return 1, cleanupErr
+		}
+		return 1, ErrCodexFailed
+	}
+	protections := mcpSessionProtections(recipeDirectory, codexConfig)
 	if preflightContext.Err() != nil {
 		_ = binding.MarkRecoverable(ctx)
 		if cleanupErr := remove(); cleanupErr != nil {
@@ -359,7 +393,7 @@ func (service *CodexAuthService) ExecuteCodex(ctx context.Context, request Codex
 		return 1, ErrCodexFailed
 	}
 	versionOutput := boundedBuffer{limit: maximumVersionOutputSize}
-	version := service.execution.run(preflightContext, preparation.config, created, metadata, access, challenge, binding, []string{"--version"}, launch.Terminal{Output: &versionOutput, ErrorOutput: io.Discard}, nil, requirements.Semantics, runtimeAuthority, filesystemGrants, executableGrants, nil)
+	version := service.execution.run(preflightContext, preparation.config, created, metadata, access, challenge, binding, []string{"--version"}, launch.Terminal{Output: &versionOutput, ErrorOutput: io.Discard}, nil, requirements.Semantics, runtimeAuthority, filesystemGrants, executableGrants, protections, nil)
 	if preflightContext.Err() != nil && version.cleanupProven {
 		version.err = ErrCodexFailed
 	} else if version.err == nil && (versionOutput.overflow || strings.TrimSpace(versionOutput.String()) != "codex-cli "+service.execution.config.SupportedVersion) {
@@ -367,7 +401,7 @@ func (service *CodexAuthService) ExecuteCodex(ctx context.Context, request Codex
 	}
 	run := version
 	if version.err == nil && version.cleanupProven && preflightContext.Err() == nil {
-		run = service.execution.run(preflightContext, preparation.config, created, metadata, access, challenge, binding, nil, request.Terminal, supervisor, requirements.Semantics, runtimeAuthority, filesystemGrants, executableGrants, environment)
+		run = service.execution.run(preflightContext, preparation.config, created, metadata, access, challenge, binding, nil, request.Terminal, supervisor, requirements.Semantics, runtimeAuthority, filesystemGrants, executableGrants, protections, environment)
 	} else if version.err == nil && preflightContext.Err() != nil {
 		run.err = ErrCodexFailed
 	}

@@ -17,6 +17,7 @@ codex_archive="$4"
 recovery_root="$5"
 sandbox_backend="$6"
 devin_binary="${ACS_TEST_DEVIN_BINARY:-}"
+devin_archive="${ACS_TEST_DEVIN_ARCHIVE:-}"
 
 fail() {
   printf 'run native candidate gates: %s\n' "$1" >&2
@@ -34,6 +35,8 @@ case "$devin_binary" in /*) ;; *) fail "Devin target path must be absolute" ;; e
 [ -f "$codex_binary" ] && [ ! -L "$codex_binary" ] && [ -x "$codex_binary" ] || fail "supplied Codex binary is unavailable or unsafe"
 [ -f "$codex_archive" ] && [ ! -L "$codex_archive" ] || fail "supplied Codex archive is unavailable or unsafe"
 [ -f "$devin_binary" ] && [ ! -L "$devin_binary" ] && [ -x "$devin_binary" ] || fail "checksum-locked Devin target is unavailable or unsafe"
+case "$devin_archive" in /*) ;; *) fail "Devin archive path must be absolute" ;; esac
+[ -f "$devin_archive" ] && [ ! -L "$devin_archive" ] || fail "checksum-locked Devin archive is unavailable or unsafe"
 [ "$sandbox_backend" = "available" ] || fail "native sandbox backend must be available"
 
 # The caller supplies these values as positional inputs. Do not let ambient
@@ -43,6 +46,7 @@ unset ACS_RUN_NATIVE_AUTH_GATE ACS_RUN_NATIVE_AUTH_RECOVERY
 unset ACS_NATIVE_AUTH_RECOVERY_ROOT ACS_TEST_CODEX_BINARY ACS_TEST_CODEX_ARCHIVE
 unset ACS_RUN_NATIVE_INSTRUCTION_RULES ACS_TEST_DEVIN_BINARY
 unset ACS_RUN_MCP_AMBIENT_FEASIBILITY
+unset ACS_RUN_NATIVE_DEVIN_MCP ACS_TEST_DEVIN_ARCHIVE
 
 read_digest() {
   digest_output="$(shasum -a 256 "$1")" || return 1
@@ -135,13 +139,25 @@ trap 'handle_signal 143' TERM
 
 require_test ./internal/codexauthresource TestNativeInstalledACSExecutesLockedCodexToolThroughNamedIdentity
 run_auth_test ./internal/codexauthresource -run '^TestNativeInstalledACSExecutesLockedCodexToolThroughNamedIdentity$' -count=1 -v
+require_test ./internal/codexauthresource TestCodexPublicProductionMCPProtection
+run_auth_test ./internal/codexauthresource -run '^TestCodexPublicProductionMCPProtection$' -count=1 -v
 
 # These broad suites deliberately remain unfiltered so new restoration, Session
 # recovery and installed-artifact coverage enters the release gate automatically.
-go test ./...
+go test -v ./...
 
 require_test ./acceptance TestPromotedArtifactSharedTargetConformance
 run_acceptance_test ./acceptance -run '^TestPromotedArtifactSharedTargetConformance$' -count=1 -v
+require_test ./acceptance TestPromotedArtifactNativeProductionMCPProtection
+run_acceptance_test ./acceptance -run '^TestPromotedArtifactNativeProductionMCPProtection$' -count=1 -v
+require_test ./acceptance TestPromotedArtifactNativeRealDevinMCP
+run_real_devin_mcp_test() (
+  ACS_RUN_NATIVE_DEVIN_MCP=1
+  ACS_TEST_DEVIN_ARCHIVE="$devin_archive"
+  export ACS_RUN_NATIVE_DEVIN_MCP ACS_TEST_DEVIN_ARCHIVE
+  run_acceptance_test ./acceptance -run '^TestPromotedArtifactNativeRealDevinMCP$' -count=1 -v
+)
+run_real_devin_mcp_test
 require_test ./acceptance TestPromotedArtifactNativeInstructionRules
 run_acceptance_test ./acceptance -run '^TestPromotedArtifactNativeInstructionRules$' -count=1 -v
 require_test ./internal/executor TestNativeProductionInstructionRulesReceipts

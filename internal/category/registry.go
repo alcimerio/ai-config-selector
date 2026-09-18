@@ -21,16 +21,17 @@ var categoryIDPattern = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
 // Definition keeps one category's concrete selection, resolved value, and
 // launch contribution types together.
 type Definition[S, R any, C launch.Contribution] struct {
-	ID            string
-	SchemaVersion int
-	Empty         func() S
-	LegacyEmpty   func() S
-	Encode        func(S) (json.RawMessage, error)
-	Decode        func(json.RawMessage) (S, error)
-	Resolve       func(context.Context, S) (R, error)
-	ResolveSyntax func(S) (R, error)
-	Contribute    func(R) (C, error)
-	Count         func(S) int
+	ID                 string
+	SchemaVersion      int
+	Empty              func() S
+	LegacyEmpty        func() S
+	Encode             func(S) (json.RawMessage, error)
+	Decode             func(json.RawMessage) (S, error)
+	Resolve            func(context.Context, S) (R, error)
+	ResolveSyntax      func(S) (R, error)
+	Contribute         func(R) (C, error)
+	Count              func(S) int
+	ValidateReferences func(S, map[string]any) error
 }
 
 // Binding is a typed handle used by a category module to read or update its
@@ -55,17 +56,18 @@ func (binding Binding[S, R, C]) ID() string {
 
 // Registration is one validated category entry accepted by NewRegistry.
 type Registration struct {
-	id            string
-	schemaVersion int
-	empty         func() any
-	legacyEmpty   func() any
-	encode        func(any) (json.RawMessage, error)
-	decode        func(json.RawMessage) (any, error)
-	resolve       func(context.Context, any) (any, error)
-	resolveSyntax func(any) (any, error)
-	contribute    func(any) (launch.Contribution, error)
-	count         func(any) int
-	token         *struct{ marker byte }
+	id                 string
+	schemaVersion      int
+	empty              func() any
+	legacyEmpty        func() any
+	encode             func(any) (json.RawMessage, error)
+	decode             func(json.RawMessage) (any, error)
+	resolve            func(context.Context, any) (any, error)
+	resolveSyntax      func(any) (any, error)
+	contribute         func(any) (launch.Contribution, error)
+	count              func(any) int
+	validateReferences func(any, map[string]any) error
+	token              *struct{ marker byte }
 }
 
 // ID returns the stable category ID represented by this opaque registration.
@@ -140,6 +142,16 @@ func Bind[S, R any, C launch.Contribution](definition Definition[S, R, C]) (Bind
 				return 0
 			}
 			return definition.Count(selection)
+		},
+		validateReferences: func(value any, selections map[string]any) error {
+			if definition.ValidateReferences == nil {
+				return nil
+			}
+			selection, ok := value.(S)
+			if !ok {
+				return fmt.Errorf("category %q selection type mismatch", definition.ID)
+			}
+			return definition.ValidateReferences(selection, selections)
 		},
 		token: &struct{ marker byte }{marker: 1},
 	}
@@ -507,6 +519,7 @@ func (registry *Registry) Normalize(candidate profile.Profile) (profile.Profile,
 	if known == nil {
 		known = make(map[string]profile.CategoryPayload, len(registry.ordered))
 	}
+	selections := make(map[string]any, len(registry.ordered))
 	for _, registration := range registry.ordered {
 		payload, exists := known[registration.id]
 		if !exists {
@@ -520,12 +533,14 @@ func (registry *Registry) Normalize(candidate profile.Profile) (profile.Profile,
 					return profile.Profile{}, fmt.Errorf("encode empty %s category selection: %w", registration.id, err)
 				}
 				known[registration.id] = profile.CategoryPayload{SchemaVersion: registration.schemaVersion, Selection: encoded}
+				selections[registration.id] = empty
 				continue
 			}
 			// A LegacyEmpty registration is common-only. Its legacy value is
 			// synthesized for drafts and resolution, never serialized into the
 			// supported v2 categories map.
 			if registration.legacyEmpty != nil {
+				selections[registration.id] = registration.legacyEmpty()
 				continue
 			}
 			empty := registration.empty()
@@ -537,6 +552,7 @@ func (registry *Registry) Normalize(candidate profile.Profile) (profile.Profile,
 				SchemaVersion: registration.schemaVersion,
 				Selection:     encoded,
 			}
+			selections[registration.id] = empty
 			continue
 		}
 		if payload.SchemaVersion != registration.schemaVersion {
@@ -552,6 +568,12 @@ func (registry *Registry) Normalize(candidate profile.Profile) (profile.Profile,
 		}
 		payload.Selection = encoded
 		known[registration.id] = payload
+		selections[registration.id] = selection
+	}
+	for _, registration := range registry.ordered {
+		if err := registration.validateReferences(selections[registration.id], selections); err != nil {
+			return profile.Profile{}, fmt.Errorf("validate %s category references: %w", registration.id, err)
+		}
 	}
 	if candidate.Version == profile.CurrentVersion {
 		candidate.Common = make(map[string]profile.CommonPayload, len(known))
@@ -682,6 +704,7 @@ func (registry *Registry) resolveFor(ctx context.Context, candidate profile.Prof
 		workspaceAccess = intent.Access
 	}
 	contributions := make([]authority.Contribution, 0, len(registry.ordered))
+	resolvedValues := make(map[string]any, len(registry.ordered))
 	for _, registration := range registry.ordered {
 		payload, err := registry.payloadFor(normalized, registration)
 		if err != nil {
@@ -707,7 +730,19 @@ func (registry *Registry) resolveFor(ctx context.Context, candidate profile.Prof
 		if isNilContribution(contribution) {
 			return ResolvedProfile{}, fmt.Errorf("build %s category launch contribution: contribution is nil", registration.id)
 		}
+		resolvedValues[registration.id] = value
 		contributions = append(contributions, authority.Contribution{ID: registration.id, Value: contribution})
+	}
+	for _, contribution := range contributions {
+		validator, ok := contribution.Value.(interface {
+			ValidateReferenceCapabilities(executables, paths, environment any) error
+		})
+		if !ok {
+			continue
+		}
+		if err := validator.ValidateReferenceCapabilities(resolvedValues["executables"], resolvedValues["paths"], resolvedValues["environment"]); err != nil {
+			return ResolvedProfile{}, fmt.Errorf("validate %s category references: %w", contribution.ID, err)
+		}
 	}
 	requirements := registry.requirements
 	if overlay == "" {

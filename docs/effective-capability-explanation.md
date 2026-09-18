@@ -47,6 +47,18 @@ omitted. `runtime.executable-visibility` records the intrinsic readable runtime,
 and `unsupported.exclusive-execution-filtering` states that executable
 visibility is additive and non-exclusive rather than a command allowlist.
 
+Selected MCP servers appear as reference-only requested facts with transport,
+server ID, executable-entry ID, ordered argv-reference kind/IDs, declared
+input/environment entry IDs, and disabled-tool names. These semantic
+references affect `authorityDigest`; local paths, argument values, environment
+source names and values remain excluded. Target recipe applicability is shown
+separately when Devin or Codex is selected. The target-added fact names the
+registered projection that the selected recipe would compile; it does not
+report MCP as effective runtime enforcement or prove the target started a
+server, removed a disabled tool, excluded every ambient source, or enforced a
+boundary around MCP children. Generic `acs run` preserves this intent without
+projecting or starting a server.
+
 Selected Skill identities and environment destinations, scope, source/provider
 class, required state, and classification are intentionally public.
 Environment source names, secret references, resolved values, canonical source,

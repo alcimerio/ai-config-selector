@@ -1,2 +1,3 @@
 # version|os|arch|sha256|url
 0.149.1|darwin|arm64|ed60f475c6dda6044c2c00fd7f33273cc3f3f98900ccd1204bfdf2fe935f3405|https://github.com/openai/codex/releases/download/rust-v0.149.1/codex-aarch64-apple-darwin.tar.gz
+0.149.1|darwin|arm64|aae1c0c9459700a2e897adadd647351140ae7933ad73bd8d3af6505c69a4f3fd|https://github.com/openai/codex/releases/download/rust-v0.149.1/codex-code-mode-host-aarch64-apple-darwin.tar.gz
