@@ -26,7 +26,10 @@ func TestResolveCodeModeCompanionLayoutsAndAbsence(t *testing.T) {
 		}
 	})
 	t.Run("package resources wins", func(t *testing.T) {
-		root := t.TempDir()
+		root, err := filepath.EvalSymlinks(t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
 		bin := filepath.Join(root, "bin")
 		resources := filepath.Join(root, "codex-resources")
 		if err := os.MkdirAll(bin, 0o700); err != nil {
@@ -51,7 +54,10 @@ func TestResolveCodeModeCompanionLayoutsAndAbsence(t *testing.T) {
 		}
 	})
 	t.Run("legacy resources", func(t *testing.T) {
-		home := t.TempDir()
+		home, err := filepath.EvalSymlinks(t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
 		t.Setenv("CODEX_HOME", filepath.Join(home, ".codex"))
 		root := filepath.Join(home, ".codex", "packages", "standalone", "releases", "channel", "r1")
 		if err := os.MkdirAll(filepath.Join(root, "codex-resources"), 0o700); err != nil {

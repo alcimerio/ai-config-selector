@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -43,16 +44,13 @@ func TestMain(m *testing.M) {
 }
 
 func runCodexProtectionWitness(args []string) {
-	if len(args) == 1 && args[0] == "--version" {
+	valid, version := classifyCodexWitnessArgs(args)
+	if !valid {
+		os.Exit(76)
+	}
+	if version {
 		fmt.Println("codex-cli 0.149.1")
 		return
-	}
-	if len(args) != 0 {
-		for i := 0; i < len(args); i += 2 {
-			if args[i] != "-c" || i+1 >= len(args) || !strings.Contains(args[i+1], "=") {
-				os.Exit(76)
-			}
-		}
 	}
 	home := os.Getenv("HOME")
 	workspace, _ := os.Getwd()
@@ -88,6 +86,17 @@ func runCodexProtectionWitness(args []string) {
 	if os.WriteFile(done+".pending", data, 0o600) != nil || os.Rename(done+".pending", done) != nil || !waitCodexProtectionFile(release) {
 		os.Exit(75)
 	}
+}
+
+func classifyCodexWitnessArgs(args []string) (bool, bool) {
+	for index := 0; index < len(args); {
+		if args[index] != "-c" || index+1 >= len(args) || !strings.Contains(args[index+1], "=") {
+			version := index+1 == len(args) && args[index] == "--version"
+			return version, version
+		}
+		index += 2
+	}
+	return true, false
 }
 
 func mustCodexExecutable() string {
@@ -196,12 +205,14 @@ func TestCodexPublicProductionMCPProtection(t *testing.T) {
 	command := exec.Command(candidate, "codex", "--profile", "codex-protection")
 	command.Dir = workspace
 	command.Env = append(nativeCandidateEnvironment(home, tools), "ACS_NATIVE_MCP_ARGUMENT=argument")
+	output := &nativeDiagnosticSink{}
+	command.Stdout, command.Stderr = output, output
 	if err := command.Start(); err != nil {
 		t.Fatal(err)
 	}
 	result := startNativeCodexProtectionCommand(command)
 	defer settleNativeCodexProtectionCommand(command, result)
-	sessionHome := strings.TrimSpace(string(waitCodexProtectionFileContents(t, filepath.Join(workspace, ".codex-protection-ready"))))
+	sessionHome := waitCodexProtectionReady(t, filepath.Join(workspace, ".codex-protection-ready"), result, output)
 	if !strings.HasPrefix(sessionHome, filepath.Join(home, ".acs", "sessions")+string(os.PathSeparator)) {
 		t.Fatalf("invalid Session HOME %q", sessionHome)
 	}
@@ -410,6 +421,134 @@ func waitCodexProtectionFileContents(t *testing.T, path string) []byte {
 	}
 	t.Fatalf("timed out waiting for %s", path)
 	return nil
+}
+
+func waitCodexProtectionReady(t *testing.T, path string, result *nativeCodexProtectionResult, output *nativeDiagnosticSink) string {
+	t.Helper()
+	ready, category := waitCodexProtectionReadyState(path, result, 30*time.Second)
+	if category != "" {
+		outputState := "no-output"
+		if output.Present() {
+			outputState = "output-present"
+		}
+		t.Fatalf("Codex protection readiness %s (%s)", category, outputState)
+	}
+	return ready
+}
+
+func waitCodexProtectionReadyState(path string, result *nativeCodexProtectionResult, limit time.Duration) (string, string) {
+	deadline := time.NewTimer(limit)
+	defer deadline.Stop()
+	ticker := time.NewTicker(20 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			if data, err := os.ReadFile(path); err == nil && len(data) > 0 {
+				return strings.TrimSpace(string(data)), ""
+			}
+		case <-result.done:
+			return "", nativeProtectionExitCategory(result)
+		case <-deadline.C:
+			return "", "timeout"
+		}
+	}
+}
+
+type nativeDiagnosticSink struct {
+	mutex   sync.Mutex
+	present bool
+}
+
+func (sink *nativeDiagnosticSink) Write(p []byte) (int, error) {
+	sink.mutex.Lock()
+	sink.present = sink.present || len(p) != 0
+	sink.mutex.Unlock()
+	return len(p), nil
+}
+
+func (sink *nativeDiagnosticSink) Present() bool {
+	sink.mutex.Lock()
+	present := sink.present
+	sink.mutex.Unlock()
+	return present
+}
+
+func nativeProtectionExitCategory(result *nativeCodexProtectionResult) string {
+	if result.err == nil {
+		return "early-exit-success"
+	}
+	if exit, ok := result.err.(*exec.ExitError); ok && exit.ProcessState != nil {
+		if status, statusOK := exit.ProcessState.Sys().(syscall.WaitStatus); statusOK && status.Signaled() {
+			return "early-exit-signal"
+		}
+	}
+	return "early-exit"
+}
+
+func TestCodexWitnessArgumentClassifier(t *testing.T) {
+	tests := []struct {
+		name           string
+		args           []string
+		valid, version bool
+	}{
+		{"production version", []string{"-c", "a=b", "-c", "c=d", "--version"}, true, true},
+		{"interactive", []string{"-c", "a=b", "-c", "c=d"}, true, false},
+		{"malformed", []string{"-c", "missing"}, false, false},
+		{"nonterminal version", []string{"--version", "extra"}, false, false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			valid, version := classifyCodexWitnessArgs(test.args)
+			if valid != test.valid || version != test.version {
+				t.Fatalf("got (%v,%v)", valid, version)
+			}
+		})
+	}
+}
+
+func TestNativeProtectionReadyClosedDoneIsEarlyExit(t *testing.T) {
+	result := &nativeCodexProtectionResult{done: make(chan struct{}), err: fmt.Errorf("closed")}
+	close(result.done)
+	if _, category := waitCodexProtectionReadyState(filepath.Join(t.TempDir(), "missing-ready"), result, time.Second); category != "early-exit" {
+		t.Fatalf("category=%q", category)
+	}
+}
+
+func TestNativeDiagnosticSinkConcurrentWrites(t *testing.T) {
+	sink := &nativeDiagnosticSink{}
+	var writers sync.WaitGroup
+	stop := make(chan struct{})
+	var readers sync.WaitGroup
+	readers.Add(1)
+	go func() {
+		defer readers.Done()
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				sink.Present()
+			}
+		}
+	}()
+	for i := 0; i < 8; i++ {
+		writers.Add(1)
+		go func() {
+			defer writers.Done()
+			for j := 0; j < 100; j++ {
+				if _, err := sink.Write([]byte("diagnostic")); err != nil {
+					t.Errorf("sink write: %v", err)
+				}
+			}
+		}()
+	}
+	writers.Wait()
+	close(stop)
+	readers.Wait()
+	if !sink.Present() {
+		t.Fatal("sink did not record concurrent output")
+	}
 }
 
 func nativeCodexFileIdentity(t *testing.T, path string) (uint64, uint64) {
