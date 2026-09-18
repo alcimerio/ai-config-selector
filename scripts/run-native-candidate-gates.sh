@@ -151,7 +151,13 @@ run_acceptance_test ./acceptance -run '^TestPromotedArtifactSharedTargetConforma
 require_test ./acceptance TestPromotedArtifactNativeProductionMCPProtection
 run_acceptance_test ./acceptance -run '^TestPromotedArtifactNativeProductionMCPProtection$' -count=1 -v
 require_test ./acceptance TestPromotedArtifactNativeRealDevinMCP
-ACS_RUN_NATIVE_DEVIN_MCP=1 ACS_TEST_DEVIN_ARCHIVE="$devin_archive" run_acceptance_test ./acceptance -run '^TestPromotedArtifactNativeRealDevinMCP$' -count=1 -v
+run_real_devin_mcp_test() (
+  ACS_RUN_NATIVE_DEVIN_MCP=1
+  ACS_TEST_DEVIN_ARCHIVE="$devin_archive"
+  export ACS_RUN_NATIVE_DEVIN_MCP ACS_TEST_DEVIN_ARCHIVE
+  run_acceptance_test ./acceptance -run '^TestPromotedArtifactNativeRealDevinMCP$' -count=1 -v
+)
+run_real_devin_mcp_test
 require_test ./acceptance TestPromotedArtifactNativeInstructionRules
 run_acceptance_test ./acceptance -run '^TestPromotedArtifactNativeInstructionRules$' -count=1 -v
 require_test ./internal/executor TestNativeProductionInstructionRulesReceipts

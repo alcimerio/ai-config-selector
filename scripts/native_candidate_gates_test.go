@@ -291,7 +291,17 @@ func (fixture nativeGateFixture) run(t *testing.T, mode string, wantSuccess bool
 }
 
 func (fixture nativeGateFixture) command(mode string) *exec.Cmd {
-	command := exec.Command("sh", "run-native-candidate-gates.sh", "v0.4.0", fixture.candidate, fixture.target, fixture.archive, filepath.Join(fixture.root, "recovery"), "available")
+	return fixture.commandWithShell("sh", mode)
+}
+
+func (fixture nativeGateFixture) commandWithShell(shell, mode string) *exec.Cmd {
+	commandName := shell
+	commandArgs := []string{"run-native-candidate-gates.sh", "v0.4.0", fixture.candidate, fixture.target, fixture.archive, filepath.Join(fixture.root, "recovery"), "available"}
+	if shell == "bash-posix" {
+		commandName = "bash"
+		commandArgs = append([]string{"--posix"}, commandArgs...)
+	}
+	command := exec.Command(commandName, commandArgs...)
 	command.Env = append(os.Environ(),
 		"PATH="+fixture.bin+":"+os.Getenv("PATH"),
 		"ACS_TEST_CALLS="+fixture.callsPath,
@@ -312,6 +322,68 @@ func (fixture nativeGateFixture) command(mode string) *exec.Cmd {
 		"ACS_RUN_NATIVE_DEVIN_MCP=ambient-enable",
 	)
 	return command
+}
+
+func TestNativeCandidateScopedDevinEnvironmentAcrossShells(t *testing.T) {
+	for _, shell := range []string{"sh", "bash-posix"} {
+		t.Run(shell, func(t *testing.T) {
+			fixture := newNativeGateFixture(t)
+			output, err := fixture.commandWithShell(shell, "success").CombinedOutput()
+			if err != nil {
+				t.Fatalf("gate failed: %v output=%q", err, output)
+			}
+			calls := fixture.calls(t)
+			assertDevinGateMetadata(t, calls, fixture, true)
+		})
+	}
+}
+
+func TestNativeCandidateScopedDevinFailurePreservesRecoveryAcrossShells(t *testing.T) {
+	for _, shell := range []string{"sh", "bash-posix"} {
+		t.Run(shell, func(t *testing.T) {
+			fixture := newNativeGateFixture(t)
+			output, err := fixture.commandWithShell(shell, "fail-real-devin-mcp").CombinedOutput()
+			exit, ok := err.(*exec.ExitError)
+			if !ok || exit.ExitCode() != 37 {
+				t.Fatalf("exit=%v output=%q", err, output)
+			}
+			calls := fixture.calls(t)
+			if !strings.Contains(calls, "go test ./internal/codexauthresource -run ^TestNativeKeychainRecoveryEntrypoint$") {
+				t.Fatalf("recovery invocation missing under %s: %s", shell, calls)
+			}
+			assertDevinGateMetadata(t, calls, fixture, true)
+			const recovery = "devin-mcp= devin-archive= go test ./internal/codexauthresource -run ^TestNativeKeychainRecoveryEntrypoint$ -count=1"
+			if strings.Count(calls, recovery) != 1 {
+				t.Fatalf("expected one actual recovery invocation under %s: %s", shell, calls)
+			}
+		})
+	}
+}
+
+func assertDevinGateMetadata(t *testing.T, calls string, fixture nativeGateFixture, requireEnabled bool) {
+	t.Helper()
+	const prefix = "devin-mcp="
+	enabled := "devin-mcp=1 devin-archive=" + fixture.devinArchive + " go test ./acceptance -run ^TestPromotedArtifactNativeRealDevinMCP$ -count=1 -v"
+	count := 0
+	for _, line := range strings.Split(strings.TrimSpace(calls), "\n") {
+		if !strings.HasPrefix(line, prefix) {
+			continue
+		}
+		if line == enabled {
+			count++
+			continue
+		}
+		if !strings.HasPrefix(line, "devin-mcp= devin-archive= go ") {
+			t.Fatalf("unexpected Devin metadata contamination: %s", line)
+		}
+	}
+	want := 0
+	if requireEnabled {
+		want = 1
+	}
+	if count != want {
+		t.Fatalf("enabled Devin metadata count=%d want=%d: %s", count, want, calls)
+	}
 }
 
 func (fixture nativeGateFixture) calls(t *testing.T) string {
