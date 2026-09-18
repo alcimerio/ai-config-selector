@@ -78,6 +78,32 @@ func TestSelectedMCPProjectionContainsOnlyReferencesAndToolFilters(t *testing.T)
 	}
 }
 
+func TestCodexProjectionCanonicalizesSymlinkedHomeWithoutMCP(t *testing.T) {
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonicalHome := filepath.Join(root, "canonical-home")
+	if err := os.MkdirAll(canonicalHome, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	logicalHome := filepath.Join(root, "logical-home")
+	if err := os.Symlink(canonicalHome, logicalHome); err != nil {
+		t.Fatal(err)
+	}
+	path, err := writeCodexExecutionConfigForSemanticsAndMCP(logicalHome, "", filepath.Join(root, "workspace"), authority.CodexSemantics(), nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(canonicalHome, ".codex", "config.toml")
+	if path != want {
+		t.Fatalf("Codex config path=%q want canonical %q", path, want)
+	}
+	if _, err := os.Stat(want); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestDevinMCPProjectionCanonicalizesAliasedSessionParent(t *testing.T) {
 	root, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {

@@ -106,13 +106,9 @@ func writeCodexExecutionConfigForSemantics(home, chatGPTWorkspace, workingDirect
 }
 
 func writeCodexExecutionConfigForSemanticsAndMCP(home, chatGPTWorkspace, workingDirectory string, semantics authority.TargetSemantics, recipes []launch.MCPRecipe, launcher string) (string, error) {
-	projectionHome := home
-	if len(recipes) != 0 {
-		canonicalHome, err := canonicalMCPProjectionHome(home)
-		if err != nil {
-			return "", err
-		}
-		projectionHome = canonicalHome
+	projectionHome, err := canonicalMCPProjectionHome(home)
+	if err != nil {
+		return "", err
 	}
 	codexHome := filepath.Join(projectionHome, ".codex")
 	if err := os.MkdirAll(codexHome, 0o700); err != nil {

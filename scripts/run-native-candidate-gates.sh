@@ -135,6 +135,8 @@ trap 'handle_signal 143' TERM
 
 require_test ./internal/codexauthresource TestNativeInstalledACSExecutesLockedCodexToolThroughNamedIdentity
 run_auth_test ./internal/codexauthresource -run '^TestNativeInstalledACSExecutesLockedCodexToolThroughNamedIdentity$' -count=1 -v
+require_test ./internal/codexauthresource TestCodexPublicProductionMCPProtection
+run_auth_test ./internal/codexauthresource -run '^TestCodexPublicProductionMCPProtection$' -count=1 -v
 
 # These broad suites deliberately remain unfiltered so new restoration, Session
 # recovery and installed-artifact coverage enters the release gate automatically.

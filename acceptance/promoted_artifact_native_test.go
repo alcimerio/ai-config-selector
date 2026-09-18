@@ -26,6 +26,7 @@ import (
 	"unsafe"
 
 	"github.com/alcimerio/ai-config-selector/internal/instructions"
+	"github.com/alcimerio/ai-config-selector/internal/launch"
 	"github.com/charmbracelet/x/term"
 	"github.com/creack/pty"
 	"github.com/ebitengine/purego"
@@ -196,6 +197,210 @@ func TestPromotedArtifactNativeContainmentContract(t *testing.T) {
 	t.Run("Devin preflight and target generations are fresh while retained", assertPromotedArtifactDevinGenerations)
 	t.Run("preflight failure is categorized without target details", assertPromotedArtifactNativePreflightFailureIsSafe)
 	t.Run("missing backend OR invalid policy cannot start a marker", assertPromotedArtifactMissingBackendFailsClosed)
+}
+
+func TestPromotedArtifactNativeProductionMCPProtection(t *testing.T) {
+	binary := promotedBinary(t)
+	home, path := prepareRuntimeHome(t)
+	root := realTemporaryDirectory(t)
+	workspace, tools := filepath.Join(root, "workspace"), filepath.Join(root, "tools")
+	if err := os.MkdirAll(workspace, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(tools, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	installPromotedArtifactFakeDevin(t, tools)
+	writeMCPProtectionProfile(t, home, "mcp-protection")
+	ready, start, done, release := filepath.Join(workspace, "ready"), filepath.Join(workspace, "start"), filepath.Join(workspace, "done"), filepath.Join(workspace, "release")
+	writeFakeDevinConfiguration(t, workspace, fakeDevinConfiguration{Mode: "mcp-protection", ProtectionReady: ready, ProtectionStart: start, ProtectionDone: done, ProtectionRelease: release})
+	before := promotedSessionSnapshot(t, binary, home, path)
+	command := exec.Command(binary, "devin", "--profile", "mcp-protection")
+	command.Dir = workspace
+	command.Env = nativeCandidateEnvironment(home, tools+string(os.PathListSeparator)+path, nil)
+	output := &bytes.Buffer{}
+	command.Stdout, command.Stderr = output, output
+	if err := command.Start(); err != nil {
+		t.Fatal(err)
+	}
+	result := startNativeCommand(command)
+	defer func() {
+		settleNativeCommand(command, result)
+	}()
+	sessionHome := strings.TrimSpace(string(waitForFileContents(t, ready)))
+	if !filepath.IsAbs(sessionHome) || !strings.HasPrefix(sessionHome, filepath.Join(home, ".acs", "sessions")+string(os.PathSeparator)) {
+		t.Fatalf("invalid selected Session HOME %q", sessionHome)
+	}
+	protected := []string{filepath.Join(sessionHome, ".acs", "mcp", "recipes.json"), filepath.Join(sessionHome, ".config", "devin", "mcp_config.json"), filepath.Join(sessionHome, ".config", "devin", "config.json")}
+	type protectedSnapshot struct {
+		bytes    []byte
+		mode     os.FileMode
+		dev, ino uint64
+	}
+	snapshots := map[string]protectedSnapshot{}
+	directorySnapshots := map[string]protectedSnapshot{}
+	for _, path := range protected {
+		contents, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("generated protected file %s: %v", path, err)
+		}
+		if !json.Valid(contents) {
+			t.Fatalf("generated Devin artifact %s is not JSON", path)
+		}
+		switch filepath.Base(path) {
+		case "recipes.json":
+			var recipes []launch.MCPRecipe
+			fixedSearch := ""
+			for _, directory := range []string{"/usr/local/bin", "/usr/bin", "/bin"} {
+				candidatePath := filepath.Join(directory, "sh")
+				if info, statErr := os.Stat(candidatePath); statErr == nil && info.Mode().IsRegular() && info.Mode().Perm()&0o111 != 0 {
+					fixedSearch = candidatePath
+					break
+				}
+			}
+			if fixedSearch == "" {
+				t.Fatal("fixed-search sh is unavailable")
+			}
+			canonicalSearch, err := filepath.EvalSymlinks(fixedSearch)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := json.Unmarshal(contents, &recipes); err != nil || len(recipes) != 1 || recipes[0].ID != "fixture" || recipes[0].ExecutableLogicalPath != fixedSearch || recipes[0].Executable != canonicalSearch || len(recipes[0].Disabled) != 1 || recipes[0].Disabled[0] != "blocked" || len(recipes[0].Arguments) != 0 || len(recipes[0].EnvNames) != 0 {
+				t.Fatalf("recipe projection is not the exact selected fixture: %s", contents)
+			}
+		case "mcp_config.json":
+			var config struct {
+				MCPServers map[string]struct {
+					Type     string   `json:"type"`
+					Command  string   `json:"command"`
+					Args     []string `json:"args"`
+					Disabled []string `json:"disabledTools"`
+				} `json:"mcpServers"`
+			}
+			if err := json.Unmarshal(contents, &config); err != nil || len(config.MCPServers) != 1 {
+				t.Fatalf("invalid exact Devin MCP config: %s", contents)
+			}
+			server, ok := config.MCPServers["fixture"]
+			candidateCommand, err := filepath.EvalSymlinks(binary)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !ok || server.Type != "stdio" || server.Command != candidateCommand || len(server.Args) != 3 || server.Args[0] != "--acs-mcp-launch" || server.Args[1] != sessionHome || server.Args[2] != "fixture" || len(server.Disabled) != 1 || server.Disabled[0] != "blocked" {
+				t.Fatalf("unexpected Devin MCP projection: %s", contents)
+			}
+		case "config.json":
+			var config struct {
+				Imports map[string]bool `json:"read_config_from"`
+			}
+			if err := json.Unmarshal(contents, &config); err != nil || len(config.Imports) != 5 {
+				t.Fatalf("invalid Devin import config: %s", contents)
+			}
+			for _, name := range []string{"cursor", "windsurf", "claude", "opencode", "zed"} {
+				if value, ok := config.Imports[name]; !ok || value {
+					t.Fatalf("Devin import %s is not explicitly disabled", name)
+				}
+			}
+		}
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatalf("stat generated protected file %s: %v", path, err)
+		}
+		dev, ino := nativeFileIdentity(t, path)
+		snapshots[path] = protectedSnapshot{bytes: contents, mode: info.Mode(), dev: dev, ino: ino}
+		for dir := filepath.Dir(path); ; dir = filepath.Dir(dir) {
+			info, err := os.Stat(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			dev, ino := nativeFileIdentity(t, dir)
+			directorySnapshots[dir] = protectedSnapshot{mode: info.Mode(), dev: dev, ino: ino}
+			if dir == filepath.Dir(sessionHome) {
+				break
+			}
+		}
+	}
+	if err := os.WriteFile(start, []byte("start\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	doneBytes := waitForFileContents(t, done)
+	var results map[string]string
+	if err := json.Unmarshal(doneBytes, &results); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range protected {
+		contents, err := os.ReadFile(path)
+		info, statErr := os.Stat(path)
+		dev, ino := nativeFileIdentity(t, path)
+		before := snapshots[path]
+		if err != nil || statErr != nil || !bytes.Equal(contents, before.bytes) || info.Mode() != before.mode || dev != before.dev || ino != before.ino {
+			t.Fatalf("protected file changed before cleanup: %s err=%v", path, err)
+		}
+	}
+	for path, before := range directorySnapshots {
+		info, err := os.Stat(path)
+		dev, ino := nativeFileIdentity(t, path)
+		if err != nil || info.Mode() != before.mode || dev != before.dev || ino != before.ino {
+			t.Fatalf("protected Devin directory changed: %s", path)
+		}
+	}
+	for key, value := range results {
+		if strings.Contains(key, "-overwrite") || strings.Contains(key, "-truncate") || strings.Contains(key, "-unlink") || strings.Contains(key, "-rename") {
+			if value != "denied" {
+				t.Fatalf("protection receipt %s=%q; all=%v", key, value, results)
+			}
+		}
+	}
+	expectedKeys := map[string]bool{"ordinary-home-write": true, "ordinary-devin-write": true}
+	for _, path := range protected {
+		for _, op := range []string{"overwrite", "truncate", "unlink", "rename"} {
+			expectedKeys[filepath.Base(path)+"-"+op] = true
+		}
+		for dir := filepath.Dir(path); dir == filepath.Dir(sessionHome) || dir == sessionHome || strings.HasPrefix(dir, sessionHome+string(os.PathSeparator)); dir = filepath.Dir(dir) {
+			expectedKeys[filepath.Base(path)+"-ancestor-"+filepath.Base(dir)+"-rename"] = true
+		}
+	}
+	if len(results) != len(expectedKeys) {
+		t.Fatalf("protection receipt keys=%v want=%v", results, expectedKeys)
+	}
+	for key := range expectedKeys {
+		if results[key] == "" {
+			t.Fatalf("missing protection receipt %s", key)
+		}
+	}
+	if results["ordinary-home-write"] != "ok" {
+		t.Fatalf("ordinary HOME write receipt=%q", results["ordinary-home-write"])
+	}
+	if results["ordinary-devin-write"] != "ok" {
+		t.Fatalf("ordinary Devin write receipt=%q", results["ordinary-devin-write"])
+	}
+	ordinaryHome := filepath.Join(sessionHome, "ordinary-protection-marker")
+	ordinaryDevin := filepath.Join(sessionHome, ".config", "devin", "ordinary-cli-marker")
+	if contents, err := os.ReadFile(ordinaryHome); err != nil || string(contents) != "ordinary-write\n" {
+		t.Fatalf("ordinary HOME marker=(%q,%v)", contents, err)
+	}
+	if contents, err := os.ReadFile(ordinaryDevin); err != nil || string(contents) != "ordinary-cli-write\n" {
+		t.Fatalf("ordinary Devin marker=(%q,%v)", contents, err)
+	}
+	if err := os.WriteFile(release, []byte("release\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := waitNativeCommand(result, 10*time.Second); err != nil {
+		t.Fatalf("public Devin protection command: %v output=%q", err, output.String())
+	}
+	assertNoSessions(t, home)
+	assertNewRemovedPromotedSessions(t, binary, home, path, before, "devin")
+}
+
+func writeMCPProtectionProfile(t *testing.T, home, name string) {
+	t.Helper()
+	directory := filepath.Join(home, ".acs", "profiles")
+	if err := os.MkdirAll(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	contents := `{"version":3,"name":"` + name + `","common":{"skills":{"version":1,"selection":[{"source":"devin-config","relativePath":"review"}]},"workspace":{"version":1,"selection":{"access":"read-write"}},"executables":{"version":1,"selection":{"entries":[{"id":"mcp-server","reference":{"kind":"fixed-search-name","name":"sh"}}]}},"mcp":{"version":1,"selection":{"servers":[{"id":"fixture","transport":"stdio","executableRef":"mcp-server","arguments":[],"inputRefs":[],"environmentRefs":[],"disabledTools":["blocked"]}]}}},"overlays":{"devin":{"version":1}}}`
+	if err := os.WriteFile(filepath.Join(directory, name+".json"), []byte(contents), 0o600); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // TestPromotedArtifactNativeInstructionRules exercises selected projection and
@@ -3374,6 +3579,10 @@ type fakeDevinConfiguration struct {
 	ExpectedNonSecret   string `json:"expectedNonSecret,omitempty"`
 	ExpectedOptional    string `json:"expectedOptional,omitempty"`
 	ExpectedSecret      string `json:"expectedSecret,omitempty"`
+	ProtectionReady     string `json:"protectionReady,omitempty"`
+	ProtectionStart     string `json:"protectionStart,omitempty"`
+	ProtectionDone      string `json:"protectionDone,omitempty"`
+	ProtectionRelease   string `json:"protectionRelease,omitempty"`
 }
 
 type fakeDevinResult struct {
@@ -3611,6 +3820,10 @@ func runFakeDevinInteractive() {
 		}
 		return
 	}
+	if configuration.Mode == "mcp-protection" {
+		runFakeDevinMCPProtection(configuration, workspace)
+		return
+	}
 	result := fakeDevinResult{
 		PreflightSkills:           fakeDevinMarkerExists(filepath.Join(workspace, "preflight-skills")),
 		PreflightAuthentication:   fakeDevinMarkerExists(filepath.Join(workspace, "preflight-authentication")),
@@ -3641,6 +3854,98 @@ func runFakeDevinInteractive() {
 	if err := os.WriteFile(filepath.Join(workspace, fakeDevinResultName), contents, 0o600); err != nil {
 		os.Exit(73)
 	}
+}
+
+func runFakeDevinMCPProtection(configuration fakeDevinConfiguration, workspace string) {
+	ready := configuration.ProtectionReady
+	if ready == "" || os.WriteFile(ready+".pending", []byte(os.Getenv("HOME")+"\n"), 0o600) != nil || os.Rename(ready+".pending", ready) != nil {
+		os.Exit(74)
+	}
+	if !waitForFakeDevinFile(configuration.ProtectionStart) {
+		os.Exit(75)
+	}
+	home := os.Getenv("HOME")
+	results := map[string]string{}
+	for _, path := range []string{filepath.Join(home, ".acs", "mcp", "recipes.json"), filepath.Join(home, ".config", "devin", "mcp_config.json"), filepath.Join(home, ".config", "devin", "config.json")} {
+		attemptProtectedFileOperations(path, home, workspace, results)
+	}
+	ordinary := filepath.Join(home, "ordinary-protection-marker")
+	if err := os.WriteFile(ordinary, []byte("ordinary-write\n"), 0o600); err == nil {
+		results["ordinary-home-write"] = "ok"
+	} else {
+		results["ordinary-home-write"] = "failed"
+	}
+	ordinaryDevin := filepath.Join(home, ".config", "devin", "ordinary-cli-marker")
+	if err := os.WriteFile(ordinaryDevin, []byte("ordinary-cli-write\n"), 0o600); err == nil {
+		results["ordinary-devin-write"] = "ok"
+	} else {
+		results["ordinary-devin-write"] = "failed"
+	}
+	encoded, _ := json.Marshal(results)
+	if os.WriteFile(configuration.ProtectionDone+".pending", encoded, 0o600) != nil || os.Rename(configuration.ProtectionDone+".pending", configuration.ProtectionDone) != nil || !waitForFakeDevinFile(configuration.ProtectionRelease) {
+		os.Exit(76)
+	}
+}
+
+func attemptProtectedFileOperations(path, sessionHome, workspace string, results map[string]string) {
+	if _, err := os.ReadFile(path); err != nil {
+		results[filepath.Base(path)+"-setup"] = classifyProtectionError(err)
+		return
+	}
+	attempt := func(name string, operation func() error) bool {
+		err := operation()
+		results[name] = classifyProtectionError(err)
+		return err == nil
+	}
+	if attempt(filepath.Base(path)+"-overwrite", func() error { return os.WriteFile(path, []byte("overwrite\n"), 0o600) }) {
+		return
+	}
+	if attempt(filepath.Base(path)+"-truncate", func() error { return os.Truncate(path, 0) }) {
+		return
+	}
+	if attempt(filepath.Base(path)+"-unlink", func() error { return os.Remove(path) }) {
+		return
+	}
+	replacement := filepath.Join(workspace, filepath.Base(path)+".replacement")
+	if err := os.WriteFile(replacement, []byte("replacement\n"), 0o600); err != nil {
+		results[filepath.Base(path)+"-replacement-setup"] = classifyProtectionError(err)
+		return
+	}
+	if attempt(filepath.Base(path)+"-rename", func() error { return os.Rename(replacement, path) }) {
+		return
+	}
+	_ = os.Remove(replacement)
+	for ancestor := filepath.Dir(path); ancestor == filepath.Dir(sessionHome) || ancestor == sessionHome || strings.HasPrefix(ancestor, sessionHome+string(os.PathSeparator)); ancestor = filepath.Dir(ancestor) {
+		renamed := filepath.Join(workspace, filepath.Base(ancestor)+".renamed")
+		if attempt(filepath.Base(path)+"-ancestor-"+filepath.Base(ancestor)+"-rename", func() error { return os.Rename(ancestor, renamed) }) {
+			return
+		}
+		_ = os.Remove(renamed)
+	}
+}
+
+func classifyProtectionError(err error) string {
+	if err == nil {
+		return "unexpected-success"
+	}
+	if errors.Is(err, syscall.EACCES) || errors.Is(err, syscall.EPERM) {
+		return "denied"
+	}
+	if errors.Is(err, os.ErrNotExist) {
+		return "missing"
+	}
+	return "operation-error"
+}
+
+func waitForFakeDevinFile(path string) bool {
+	deadline := time.Now().Add(30 * time.Second)
+	for path != "" && time.Now().Before(deadline) {
+		if _, err := os.Stat(path); err == nil {
+			return true
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	return false
 }
 
 func scopedEnvironmentNamesAbsent() bool {

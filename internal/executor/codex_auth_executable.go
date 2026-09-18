@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -18,10 +19,14 @@ import (
 type pinnedExecutable struct {
 	configured string
 
-	mutex     sync.Mutex
-	canonical string
-	identity  os.FileInfo
-	digest    [sha256.Size]byte
+	mutex             sync.Mutex
+	canonical         string
+	identity          os.FileInfo
+	digest            [sha256.Size]byte
+	companionSet      bool
+	companion         string
+	companionIdentity os.FileInfo
+	companionDigest   [sha256.Size]byte
 }
 
 func newPinnedExecutable(configured string) *pinnedExecutable {
@@ -45,9 +50,15 @@ func (executable *pinnedExecutable) Resolve() (string, error) {
 		if err != nil {
 			return "", err
 		}
+		companion, companionIdentity, companionDigest, companionErr := resolveCodeModeCompanion(canonical)
+		if companionErr != nil {
+			return "", companionErr
+		}
 		executable.canonical = canonical
 		executable.identity = identity
 		executable.digest = digest
+		executable.companionSet = true
+		executable.companion, executable.companionIdentity, executable.companionDigest = companion, companionIdentity, companionDigest
 		return canonical, nil
 	}
 
@@ -63,7 +74,159 @@ func (executable *pinnedExecutable) Resolve() (string, error) {
 		subtle.ConstantTimeCompare(executable.digest[:], digest[:]) != 1 {
 		return "", errors.New("Codex executable changed after preflight")
 	}
+	if executable.companionSet {
+		currentCompanion, info, digest, companionErr := resolveCodeModeCompanion(canonical)
+		if companionErr != nil {
+			return "", companionErr
+		}
+		if currentCompanion != executable.companion || (currentCompanion != "" && (info == nil || executable.companionIdentity == nil || !sameExecutable(executable.companionIdentity, info) || subtle.ConstantTimeCompare(executable.companionDigest[:], digest[:]) != 1)) {
+			return "", errors.New("Codex code-mode host changed after preflight")
+		}
+	}
 	return executable.canonical, nil
+}
+
+func resolveCodeModeCompanion(canonical string) (string, os.FileInfo, [sha256.Size]byte, error) {
+	const name = "codex-code-mode-host"
+	exeDir := filepath.Dir(canonical)
+	packageDir, binDir := "", ""
+	// Pinned InstallContext recognizes bin/ and codex-resources/ entrypoints
+	// only when the corresponding bin directory and package marker exist.
+	if base := filepath.Base(exeDir); base == "bin" || base == "codex-resources" {
+		root := filepath.Dir(exeDir)
+		bin := filepath.Join(root, "bin")
+		validBin, err := companionDirectory(bin)
+		if err != nil {
+			return "", nil, [sha256.Size]byte{}, err
+		}
+		if validBin {
+			metadata, err := packageMetadata(filepath.Join(root, "codex-package.json"))
+			if err != nil {
+				return "", nil, [sha256.Size]byte{}, err
+			}
+			if metadata {
+				packageDir, binDir = root, bin
+			}
+		}
+	}
+
+	// Build the complete pinned order before selecting a file: package resource,
+	// legacy standalone resource, package bin (or release/executable directory),
+	// then the executable sibling. Legacy release identity uses the package root
+	// when a package was recognized, never a fabricated bin/codex-resources tree.
+	candidates := make([]string, 0, 4)
+	addResources := func(root string) error {
+		directory := filepath.Join(root, "codex-resources")
+		exists, err := companionDirectory(directory)
+		if err != nil {
+			return err
+		}
+		if exists {
+			candidates = append(candidates, filepath.Join(directory, name))
+		}
+		return nil
+	}
+	if packageDir != "" {
+		if err := addResources(packageDir); err != nil {
+			return "", nil, [sha256.Size]byte{}, err
+		}
+	}
+	releaseDir := exeDir
+	if packageDir != "" {
+		releaseDir = packageDir
+	}
+	standalone := legacyStandaloneReleaseDir(releaseDir)
+	if standalone {
+		if err := addResources(releaseDir); err != nil {
+			return "", nil, [sha256.Size]byte{}, err
+		}
+	}
+	preferredDir := exeDir
+	if packageDir != "" {
+		preferredDir = binDir
+	} else if standalone {
+		preferredDir = releaseDir
+	}
+	candidates = append(candidates, filepath.Join(preferredDir, name), filepath.Join(exeDir, name))
+
+	seen := make(map[string]struct{}, len(candidates))
+	for _, candidate := range candidates {
+		candidate = filepath.Clean(candidate)
+		if _, ok := seen[candidate]; ok {
+			continue
+		}
+		seen[candidate] = struct{}{}
+		if _, err := os.Lstat(candidate); err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			return "", nil, [sha256.Size]byte{}, fmt.Errorf("inspect Codex code-mode host %s: %w", candidate, err)
+		}
+		resolved, err := filepath.EvalSymlinks(candidate)
+		if err != nil {
+			return "", nil, [sha256.Size]byte{}, fmt.Errorf("resolve Codex code-mode host %s: %w", candidate, err)
+		}
+		info, digest, err := inspectExecutable(resolved)
+		if err != nil {
+			return "", nil, [sha256.Size]byte{}, fmt.Errorf("inspect Codex code-mode host %s: %w", candidate, err)
+		}
+		return resolved, info, digest, nil
+	}
+	return "", nil, [sha256.Size]byte{}, nil
+}
+
+// Optional layout directories must really be directories. Unexpected access or
+// traversal errors remain refusals rather than silently selecting another file.
+func companionDirectory(path string) (bool, error) {
+	info, err := os.Stat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("inspect Codex companion directory %s: %w", path, err)
+	}
+	return info.IsDir(), nil
+}
+
+func packageMetadata(path string) (bool, error) {
+	info, err := os.Stat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("inspect Codex package metadata %s: %w", path, err)
+	}
+	return info.Mode().IsRegular(), nil
+}
+
+func legacyStandaloneReleaseDir(releaseDir string) bool {
+	home := os.Getenv("CODEX_HOME")
+	if home == "" {
+		userHome, err := os.UserHomeDir()
+		if err != nil {
+			return false
+		}
+		home = filepath.Join(userHome, ".codex")
+	}
+	// Upstream find_codex_home validates/canonicalizes explicit CODEX_HOME,
+	// and standalone_install_method canonicalizes even the default. Failure
+	// removes only legacy-install recognition (from_exe uses .ok()), not the
+	// independent package/sibling lookup. Never use an uncanonical fallback.
+	canonicalHome, err := filepath.EvalSymlinks(home)
+	if err != nil {
+		return false
+	}
+	info, err := os.Stat(canonicalHome)
+	if err != nil || !info.IsDir() {
+		return false
+	}
+	canonicalHome, err = filepath.Abs(canonicalHome)
+	if err != nil {
+		return false
+	}
+	releasesRoot := filepath.Join(canonicalHome, "packages", "standalone", "releases")
+	relative, err := filepath.Rel(releasesRoot, releaseDir)
+	return err == nil && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator))
 }
 
 func resolveConfiguredExecutable(configured string) (string, error) {
@@ -137,7 +300,42 @@ func (executable *pinnedExecutable) Snapshot(snapshotRoot string) (string, func(
 		cleanup()
 		return "", nil, err
 	}
+	if executable.companion != "" {
+		if err := copyPinnedCompanion(executable.companion, filepath.Join(directory, "codex-code-mode-host"), executable.companionIdentity, executable.companionDigest); err != nil {
+			cleanup()
+			return "", nil, err
+		}
+		if err := syncExecutableDirectory(directory); err != nil {
+			cleanup()
+			return "", nil, err
+		}
+	}
 	return path, cleanup, nil
+}
+
+func copyPinnedCompanion(sourcePath, destinationPath string, want os.FileInfo, wantDigest [sha256.Size]byte) error {
+	source, current, err := openExecutable(sourcePath)
+	if err != nil || !sameExecutable(want, current) {
+		if source != nil {
+			_ = source.Close()
+		}
+		return errors.New("Codex code-mode host changed while snapshotting")
+	}
+	defer source.Close()
+	destination, err := os.OpenFile(destinationPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o500)
+	if err != nil {
+		return err
+	}
+	hash := sha256.New()
+	_, copyErr := io.Copy(io.MultiWriter(destination, hash), source)
+	syncErr := destination.Sync()
+	closeErr := destination.Close()
+	digest := hash.Sum(nil)
+	if copyErr != nil || syncErr != nil || closeErr != nil || subtle.ConstantTimeCompare(wantDigest[:], digest) != 1 {
+		_ = os.Remove(destinationPath)
+		return errors.New("Codex code-mode host changed while copying")
+	}
+	return nil
 }
 
 func secureExecutableSnapshotRoot(path string) error {
@@ -203,7 +401,7 @@ func inspectExecutable(path string) (os.FileInfo, [sha256.Size]byte, error) {
 }
 
 func openExecutable(path string) (*os.File, os.FileInfo, error) {
-	descriptor, err := syscall.Open(path, syscall.O_RDONLY|syscall.O_CLOEXEC|syscall.O_NOFOLLOW, 0)
+	descriptor, err := syscall.Open(path, syscall.O_RDONLY|syscall.O_CLOEXEC|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return nil, nil, err
 	}
