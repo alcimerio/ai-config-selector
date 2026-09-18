@@ -114,7 +114,7 @@ func assembleNativeDevinProofWithOptions(t *testing.T, input func(devinInputFram
 	}
 	buildDevinResearchHelper(t, "devin-native-mcp-server", filepath.Join(workspace, "native-mcp-server"), map[string]string{"forbiddenPath": forbidden, "evidenceBase": evidenceBase})
 	if options != nil {
-		buildDevinResearchHelper(t, "devin-session-start-hook", hookPath, map[string]string{"receipt": receiptPath, "inputPath": inputPath, "outsidePath": forbidden, "expectedInput": "acs selected input\n"})
+		buildDevinResearchHelper(t, "devin-session-start-hook", hookPath, map[string]string{"receipt": receiptPath, "diagnostic": receiptPath + ".diagnostic", "invoked": receiptPath + ".invoked", "inputPath": inputPath, "outsidePath": forbidden, "expectedInput": "acs selected input\n"})
 		if e = options.onBuilt(hookPath, inputPath); e != nil {
 			t.Fatal(e)
 		}

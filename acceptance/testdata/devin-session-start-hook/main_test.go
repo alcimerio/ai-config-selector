@@ -13,10 +13,12 @@ import (
 
 func witnessFixture(t *testing.T) {
 	t.Helper()
-	oldInput, oldOutside, oldReceipt, oldExpected := inputPath, outsidePath, receipt, expectedInput
-	t.Cleanup(func() { inputPath, outsidePath, receipt, expectedInput = oldInput, oldOutside, oldReceipt, oldExpected })
+	oldInput, oldOutside, oldReceipt, oldDiagnostic, oldInvoked, oldExpected := inputPath, outsidePath, receipt, diagnostic, invoked, expectedInput
+	t.Cleanup(func() {
+		inputPath, outsidePath, receipt, diagnostic, invoked, expectedInput = oldInput, oldOutside, oldReceipt, oldDiagnostic, oldInvoked, oldExpected
+	})
 	dir := t.TempDir()
-	inputPath, outsidePath, receipt, expectedInput = filepath.Join(dir, "input"), filepath.Join(dir, "outside"), filepath.Join(dir, "receipt.json"), "selected\n"
+	inputPath, outsidePath, receipt, diagnostic, invoked, expectedInput = filepath.Join(dir, "input"), filepath.Join(dir, "outside"), filepath.Join(dir, "receipt.json"), filepath.Join(dir, "diagnostic"), filepath.Join(dir, "invoked"), "selected\n"
 	home := filepath.Join(dir, "home")
 	cfg := filepath.Join(home, ".config", "devin", "config.json")
 	if err := os.MkdirAll(filepath.Dir(cfg), 0700); err != nil {
@@ -90,11 +92,27 @@ func TestRunWitnessRejectsInvalidEvents(t *testing.T) {
 func TestRunWitnessRequiresExpectedInput(t *testing.T) {
 	witnessFixture(t)
 	expectedInput = ""
-	err := run(bytes.NewBufferString(validEvent), &bytes.Buffer{})
+	err := entry(bytes.NewBufferString(validEvent), &bytes.Buffer{})
 	if err == nil || err.Error() != "expected selected input is required" {
 		t.Fatalf("expected missing expectation error, got %v", err)
 	}
 	requireNoReceipt(t)
+}
+
+func TestRunWitnessPublishesFixedDiagnosticOnFailure(t *testing.T) {
+	witnessFixture(t)
+	expectedInput = ""
+	err := entry(bytes.NewBufferString(validEvent), &bytes.Buffer{})
+	if err == nil {
+		t.Fatal("expected witness failure")
+	}
+	b, err := os.ReadFile(diagnostic)
+	if err != nil || string(b) != "missing-input-expectation\n" {
+		t.Fatalf("fixed diagnostic=%q err=%v", b, err)
+	}
+	if b, err := os.ReadFile(invoked); err != nil || string(b) != "invoked\n" {
+		t.Fatalf("entry marker=%q err=%v", b, err)
+	}
 }
 func TestRunWitnessRejectsWrongSelectedInput(t *testing.T) {
 	witnessFixture(t)

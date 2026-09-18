@@ -13,13 +13,17 @@ import (
 	"time"
 )
 
-var receipt, inputPath, outsidePath, expectedInput string
+var receipt, diagnostic, invoked, inputPath, outsidePath, expectedInput string
 
 type hookEvent struct {
 	Event     string `json:"hook_event_name"`
 	SessionID string `json:"session_id"`
 	PromptID  string `json:"prompt_id"`
 }
+type witnessError struct{ code, message string }
+
+func (e witnessError) Error() string { return e.message }
+
 type hookReceipt struct {
 	Event             string `json:"event"`
 	SessionID         string `json:"session_id"`
@@ -35,9 +39,72 @@ type hookReceipt struct {
 }
 
 func main() {
-	if err := run(os.Stdin, os.Stdout); err != nil {
+	if err := entry(os.Stdin, os.Stdout); err != nil {
 		os.Exit(1)
 	}
+}
+
+func entry(in io.Reader, out io.Writer) error {
+	_ = publishFixed(invoked, "invoked\n")
+	if err := run(in, out); err != nil {
+		_ = publishDiagnostic(diagnostic, diagnosticCode(err))
+		return err
+	}
+	return nil
+}
+
+func diagnosticCode(err error) string {
+	var classified witnessError
+	if errors.As(err, &classified) {
+		return classified.code
+	}
+	switch err.Error() {
+	case "invalid SessionStart event":
+		return "invalid-event"
+	case "expected selected input is required":
+		return "missing-input-expectation"
+	case "selected input mismatch":
+		return "input-mismatch"
+	case "required write denial missing":
+		return "write-denial-missing"
+	case "hook input deadline exceeded":
+		return "input-timeout"
+	default:
+		return "witness-failed"
+	}
+}
+
+func publishDiagnostic(path, code string) error {
+	if path == "" {
+		return errors.New("diagnostic path missing")
+	}
+	if code == "" {
+		return errors.New("diagnostic code missing")
+	}
+	return publishFixed(path, code+"\n")
+}
+
+func publishFixed(path, data string) error {
+	tmp, err := os.OpenFile(path+".tmp", os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	if err != nil {
+		return err
+	}
+	if _, err = io.WriteString(tmp, data); err == nil {
+		err = tmp.Sync()
+	}
+	closeErr := tmp.Close()
+	if err != nil || closeErr != nil {
+		_ = os.Remove(path + ".tmp")
+		if err != nil {
+			return err
+		}
+		return closeErr
+	}
+	if err = os.Link(path+".tmp", path); err != nil {
+		_ = os.Remove(path + ".tmp")
+		return err
+	}
+	return os.Remove(path + ".tmp")
 }
 func run(in io.Reader, _ io.Writer) error {
 	body, err := readBounded(in, 16<<10, time.Second)
@@ -46,14 +113,14 @@ func run(in io.Reader, _ io.Writer) error {
 	}
 	event, err := decodeEvent(body)
 	if err != nil {
-		return errors.New("invalid SessionStart event")
+		return err
 	}
 	if expectedInput == "" {
 		return errors.New("expected selected input is required")
 	}
 	input, err := readSelectedInput(inputPath)
 	if err != nil {
-		return err
+		return witnessError{"selected-input-read", "selected input read failed"}
 	}
 	if expectedInput != "" && !bytes.Equal(input, []byte(expectedInput)) {
 		return errors.New("selected input mismatch")
@@ -74,7 +141,7 @@ func run(in io.Reader, _ io.Writer) error {
 	}
 	executableHash, err := digestExecutable(executable)
 	if err != nil {
-		return err
+		return witnessError{"executable-read", "executable read failed"}
 	}
 	h := sha256.Sum256(input)
 	r := hookReceipt{Event: event.Event, SessionID: event.SessionID, SessionHome: home, Executable: executable, ExecutableSHA256: hex.EncodeToString(executableHash[:]), PID: os.Getpid(), PPID: os.Getppid(), InputSHA256: hex.EncodeToString(h[:]), InputWriteError: inputErr, OutsideWriteError: outsideErr, ConfigWriteError: configErr}
@@ -82,7 +149,10 @@ func run(in io.Reader, _ io.Writer) error {
 	if err != nil {
 		return err
 	}
-	return publish(data)
+	if err := publish(data); err != nil {
+		return witnessError{"receipt-publication", "receipt publication failed"}
+	}
+	return nil
 }
 
 func digestExecutable(path string) ([32]byte, error) {
@@ -138,49 +208,52 @@ func decodeEvent(data []byte) (hookEvent, error) {
 	dec := json.NewDecoder(bytes.NewReader(data))
 	tok, err := dec.Token()
 	if err != nil {
-		return hookEvent{}, err
+		return hookEvent{}, witnessError{"invalid-json", "invalid SessionStart event"}
 	}
 	if tok != json.Delim('{') {
-		return hookEvent{}, errors.New("event is not object")
+		return hookEvent{}, witnessError{"invalid-json", "invalid SessionStart event"}
 	}
 	values := map[string]json.RawMessage{}
 	for dec.More() {
 		keyToken, err := dec.Token()
 		if err != nil {
-			return hookEvent{}, err
+			return hookEvent{}, witnessError{"invalid-json", "invalid SessionStart event"}
 		}
 		key, ok := keyToken.(string)
 		if !ok {
-			return hookEvent{}, errors.New("event key is not string")
+			return hookEvent{}, witnessError{"invalid-json", "invalid SessionStart event"}
 		}
 		if _, exists := values[key]; exists {
-			return hookEvent{}, errors.New("duplicate event key")
+			return hookEvent{}, witnessError{"duplicate-key", "invalid SessionStart event"}
 		}
 		var raw json.RawMessage
 		if err = dec.Decode(&raw); err != nil {
-			return hookEvent{}, err
+			return hookEvent{}, witnessError{"invalid-json", "invalid SessionStart event"}
 		}
 		values[key] = raw
 	}
 	if _, err = dec.Token(); err != nil {
-		return hookEvent{}, err
+		return hookEvent{}, witnessError{"invalid-json", "invalid SessionStart event"}
 	}
 	var extra any
 	if err = dec.Decode(&extra); err != io.EOF {
-		return hookEvent{}, errors.New("event trailing data")
+		return hookEvent{}, witnessError{"invalid-json", "invalid SessionStart event"}
 	}
 	var event hookEvent
 	if raw, ok := values["hook_event_name"]; !ok || json.Unmarshal(raw, &event.Event) != nil {
-		return hookEvent{}, errors.New("event name missing")
+		return hookEvent{}, witnessError{"event-name-missing", "invalid SessionStart event"}
 	}
 	if raw, ok := values["session_id"]; !ok || json.Unmarshal(raw, &event.SessionID) != nil {
-		return hookEvent{}, errors.New("session id missing")
+		return hookEvent{}, witnessError{"session-id-invalid", "invalid SessionStart event"}
 	}
 	if _, ok := values["prompt_id"]; ok {
-		return hookEvent{}, errors.New("prompt id present")
+		return hookEvent{}, witnessError{"prompt-id-present", "invalid SessionStart event"}
 	}
-	if event.Event != "SessionStart" || event.SessionID == "" {
-		return hookEvent{}, errors.New("invalid SessionStart event")
+	if event.Event != "SessionStart" {
+		return hookEvent{}, witnessError{"event-name-unexpected", "invalid SessionStart event"}
+	}
+	if event.SessionID == "" {
+		return hookEvent{}, witnessError{"session-id-empty", "invalid SessionStart event"}
 	}
 	return event, nil
 }
@@ -246,6 +319,6 @@ func readBounded(in io.Reader, limit int64, timeout time.Duration) ([]byte, erro
 		}
 		return r.b, nil
 	case <-time.After(timeout):
-		return nil, errors.New("hook input deadline exceeded")
+		return nil, witnessError{"read-timeout", "hook input deadline exceeded"}
 	}
 }

@@ -16,9 +16,9 @@ import (
 	"github.com/alcimerio/ai-config-selector/internal/profile"
 )
 
-// representativeProfile is assembled through the existing typed codecs. It
+// mcpAuthorityProfile is assembled through the existing typed codecs. It
 // is not an extension schema or a hand-written authority classifier.
-func representativeProfile(t *testing.T) profile.Profile {
+func mcpAuthorityProfile(t *testing.T) profile.Profile {
 	t.Helper()
 	p := devin.NewSkillsProfile("extension-assessment", nil)
 	executables, err := commonprofile.EncodeExecutableSelection(commonprofile.ExecutableSelection{Entries: []commonprofile.ExecutableEntry{{
@@ -70,9 +70,9 @@ func newTestTarget(t *testing.T) *devin.Adapter {
 	return target
 }
 
-func TestRepresentativeDefinitionUsesProductionAuthorityComposition(t *testing.T) {
+func TestMCPReferencesUseProductionAuthorityComposition(t *testing.T) {
 	target := newTestTarget(t)
-	plan, err := target.Categories().ResolveSyntaxFor(context.Background(), representativeProfile(t), "devin")
+	plan, err := target.Categories().ResolveSyntaxFor(context.Background(), mcpAuthorityProfile(t), "devin")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,8 +88,8 @@ func TestRepresentativeDefinitionUsesProductionAuthorityComposition(t *testing.T
 	}
 }
 
-func TestRepresentativeDefinitionRejectsUnboundAuthorityReferences(t *testing.T) {
-	p := representativeProfile(t)
+func TestMCPReferencesRejectUnboundAuthorityReferences(t *testing.T) {
+	p := mcpAuthorityProfile(t)
 	mcp := p.Common[commonprofile.MCPCapabilityID]
 	mcp.Selection = []byte(`{"servers":[{"id":"fixture","transport":"stdio","executableRef":"missing","arguments":[],"inputRefs":[],"environmentRefs":[]}]}`)
 	p.Common[commonprofile.MCPCapabilityID] = mcp

@@ -5,6 +5,7 @@ package acceptance_test
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"syscall"
@@ -36,11 +37,15 @@ func TestPromotedArtifactNativeDevinSessionStartHook(t *testing.T) {
 		t.Skip("explicit hook assessment gate required")
 	}
 	receipt := ""
+	diagnostic := ""
+	invoked := ""
 	var expected devinHookReceiptExpected
 	var first devinHookReceiptSnapshot
 	assembleNativeDevinProofWithOptions(t, devinNativeInput, verifyDevinListing, &devinNativeAssessmentOptions{
 		seed: func(home, workspace, hookPath, path string) error {
 			receipt = path
+			diagnostic = path + ".diagnostic"
+			invoked = path + ".invoked"
 			return seedDevinSessionStartHook(home, workspace, hookPath, path)
 		},
 		beforeFirstInput: func() error {
@@ -50,6 +55,12 @@ func TestPromotedArtifactNativeDevinSessionStartHook(t *testing.T) {
 			var err error
 			first, err = readDevinHookReceipt(receipt, expected, nil)
 			if err != nil {
+				if code, readErr := readHookFixedMarker(diagnostic); readErr == nil {
+					return fmt.Errorf("hook witness fixed failure=%s: %w", code, err)
+				}
+				if _, readErr := readHookFixedMarker(invoked); readErr == nil {
+					return fmt.Errorf("hook witness invoked without receipt: %w", err)
+				}
 				return err
 			}
 			// This checks only absence of the receipt's claimed PID after a synchronous
@@ -86,6 +97,7 @@ func TestPromotedArtifactNativeDevinSessionStartHook(t *testing.T) {
 		},
 	})
 }
+
 func waitDevinClaimedHookPIDAbsent(pid int) error {
 	if pid <= 1 {
 		return errors.New("hook claimed PID invalid")
