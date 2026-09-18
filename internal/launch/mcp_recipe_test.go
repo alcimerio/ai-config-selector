@@ -132,6 +132,35 @@ func TestMCPRecipeHelperExecutesSelectedReferencesAndRejectsMissingID(t *testing
 	}
 }
 
+func TestResolveFilesystemGrantsLocalAbsoluteUsesEffectiveHomeRoot(t *testing.T) {
+	root := t.TempDir()
+	home := filepath.Join(root, "home")
+	workspace := filepath.Join(root, "workspace")
+	sessions := filepath.Join(root, "sessions")
+	for _, directory := range []string{home, workspace, sessions} {
+		if err := os.MkdirAll(directory, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("HOME", home)
+	inHome := filepath.Join(home, "mcp-input", "selected.txt")
+	outside := filepath.Join(root, "outside", "selected.txt")
+	for _, path := range []string{inHome, outside} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("selected"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := ResolveFilesystemGrants([]PathGrantIntent{{ID: "input", Access: PathAccessReadOnly, Type: PathTypeFile, ReferenceKind: PathReferenceLocalAbsolute, Path: inHome}}, workspace, sessions, WorkspaceAccessReadOnly); err != nil {
+		t.Fatalf("effective-home local grant rejected: %v", err)
+	}
+	if _, err := ResolveFilesystemGrants([]PathGrantIntent{{ID: "input", Access: PathAccessReadOnly, Type: PathTypeFile, ReferenceKind: PathReferenceLocalAbsolute, Path: outside}}, workspace, sessions, WorkspaceAccessReadOnly); err == nil {
+		t.Fatal("outside-home local grant accepted")
+	}
+}
+
 func TestMCPRecipeDecoderRequiresCanonicalBoundedRecipes(t *testing.T) {
 	home := filepath.Join(t.TempDir(), "home")
 	if err := os.Mkdir(home, 0o700); err != nil {

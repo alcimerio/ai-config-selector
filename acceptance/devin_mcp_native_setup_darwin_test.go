@@ -50,7 +50,13 @@ func assembleNativeDevinProof(t *testing.T, input func(devinInputFrame, string) 
 	if e != nil {
 		t.Fatal(e)
 	}
-	inputRoot := realTemporaryDirectory(t)
+	// Local-absolute Profile inputs must remain under the effective HOME (and
+	// outside ACS's protected subtrees); production grant resolution rejects
+	// unrelated host paths before Session creation.
+	inputRoot := filepath.Join(home, "mcp-inputs")
+	if e = os.Mkdir(inputRoot, 0700); e != nil {
+		t.Fatal(e)
+	}
 	inputPath := filepath.Join(inputRoot, "native-mcp-input.txt")
 	evidenceBase := filepath.Join(workspace, "mcp-evidence")
 	if e = writeDevinNativeProfile(home, inputPath); e != nil {
