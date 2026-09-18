@@ -39,6 +39,7 @@ type discoverySession struct {
 	diagnostic        string
 	request           launch.ProcessRequest
 	startup           *discoveryStartup
+	featured          *discoveryCodexFeaturedMetadata
 }
 
 func newDiscoverySession(t *testing.T, ctx context.Context, target, kind, label string) *discoverySession {
@@ -220,6 +221,7 @@ func TestNativeInstalledExtensionDiscovery(t *testing.T) {
 	})
 	t.Run("codex-untrusted-hook-discovery", func(t *testing.T) {
 		s := newDiscoverySession(t, ctx, codex, "codex", "codex-hooks")
+		s.featured = &discoveryCodexFeaturedMetadata{}
 		seedDiscoveryCodexConfig(t, s)
 		tripwire := filepath.Join(s.workspace, "UNEXPECTED_HOOK")
 		command := "/bin/sh -c " + devinShellLiteral("printf unexpected > "+devinShellLiteral(tripwire))
@@ -241,6 +243,7 @@ func TestNativeInstalledExtensionDiscovery(t *testing.T) {
 			t.Fatal("discovery executed hook")
 		}
 		negativeSession := newDiscoverySession(t, ctx, codex, "codex", "codex-hooks-malformed")
+		negativeSession.featured = &discoveryCodexFeaturedMetadata{}
 		seedDiscoveryCodexConfig(t, negativeSession)
 		negativeSource := filepath.Join(negativeSession.created.HomeDirectory(), ".codex", "hooks.json")
 		if e = discoveryWrite(negativeSource, []byte("{broken")); e != nil {
@@ -438,28 +441,41 @@ func seedDiscoveryCodexConfig(t *testing.T, s *discoverySession) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	var requests atomic.Int64
 	var server *http.Server
-	server = &http.Server{ReadHeaderTimeout: time.Second, ReadTimeout: time.Second, WriteTimeout: time.Second, MaxHeaderBytes: 8192, Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if requests.Add(1) > 8 {
-			_ = server.Close()
-			return
-		}
-		r.Body.Close()
-		w.Header().Set("Connection", "close")
-		w.WriteHeader(501)
-	})}
+	handler := &discoveryCodexHTTPHandler{featured: s.featured, hook: s.featured != nil}
+	server = &http.Server{ReadHeaderTimeout: time.Second, ReadTimeout: time.Second, WriteTimeout: time.Second, MaxHeaderBytes: 8192, Handler: handler}
+	handler.onOverflow = func() { _ = server.Close() }
 	done := make(chan error, 1)
 	go func() { done <- server.Serve(listener) }()
 	t.Cleanup(func() {
-		_ = server.Close()
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		shutdownErr := server.Shutdown(ctx)
+		cancel()
+		if shutdownErr != nil {
+			t.Error("metadata listener graceful shutdown failed")
+			_ = server.Close()
+		}
 		select {
 		case <-done:
 		case <-time.After(time.Second):
 			t.Error("model tripwire listener did not settle")
 		}
-		if requests.Load() != 0 {
-			t.Error("model/backend request during discovery")
+		total, forbidden, overflow := handler.summary()
+		t.Logf("codex-discovery-http total=%d forbidden=%d overflow=%d", total, forbidden, overflow)
+		if forbidden != 0 || overflow != 0 {
+			t.Errorf("Codex discovery HTTP contract total=%d forbidden=%d overflow=%d", total, forbidden, overflow)
+		}
+		if s.featured != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			if e := s.featured.wait(ctx); e != nil {
+				t.Error(e)
+			}
+			seen, failure := s.featured.summary()
+			t.Logf("codex-featured-metadata-count=%d", seen)
+			if failure != "" {
+				t.Errorf("Codex featured metadata contract failure=%s", failure)
+			}
 		}
 	})
 	endpoint := "http://" + listener.Addr().String()

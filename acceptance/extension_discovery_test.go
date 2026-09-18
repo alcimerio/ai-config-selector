@@ -22,6 +22,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -598,6 +599,266 @@ type discoveryHTTPDiagnostics struct {
 	methods  [3]int
 	routes   [5]int
 	query    int
+}
+
+// discoveryCodexFeaturedMetadata is the narrow, source-backed optional
+// startup request permitted only for the Codex hook-discovery Session.
+// It intentionally returns the existing refusal response and never exposes
+// request values in its fixed diagnostic state.
+type discoveryCodexFeaturedMetadata struct {
+	mu   sync.Mutex
+	seen int
+	fail string
+	work sync.WaitGroup
+}
+
+type discoveryCodexHTTPHandler struct {
+	featured   *discoveryCodexFeaturedMetadata
+	hook       bool
+	total      atomic.Int64
+	forbidden  atomic.Int64
+	overflow   atomic.Int64
+	onOverflow func()
+}
+
+func (h *discoveryCodexHTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	defer r.Body.Close()
+	if h.total.Add(1) > 8 {
+		h.overflow.Add(1)
+		if h.onOverflow != nil {
+			h.onOverflow()
+		}
+		http.Error(w, "request cap", http.StatusTooManyRequests)
+		return
+	}
+	if r.Method == http.MethodGet || r.URL.Path == "/plugins/featured" {
+		if h.hook && h.featured != nil {
+			h.featured.ServeHTTP(w, r)
+			return
+		}
+		h.forbidden.Add(1)
+		http.Error(w, "metadata scope", http.StatusForbidden)
+		return
+	}
+	h.forbidden.Add(1)
+	http.Error(w, "request forbidden", http.StatusNotImplemented)
+}
+
+func (h *discoveryCodexHTTPHandler) summary() (total, forbidden, overflow int64) {
+	return h.total.Load(), h.forbidden.Load(), h.overflow.Load()
+}
+
+func (d *discoveryCodexFeaturedMetadata) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	d.work.Add(1)
+	defer d.work.Done()
+	defer r.Body.Close()
+	d.mu.Lock()
+	if d.fail != "" {
+		d.mu.Unlock()
+		http.Error(w, "metadata refused", http.StatusConflict)
+		return
+	}
+	d.seen++
+	if d.seen > 1 {
+		d.fail = "metadata-duplicate"
+		d.mu.Unlock()
+		http.Error(w, "metadata refused", http.StatusConflict)
+		return
+	}
+	headerPresent := func(name string) bool { return len(r.Header.Values(name)) != 0 }
+	valid := r.Method == http.MethodGet && r.URL.Path == "/plugins/featured" && r.URL.RawQuery == "platform=codex" && !r.URL.ForceQuery && r.URL.RawPath == "" && r.ContentLength == 0 && len(r.TransferEncoding) == 0 && !headerPresent("Authorization") && !headerPresent("Proxy-Authorization") && !headerPresent("Cookie")
+	d.mu.Unlock()
+	if !valid {
+		d.mu.Lock()
+		d.fail = "metadata-contract"
+		d.mu.Unlock()
+		http.Error(w, "metadata refused", http.StatusBadRequest)
+		return
+	}
+	// A zero Content-Length is necessary but not sufficient: a custom body can
+	// still provide bytes. Read one bounded byte and require immediate EOF.
+	var one [1]byte
+	n, err := r.Body.Read(one[:])
+	if n != 0 || err != io.EOF {
+		d.mu.Lock()
+		d.fail = "metadata-body"
+		d.mu.Unlock()
+		http.Error(w, "metadata refused", http.StatusBadRequest)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Length", "0")
+	w.Header().Set("Connection", "close")
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+func (d *discoveryCodexFeaturedMetadata) summary() (seen int, failure string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.seen, d.fail
+}
+
+func (d *discoveryCodexFeaturedMetadata) wait(ctx context.Context) error {
+	done := make(chan struct{})
+	go func() { d.work.Wait(); close(done) }()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return errors.New("metadata handler settlement deadline")
+	}
+}
+
+func TestDiscoveryCodexFeaturedMetadataExactContract(t *testing.T) {
+	valid := func() *http.Request {
+		r := httptest.NewRequest(http.MethodGet, "http://fixture/plugins/featured?platform=codex", http.NoBody)
+		r.ContentLength = 0
+		return r
+	}
+	for name, request := range map[string]func() *http.Request{
+		"wrong-method": func() *http.Request { r := valid(); r.Method = http.MethodPost; return r },
+		"wrong-query": func() *http.Request {
+			return httptest.NewRequest(http.MethodGet, "http://fixture/plugins/featured?platform=other", http.NoBody)
+		},
+		"duplicate-query": func() *http.Request {
+			return httptest.NewRequest(http.MethodGet, "http://fixture/plugins/featured?platform=codex&platform=codex", http.NoBody)
+		},
+		"encoded-query": func() *http.Request {
+			return httptest.NewRequest(http.MethodGet, "http://fixture/plugins/featured?platform=%63odex", http.NoBody)
+		},
+		"wrong-path": func() *http.Request {
+			return httptest.NewRequest(http.MethodGet, "http://fixture/plugins/other?platform=codex", http.NoBody)
+		},
+		"authorization": func() *http.Request { r := valid(); r.Header.Set("Authorization", "Bearer hidden"); return r },
+		"authorization-duplicate-empty-first": func() *http.Request {
+			r := valid()
+			r.Header.Add("Authorization", "")
+			r.Header.Add("Authorization", "Bearer hidden")
+			return r
+		},
+		"proxy-authorization-duplicate-empty-first": func() *http.Request {
+			r := valid()
+			r.Header.Add("Proxy-Authorization", "")
+			r.Header.Add("Proxy-Authorization", "Basic hidden")
+			return r
+		},
+		"cookie": func() *http.Request { r := valid(); r.Header.Set("Cookie", "hidden"); return r },
+		"cookie-duplicate-empty-first": func() *http.Request {
+			r := valid()
+			r.Header.Add("Cookie", "")
+			r.Header.Add("Cookie", "hidden")
+			return r
+		},
+		"body-read-error": func() *http.Request {
+			r := valid()
+			r.Body = io.NopCloser(discoveryErrorReader{})
+			return r
+		},
+		"body-present": func() *http.Request {
+			r := valid()
+			r.Body = io.NopCloser(bytes.NewReader([]byte("x")))
+			return r
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			d := &discoveryCodexFeaturedMetadata{}
+			w := httptest.NewRecorder()
+			d.ServeHTTP(w, request())
+			if w.Code == http.StatusNotImplemented {
+				t.Fatal("invalid metadata request accepted")
+			}
+			if seen, failure := d.summary(); seen != 1 || failure == "" {
+				t.Fatalf("invalid metadata state seen=%d failure=%s", seen, failure)
+			}
+		})
+	}
+
+	d := &discoveryCodexFeaturedMetadata{}
+	w := httptest.NewRecorder()
+	d.ServeHTTP(w, valid())
+	if w.Code != http.StatusNotImplemented || w.Body.Len() != 0 {
+		t.Fatalf("valid metadata response code=%d body=%q", w.Code, w.Body.String())
+	}
+	if seen, failure := d.summary(); seen != 1 || failure != "" {
+		t.Fatalf("valid metadata state seen=%d failure=%s", seen, failure)
+	}
+}
+
+func TestDiscoveryCodexFeaturedMetadataConcurrentDuplicateFails(t *testing.T) {
+	d := &discoveryCodexFeaturedMetadata{}
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			w := httptest.NewRecorder()
+			d.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "http://fixture/plugins/featured?platform=codex", http.NoBody))
+		}()
+	}
+	close(start)
+	wg.Wait()
+	if seen, failure := d.summary(); seen != 2 || failure != "metadata-duplicate" {
+		t.Fatalf("duplicate metadata state seen=%d failure=%s", seen, failure)
+	}
+}
+
+func TestDiscoveryCodexFeaturedDispatchScopeAndTotalCap(t *testing.T) {
+	valid := func() *http.Request {
+		return httptest.NewRequest(http.MethodGet, "http://fixture/plugins/featured?platform=codex", http.NoBody)
+	}
+	for name, hook := range map[string]bool{"hook": true, "non-hook": false} {
+		t.Run(name, func(t *testing.T) {
+			d := &discoveryCodexFeaturedMetadata{}
+			h := &discoveryCodexHTTPHandler{featured: d, hook: hook}
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, valid())
+			if hook && w.Code != http.StatusNotImplemented {
+				t.Fatalf("hook metadata status=%d", w.Code)
+			}
+			if !hook && w.Code == http.StatusNotImplemented {
+				t.Fatal("non-hook metadata request accepted")
+			}
+		})
+	}
+	h := &discoveryCodexHTTPHandler{hook: true}
+	for i := 0; i < 8; i++ {
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "http://fixture/other", http.NoBody))
+	}
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, valid())
+	if w.Code != http.StatusTooManyRequests {
+		t.Fatalf("total cap status=%d", w.Code)
+	}
+	if total, forbidden, overflow := h.summary(); total != 9 || forbidden != 8 || overflow != 1 {
+		t.Fatalf("dispatch summary total=%d forbidden=%d overflow=%d", total, forbidden, overflow)
+	}
+}
+
+func TestDiscoveryCodexFeaturedMetadataBlockedHandlerSettles(t *testing.T) {
+	started, release := make(chan struct{}), make(chan struct{})
+	d := &discoveryCodexFeaturedMetadata{}
+	r := httptest.NewRequest(http.MethodGet, "http://fixture/plugins/featured?platform=codex", http.NoBody)
+	r.Body = io.NopCloser(&discoveryGatedReader{ready: started, release: release})
+	done := make(chan struct{})
+	go func() { d.ServeHTTP(httptest.NewRecorder(), r); close(done) }()
+	<-started
+	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
+	if err := d.wait(ctx); err == nil {
+		t.Fatal("blocked handler reported settled")
+	}
+	cancel()
+	close(release)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("blocked handler did not settle")
+	}
+	if err := d.wait(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func (d *discoveryHTTPDiagnostics) record(method, path string, hasQuery bool) {
