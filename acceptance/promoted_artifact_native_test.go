@@ -2068,6 +2068,7 @@ func assertPromotedArtifactGenericRun(t *testing.T) {
 		}
 	}
 	assertNoSessions(t, home)
+	assertPromotedArtifactGenericRunWithSelectedMCP(t, binary, home, path, workspace)
 
 	beforeGenericSessions := promotedSessionSnapshot(t, binary, home, path)
 	command := exec.Command(binary, "run", "--profile", "generic-readwrite", "--", helper,
@@ -2222,6 +2223,54 @@ func assertPromotedArtifactGenericRun(t *testing.T) {
 		t.Fatalf("generic resize was not forwarded: %s", capture.String())
 	}
 	assertNoSessions(t, home)
+}
+
+func assertPromotedArtifactGenericRunWithSelectedMCP(t *testing.T, binary, home, path, workspace string) {
+	t.Helper()
+	profilePath := filepath.Join(home, ".acs", "profiles", "generic-selected-mcp.json")
+	server := filepath.Join(workspace, "generic-mcp-server.sh")
+	serverEffect := filepath.Join(workspace, "mcp-fixture-server-effect")
+	shellMarker := "'" + strings.ReplaceAll(serverEffect, "'", "'\\''") + "'"
+	if err := os.WriteFile(server, []byte("#!/bin/sh\nprintf server-started > "+shellMarker+"\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	profile := string(genericSelectedMCPProfileDocument())
+	if err := os.WriteFile(profilePath, []byte(profile), 0600); err != nil {
+		t.Fatal(err)
+	}
+	profileBefore, err := os.ReadFile(profilePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := promotedSessionSnapshot(t, binary, home, path)
+	marker := filepath.Join(workspace, "generic-selected-mcp-command-ran")
+	commandContext, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	command := exec.CommandContext(commandContext, binary, "run", "--profile", "generic-selected-mcp", "--", "/bin/sh", "-c", "test ! -e \"$HOME/.acs/mcp/recipes.json\" && test ! -e \"$HOME/.config/devin/mcp_config.json\" && test ! -e \"$HOME/.codex/config.toml\" && printf command-ok > \"$1\"", "sh", marker)
+	command.WaitDelay = 2 * time.Second
+	command.Dir = workspace
+	command.Env = nativeCandidateEnvironment(home, path, nil)
+	if output, err := command.CombinedOutput(); err != nil {
+		if errors.Is(commandContext.Err(), context.DeadlineExceeded) {
+			t.Fatalf("selected-MCP generic command timed out: %v; output=%s", err, output)
+		}
+		t.Fatalf("selected-MCP generic command: %v output=%s", err, output)
+	}
+	if data, err := os.ReadFile(marker); err != nil || string(data) != "command-ok" {
+		t.Fatalf("generic command marker=(%q,%v)", data, err)
+	}
+	if _, err := os.Stat(serverEffect); !os.IsNotExist(err) {
+		t.Fatalf("unexpected MCP server effect: %v", err)
+	}
+	assertNoSessions(t, home)
+	profileAfter, err := os.ReadFile(profilePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(profileBefore, profileAfter) {
+		t.Fatal("selected-MCP generic run changed the stored Profile bytes")
+	}
+	assertNewRemovedPromotedSessions(t, binary, home, path, before, "command")
 }
 
 func writeGenericInstructionProfile(t *testing.T, home, name string) {
