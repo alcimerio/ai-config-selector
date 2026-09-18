@@ -7,6 +7,14 @@ are completed and until the authorized maintainer approves the tag push. That
 push authorizes the existing workflow to build, natively validate, attest, and
 publish the final package without another human pause.
 
+The comparison boundary below is the historical preparation recorded on
+2026-09-07. The [current-source candidate handoff](current-candidate-handoff.md)
+records the later PR #118 tree, unpublished candidate bytes, new supported
+Profile capabilities, and remaining operator evidence. It does not amend the
+earlier source boundary or designate final release bytes. Selected instruction
+references in the later source have a Devin-specific always-on rule projection;
+Codex does not activate them as ACS-managed rules.
+
 ## Comparison boundary
 
 The prepared source boundary is commit

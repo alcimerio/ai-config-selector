@@ -524,11 +524,14 @@ refresh observation remains supplemental and is never a CI credential gate.
 - Linux source is retained without binaries, native CI, or support guarantees.
 - Source builds and authenticated smoke runs are development evidence, not
   immutable-release evidence.
-- ACS does not manage MCP servers, hooks, agents, or arbitrary
-  target settings. Interactive Codex isolates ordinary host/project MCP inputs;
-  it does not claim to override every account-service enterprise policy.
+- Current source projects explicitly selected local STDIO MCP server references
+  for Devin and Codex. ACS does not manage plugins, hooks, agents, remote MCP,
+  or arbitrary target settings. Interactive Codex isolates ordinary host/project
+  MCP inputs; it does not claim to override every account-service enterprise
+  policy.
 - Interactive Codex supports only `codex-cli 0.149.1`, ChatGPT named identities,
-  common Skills and workspace access. It exposes no arbitrary target arguments,
+  selected common capabilities and workspace access. It exposes no arbitrary
+  target arguments,
   backend selection, plugin configuration, API-key import, or generic Codex
   configuration passthrough.
 - ACS is the sole sandbox and approval authority for interactive Codex. The

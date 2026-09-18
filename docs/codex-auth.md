@@ -267,9 +267,9 @@ tool approval decisions. This prevents hostile project configuration from
 selecting another credential store, endpoint, provider, plugin, project-local
 MCP configuration, sandbox mode, or approval policy. A missing or uncertain ACS
 outer sandbox fails closed; Codex is never launched directly as a fallback.
-ACS does not configure MCP servers in this delivery, and its empty ordinary MCP
-table is not represented as clearing every account-service or enterprise
-policy source. Repository
+Current source can project explicitly selected local STDIO MCP server references
+from a v3 Profile. An empty selected MCP table is not represented as clearing
+every account-service or enterprise policy source. Repository
 `.agents/skills` inheritance and bundled system behavior remain Codex-owned;
 ACS's selected-only statement applies to ACS-managed global projections, not
 every readable workspace file.

@@ -6,6 +6,11 @@ candidate version embedded in the artifact, artifact directory, binary checksum,
 and previously trusted executable. Do not substitute a guessed release URL,
 `latest`, or a checksum copied from another build.
 
+For the verified PR #118 development candidate, use the actual values and
+source relationship in the [current candidate handoff](current-candidate-handoff.md).
+Its embedded `v0.4.0` is a development placeholder. A future tagged release
+will build distinct versioned bytes and requires new checksums and validation.
+
 The supported candidate target is macOS 26 on Apple Silicon (`darwin/arm64`).
 The immutable published v0.4.0 release remains available for both Apple Silicon
 and Intel as historical evidence; that fact does not extend Intel support to the
@@ -24,6 +29,10 @@ candidate. See the [v0.4.0 release notes](releases/v0.4.0.md) and the
 | Bounded local Profile history | Not available | Supported after a Profile is adopted by a successful mutation |
 | Literal contained `run` and effective-authority explanation | Not available | Supported |
 | Named Codex authentication and durable Session operations | Not available | Supported |
+| Selected instruction bundles and Devin always-on rules | Not available | Common references retained; only Devin projects and checks always-on rules |
+| Scoped environment, selected filesystem and executable grants | Not available | Supported under the bounded v3 common contract |
+| Local reference-only STDIO MCP for Devin and Codex | Not available | Supported with selected executable, path and environment references |
+| ACS-managed plugins, hooks or agents | Not available | Not supported; current source only assesses target-owned discovery |
 
 Installing or selecting a binary never migrates data. Passive Profile inspection
 never rewrites a Profile. A confirmed current-source mutation can canonicalize a
@@ -41,13 +50,24 @@ schema number says nothing about their compatibility. Read the
 [portable exchange contract](portable-profile-exchange.md),
 [history boundary](profile-history.md), and
 [Session recovery contract](session-operations.md) before changing state.
+Also read the [selected instruction](instruction-bundles.md),
+[MCP](mcp-profiles.md), and [scoped environment](common-profile-format.md#scoped-environment)
+contracts for Profiles using those current-source capabilities. Export and
+history retain references, not source instruction bodies or resolved environment
+values. On binary rollback to v0.4.0, keep the current candidate available to
+inspect and recover Profiles containing these newer categories. Selected secret
+environment values can be read by the launched target, its MCP servers and
+descendants; they are not isolated per MCP server.
 
 ## Supply, install and verify the exact candidate
 
 Obtain the promoted candidate directory and all values below through the
 approved artifact handoff. The directory must contain exactly the supplied
 candidate's `install.sh`, `SHA256SUMS`, and Apple Silicon archive. Work from a
-clean checkout of the same source revision as the candidate; the validator is a
+clean checkout with the candidate's exact source tree. For the PR #118 candidate,
+merged commit `49a427dbedc1e8b3b9490fac0262d183ebbf42f3` has the same tree
+as CI source `e9b9f652178a1aa2eac80b042da6390ecb5d2b34`. Record both
+identities; tree equality does not alter build provenance. The validator is a
 repository maintenance interface, not a downloadable release channel.
 
 Start a dedicated Bash with `/bin/bash --noprofile --norc`. Then export the
@@ -63,7 +83,7 @@ umask 077
 : "${ACS_CANDIDATE_ARCHIVE_SHA256:?supply the verified archive SHA-256}"
 : "${ACS_CANDIDATE_MANIFEST_SHA256:?supply the verified SHA256SUMS SHA-256}"
 : "${ACS_CANDIDATE_INSTALLER_SHA256:?supply the verified installer SHA-256}"
-: "${ACS_CANDIDATE_BINARY_SHA256:?supply the verified installed binary SHA-256}"
+: "${ACS_CANDIDATE_BINARY_SHA256:?supply the archive-member SHA-256; verify installed bytes below}"
 : "${ACS_KNOWN_GOOD_BIN:?supply the absolute trusted current executable}"
 : "${ACS_MAINTENANCE_ROOT:?supply a new absolute private maintenance directory}"
 
@@ -141,7 +161,10 @@ cmp "$maintenance_root/candidate/expected-version.txt" \
 
 Stop on any failure. A matching version string alone cannot distinguish two
 builds. Retain the private candidate directory, supplied provenance, checksum,
-source commit and tree, validator output, and installed-binary checksum together.
+source commit and tree, validator output, and the Mac's installed-binary checksum
+together. The supplied archive-member digest is an expected value; the successful
+`shasum -c` against `"$candidate_bin/acs"` is the separate installed-host byte
+witness. Do not record it as observed until that command succeeds on the Mac.
 Do not strip quarantine, disable Gatekeeper, ad-hoc sign, or weaken Seatbelt to
 make a candidate run.
 
@@ -296,6 +319,9 @@ Devin and Codex versions:
 Useful-work quickstart result and elapsed time:
 Profile schema before/after; migration decision and outcome:
 Shared Skills identities (source:relativePath only) and target projections:
+Selected instruction identities and Devin rule result (no instruction bodies):
+Scoped environment names and required-source outcome (no values):
+Selected MCP server IDs, target discovery/filtering and cleanup (no argv values):
 Named Codex auth isolation observed (no account or credential data):
 Workspace read-only/read-write behavior and unrelated-path denial:
 Terminal input/output, resize, interrupt and descendant settlement:
