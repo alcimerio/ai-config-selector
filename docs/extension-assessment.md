@@ -30,7 +30,7 @@ The Codex source links below refer to commit
 | --- | --- | --- | --- |
 | Codex plugin | Root `plugin.json` and OpenAI overlay precedence are target-owned; package capabilities include Skills, MCP and hooks. | Plugin hooks use target trust; plugin root/data and installed lifecycle are additional authority. ACS currently disables Codex plugins. | Consider only an identity-pinned local package overlay. Exclude marketplace, dependencies, remote auth, updates and persistent data until native discovery, trust and cleanup are proven. |
 | Devin plugin | Manifest precedence is `.devin-plugin`, `.claude-plugin`, then root; local installs are live-linked. Governance and managed manifests have fail-open cases. | Plugins may add rules, MCP, hooks, agents and persistent `PLUGIN_DATA`; this is not equivalent to a disposable Session. | Consider only explicit local activation with common grants for selected resources. Defer Cloud sync, credentials, dependencies, updates, governance and persistent data. |
-| Codex hook | Pinned source defines layered discovery, normalized-definition trust hashes, command/MCP handlers, SessionStart and other lifecycle events. Normal command completion can leave detached helpers. | Common grants can cover selected executable/input/MCP references; trust, shell ABI, event timing and output decisions remain target-owned. | A compiler prototype records selected resources without activating the definition. Installed metadata and malformed-definition assertions completed, but the case failed its backend-request check; async/background support remains deferred until settlement is proven. |
+| Codex hook | Pinned source defines layered discovery, normalized-definition trust hashes, command/MCP handlers, SessionStart and other lifecycle events. Normal command completion can leave detached helpers. | Common grants can cover selected executable/input/MCP references; trust, shell ABI, event timing and output decisions remain target-owned. | A compiler prototype records selected resources without activating the definition. Installed untrusted metadata discovery and malformed-definition reporting passed with bounded optional startup metadata requests; async/background support remains deferred until settlement is proven. |
 | Devin hook | Pinned docs define project `hooks.v1.json`, event JSON, command output/decisions, SessionStart before the first prompt, and incomplete cross-source merge details. Exit semantics distinguish success, block and logged errors. | Hook fail-open/timeout/child semantics are target behavior, not ACS enforcement. | The current opt-in harness assesses one bounded project SessionStart witness through public ACS composition. No hook schema is shipped. |
 | Codex role/agent | Pinned role application is a typed allowlist of model/prompt/personality/service-tier and feature/Skill controls. It preserves parent authority. | Roles do not add arbitrary filesystem, environment, network, credential or sandbox authority; threads are not necessarily OS processes. | A narrow descriptive role overlay is a future candidate. Reject unsupported authority fields and defer model-assisted/native lifecycle claims. |
 | Devin custom agent | Pinned Markdown agents support model, prompt, `allowed-tools` and `max-nesting`; default tool access is all, background agents inherit approvals, and parent interruption parks agents. | Target tool policy is not an OS grant; no independent per-agent filesystem/env/network/cleanup lease is documented. | Consider only a target-owned identity/prompt/tool overlay after bounded selection and lifecycle evidence. Keep parent ACS grants as the OS boundary. |
@@ -48,22 +48,36 @@ ACS Profile capability. The rows distinguish prepared cases from observed runs.
 
 | Target / concept | Observable and negative case | Status and limit |
 | --- | --- | --- |
-| Codex plugin | `TestNativeInstalledExtensionDiscovery` adds a local marketplace, checks available and installed package identity, and checks missing-plugin refusal with unchanged inventory. | Passed (0.91 seconds), including available/installed inventory and missing-plugin refusal. No plugin tool execution or runtime authority claim. |
-| Devin plugin | `TestNativeInstalledExtensionDiscovery` installs a local package, checks its identity and Skill inventory, and checks malformed-package refusal with unchanged inventory. | Passed (1.06 seconds), including local inventory and malformed-package refusal under bounded synthetic startup replies. No real authentication, update or persistent-data lifecycle claim. |
-| Codex hook | `TestNativeInstalledExtensionDiscovery` checks untrusted hook discovery metadata and normalized hash, absence of the execution tripwire, and malformed-definition reporting in a fresh Session. | Protocol, metadata and malformed-definition assertions completed, but the case failed because both disposable Sessions observed a local backend request. Its purpose is not established by the request counter; no hook execution or child lifecycle claim. |
-| Devin hook | `TestPromotedArtifactNativeDevinSessionStartHook` observes a selected project hook, receipt, selected-input read, protected/outside write denials, and existing MCP/Session checks. | Three more repetitions passed after the receipt-gate correction. Earlier failed runs remain recorded; the old logs cannot prove that every failure was a benign race. Receipt or diagnostic absence cannot prove non-invocation; MCP cleanup is not hook-child cleanup proof. |
-| Codex role/agent | `TestNativeInstalledCustomCodexAgentDiscovery` checks the initial Responses request for the exact custom role catalog entry in selected and absent cases. | Selected and absent cases passed again (19.44 seconds total); no child-agent invocation, custom-instruction execution, or independent agent authority claim. |
-| Devin custom agent | `TestPromotedArtifactNativeCustomDevinAgentDiscovery` checks the initial request system catalog for the exact Markdown profile entry in selected and absent cases. | Selected and absent cases passed again (14.54 seconds total); no child-agent invocation or child lifecycle claim. |
+| Codex plugin | `TestNativeInstalledExtensionDiscovery` adds a local marketplace, checks available and installed package identity, and checks missing-plugin refusal with unchanged inventory. | Passed (1.89 seconds). The plugin Session recorded zero HTTP requests. No plugin tool execution or runtime authority claim. |
+| Devin plugin | `TestNativeInstalledExtensionDiscovery` installs a local package, checks its identity and Skill inventory, and checks malformed-package refusal with unchanged inventory. | Passed (1.68 seconds), including local inventory and malformed-package refusal under bounded synthetic startup replies. No real authentication, update or persistent-data lifecycle claim. |
+| Codex hook | `TestNativeInstalledExtensionDiscovery` checks untrusted hook discovery metadata and normalized hash, absence of the execution tripwire, and malformed-definition reporting in fresh Sessions. | Passed (0.83 seconds). Positive and malformed Sessions each observed exactly one allowed metadata request, with fixed `metadata-count=1`, `forbidden=0`, and `overflow=0`; no hook execution or child lifecycle claim. |
+| Devin hook | `TestPromotedArtifactNativeDevinSessionStartHook` observes a selected project hook, receipt, selected-input read, protected/outside write denials, and existing MCP/Session checks. | Three repetitions passed in 10.00, 10.00 and 9.36 seconds. Earlier failed runs remain recorded; the old logs cannot prove that every failure was a benign race. Receipt or diagnostic absence cannot prove non-invocation; MCP cleanup is not hook-child cleanup proof. |
+| Codex role/agent | `TestNativeInstalledCustomCodexAgentDiscovery` checks the initial Responses request for the exact custom role catalog entry in selected and absent cases. | Selected and absent cases passed (25.43 seconds total); no child-agent invocation, custom-instruction execution, or independent agent authority claim. |
+| Devin custom agent | `TestPromotedArtifactNativeCustomDevinAgentDiscovery` checks the initial request system catalog for the exact Markdown profile entry in selected and absent cases. | Selected and absent cases passed (18.84 seconds total); no child-agent invocation or child lifecycle claim. |
 
 The latest observations are from commit
-`3baf0c6f661c2e6d36336c64ae836d9ed5ed0fde` in the
-[native artifact validation job](https://github.com/alcimerio/ai-config-selector/actions/runs/35366014035/job/105668723178).
-The shared native gates, both plugin cases and both paired agent catalog cases
-passed. The corrected Devin hook gate passed three repetitions in 7.30, 7.00
-and 7.10 seconds. Whole-test durations are not hook latency measurements.
-The assessment job failed only in Codex hook discovery: its positive and
-malformed-definition Sessions each tripped the local backend-request counter.
-The original counter does not distinguish metadata discovery from inference.
+`8aca958410d26a7762106e760d945f2aa466d9c0` in the
+[promoted artifact validation job](https://github.com/alcimerio/ai-config-selector/actions/runs/35369714139/job/105680652306).
+The shared native gates, both plugin cases, both paired agent catalog cases,
+Codex hook discovery, and three Devin hook repetitions passed. The Codex
+plugin Session recorded zero HTTP requests. Each fresh Codex hook Session
+recorded one exact optional metadata request, with forbidden and overflow
+counters both zero. The Devin hook repetitions took 10.00, 10.00 and 9.36
+seconds; whole-test durations are not hook latency measurements.
+
+The allowed Codex startup request is source-backed, not an inferred model
+request: pinned [`remote_legacy.rs:123-157`](https://github.com/openai/codex/blob/ff29a44391deccde0aba0f8390337d7f3c319ea4/codex-rs/core-plugins/src/remote_legacy.rs#L123-L157)
+issues the optional authless `GET /plugins/featured?platform=codex` with an
+empty body. The fixture returns the existing empty 501 response and provides
+no successful inference or catalog response. Any other route, method, query, body,
+credential header, duplicate, or overflow remains forbidden.
+
+At `3baf0c6f661c2e6d36336c64ae836d9ed5ed0fde`, the
+[preceding discovery job](https://github.com/alcimerio/ai-config-selector/actions/runs/35366014035/job/105668723178)
+passed both plugin cases, both paired catalogs, and three Devin hook repetitions
+(7.30, 7.00 and 7.10 seconds). Codex hook discovery failed only its aggregate
+backend-request counter. That counter did not record the request shape, so the
+later result does not retrospectively classify those earlier requests.
 
 At `4702915ccddbc6aaa9feb18282fb01451eb85a91`, the
 [preceding correction job](https://github.com/alcimerio/ai-config-selector/actions/runs/35363616409/job/105660790373)
@@ -89,9 +103,11 @@ Discovery diagnostics now distinguish an early Codex process exit from a slow
 protocol response. Source comparison found that the direct fixture omitted the
 exact optional system-requirements probe already supplied by the production
 Codex executor. The Devin requests were known startup routes, with no model or
-unknown route observed. After aligning the exact system-file probe and bounded synthetic startup
-replies, both plugin cases passed. The remaining Codex hook backend request
-requires separate classification; no production extension support follows.
+unknown route observed. After aligning the exact system-file probe and bounded
+synthetic startup replies, both plugin cases passed. The earlier Codex hook
+backend-request failure is retained as history; the latest run classified one
+source-backed optional metadata request per fresh hook Session. No production
+extension support follows.
 
 The installed discovery definition is deliberately narrower than the product
 matrix: it is a bounded black-box observation of target discovery and request
