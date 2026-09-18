@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -315,6 +317,334 @@ func nativeMCPFunctionCallOutputEnvelope(body, callID string) error {
 		return fmt.Errorf("function output count=%d, want one", count)
 	}
 	return nil
+}
+
+// The grammar is pinned to Codex 0.149.1. Description text is not capability proof.
+const nativeMCPExecGrammar = `start: pragma_source | plain_source
+pragma_source: PRAGMA_LINE NEWLINE SOURCE
+plain_source: SOURCE
+
+PRAGMA_LINE: /[ \t]*\/\/ @exec:[^\r\n]*/
+NEWLINE: /\r?\n/
+SOURCE: /[\s\S]+/`
+
+func nativeMCPHasExec(body string) (bool, error) {
+	// Reuse the structural inventory validation (including duplicate/mixed forms).
+	if _, err := nativeMCPInventoryHasType(body, "custom"); err != nil {
+		return false, err
+	}
+	var request map[string]any
+	if err := json.Unmarshal([]byte(body), &request); err != nil {
+		return false, errors.New("invalid exec inventory")
+	}
+	tools, _ := request["tools"].([]any)
+	if input, ok := request["input"].([]any); ok {
+		for _, raw := range input {
+			if item, ok := raw.(map[string]any); ok && item["type"] == "additional_tools" {
+				tools, _ = item["tools"].([]any)
+			}
+		}
+	}
+	count, namespaces := 0, 0
+	for _, raw := range tools {
+		entry, _ := raw.(map[string]any)
+		if entry["type"] != "namespace" || entry["name"] != "functions" {
+			continue
+		}
+		namespaces++
+		members, ok := entry["tools"].([]any)
+		if !ok {
+			return false, errors.New("malformed functions namespace")
+		}
+		for _, raw := range members {
+			tool, ok := raw.(map[string]any)
+			if !ok {
+				return false, errors.New("malformed functions member")
+			}
+			if tool["name"] != "exec" {
+				continue
+			}
+			format, ok := tool["format"].(map[string]any)
+			definition, _ := format["definition"].(string)
+			if tool["type"] != "custom" || !ok || format["type"] != "grammar" || format["syntax"] != "lark" || strings.TrimSpace(definition) != nativeMCPExecGrammar {
+				return false, errors.New("exec declaration does not match pinned grammar")
+			}
+			count++
+		}
+	}
+	if namespaces > 1 || count > 1 {
+		return false, errors.New("duplicate functions exec inventory")
+	}
+	return count == 1, nil
+}
+
+// Only these four known fixture identifiers leave the target. ALL_TOOLS has no schema.
+func nativeMCPDiscoverySource() string {
+	return `// @exec: {"yield_time_ms":10000,"max_output_tokens":1024}
+text(Object.fromEntries(["fixture__allowed","mcp__fixture__allowed","fixture__blocked","mcp__fixture__blocked"].map(name => [name, ALL_TOOLS.filter(tool => tool.name === name).length])));`
+}
+
+func nativeMCPInvocationSource(namespace, name, arguments string) string {
+	return "// @exec: {\"yield_time_ms\":10000,\"max_output_tokens\":1024}\ntext(await tools." + namespace + "__" + name + "(" + arguments + "));"
+}
+
+func nativeMCPInputItem(body, callID, kind string) (map[string]any, error) {
+	var request map[string]any
+	if err := json.Unmarshal([]byte(body), &request); err != nil {
+		return nil, errors.New("invalid tool request JSON")
+	}
+	input, ok := request["input"].([]any)
+	if !ok {
+		return nil, errors.New("tool request lacks input array")
+	}
+	var found map[string]any
+	for _, raw := range input {
+		item, ok := raw.(map[string]any)
+		if !ok || item["type"] != kind || item["call_id"] != callID {
+			continue
+		}
+		if found != nil {
+			return nil, errors.New("duplicate pending tool item")
+		}
+		found = item
+	}
+	if found == nil {
+		return nil, errors.New("pending tool item missing")
+	}
+	return found, nil
+}
+
+func nativeMCPRequireCustomCall(body, callID string) (string, error) {
+	item, err := nativeMCPInputItem(body, callID, "custom_tool_call")
+	if err != nil {
+		return "", err
+	}
+	source, ok := item["input"].(string)
+	if item["namespace"] != "functions" || item["name"] != "exec" || !ok || source != nativeMCPDiscoverySource() {
+		return "", errors.New("custom discovery call mismatch")
+	}
+	return source, nil
+}
+
+func nativeMCPRequireObservedCustomIdentity(body, callID, namespace, name string) error {
+	item, err := nativeMCPInputItem(body, callID, "custom_tool_call")
+	if err != nil {
+		return err
+	}
+	source, ok := item["input"].(string)
+	if item["namespace"] != namespace || item["name"] != name || !ok || source == "" {
+		return errors.New("custom invocation identity mismatch")
+	}
+	return nil
+}
+
+func nativeMCPRequireInvocation(body, callID, source string) error {
+	if err := nativeMCPRequireObservedCustomIdentity(body, callID, "functions", "exec"); err != nil {
+		return err
+	}
+	item, _ := nativeMCPInputItem(body, callID, "custom_tool_call")
+	if item["input"] != source {
+		return errors.New("custom invocation source mismatch")
+	}
+	return nil
+}
+
+func nativeMCPRequireCustomOutput(body, callID string) error {
+	_, err := nativeMCPRequireCustomOutputText(body, callID)
+	return err
+}
+
+// Code mode prepends a status text item, not an envelope success boolean. This
+// bounded fixture deliberately fails a yielded script; it never treats running
+// output as completion. Native evidence will determine whether waits are needed.
+func nativeMCPRequireCustomOutputText(body, callID string) (string, error) {
+	item, err := nativeMCPInputItem(body, callID, "custom_tool_call_output")
+	if err != nil {
+		return "", err
+	}
+	var parts []string
+	switch value := item["output"].(type) {
+	case string:
+		parts = []string{value}
+	case []any:
+		if len(value) == 0 || len(value) > 16 {
+			return "", errors.New("invalid exec content count")
+		}
+		for _, raw := range value {
+			part, ok := raw.(map[string]any)
+			if !ok || part["type"] != "input_text" {
+				return "", errors.New("unexpected exec content type")
+			}
+			text, ok := part["text"].(string)
+			if !ok {
+				return "", errors.New("invalid exec text")
+			}
+			parts = append(parts, text)
+		}
+	default:
+		return "", errors.New("invalid exec output")
+	}
+	length := 0
+	for _, part := range parts {
+		length += len(part)
+	}
+	if length > 16384 {
+		return "", errors.New("exec output exceeds fixture bound")
+	}
+	// The first text item owns the complete header. Payload cannot supply it.
+	first := parts[0]
+	lines := strings.SplitN(first, "\n", 4)
+	if len(lines) != 4 || lines[0] != "Script completed" || lines[2] != "Output:" {
+		return "", errors.New("exec did not complete (yield/failure/invalid status)")
+	}
+	if !regexp.MustCompile(`^Wall time [0-9]+\.[0-9] seconds$`).MatchString(lines[1]) {
+		return "", errors.New("invalid exec wall time header")
+	}
+	payload := lines[3]
+	for _, part := range parts[1:] {
+		payload += part
+	}
+	if strings.TrimSpace(payload) == "" {
+		return "", errors.New("exec completed without fixture result")
+	}
+	return payload, nil
+}
+
+// Decode JSON with duplicate-key rejection, including nested MCP result objects.
+func nativeMCPUniqueJSON(payload string) (any, error) {
+	decoder := json.NewDecoder(strings.NewReader(payload))
+	decoder.UseNumber()
+	var read func(int) (any, error)
+	read = func(depth int) (any, error) {
+		if depth > 16 {
+			return nil, errors.New("fixture JSON nesting exceeds bound")
+		}
+		token, err := decoder.Token()
+		if err != nil {
+			return nil, err
+		}
+		switch token {
+		case json.Delim('{'):
+			object := map[string]any{}
+			for decoder.More() {
+				key, err := decoder.Token()
+				if err != nil {
+					return nil, err
+				}
+				name, ok := key.(string)
+				if !ok {
+					return nil, errors.New("invalid JSON key")
+				}
+				if _, exists := object[name]; exists {
+					return nil, errors.New("duplicate JSON key")
+				}
+				value, err := read(depth + 1)
+				if err != nil {
+					return nil, err
+				}
+				object[name] = value
+			}
+			end, err := decoder.Token()
+			if err != nil || end != json.Delim('}') {
+				return nil, errors.New("invalid JSON object")
+			}
+			return object, nil
+		case json.Delim('['):
+			array := []any{}
+			for decoder.More() {
+				value, err := read(depth + 1)
+				if err != nil {
+					return nil, err
+				}
+				array = append(array, value)
+			}
+			end, err := decoder.Token()
+			if err != nil || end != json.Delim(']') {
+				return nil, errors.New("invalid JSON array")
+			}
+			return array, nil
+		default:
+			return token, nil
+		}
+	}
+	value, err := read(0)
+	if err != nil {
+		return nil, errors.New("invalid fixture JSON")
+	}
+	if _, err := decoder.Token(); err != io.EOF {
+		return nil, errors.New("trailing fixture JSON")
+	}
+	return value, nil
+}
+
+func nativeMCPCustomDiscoveryIdentity(body, callID, serverID, toolName, blocked string) (string, string, error) {
+	payload, err := nativeMCPRequireCustomOutputText(body, callID)
+	if err != nil {
+		return "", "", err
+	}
+	value, err := nativeMCPUniqueJSON(payload)
+	if err != nil {
+		return "", "", err
+	}
+	counts, ok := value.(map[string]any)
+	if !ok || len(counts) != 4 {
+		return "", "", errors.New("discovery requires exactly four counts")
+	}
+	keys := []string{serverID + "__" + toolName, "mcp__" + serverID + "__" + toolName, serverID + "__" + blocked, "mcp__" + serverID + "__" + blocked}
+	numbers := [4]int64{}
+	for index, key := range keys {
+		number, ok := counts[key].(json.Number)
+		if !ok {
+			return "", "", errors.New("discovery count missing or nonnumeric")
+		}
+		count, err := number.Int64()
+		if err != nil || count < 0 || count > 1 {
+			return "", "", errors.New("discovery count not zero or one")
+		}
+		numbers[index] = count
+	}
+	if numbers[0]+numbers[1] != 1 || numbers[2] != 0 || numbers[3] != 0 {
+		return "", "", errors.New("discovery is ambiguous or exposes disabled tool")
+	}
+	namespace := serverID
+	if numbers[1] == 1 {
+		namespace = "mcp__" + serverID
+	}
+	return namespace, toolName, nil
+}
+
+func nativeMCPCustomMCPResult(body, callID string) (string, error) {
+	payload, err := nativeMCPRequireCustomOutputText(body, callID)
+	if err != nil {
+		return "", err
+	}
+	value, err := nativeMCPUniqueJSON(payload)
+	if err != nil {
+		return "", err
+	}
+	result, ok := value.(map[string]any)
+	if !ok {
+		return "", errors.New("MCP result is not an object")
+	}
+	if flag, present := result["isError"]; present {
+		failed, ok := flag.(bool)
+		if !ok || failed {
+			return "", errors.New("MCP call reported an error")
+		}
+	}
+	content, ok := result["content"].([]any)
+	if !ok || len(content) != 1 {
+		return "", errors.New("MCP fixture result content mismatch")
+	}
+	item, ok := content[0].(map[string]any)
+	if !ok || item["type"] != "text" {
+		return "", errors.New("MCP fixture result is not text")
+	}
+	text, ok := item["text"].(string)
+	if !ok || !regexp.MustCompile(`^mcp-fixture-call-ok mcp-secret-environment-ok descendant-pid:[0-9]+$`).MatchString(text) {
+		return "", errors.New("MCP fixture result missing exact receipts")
+	}
+	return text, nil
 }
 
 // nativeMCPInventoryStructure returns only bounded structural facts needed to
@@ -734,5 +1064,209 @@ func TestNativeMCPInventoryStructureIsBoundedAndClassifiesDiscovery(t *testing.T
 	knownNamespace := `{"input":[{"type":"additional_tools","role":"developer","tools":[{"type":"namespace","name":"collaboration","tools":[{"type":"function","name":"spawn_agent"}]},{"type":"namespace","name":"mystery","tools":[{"type":"custom","name":"exec"}]}]}]}`
 	if got := nativeMCPInventoryStructure(knownNamespace, "fixture", "allowed"); !strings.Contains(got, "known-ns=collaboration:true,clock:false,web:false,image_gen:false") || !strings.Contains(got, "custom-exec=false") {
 		t.Fatalf("namespace identity classification=%q", got)
+	}
+}
+
+func nativeMCPTestOutput(value any, history ...any) string {
+	input := append(history, map[string]any{"type": "custom_tool_call_output", "call_id": "pending", "output": value})
+	b, _ := json.Marshal(map[string]any{"input": input})
+	return string(b)
+}
+func nativeMCPTestParts(status, payload string) []any {
+	return []any{map[string]any{"type": "input_text", "text": status + "\nWall time 0.1 seconds\nOutput:\n"}, map[string]any{"type": "input_text", "text": payload}}
+}
+
+const nativeMCPTestCounts = `{"mcp__fixture__allowed":1,"fixture__allowed":0,"mcp__fixture__blocked":0,"fixture__blocked":0}`
+
+func TestNativeMCPCodeModeDiscoveryValidation(t *testing.T) {
+	for _, tc := range []struct {
+		name, payload, status string
+		valid                 bool
+		namespace             string
+	}{
+		{"prefixed", nativeMCPTestCounts, "Script completed", true, "mcp__fixture"},
+		{"unprefixed", `{"mcp__fixture__allowed":0,"fixture__allowed":1,"mcp__fixture__blocked":0,"fixture__blocked":0}`, "Script completed", true, "fixture"},
+		{"unprefixed_blocked", strings.Replace(nativeMCPTestCounts, `"fixture__blocked":0`, `"fixture__blocked":1`, 1), "Script completed", false, ""},
+		{"omitted_keys", `{"mcp__fixture__allowed":1,"mcp__fixture__blocked":0}`, "Script completed", false, ""},
+		{"unknown_key", strings.TrimSuffix(nativeMCPTestCounts, "}") + `,"unexpected":0}`, "Script completed", false, ""},
+		{"fractional_unprefixed_blocked", strings.Replace(nativeMCPTestCounts, `"fixture__blocked":0`, `"fixture__blocked":0.5`, 1), "Script completed", false, ""},
+		{"wrong_type_unprefixed_allowed", strings.Replace(nativeMCPTestCounts, `"fixture__allowed":0`, `"fixture__allowed":"0"`, 1), "Script completed", false, ""},
+		{"duplicate_json_key", strings.TrimSuffix(nativeMCPTestCounts, "}") + `,"fixture__blocked":1}`, "Script completed", false, ""},
+		{"running", nativeMCPTestCounts, "Script running with cell ID g2:1", false, ""},
+		{"failed", nativeMCPTestCounts, "Script failed", false, ""},
+		{"terminated", nativeMCPTestCounts, "Script terminated", false, ""},
+		{"missing_header", nativeMCPTestCounts, "", false, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ns, name, err := nativeMCPCustomDiscoveryIdentity(nativeMCPTestOutput(nativeMCPTestParts(tc.status, tc.payload)), "pending", "fixture", "allowed", "blocked")
+			if tc.valid {
+				if err != nil || ns != tc.namespace || name != "allowed" {
+					t.Fatalf("valid identity rejected: %s/%s %v", ns, name, err)
+				}
+			} else if err == nil {
+				t.Fatalf("invalid discovery accepted: %s/%s", ns, name)
+			}
+		})
+	}
+}
+func TestNativeMCPCodeModeMalformedContent(t *testing.T) {
+	parts := append(nativeMCPTestParts("Script completed", nativeMCPTestCounts), map[string]any{"type": "input_image", "image_url": "synthetic"})
+	if _, _, err := nativeMCPCustomDiscoveryIdentity(nativeMCPTestOutput(parts), "pending", "fixture", "allowed", "blocked"); err == nil {
+		t.Fatal("unexpected content ignored")
+	}
+}
+func TestNativeMCPCodeModeHistoricalAndDuplicateCorrelation(t *testing.T) {
+	old := map[string]any{"type": "custom_tool_call_output", "call_id": "older", "output": "older irrelevant"}
+	valid := nativeMCPTestOutput(nativeMCPTestParts("Script completed", nativeMCPTestCounts), old, map[string]any{"type": "message", "role": "user", "content": "fixture"})
+	if _, _, err := nativeMCPCustomDiscoveryIdentity(valid, "pending", "fixture", "allowed", "blocked"); err != nil {
+		t.Fatalf("legitimate history rejected: %v", err)
+	}
+	duplicate := map[string]any{"type": "custom_tool_call_output", "call_id": "pending", "output": nativeMCPTestParts("Script completed", nativeMCPTestCounts)}
+	if _, _, err := nativeMCPCustomDiscoveryIdentity(nativeMCPTestOutput(nativeMCPTestParts("Script completed", nativeMCPTestCounts), duplicate), "pending", "fixture", "allowed", "blocked"); err == nil {
+		t.Fatal("duplicate pending accepted")
+	}
+}
+func TestNativeMCPCodeModeOutputEnvelopeNotCompletion(t *testing.T) {
+	for _, value := range []any{nil, 3, nativeMCPTestParts("Script failed", ""), nativeMCPTestParts("Script running with cell ID g2:1", "")} {
+		if err := nativeMCPRequireCustomOutput(nativeMCPTestOutput(value), "pending"); err == nil {
+			t.Errorf("incomplete or malformed output accepted: %#v", value)
+		}
+	}
+}
+
+func nativeMCPTestExecInventory(namespace, kind, syntax, grammar string, copies int, lite bool) string {
+	members := []any{}
+	for i := 0; i < copies; i++ {
+		members = append(members, map[string]any{"type": kind, "name": "exec", "format": map[string]any{"type": "grammar", "syntax": syntax, "definition": grammar}})
+	}
+	tools := []any{map[string]any{"type": "namespace", "name": namespace, "tools": members}}
+	request := map[string]any{"tools": tools}
+	if lite {
+		request = map[string]any{"tools": nil, "input": []any{map[string]any{"type": "additional_tools", "role": "developer", "tools": tools}}}
+	}
+	b, _ := json.Marshal(request)
+	return string(b)
+}
+
+func TestNativeMCPCodeModeAdvertisedExec(t *testing.T) {
+	for _, lite := range []bool{false, true} {
+		body := nativeMCPTestExecInventory("functions", "custom", "lark", "\n"+nativeMCPExecGrammar+"\n", 1, lite)
+		if found, err := nativeMCPHasExec(body); err != nil || !found {
+			t.Fatalf("valid exec rejected: %v", err)
+		}
+	}
+	for _, tc := range []struct {
+		name, namespace, kind, syntax, grammar string
+		copies                                 int
+	}{
+		{"wrong namespace", "other", "custom", "lark", nativeMCPExecGrammar, 1},
+		{"wrong type", "functions", "function", "lark", nativeMCPExecGrammar, 1},
+		{"wrong syntax", "functions", "custom", "regex", nativeMCPExecGrammar, 1},
+		{"wrong grammar", "functions", "custom", "lark", "start: BAD", 1},
+		{"duplicate exec", "functions", "custom", "lark", nativeMCPExecGrammar, 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if found, err := nativeMCPHasExec(nativeMCPTestExecInventory(tc.namespace, tc.kind, tc.syntax, tc.grammar, tc.copies, false)); err == nil && found {
+				t.Fatal("unadvertised/ambiguous exec accepted")
+			}
+		})
+	}
+	body := nativeMCPTestExecInventory("functions", "custom", "lark", nativeMCPExecGrammar, 1, false)
+	var request map[string]any
+	_ = json.Unmarshal([]byte(body), &request)
+	tools := request["tools"].([]any)
+	request["tools"] = append(tools, tools[0])
+	b, _ := json.Marshal(request)
+	if found, err := nativeMCPHasExec(string(b)); err == nil || found {
+		t.Fatal("duplicate functions namespace accepted")
+	}
+	request["tools"] = tools
+	request["input"] = []any{map[string]any{"type": "additional_tools", "role": "developer", "tools": tools}}
+	b, _ = json.Marshal(request)
+	if found, err := nativeMCPHasExec(string(b)); err == nil || found {
+		t.Fatal("mixed inventories accepted")
+	}
+}
+
+func TestNativeMCPCodeModeExactEcho(t *testing.T) {
+	for _, tc := range []struct {
+		callID, source string
+		discovery      bool
+	}{
+		{"discover", nativeMCPDiscoverySource(), true},
+		{"invoke", nativeMCPInvocationSource("fixture", "allowed", `{"value":"v","input":"i"}`), false},
+	} {
+		check := func(body string) error {
+			if tc.discovery {
+				_, err := nativeMCPRequireCustomCall(body, tc.callID)
+				return err
+			}
+			return nativeMCPRequireInvocation(body, tc.callID, tc.source)
+		}
+		call := map[string]any{"type": "custom_tool_call", "namespace": "functions", "name": "exec", "call_id": tc.callID, "input": tc.source}
+		encode := func(items ...any) string { b, _ := json.Marshal(map[string]any{"input": items}); return string(b) }
+		old := map[string]any{"type": "custom_tool_call", "namespace": "functions", "name": "exec", "call_id": "old", "input": "old"}
+		if err := check(encode(old, call)); err != nil {
+			t.Fatalf("valid history rejected: %v", err)
+		}
+		if err := check(encode(call, call)); err == nil {
+			t.Fatal("duplicate pending call accepted")
+		}
+		for key, wrong := range map[string]string{"type": "function_call", "namespace": "fixture", "name": "allowed", "call_id": "other", "input": tc.source + "\ntext('changed');"} {
+			original := call[key]
+			call[key] = wrong
+			if err := check(encode(call)); err == nil {
+				t.Errorf("changed %s accepted", key)
+			}
+			call[key] = original
+		}
+	}
+}
+
+func TestNativeMCPCodeModeResult(t *testing.T) {
+	const text = "mcp-fixture-call-ok mcp-secret-environment-ok descendant-pid:4242"
+	const payload = `{"content":[{"type":"text","text":"` + text + `"}]}`
+	for _, output := range []any{nativeMCPTestParts("Script completed", payload), "Script completed\nWall time 0.1 seconds\nOutput:\n" + payload} {
+		got, err := nativeMCPCustomMCPResult(nativeMCPTestOutput(output), "pending")
+		if err != nil || got != text {
+			t.Fatalf("real MCP result rejected: %q %v", got, err)
+		}
+	}
+	for _, bad := range []string{
+		`{"isError":true,"content":[{"type":"text","text":"` + text + `"}]}`,
+		`{"isError":"false","content":[{"type":"text","text":"` + text + `"}]}`,
+		`{"content":[],"structuredContent":{"text":"` + text + `"}}`,
+		`{"content":[{"type":"image","text":"` + text + `"}]}`,
+		`{"content":[{"type":"text","text":"mcp-fixture-call-ok"}]}`,
+		`{"content":[{"type":"text","text":"wrong"},{"type":"text","text":"` + text + `"}]}`,
+		payload + payload,
+		strings.Replace(payload, `"content":`, `"content":[],"content":`, 1),
+	} {
+		if _, err := nativeMCPCustomMCPResult(nativeMCPTestOutput(nativeMCPTestParts("Script completed", bad)), "pending"); err == nil {
+			t.Errorf("bad MCP result accepted: %s", bad)
+		}
+	}
+}
+
+func TestNativeMCPCodeModeOutputBoundaries(t *testing.T) {
+	for _, output := range []any{
+		[]any{map[string]any{"type": "input_text", "text": "Script completed\nWall time 0.1 seconds\n"}, map[string]any{"type": "input_text", "text": "Output:\n" + nativeMCPTestCounts}},
+		[]any{map[string]any{"type": "input_text", "text": 1}},
+		"prefix Script completed\nWall time 0.1 seconds\nOutput:\n" + nativeMCPTestCounts,
+		"Script completed\nWall time invalid seconds\nOutput:\n" + nativeMCPTestCounts,
+		"Script completed\nWall time 0.1 seconds\nOutput:\n" + strings.Repeat("x", 17000),
+	} {
+		if _, err := nativeMCPRequireCustomOutputText(nativeMCPTestOutput(output), "pending"); err == nil {
+			t.Fatal("malformed/oversized output accepted")
+		}
+	}
+	for _, payload := range []string{nativeMCPTestCounts + " trailing", "prefix " + nativeMCPTestCounts, nativeMCPTestCounts + nativeMCPTestCounts, strings.TrimSuffix(nativeMCPTestCounts, "}")} {
+		if _, _, err := nativeMCPCustomDiscoveryIdentity(nativeMCPTestOutput(nativeMCPTestParts("Script completed", payload)), "pending", "fixture", "allowed", "blocked"); err == nil {
+			t.Fatal("nonexact JSON payload accepted")
+		}
+	}
+	body := nativeMCPTestOutput(nativeMCPTestParts("Script completed", nativeMCPTestCounts))
+	if _, _, err := nativeMCPCustomDiscoveryIdentity(strings.Replace(body, "custom_tool_call_output", "function_call_output", 1), "pending", "fixture", "allowed", "blocked"); err == nil {
+		t.Fatal("wrong result type accepted")
 	}
 }
