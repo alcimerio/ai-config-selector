@@ -48,28 +48,41 @@ ACS Profile capability. The rows distinguish prepared cases from observed runs.
 
 | Target / concept | Observable and negative case | Status and limit |
 | --- | --- | --- |
-| Codex plugin | `TestNativeInstalledExtensionDiscovery` adds a local marketplace, checks available and installed package identity, and checks missing-plugin refusal with unchanged inventory. | Failed at local marketplace addition (target exit 1); inventory and negative case were not reached. No plugin tool execution or runtime authority claim. |
-| Devin plugin | `TestNativeInstalledExtensionDiscovery` installs a local package, checks its identity and Skill inventory, and checks malformed-package refusal with unchanged inventory. | Failed at local installation (target exit 1), with backend activity of unknown purpose. Inventory and malformed-package case were not reached; no lifecycle support claim. |
-| Codex hook | `TestNativeInstalledExtensionDiscovery` checks untrusted hook discovery metadata and normalized hash, absence of the execution tripwire, and malformed-definition reporting in a fresh Session. | Failed in the protocol/settlement path; the original diagnostic does not identify the stage. The malformed-definition case was not reached; no hook execution or child lifecycle claim. |
-| Devin hook | `TestPromotedArtifactNativeDevinSessionStartHook` observes a selected project hook, receipt, selected-input read, protected/outside write denials, and existing MCP/Session checks. | One earlier run passed; the latest three repetitions all failed before a valid receipt. Prior failures remain unresolved. Receipt or diagnostic absence cannot prove non-invocation; MCP cleanup is not hook-child cleanup proof. |
-| Codex role/agent | `TestNativeInstalledCustomCodexAgentDiscovery` checks the initial Responses request for the exact custom role catalog entry in selected and absent cases. | Selected and absent cases passed (23.40 seconds total); no child-agent invocation, custom-instruction execution, or independent agent authority claim. |
-| Devin custom agent | `TestPromotedArtifactNativeCustomDevinAgentDiscovery` checks the initial request system catalog for the exact Markdown profile entry in selected and absent cases. | Selected and absent cases passed (17.97 seconds total); no child-agent invocation or child lifecycle claim. |
+| Codex plugin | `TestNativeInstalledExtensionDiscovery` adds a local marketplace, checks available and installed package identity, and checks missing-plugin refusal with unchanged inventory. | Failed at local marketplace addition (target exit 1, configuration-load error family); inventory and negative case were not reached. No plugin tool execution or runtime authority claim. |
+| Devin plugin | `TestNativeInstalledExtensionDiscovery` installs a local package, checks its identity and Skill inventory, and checks malformed-package refusal with unchanged inventory. | Failed at local installation (target exit 1), with one team-settings, one user-status and one analytics request. Inventory and malformed-package case were not reached; no lifecycle support claim. |
+| Codex hook | `TestNativeInstalledExtensionDiscovery` checks untrusted hook discovery metadata and normalized hash, absence of the execution tripwire, and malformed-definition reporting in a fresh Session. | Exited with status 1 and a permission error family before the initialize response; cleanup passed. The malformed-definition case was not reached; no hook execution or child lifecycle claim. |
+| Devin hook | `TestPromotedArtifactNativeDevinSessionStartHook` observes a selected project hook, receipt, selected-input read, protected/outside write denials, and existing MCP/Session checks. | Three repetitions passed after the receipt-gate correction. Earlier failed runs remain recorded; the old logs cannot prove that every failure was a benign race. Receipt or diagnostic absence cannot prove non-invocation; MCP cleanup is not hook-child cleanup proof. |
+| Codex role/agent | `TestNativeInstalledCustomCodexAgentDiscovery` checks the initial Responses request for the exact custom role catalog entry in selected and absent cases. | Selected and absent cases passed again (19.09 seconds total); no child-agent invocation, custom-instruction execution, or independent agent authority claim. |
+| Devin custom agent | `TestPromotedArtifactNativeCustomDevinAgentDiscovery` checks the initial request system catalog for the exact Markdown profile entry in selected and absent cases. | Selected and absent cases passed again (14.86 seconds total); no child-agent invocation or child lifecycle claim. |
 
-These latest outcomes were observed at commit
-`e897b57c8ba7dc68fabd9ed980e0d820a04a2e42` in the
-[native artifact validation job](https://github.com/alcimerio/ai-config-selector/actions/runs/35360789038/job/105651406882).
-The shared native candidate gates passed; the assessment job failed. The three
-hook repetitions failed in 5.38, 5.27 and 4.97 seconds, respectively; only the
-third reported an invocation marker. These are whole-test durations, not hook
-latency measurements. The earlier single hook pass was observed at `91dae608`
-in [its native job](https://github.com/alcimerio/ai-config-selector/actions/runs/35358006972/job/105642152984).
+The latest observations are from commit
+`4702915ccddbc6aaa9feb18282fb01451eb85a91` in the
+[native artifact validation job](https://github.com/alcimerio/ai-config-selector/actions/runs/35363616409/job/105660790373).
+The shared native candidate gates passed; the assessment job failed only in
+installed discovery. The corrected hook gate passed three fresh repetitions in
+8.43, 8.69 and 9.02 seconds. These are whole-test durations, not hook latency.
+Both custom-agent catalog suites passed their selected and absent cases again.
 
-The hook fixture assumed that an editable initial screen implied receipt
-publication. Source inspection identified that unsupported synchronization
-assumption. Missing-receipt errors in the failed run discarded the underlying
-error category, so the logs cannot prove that all failures were benign races or
-would eventually have succeeded. Discovery failures also need more precise
-diagnostics before configuration or target-contract changes are justified.
+At `e897b57c8ba7dc68fabd9ed980e0d820a04a2e42`, the
+[preceding native job](https://github.com/alcimerio/ai-config-selector/actions/runs/35360789038/job/105651406882)
+passed both catalog suites but failed discovery and all three hook repetitions
+(5.38, 5.27 and 4.97 seconds); only the third reported an invocation marker.
+An earlier single hook pass was observed at `91dae608` in
+[its native job](https://github.com/alcimerio/ai-config-selector/actions/runs/35358006972/job/105642152984),
+after the original receipt-unavailable failure.
+
+The hook fixture had assumed that an editable initial screen implied receipt
+publication. The corrected gate waits for a valid receipt before producing
+first input and uses the existing ticker and deadline. Earlier error messages
+discarded the underlying error category, so later passes cannot prove that all
+prior failures were benign races or would eventually have succeeded.
+
+Discovery diagnostics now distinguish an early Codex process exit from a slow
+protocol response. Source comparison found that the direct fixture omitted the
+exact optional system-requirements probe already supplied by the production
+Codex executor. The Devin requests were known startup routes, with no model or
+unknown route observed. Corrected synthetic startup prerequisites require their
+own native validation; neither diagnosis adds production extension support.
 
 The installed discovery definition is deliberately narrower than the product
 matrix: it is a bounded black-box observation of target discovery and request
@@ -126,8 +139,9 @@ metadata, not public Profile activation or a general extension capability.
   other-error policy beyond the documented table, detached-child cleanup and
   fail-open behavior as ACS enforcement. One native observation passed and
   established the selected hook's observed physical effects; an earlier
-  receipt-unavailable failure and the latest three failures remain unresolved.
-  Diagnostic publication is best-effort; absence cannot prove non-invocation.
+  receipt-unavailable failure and three later failures remain recorded. The
+  corrected gate subsequently passed three fresh native cases. Diagnostic
+  publication is best-effort; absence cannot prove non-invocation.
 
 ### Codex roles/agents
 
@@ -228,8 +242,9 @@ disappear.
 The native hook test is enabled only in the separate promoted-artifacts CI
 step with explicit opt-in. One promoted run passed and established the
 selected hook's observed physical effects; an earlier run failed before a
-valid receipt and remains unexplained, and the latest three repetitions also
-failed before a valid receipt. A fixed-code diagnostic sidecar offers
+valid receipt, and three later repetitions also failed. The corrected gate
+subsequently passed three fresh native repetitions; earlier erased error
+categories prevent attributing every past failure to the same cause. A fixed-code diagnostic sidecar offers
 best-effort invocation/stage context without exposing event data or paths;
 absence of a diagnostic or receipt cannot prove non-invocation.
 
@@ -242,12 +257,12 @@ publication, PID/PPID/session/executable/input evidence, and a first-input gate.
 Existing MCP, public ACS, live-session, natural-exit and descendant checks remain
 unchanged. The native glue now validates the receipt before successful
 completion acknowledgement. One native run passed, while an earlier failure
-before a valid receipt remains unexplained and the latest three repetitions
-also failed. The revised gate keeps first input pending only for genuine
-missing receipt/marker leaves, uses the existing ticker and deadline, and
-refuses unsafe or malformed proof immediately. Its portable regression passed;
-the revision still requires native validation and does not explain every prior
-failure.
+before a valid receipt remains unexplained and three subsequent repetitions
+also failed before the correction. The revised gate keeps first input pending
+only for genuine missing receipt/marker leaves, uses the existing ticker and
+deadline, and refuses unsafe or malformed proof immediately. Its portable
+regression and three fresh native repetitions passed; that evidence does not
+explain every prior failure.
 Independently reviewed source is not runtime evidence. MCP evidence is not
 presented as hook-child cleanup evidence.
 

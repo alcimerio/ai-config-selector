@@ -37,9 +37,11 @@ type discoverySession struct {
 	label             string
 	environment       *environmentresource.Lease
 	diagnostic        string
+	request           launch.ProcessRequest
+	startup           *discoveryStartup
 }
 
-func newDiscoverySession(t *testing.T, ctx context.Context, target, label string) *discoverySession {
+func newDiscoverySession(t *testing.T, ctx context.Context, target, kind, label string) *discoverySession {
 	t.Helper()
 	root, err := os.MkdirTemp("", "acs-discovery-")
 	if err != nil {
@@ -58,10 +60,11 @@ func newDiscoverySession(t *testing.T, ctx context.Context, target, label string
 		t.Fatal(e)
 	}
 	sandbox := launch.NewProcessSandbox()
-	if e = sandbox.Check(ctx, launch.SandboxCheck{Workspace: workspace, WorkspaceAccess: launch.WorkspaceAccessReadWrite, SessionsDirectory: created.SessionsDirectory(), Executable: target}); e != nil {
+	check, request := discoverySandboxRequests(kind, launch.ProcessRequest{Workspace: workspace, WorkspaceAccess: launch.WorkspaceAccessReadWrite, SessionsDirectory: created.SessionsDirectory(), SessionDirectory: created.RootDirectory(), SessionHome: created.HomeDirectory(), TemporaryDirectory: created.TemporaryDirectory(), Executable: target})
+	if e = sandbox.Check(ctx, check); e != nil {
 		t.Fatal(e)
 	}
-	s := &discoverySession{t: t, ctx: ctx, created: created, sandbox: sandbox, target: target, workspace: workspace, label: label}
+	s := &discoverySession{t: t, ctx: ctx, created: created, sandbox: sandbox, target: target, workspace: workspace, label: label, request: request}
 	t.Cleanup(func() {
 		if e := created.Remove(); e != nil {
 			t.Error("discovery Session removal failed; preserving private root")
@@ -84,7 +87,12 @@ func (s *discoverySession) prepare(ctx context.Context, args []string, in io.Rea
 	if e != nil {
 		return nil, e
 	}
-	p, e := s.sandbox.Prepare(ctx, launch.ProcessRequest{Workspace: s.workspace, WorkspaceAccess: launch.WorkspaceAccessReadWrite, SessionsDirectory: s.created.SessionsDirectory(), SessionDirectory: s.created.RootDirectory(), SessionHome: s.created.HomeDirectory(), TemporaryDirectory: s.created.TemporaryDirectory(), Executable: s.target, RecoveryProofChallenge: challenge, Environment: s.environment, Arguments: args, Terminal: launch.Terminal{Input: in, Output: out, ErrorOutput: stderr}})
+	request := s.request
+	request.RecoveryProofChallenge = challenge
+	request.Environment = s.environment
+	request.Arguments = args
+	request.Terminal = launch.Terminal{Input: in, Output: out, ErrorOutput: stderr}
+	p, e := s.sandbox.Prepare(ctx, request)
 	if e != nil {
 		return nil, e
 	}
@@ -102,6 +110,12 @@ func discoverySettle(p launch.Process) error {
 }
 func (s *discoverySession) command(args ...string) ([]byte, error) {
 	s.diagnostic = "stage=prepare"
+	if s.startup != nil {
+		if err := s.startup.begin(s.calls + 1); err != nil {
+			return nil, err
+		}
+		defer s.startup.end()
+	}
 	ctx, cancel := context.WithTimeout(s.ctx, 10*time.Second)
 	defer cancel()
 	var out, stderr discoveryCapture
@@ -168,7 +182,7 @@ func TestNativeInstalledExtensionDiscovery(t *testing.T) {
 		}
 	}()
 	t.Run("codex-local-plugin", func(t *testing.T) {
-		s := newDiscoverySession(t, ctx, codex, "codex-plugin")
+		s := newDiscoverySession(t, ctx, codex, "codex", "codex-plugin")
 		seedDiscoveryCodexConfig(t, s)
 		catalog := filepath.Join(s.workspace, "catalog")
 		if e := seedDiscoveryCatalog(catalog); e != nil {
@@ -205,7 +219,7 @@ func TestNativeInstalledExtensionDiscovery(t *testing.T) {
 		checkDiscoveryPluginList(t, s.success("plugin", "list", "--marketplace", "acs-assessment", "--json"), true)
 	})
 	t.Run("codex-untrusted-hook-discovery", func(t *testing.T) {
-		s := newDiscoverySession(t, ctx, codex, "codex-hooks")
+		s := newDiscoverySession(t, ctx, codex, "codex", "codex-hooks")
 		seedDiscoveryCodexConfig(t, s)
 		tripwire := filepath.Join(s.workspace, "UNEXPECTED_HOOK")
 		command := "/bin/sh -c " + devinShellLiteral("printf unexpected > "+devinShellLiteral(tripwire))
@@ -226,7 +240,7 @@ func TestNativeInstalledExtensionDiscovery(t *testing.T) {
 		if _, e = os.Lstat(tripwire); !os.IsNotExist(e) {
 			t.Fatal("discovery executed hook")
 		}
-		negativeSession := newDiscoverySession(t, ctx, codex, "codex-hooks-malformed")
+		negativeSession := newDiscoverySession(t, ctx, codex, "codex", "codex-hooks-malformed")
 		seedDiscoveryCodexConfig(t, negativeSession)
 		negativeSource := filepath.Join(negativeSession.created.HomeDirectory(), ".codex", "hooks.json")
 		if e = discoveryWrite(negativeSource, []byte("{broken")); e != nil {
@@ -254,7 +268,7 @@ func TestNativeInstalledExtensionDiscovery(t *testing.T) {
 
 	})
 	t.Run("devin-local-plugin", func(t *testing.T) {
-		s := newDiscoverySession(t, ctx, devin, "devin-plugin")
+		s := newDiscoverySession(t, ctx, devin, "devin", "devin-plugin")
 		endpoint, e := copyDevinSyntheticCredentials(s.created.HomeDirectory())
 		if e != nil {
 			t.Fatal(e)
@@ -268,19 +282,19 @@ func TestNativeInstalledExtensionDiscovery(t *testing.T) {
 		if e != nil {
 			t.Fatal("synthetic endpoint unavailable")
 		}
+		s.startup = &discoveryStartup{}
 		var requests atomic.Int64
-		var httpDiagnostic discoveryHTTPDiagnostics
-		var server *http.Server
-		server = &http.Server{ReadHeaderTimeout: time.Second, ReadTimeout: time.Second, WriteTimeout: time.Second, MaxHeaderBytes: 8192, Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if requests.Add(1) > 8 {
+		server := &http.Server{ReadHeaderTimeout: time.Second, ReadTimeout: time.Second, WriteTimeout: time.Second, MaxHeaderBytes: 8192}
+		server.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if requests.Add(1) > 20 {
+				s.startup.mu.Lock()
+				s.startup.failLocked("request-total")
+				s.startup.mu.Unlock()
 				_ = server.Close()
 				return
 			}
-			httpDiagnostic.record(r.Method, r.URL.Path, r.URL.RawQuery != "")
-			defer r.Body.Close()
-			_, _ = io.Copy(io.Discard, io.LimitReader(r.Body, 65537))
-			w.WriteHeader(http.StatusNotImplemented)
-		})}
+			s.startup.ServeHTTP(w, r)
+		})
 		done := make(chan error, 1)
 		go func() { done <- server.Serve(listener) }()
 		t.Cleanup(func() {
@@ -293,8 +307,8 @@ func TestNativeInstalledExtensionDiscovery(t *testing.T) {
 			case <-time.After(time.Second):
 				t.Error("synthetic listener did not settle")
 			}
-			if requests.Load() != 0 {
-				t.Errorf("plugin management observed backend requests; no success inferred %s", httpDiagnostic.summary())
+			if summary, failed := s.startup.summary(); failed {
+				t.Errorf("synthetic startup contract failed %s", summary)
 			}
 		})
 		pkg := filepath.Join(s.workspace, "package")

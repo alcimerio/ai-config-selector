@@ -14,6 +14,8 @@ import (
 	"github.com/alcimerio/ai-config-selector/internal/launch"
 	"io"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -21,6 +23,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 const discoveryOutputLimit = 64 << 10
@@ -684,5 +687,374 @@ func TestDiscoveryHTTPDiagnosticBounds(t *testing.T) {
 	want := "recorded=8 post=4 get=1 other_method=3 team=1 user_status=1 analytics=1 model=1 unknown_route=4 query_present=4"
 	if got := d.summary(); got != want {
 		t.Fatalf("fixed counts %s", got)
+	}
+}
+
+// Same exact optional system probe as the production Codex executor; the
+// generic boundary otherwise has no reason to grant this target-owned path.
+func discoverySandboxRequests(kind string, request launch.ProcessRequest) (launch.SandboxCheck, launch.ProcessRequest) {
+	if kind == "codex" {
+		request.RuntimeProbePaths = []string{"/etc/codex/requirements.toml"}
+	}
+	check := launch.SandboxCheck{Workspace: request.Workspace, WorkspaceAccess: request.WorkspaceAccess, SessionsDirectory: request.SessionsDirectory, Executable: request.Executable, RuntimeProbePaths: append([]string(nil), request.RuntimeProbePaths...)}
+	return check, request
+}
+
+const discoveryStatusResponse = "\x0a\x18\x2a\x12ACS_SYNTHETIC_TEAM\x30\x02\x50\x01"
+const discoveryDefaultResponse = `{"code":"unimplemented","message":"ACS synthetic local driver"}`
+
+// Five existing CLI operations; each admits at most two reviewed team replies,
+// one status reply and one ancillary analytics refusal. No model requests.
+type discoveryStartup struct {
+	mu                                     sync.Mutex
+	phase, phases, total, active, complete int
+	counts                                 [3]int
+	failure                                string
+	diagnostic                             discoveryHTTPDiagnostics
+}
+
+func (d *discoveryStartup) failLocked(reason string) {
+	if d.failure == "" {
+		d.failure = reason
+	}
+}
+func (d *discoveryStartup) begin(call int) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.failure != "" || d.phase != 0 || d.active != 0 || call != d.phases+1 || call > 5 {
+		d.failLocked("phase-start")
+		return errors.New("synthetic startup phase refused")
+	}
+	d.phase = call
+	d.phases++
+	d.counts = [3]int{}
+	return nil
+}
+func (d *discoveryStartup) end() {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.phase == 0 || d.active != 0 {
+		d.failLocked("phase-settlement")
+	}
+	d.phase = 0
+}
+func (d *discoveryStartup) summary() (string, bool) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return fmt.Sprintf("phases=%d total=%d complete=%d active=%d failure=%s %s", d.phases, d.total, d.complete, d.active, d.failure, d.diagnostic.summary()), d.failure != "" || d.active != 0
+}
+func (d *discoveryStartup) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	defer r.Body.Close()
+	d.mu.Lock()
+	d.total++
+	d.active++
+	phase := d.phase
+	d.diagnostic.record(r.Method, r.URL.Path, r.URL.RawQuery != "")
+	valid := true
+	if d.failure != "" || phase == 0 || d.total > 20 {
+		d.failLocked("request-phase-or-total")
+		valid = false
+	}
+	route := -1
+	switch r.URL.Path {
+	case devinSeat + "GetCliTeamSettings":
+		route = 0
+	case devinSeat + "GetUserStatus":
+		route = 1
+	case devinAnalytics:
+		route = 2
+	}
+	if r.Method != "POST" || r.URL.RawQuery != "" || r.URL.ForceQuery || r.URL.RawPath != "" || r.Header.Get("Content-Type") != "application/proto" || route < 0 {
+		d.failLocked("request-contract")
+		valid = false
+	}
+	if valid {
+		d.counts[route]++
+		limit := 1
+		if route == 0 {
+			limit = 2
+		}
+		if d.counts[route] > limit {
+			d.failLocked("route-quota")
+			valid = false
+		}
+	}
+	d.mu.Unlock()
+
+	status, content, data := 501, "application/json", []byte(discoveryDefaultResponse)
+	if valid {
+		body, err := io.ReadAll(io.LimitReader(r.Body, 65537))
+		if err != nil || len(body) == 0 || len(body) > 65536 {
+			d.mu.Lock()
+			d.failLocked("body-bound-or-read")
+			d.mu.Unlock()
+			valid = false
+		} else if _, err = devinWire(body); err != nil {
+			d.mu.Lock()
+			d.failLocked("body-protobuf")
+			d.mu.Unlock()
+			valid = false
+		}
+	}
+	if valid {
+		switch route {
+		case 0:
+			status, content, data = 200, "application/proto", []byte{8, 1}
+		case 1:
+			status, content, data = 200, "application/proto", []byte(discoveryStatusResponse)
+		}
+	}
+	d.mu.Lock()
+	defer func() { d.active--; d.mu.Unlock() }()
+	if d.phase != phase || d.failure != "" {
+		d.failLocked("phase-changed")
+		valid = false
+		status, content, data = 501, "application/json", []byte(discoveryDefaultResponse)
+	}
+	// Keep the bounded response write in the admitted phase. Native server writes
+	// have the existing one-second deadline; end cannot race a success publication.
+	w.Header().Set("Content-Type", content)
+	w.Header().Set("Content-Length", strconv.Itoa(len(data)))
+	w.WriteHeader(status)
+	n, err := w.Write(data)
+	if err != nil || n != len(data) {
+		d.failLocked("reply-write")
+	} else if valid {
+		d.complete++
+	}
+}
+func TestDiscoveryCodexRuntimeProbe(t *testing.T) {
+	for _, kind := range []string{"codex", "devin"} {
+		check, request := discoverySandboxRequests(kind, launch.ProcessRequest{Workspace: "/workspace", WorkspaceAccess: launch.WorkspaceAccessReadWrite, SessionsDirectory: "/sessions", Executable: "/target"})
+		if check.Workspace != request.Workspace || check.Executable != request.Executable || check.SessionsDirectory != request.SessionsDirectory {
+			t.Fatal("check/request mismatch")
+		}
+		if kind == "codex" {
+			if len(check.RuntimeProbePaths) != 1 || len(request.RuntimeProbePaths) != 1 || check.RuntimeProbePaths[0] != "/etc/codex/requirements.toml" || request.RuntimeProbePaths[0] != "/etc/codex/requirements.toml" {
+				t.Fatal("exact Codex probe missing")
+			}
+			check.RuntimeProbePaths[0] = "changed"
+			if request.RuntimeProbePaths[0] != "/etc/codex/requirements.toml" {
+				t.Fatal("probe alias")
+			}
+		} else if len(check.RuntimeProbePaths) != 0 || len(request.RuntimeProbePaths) != 0 {
+			t.Fatal("probe leaked to Devin")
+		}
+	}
+}
+func discoveryStartupRequest(d *discoveryStartup, path string, body io.Reader) *httptest.ResponseRecorder {
+	r := httptest.NewRequest("POST", "http://fixture"+path, body)
+	r.Header.Set("Content-Type", "application/proto")
+	w := httptest.NewRecorder()
+	d.ServeHTTP(w, r)
+	return w
+}
+func TestDiscoveryStartupExactReplies(t *testing.T) {
+	h := sha256.Sum256([]byte(discoveryStatusResponse))
+	if hex.EncodeToString(h[:]) != "15e81c3724477e95074913d5f0913da83b09730c932db589b72db999bccb66c2" {
+		t.Fatal("reviewed status bytes changed")
+	}
+	var d discoveryStartup
+	for call := 1; call <= 5; call++ {
+		if err := d.begin(call); err != nil {
+			t.Fatal(err)
+		}
+		for _, tc := range []struct {
+			path    string
+			status  int
+			content string
+			body    []byte
+		}{
+			{devinSeat + "GetCliTeamSettings", 200, "application/proto", []byte{8, 1}},
+			{devinSeat + "GetCliTeamSettings", 200, "application/proto", []byte{8, 1}},
+			{devinSeat + "GetUserStatus", 200, "application/proto", []byte(discoveryStatusResponse)},
+			{devinAnalytics, 501, "application/json", []byte(discoveryDefaultResponse)},
+		} {
+			w := discoveryStartupRequest(&d, tc.path, bytes.NewReader([]byte{8, 1}))
+			if w.Code != tc.status || w.Header().Get("Content-Type") != tc.content || !bytes.Equal(w.Body.Bytes(), tc.body) {
+				t.Fatal("exact reply mismatch")
+			}
+		}
+		d.end()
+	}
+	summary, failed := d.summary()
+	if failed || !strings.Contains(summary, "phases=5 total=20 complete=20 active=0") {
+		t.Fatal("bounded startup did not settle")
+	}
+	if d.begin(6) == nil {
+		t.Fatal("extra command accepted")
+	}
+}
+
+type discoveryErrorReader struct{}
+
+func (discoveryErrorReader) Read([]byte) (int, error) { return 0, errors.New("PRIVATE_READ_ERROR") }
+
+type discoveryFailWriter struct{ header http.Header }
+
+func (w *discoveryFailWriter) Header() http.Header       { return w.header }
+func (w *discoveryFailWriter) WriteHeader(int)           {}
+func (w *discoveryFailWriter) Write([]byte) (int, error) { return 0, errors.New("PRIVATE_WRITE_ERROR") }
+func TestDiscoveryStartupRefusals(t *testing.T) {
+	for _, name := range []string{"before-phase", "method", "query", "empty-query", "encoded-path", "type", "unknown", "model", "empty", "oversize", "malformed", "read-error", "team-quota", "status-quota", "analytics-quota", "after-phase", "write-error"} {
+		t.Run(name, func(t *testing.T) {
+			var d discoveryStartup
+			if name != "before-phase" {
+				if e := d.begin(1); e != nil {
+					t.Fatal(e)
+				}
+			}
+			path := devinSeat + "GetCliTeamSettings"
+			method := "POST"
+			content := "application/proto"
+			var body io.Reader = bytes.NewReader([]byte{8, 1})
+			switch name {
+			case "method":
+				method = "GET"
+			case "query":
+				path += "?SECRET_QUERY"
+			case "empty-query":
+				path += "?"
+			case "encoded-path":
+				path = strings.Replace(path, "GetCli", "%47etCli", 1)
+			case "type":
+				content = "application/json"
+			case "unknown":
+				path = "/SECRET_PATH"
+			case "model":
+				path = devinModel
+			case "empty":
+				body = bytes.NewReader(nil)
+			case "oversize":
+				body = bytes.NewReader(make([]byte, 65537))
+			case "malformed":
+				body = bytes.NewReader([]byte{0xff})
+			case "read-error":
+				body = discoveryErrorReader{}
+			case "team-quota":
+				for i := 0; i < 2; i++ {
+					discoveryStartupRequest(&d, path, bytes.NewReader([]byte{8, 1}))
+				}
+			case "status-quota":
+				path = devinSeat + "GetUserStatus"
+				discoveryStartupRequest(&d, path, bytes.NewReader([]byte{8, 1}))
+			case "analytics-quota":
+				path = devinAnalytics
+				discoveryStartupRequest(&d, path, bytes.NewReader([]byte{8, 1}))
+			case "after-phase":
+				d.end()
+			}
+			r := httptest.NewRequest(method, "http://fixture"+path, body)
+			r.Header.Set("Content-Type", content)
+			if name == "write-error" {
+				d.ServeHTTP(&discoveryFailWriter{http.Header{}}, r)
+			} else {
+				w := httptest.NewRecorder()
+				d.ServeHTTP(w, r)
+				if w.Code != 501 {
+					t.Fatal("invalid request succeeded")
+				}
+			}
+			summary, failed := d.summary()
+			if !failed || strings.Contains(summary, "SECRET") || strings.Contains(summary, "PRIVATE") {
+				t.Fatal("refusal/diagnostic contract")
+			}
+		})
+	}
+}
+
+type discoveryGatedReader struct {
+	ready, release chan struct{}
+	read           bool
+}
+
+func (r *discoveryGatedReader) Read(p []byte) (int, error) {
+	if r.read {
+		return 0, io.EOF
+	}
+	r.read = true
+	close(r.ready)
+	<-r.release
+	return copy(p, []byte{8, 1}), nil
+}
+func TestDiscoveryStartupPhaseCannotChangeDuringBody(t *testing.T) {
+	var d discoveryStartup
+	if e := d.begin(1); e != nil {
+		t.Fatal(e)
+	}
+	r := &discoveryGatedReader{ready: make(chan struct{}), release: make(chan struct{})}
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() { done <- discoveryStartupRequest(&d, devinSeat+"GetUserStatus", r) }()
+	select {
+	case <-r.ready:
+	case <-time.After(time.Second):
+		close(r.release)
+		t.Fatal("body readiness deadline")
+	}
+	d.end()
+	close(r.release)
+	var w *httptest.ResponseRecorder
+	select {
+	case w = <-done:
+	case <-time.After(time.Second):
+		t.Fatal("body completion deadline")
+	}
+	if w.Code != 501 {
+		t.Fatal("late phase reply succeeded")
+	}
+	if summary, failed := d.summary(); !failed || !strings.Contains(summary, "complete=0 active=0") {
+		t.Fatal("phase failure missing")
+	}
+}
+
+type discoveryGatedWriter struct {
+	*httptest.ResponseRecorder
+	ready, release chan struct{}
+}
+
+func (w *discoveryGatedWriter) Write(p []byte) (int, error) {
+	n, e := w.ResponseRecorder.Write(p)
+	close(w.ready)
+	<-w.release
+	return n, e
+}
+func TestDiscoveryStartupReplyAndSettlementAreAtomic(t *testing.T) {
+	var d discoveryStartup
+	if e := d.begin(1); e != nil {
+		t.Fatal(e)
+	}
+	w := &discoveryGatedWriter{ResponseRecorder: httptest.NewRecorder(), ready: make(chan struct{}), release: make(chan struct{})}
+	var once sync.Once
+	release := func() { once.Do(func() { close(w.release) }) }
+	defer release()
+	r := httptest.NewRequest("POST", "http://fixture"+devinSeat+"GetCliTeamSettings", bytes.NewReader([]byte{8, 1}))
+	r.Header.Set("Content-Type", "application/proto")
+	served := make(chan struct{})
+	go func() { d.ServeHTTP(w, r); close(served) }()
+	select {
+	case <-w.ready:
+	case <-time.After(time.Second):
+		t.Fatal("reply readiness deadline")
+	}
+	ended := make(chan struct{})
+	go func() { d.end(); close(ended) }()
+	select {
+	case <-ended:
+		t.Fatal("phase ended during response write")
+	case <-time.After(time.Millisecond):
+	}
+	release()
+	select {
+	case <-served:
+	case <-time.After(time.Second):
+		t.Fatal("reply completion deadline")
+	}
+	select {
+	case <-ended:
+	case <-time.After(time.Second):
+		t.Fatal("phase settlement deadline")
+	}
+	if summary, failed := d.summary(); failed || !strings.Contains(summary, "complete=1 active=0") {
+		t.Fatal("completed reply was not atomically settled")
 	}
 }
