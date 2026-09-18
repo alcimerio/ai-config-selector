@@ -981,6 +981,8 @@ type nativeResponsesFixture struct {
 type nativeMCPResponsesScenario struct {
 	serverID, allowedTool, disabledTool string
 	callArguments                       string
+	deferred                            bool
+	searchCallID                        string
 }
 
 // nativeCodexPhaseCoordination is intentionally fixture-only.  Its literal
@@ -1148,7 +1150,11 @@ func newNativeResponsesFixture(t *testing.T, shellCommand, launcherHome string) 
 		index := fixture.requests
 		fixture.bodies = append(fixture.bodies, body)
 		fixture.headers = append(fixture.headers, request.Header.Clone())
-		if index == 2 {
+		observationIndex := 2
+		if fixture.mcpScenario != nil && fixture.mcpScenario.deferred {
+			observationIndex = 3
+		}
+		if index == observationIndex {
 			fixture.sessionObservationErr = observeNativeSessionProjection(launcherHome, fixture.preexistingHomes, fixture.privateSentinels)
 		}
 		fixture.mu.Unlock()
@@ -1161,11 +1167,6 @@ func newNativeResponsesFixture(t *testing.T, shellCommand, launcherHome string) 
 				functionArguments = string(arguments)
 			} else {
 				scenario := fixture.mcpScenario
-				functionName, err = nativeMCPInventoryFunction(body, scenario.serverID, scenario.allowedTool)
-				if err != nil {
-					fixture.rejectProtocol(response, err.Error())
-					return
-				}
 				blockedPresent, err := nativeMCPInventoryContains(body, scenario.serverID, scenario.disabledTool)
 				if err != nil {
 					fixture.rejectProtocol(response, err.Error())
@@ -1175,7 +1176,22 @@ func newNativeResponsesFixture(t *testing.T, shellCommand, launcherHome string) 
 					fixture.rejectProtocol(response, "disabled MCP tool appeared in the actual Responses tool inventory")
 					return
 				}
-				allowed, err := nativeMCPInventoryFunctionEntry(body, scenario.serverID, scenario.allowedTool)
+				if hasSearch, err := nativeMCPInventoryHasType(body, "tool_search"); err != nil {
+					fixture.rejectProtocol(response, err.Error())
+					return
+				} else if hasSearch {
+					fixture.mu.Lock()
+					scenario.deferred = true
+					scenario.searchCallID = "acs-search-1"
+					fixture.mu.Unlock()
+					writeSSE(response,
+						map[string]any{"type": "response.created", "response": map[string]any{"id": "resp-search"}},
+						map[string]any{"type": "response.output_item.done", "item": map[string]any{"type": "tool_search_call", "call_id": scenario.searchCallID, "execution": "client", "arguments": map[string]any{"query": "fixture allowed blocked", "limit": 8}}},
+						completedEvent("resp-search"),
+					)
+					return
+				}
+				allowed, err := nativeMCPExactNamespaceFunctionEntry(body, scenario.serverID, scenario.allowedTool)
 				if err != nil {
 					fixture.rejectProtocol(response, err.Error())
 					return
@@ -1184,14 +1200,41 @@ func newNativeResponsesFixture(t *testing.T, shellCommand, launcherHome string) 
 					fixture.rejectProtocol(response, err.Error())
 					return
 				}
+				functionName, _ = allowed["name"].(string)
 				functionArguments = scenario.callArguments
+			}
+			call := map[string]any{"type": "function_call", "call_id": "acs-call-1", "name": functionName, "arguments": functionArguments}
+			if fixture.mcpScenario != nil {
+				call["namespace"] = "mcp__" + fixture.mcpScenario.serverID
 			}
 			writeSSE(response,
 				map[string]any{"type": "response.created", "response": map[string]any{"id": "resp-1"}},
-				map[string]any{"type": "response.output_item.done", "item": map[string]any{"type": "function_call", "call_id": "acs-call-1", "name": functionName, "arguments": functionArguments}},
+				map[string]any{"type": "response.output_item.done", "item": call},
 				completedEvent("resp-1"),
 			)
 			return
+		}
+		if fixture.mcpScenario != nil && fixture.mcpScenario.deferred && index == 2 {
+			if err := nativeMCPRequireToolSearchCall(body, fixture.mcpScenario.searchCallID, "fixture allowed blocked", 8); err != nil {
+				fixture.rejectProtocol(response, "tool search call mismatch")
+				return
+			}
+			if err := nativeMCPToolSearchOutput(body, fixture.mcpScenario.searchCallID, fixture.mcpScenario.serverID, fixture.mcpScenario.allowedTool, fixture.mcpScenario.disabledTool); err != nil {
+				fixture.rejectProtocol(response, err.Error())
+				return
+			}
+			writeSSE(response,
+				map[string]any{"type": "response.created", "response": map[string]any{"id": "resp-1"}},
+				map[string]any{"type": "response.output_item.done", "item": map[string]any{"type": "function_call", "call_id": "acs-call-1", "namespace": "mcp__" + fixture.mcpScenario.serverID, "name": fixture.mcpScenario.allowedTool, "arguments": fixture.mcpScenario.callArguments}},
+				completedEvent("resp-1"),
+			)
+			return
+		}
+		if fixture.mcpScenario != nil && fixture.mcpScenario.deferred && index == 3 {
+			if err := nativeMCPFunctionCallOutputEnvelope(body, "acs-call-1"); err != nil {
+				fixture.rejectProtocol(response, err.Error())
+				return
+			}
 		}
 		writeSSE(response,
 			map[string]any{
@@ -1203,7 +1246,10 @@ func newNativeResponsesFixture(t *testing.T, shellCommand, launcherHome string) 
 			},
 			completedEvent("resp-2"),
 		)
-		if index == 2 {
+		if index == 2 && (fixture.mcpScenario == nil || !fixture.mcpScenario.deferred) {
+			close(fixture.completed)
+		}
+		if index == 3 && fixture.mcpScenario != nil && fixture.mcpScenario.deferred {
 			close(fixture.completed)
 		}
 	}))
@@ -1269,7 +1315,11 @@ func (fixture *nativeResponsesFixture) assert(t *testing.T, wantDescendant bool)
 	if fixture.protocolErr != "" {
 		t.Fatalf("fixture protocol error: %s; loopback=%s", fixture.protocolErr, fixture.summaryLocked())
 	}
-	if fixture.requests != 2 || len(fixture.bodies) != 2 {
+	wantRequests := 2
+	if fixture.mcpScenario != nil && fixture.mcpScenario.deferred {
+		wantRequests = 3
+	}
+	if fixture.requests != wantRequests || len(fixture.bodies) != wantRequests {
 		t.Fatalf("responses requests=%d; loopback=%s", fixture.requests, fixture.summaryLocked())
 	}
 	if fixture.websocketFallbacks != 1 {
@@ -1291,7 +1341,14 @@ func (fixture *nativeResponsesFixture) assert(t *testing.T, wantDescendant bool)
 			t.Fatalf("first request omitted Skill discovery sentinel %q", sentinel)
 		}
 	}
-	toolOutput, err := nativeFunctionCallOutput(fixture.bodies[1], "acs-call-1")
+	toolBodyIndex := 1
+	if wantRequests == 3 {
+		if err := nativeMCPFunctionCallOutputEnvelope(fixture.bodies[2], "acs-call-1"); err != nil {
+			t.Fatalf("final request tool output envelope: %v", err)
+		}
+		toolBodyIndex = 2
+	}
+	toolOutput, err := nativeFunctionCallOutput(fixture.bodies[toolBodyIndex], "acs-call-1")
 	if err != nil {
 		t.Fatalf("second request tool output: %v", err)
 	}
@@ -1334,11 +1391,16 @@ func (fixture *nativeResponsesFixture) assertLiveDescendant(t *testing.T) {
 		return
 	}
 	fixture.mu.Lock()
-	if len(fixture.bodies) != 2 {
+	wantBodies := 2
+	if fixture.mcpScenario != nil && fixture.mcpScenario.deferred {
+		wantBodies = 3
+	}
+	if len(fixture.bodies) != wantBodies {
 		fixture.mu.Unlock()
 		t.Fatal("cannot verify controlled descendant before the completed tool exchange")
 	}
-	toolOutput, err := nativeFunctionCallOutput(fixture.bodies[1], "acs-call-1")
+	toolIndex := len(fixture.bodies) - 1
+	toolOutput, err := nativeFunctionCallOutput(fixture.bodies[toolIndex], "acs-call-1")
 	fixture.mu.Unlock()
 	if err != nil {
 		t.Fatalf("controlled descendant output: %v", err)
@@ -1413,6 +1475,15 @@ func (fixture *nativeResponsesFixture) targetMCPDiagnostics(terminal string) str
 		if len(selected) == 4 {
 			break
 		}
+	}
+	fixture.mu.Lock()
+	var latestBody string
+	if len(fixture.bodies) > 0 {
+		latestBody = fixture.bodies[len(fixture.bodies)-1]
+	}
+	fixture.mu.Unlock()
+	if latestBody != "" {
+		selected = append(selected, "inventory="+nativeMCPInventoryStructure(latestBody, fixture.mcpScenario.serverID, fixture.mcpScenario.allowedTool))
 	}
 	selected = append(selected, "helper-state="+readNewSessionMCPHelperState(fixture.launcherHome, fixture.preexistingHomes))
 	return strings.Join(selected, " | ")
