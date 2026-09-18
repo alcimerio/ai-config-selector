@@ -38,6 +38,13 @@ func exclusive(path string, value any) error {
 	}
 	return c
 }
+func journalRequest(r request) map[string]any {
+	event := map[string]any{"event": "request", "method": r.Method, "params": r.Params}
+	if len(r.ID) != 0 {
+		event["id"] = json.RawMessage(r.ID)
+	}
+	return event
+}
 func run(in io.Reader, out io.Writer, journal io.Writer, effect string) error {
 	scan := bufio.NewScanner(io.LimitReader(in, 256*1024+1))
 	scan.Buffer(make([]byte, 4096), 32768)
@@ -65,7 +72,7 @@ func run(in io.Reader, out io.Writer, journal io.Writer, effect string) error {
 		if r.JSONRPC != "2.0" {
 			return errors.New("JSONRPC version")
 		}
-		if e := record(map[string]any{"event": "request", "method": r.Method, "id": r.ID, "params": r.Params}); e != nil {
+		if e := record(journalRequest(r)); e != nil {
 			return e
 		}
 		if r.Method == "notifications/initialized" {
