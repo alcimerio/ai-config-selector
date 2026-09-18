@@ -1486,12 +1486,15 @@ func (fixture *nativeResponsesFixture) targetMCPDiagnostics(terminal string) str
 	}
 	fixture.mu.Lock()
 	var latestBody string
+	bodyCount := len(fixture.bodies)
 	if len(fixture.bodies) > 0 {
 		latestBody = fixture.bodies[len(fixture.bodies)-1]
 	}
 	fixture.mu.Unlock()
 	if latestBody != "" {
-		selected = append(selected, "inventory="+nativeMCPInventoryStructure(latestBody, fixture.mcpScenario.serverID, fixture.mcpScenario.allowedTool))
+		selected = append(selected, fmt.Sprintf("first-request=received request-count=%d inventory=%s", bodyCount, nativeMCPInventoryStructure(latestBody, fixture.mcpScenario.serverID, fixture.mcpScenario.allowedTool)))
+	} else {
+		selected = append(selected, "first-request=not-received request-count=0")
 	}
 	selected = append(selected, "helper-state="+readNewSessionMCPHelperState(fixture.launcherHome, fixture.preexistingHomes))
 	return strings.Join(selected, " | ")

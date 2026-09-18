@@ -348,6 +348,9 @@ func nativeMCPInventoryStructure(body, serverID, toolName string) string {
 	namespaceCounts := map[string]int{"functions": 0, "fixture": 0, "mcp__fixture": 0, "other": 0}
 	namespaceAllowed := map[string]bool{"functions": false, "fixture": false, "mcp__fixture": false, "other": false}
 	namespaceBlocked := map[string]bool{"functions": false, "fixture": false, "mcp__fixture": false, "other": false}
+	knownOther := map[string]bool{"shell_command": false, "apply_patch": false, "view_image": false, "exec_command": false, "tool_search": false, "code_mode": false, "unified_exec": false}
+	knownNamespaces := map[string]bool{"collaboration": false, "clock": false, "web": false, "image_gen": false}
+	customExec, waitDeclared := false, false
 	wantAllowed := "mcp__" + serverID + "__" + toolName
 	wantBlocked := "mcp__" + serverID + "__" + "blocked"
 	wantNamespace := "mcp__" + serverID
@@ -362,25 +365,39 @@ func nativeMCPInventoryStructure(body, serverID, toolName string) string {
 			case "function":
 				functionCount++
 				name, _ := entry["name"].(string)
+				allowedPresent = allowedPresent || name == wantAllowed
+				blockedPresent = blockedPresent || name == wantBlocked
+				if namespace == wantNamespace {
+					mcpAllowedPresent = mcpAllowedPresent || name == toolName
+					mcpBlockedPresent = mcpBlockedPresent || name == "blocked"
+				}
+				waitDeclared = waitDeclared || namespace == "functions" && name == "wait"
+				if deferred, ok := entry["defer_loading"].(bool); ok && deferred {
+					deferredCount++
+				}
 				class := namespace
 				if _, ok := namespaceCounts[class]; !ok {
 					class = "other"
 				}
 				namespaceAllowed[class] = namespaceAllowed[class] || name == toolName || name == wantAllowed
 				namespaceBlocked[class] = namespaceBlocked[class] || name == "blocked" || name == wantBlocked
-				if namespace == wantNamespace {
-					mcpAllowedPresent = mcpAllowedPresent || name == toolName
-					mcpBlockedPresent = mcpBlockedPresent || name == "blocked"
-				} else {
-					allowedPresent = allowedPresent || name == wantAllowed
-					blockedPresent = blockedPresent || name == wantBlocked
+				if class == "other" {
+					if _, ok := knownOther[name]; ok {
+						knownOther[name] = true
+					}
 				}
+			case "custom":
+				name, _ := entry["name"].(string)
+				customExec = customExec || namespace == "functions" && name == "exec"
 				if deferred, ok := entry["defer_loading"].(bool); ok && deferred {
 					deferredCount++
 				}
 			case "namespace":
 				namespaceCount++
 				nestedNamespace, _ := entry["name"].(string)
+				if _, known := knownNamespaces[nestedNamespace]; known {
+					knownNamespaces[nestedNamespace] = true
+				}
 				class := nestedNamespace
 				if _, ok := namespaceCounts[class]; !ok {
 					class = "other"
@@ -417,7 +434,16 @@ func nativeMCPInventoryStructure(body, serverID, toolName string) string {
 			inputState = "array"
 		}
 	}
-	return fmt.Sprintf("legacy=%s input=%s additional-developer=%d functions=%d namespaces=%d tool-search=%d deferred=%d legacy-allowed=%t legacy-blocked=%t mcp-namespace=%t mcp-allowed=%t mcp-blocked=%t ns-functions=%d/%t/%t ns-fixture=%d/%t/%t ns-mcp-fixture=%d/%t/%t ns-other=%d/%t/%t", legacyState, inputState, len(additional), functionCount, namespaceCount, toolSearchCount, deferredCount, allowedPresent, blockedPresent, mcpNamespacePresent, mcpAllowedPresent, mcpBlockedPresent, namespaceCounts["functions"], namespaceAllowed["functions"], namespaceBlocked["functions"], namespaceCounts["fixture"], namespaceAllowed["fixture"], namespaceBlocked["fixture"], namespaceCounts["mcp__fixture"], namespaceAllowed["mcp__fixture"], namespaceBlocked["mcp__fixture"], namespaceCounts["other"], namespaceAllowed["other"], namespaceBlocked["other"])
+	modelClass := "absent"
+	if model, ok := request["model"].(string); ok {
+		modelClass = "other"
+		for _, allowed := range []string{"gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"} {
+			if model == allowed {
+				modelClass = allowed
+			}
+		}
+	}
+	return fmt.Sprintf("model=%s legacy=%s input=%s additional-developer=%d functions=%d namespaces=%d tool-search=%d deferred=%d custom-exec=%t wait=%t legacy-allowed=%t legacy-blocked=%t mcp-namespace=%t mcp-allowed=%t mcp-blocked=%t ns-functions=%d/%t/%t ns-fixture=%d/%t/%t ns-mcp-fixture=%d/%t/%t ns-other=%d/%t/%t known-ns=collaboration:%t,clock:%t,web:%t,image_gen:%t known-other=shell:%t,patch:%t,view:%t,exec:%t,search:%t,code:%t,unified:%t", modelClass, legacyState, inputState, len(additional), functionCount, namespaceCount, toolSearchCount, deferredCount, customExec, waitDeclared, allowedPresent, blockedPresent, mcpNamespacePresent, mcpAllowedPresent, mcpBlockedPresent, namespaceCounts["functions"], namespaceAllowed["functions"], namespaceBlocked["functions"], namespaceCounts["fixture"], namespaceAllowed["fixture"], namespaceBlocked["fixture"], namespaceCounts["mcp__fixture"], namespaceAllowed["mcp__fixture"], namespaceBlocked["mcp__fixture"], namespaceCounts["other"], namespaceAllowed["other"], namespaceBlocked["other"], knownNamespaces["collaboration"], knownNamespaces["clock"], knownNamespaces["web"], knownNamespaces["image_gen"], knownOther["shell_command"], knownOther["apply_patch"], knownOther["view_image"], knownOther["exec_command"], knownOther["tool_search"], knownOther["code_mode"], knownOther["unified_exec"])
 }
 
 func nativeMCPInventoryLookup(body, serverID, toolName string) (map[string]any, bool, error) {
@@ -692,8 +718,21 @@ func TestNativeMCPDeferredGatesRejectIdentityAndLifecycleDecoys(t *testing.T) {
 
 func TestNativeMCPInventoryStructureIsBoundedAndClassifiesDiscovery(t *testing.T) {
 	body := `{"input":[{"type":"additional_tools","role":"developer","tools":[{"type":"tool_search","execution":"server","description":"secret description","parameters":{}},{"type":"namespace","name":"functions","tools":[{"type":"function","name":"mcp__fixture__blocked","defer_loading":true},{"type":"function","name":"mcp__fixture__other"}]}]}],"tools":null,"metadata":{"mcp__fixture__allowed":"private value"}}`
-	want := "legacy=null input=array additional-developer=1 functions=2 namespaces=1 tool-search=1 deferred=1 legacy-allowed=false legacy-blocked=true mcp-namespace=false mcp-allowed=false mcp-blocked=false ns-functions=1/false/true ns-fixture=0/false/false ns-mcp-fixture=0/false/false ns-other=0/false/false"
+	want := "model=absent legacy=null input=array additional-developer=1 functions=2 namespaces=1 tool-search=1 deferred=1 custom-exec=false wait=false legacy-allowed=false legacy-blocked=true mcp-namespace=false mcp-allowed=false mcp-blocked=false ns-functions=1/false/true ns-fixture=0/false/false ns-mcp-fixture=0/false/false ns-other=0/false/false known-ns=collaboration:false,clock:false,web:false,image_gen:false known-other=shell:false,patch:false,view:false,exec:false,search:false,code:false,unified:false"
 	if got := nativeMCPInventoryStructure(body, "fixture", "allowed"); got != want {
 		t.Fatalf("bounded inventory structure=%q, want %q", got, want)
+	}
+	codeMode := `{"model":"gpt-5.6-sol","input":[{"type":"additional_tools","role":"developer","tools":[{"type":"namespace","name":"functions","tools":[{"type":"custom","name":"exec"},{"type":"function","name":"wait"},{"type":"function","name":"shell_command"}]}]}]}`
+	wantCodeMode := "model=gpt-5.6-sol legacy=absent input=array additional-developer=1 functions=2 namespaces=1 tool-search=0 deferred=0 custom-exec=true wait=true legacy-allowed=false legacy-blocked=false mcp-namespace=false mcp-allowed=false mcp-blocked=false ns-functions=1/false/false ns-fixture=0/false/false ns-mcp-fixture=0/false/false ns-other=0/false/false known-ns=collaboration:false,clock:false,web:false,image_gen:false known-other=shell:false,patch:false,view:false,exec:false,search:false,code:false,unified:false"
+	if got := nativeMCPInventoryStructure(codeMode, "fixture", "allowed"); got != wantCodeMode {
+		t.Fatalf("code-mode inventory structure=%q, want %q", got, wantCodeMode)
+	}
+	otherModel := strings.Replace(codeMode, "gpt-5.6-sol", "gpt-unknown", 1)
+	if got := nativeMCPInventoryStructure(otherModel, "fixture", "allowed"); !strings.HasPrefix(got, "model=other ") {
+		t.Fatalf("unallowlisted model classification=%q, want model=other", got)
+	}
+	knownNamespace := `{"input":[{"type":"additional_tools","role":"developer","tools":[{"type":"namespace","name":"collaboration","tools":[{"type":"function","name":"spawn_agent"}]},{"type":"namespace","name":"mystery","tools":[{"type":"custom","name":"exec"}]}]}]}`
+	if got := nativeMCPInventoryStructure(knownNamespace, "fixture", "allowed"); !strings.Contains(got, "known-ns=collaboration:true,clock:false,web:false,image_gen:false") || !strings.Contains(got, "custom-exec=false") {
+		t.Fatalf("namespace identity classification=%q", got)
 	}
 }
