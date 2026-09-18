@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -96,6 +97,40 @@ func TestDevinProtocolRefusesUntrustedPhaseAndPreflightModel(t *testing.T) {
 	}
 	if w := nativeDevinPOST(d, devinModel, "application/connect+proto", nil); w.Code != 403 || d.failure == nil {
 		t.Fatal("model served to preflight")
+	}
+}
+
+func TestDevinPhaseCompletionDiagnosticSeparatesFailureClasses(t *testing.T) {
+	want := []string{"skills", "list", "--json"}
+	validStarted := devinPhaseStartedReceipt{PID: 11, Parent: 7, Argv: want}
+	validDone := devinPhaseDoneReceipt{PID: 11, Parent: 7, ExitCode: 0}
+	valid := func() string { return devinPhaseCompletionDiagnostic("skills", 7, validStarted, validDone, want) }
+	if got := valid(); got != "" {
+		t.Fatalf("valid completion diagnostic=%q", got)
+	}
+	unknown := devinPhaseCompletionDiagnostic("private-phase", 7, validStarted, validDone, want)
+	if !strings.Contains(unknown, "phase=unknown") || strings.Contains(unknown, "private-phase") {
+		t.Fatalf("unknown phase leaked: %q", unknown)
+	}
+	cases := []struct {
+		name   string
+		mutate func(*devinPhaseStartedReceipt, *devinPhaseDoneReceipt)
+		want   string
+	}{
+		{name: "parent", mutate: func(s *devinPhaseStartedReceipt, _ *devinPhaseDoneReceipt) { s.Parent = 8 }, want: "started-parent=false"},
+		{name: "pid", mutate: func(_ *devinPhaseStartedReceipt, d *devinPhaseDoneReceipt) { d.PID = 12 }, want: "pid-match=false"},
+		{name: "forced", mutate: func(_ *devinPhaseStartedReceipt, d *devinPhaseDoneReceipt) { d.Forced = true }, want: "forced=true"},
+		{name: "exit", mutate: func(_ *devinPhaseStartedReceipt, d *devinPhaseDoneReceipt) { d.ExitCode = 17 }, want: "exit-code=17"},
+		{name: "argv", mutate: func(s *devinPhaseStartedReceipt, _ *devinPhaseDoneReceipt) { s.Argv = []string{"auth", "status"} }, want: "argv=false"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			started, done := validStarted, validDone
+			tc.mutate(&started, &done)
+			if got := devinPhaseCompletionDiagnostic("skills", 7, started, done, want); !strings.Contains(got, tc.want) {
+				t.Fatalf("diagnostic=%q missing %q", got, tc.want)
+			}
+		})
 	}
 }
 func TestDevinProtocolCorrelationRefusals(t *testing.T) {

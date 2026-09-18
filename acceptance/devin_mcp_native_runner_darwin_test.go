@@ -293,7 +293,10 @@ func runPublicDevinPTY(r devinNativeRun) (err error) {
 			}
 			if phase == 2 && released {
 				if e = verifyDevinPhaseDone(r.Coordination, "attached", readyPIDs["attached"]); e != nil {
-					return e
+					r.Driver.mu.Lock()
+					driverFailure := r.Driver.failure != nil
+					r.Driver.mu.Unlock()
+					return devinPublicACSFailure(e, phase, released, progress.stage, "already-drained", &evidence, driverFailure)
 				}
 				if e = inspectDevinCompletedPhase(r.Coordination, phases[phase], r.Driver.home, r.Candidate); e != nil {
 					return e
@@ -371,7 +374,13 @@ func runPublicDevinPTY(r devinNativeRun) (err error) {
 				phase++
 				released = false
 			} else if !os.IsNotExist(e) {
-				return e
+				r.Driver.mu.Lock()
+				driverFailure := r.Driver.failure != nil
+				r.Driver.mu.Unlock()
+				drain := drainDevinFailureTerminal(chunks, readDone, &evidence, func(err error) bool {
+					return errors.Is(err, io.EOF) || errors.Is(err, syscall.EIO)
+				})
+				return devinPublicACSFailure(e, phase, released, progress.stage, drain, &evidence, driverFailure)
 			}
 
 			r.Driver.mu.Lock()

@@ -10,7 +10,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"reflect"
 	"strconv"
 	"strings"
 	"time"
@@ -117,23 +116,17 @@ func devinPhaseObserver(candidate, home, tools, workspace, trampoline string, d 
 }
 
 func verifyDevinPhaseDone(coord, phase string, readyPID int) error {
-	var started struct {
-		PID, Parent int
-		Argv        []string
-	}
+	var started devinPhaseStartedReceipt
 	if e := devinReadJSON(filepath.Join(coord, phase+".started"), &started); e != nil {
 		return e
 	}
-	var done struct {
-		PID, Parent, ExitCode int
-		Forced                bool
-	}
+	var done devinPhaseDoneReceipt
 	if e := devinReadJSON(filepath.Join(coord, phase+".done"), &done); e != nil {
 		return e
 	}
 	expected := map[string][]string{"skills": {"skills", "list", "--json"}, "auth": {"auth", "status"}, "attached": {"--respect-workspace-trust", "false"}}
-	if readyPID <= 1 || started.Parent != readyPID || done.Parent != readyPID || done.PID != started.PID || done.PID <= 1 || done.Forced || done.ExitCode != 0 || !reflect.DeepEqual(started.Argv, expected[phase]) {
-		return errors.New("phase start/completion identity mismatch")
+	if diagnostic := devinPhaseCompletionDiagnostic(phase, readyPID, started, done, expected[phase]); diagnostic != "" {
+		return errors.New("phase completion evidence: " + diagnostic)
 	}
 	return nil
 }

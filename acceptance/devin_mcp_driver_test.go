@@ -169,6 +169,39 @@ type devinPhaseReceipt struct {
 	Argv                      []string
 	MemberSHA256, SessionHome string
 }
+
+type devinPhaseStartedReceipt struct {
+	PID, Parent int
+	Argv        []string
+}
+
+type devinPhaseDoneReceipt struct {
+	PID, Parent, ExitCode int
+	Forced                bool
+}
+
+// devinPhaseCompletionDiagnostic classifies the completion gate without
+// emitting receipt contents, argv, paths, or environment values.
+func devinPhaseCompletionDiagnostic(phase string, readyPID int, started devinPhaseStartedReceipt, done devinPhaseDoneReceipt, expected []string) string {
+	label := "unknown"
+	if phase == "skills" || phase == "auth" || phase == "attached" {
+		label = phase
+	}
+	ready := readyPID > 1
+	startedParent := started.Parent == readyPID
+	doneParent := done.Parent == readyPID
+	startedPID := started.PID > 1
+	donePID := done.PID > 1
+	pidMatch := started.PID == done.PID
+	exitZero := done.ExitCode == 0
+	argv := reflect.DeepEqual(started.Argv, expected)
+	phaseKnown := label != "unknown"
+	if ready && startedParent && doneParent && startedPID && donePID && pidMatch && !done.Forced && exitZero && argv && phaseKnown {
+		return ""
+	}
+	return fmt.Sprintf("phase=%s ready=%t started-parent=%t done-parent=%t started-pid=%t done-pid=%t pid-match=%t forced=%t exit-code=%d exit-zero=%t argv=%t phase-known=%t", label, ready, startedParent, doneParent, startedPID, donePID, pidMatch, done.Forced, done.ExitCode, exitZero, argv, phaseKnown)
+}
+
 type devinHTTPReceipt struct {
 	Phase, Path, Method                              string
 	Bytes, Status                                    int
