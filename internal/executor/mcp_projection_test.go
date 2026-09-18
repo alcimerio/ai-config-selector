@@ -13,7 +13,11 @@ import (
 )
 
 func TestSelectedMCPProjectionContainsOnlyReferencesAndToolFilters(t *testing.T) {
-	home := filepath.Join(t.TempDir(), "selected home")
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	home := filepath.Join(root, "selected home")
 	if err := os.Mkdir(home, 0o700); err != nil {
 		t.Fatal(err)
 	}

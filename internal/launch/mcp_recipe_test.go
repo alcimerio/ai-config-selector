@@ -55,7 +55,10 @@ func TestMCPRecipeHelperSubprocess(t *testing.T) {
 }
 
 func TestMCPRecipeHelperExecutesSelectedReferencesAndRejectsMissingID(t *testing.T) {
-	root := t.TempDir()
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	workspace := filepath.Join(root, "workspace")
 	sessions := filepath.Join(root, "sessions")
 	home := filepath.Join(root, "session-home")
@@ -207,7 +210,10 @@ func TestMCPRecipeExpansionRespectsHelperReadBound(t *testing.T) {
 }
 
 func TestCompileMCPRecipesRetainsWorkspaceCoveredInputBindings(t *testing.T) {
-	root := t.TempDir()
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	workspace := filepath.Join(root, "workspace")
 	sessions := filepath.Join(root, "sessions")
 	if err := os.MkdirAll(workspace, 0o700); err != nil {

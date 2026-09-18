@@ -211,17 +211,27 @@ Keychain-backed references are a later delivery; this version supports only
 host-environment references and must not be described as durable
 credential storage.
 
+## Reference-only MCP servers
+
+`common.mcp` version 1 selects local stdio servers by references to the
+`common.executables`, `common.paths`, and `common.environment` selections.
+Arguments are ordered path or non-secret environment references; secret
+environment entries may be delivered to the attached process tree but cannot
+be used as argv items. See the [MCP Profile contract](mcp-profiles.md) for the
+full schema, target projection, remote transport boundary, public lifecycle,
+and current evidence limitations.
+
 ## Common material and projections
 
 For v3, selected Skills are copied first to:
 
 ```text
 $SESSION_HOME/.acs/common/v1/skills/<source>/<relativePath>/
+```
 
 Selected instruction files are captured before Session allocation and copied
 as verified bytes to `$SESSION_HOME/.acs/common/v1/instructions/<source>/<relativePath>`.
 They remain available to generic `acs run` without activating Devin paths.
-```
 
 The source segment prevents two source identities from being flattened. ACS
 rejects normalized duplicates, parent/child overlaps, and native case aliases

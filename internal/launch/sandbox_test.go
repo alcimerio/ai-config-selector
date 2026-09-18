@@ -821,7 +821,10 @@ func (process *stubLifecycleProcess) Signal(os.Signal) error { return nil }
 
 func validProcessRequest(t *testing.T) ProcessRequest {
 	t.Helper()
-	root := t.TempDir()
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	workspace := filepath.Join(root, "workspace")
 	sessions := filepath.Join(root, "sessions")
 	session := filepath.Join(sessions, "session-one")

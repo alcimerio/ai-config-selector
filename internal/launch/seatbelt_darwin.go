@@ -880,6 +880,9 @@ func buildSeatbeltPolicy(request validatedProcessRequest) (string, []string, err
 	var sessionProtectionRules strings.Builder
 	seenSessionProtectionPaths := map[string]bool{}
 	addSessionProtection := func(index int, protection validatedSessionProtection, includeAncestors bool) {
+		if protection.path == "" {
+			return
+		}
 		if seenSessionProtectionPaths[protection.path] {
 			return
 		}

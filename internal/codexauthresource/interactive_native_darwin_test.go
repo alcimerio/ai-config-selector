@@ -21,12 +21,15 @@ import (
 	"reflect"
 	"regexp"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"syscall"
 	"testing"
 	"time"
+
+	"golang.org/x/sys/unix"
 
 	"github.com/alcimerio/ai-config-selector/internal/codexauthresource"
 	"github.com/creack/pty"
@@ -966,6 +969,7 @@ type nativeResponsesFixture struct {
 	protocolErr                string
 	mcpStartupReceipt          string
 	preexistingHomes           map[string]struct{}
+	launcherHome               string
 	descendantReady            string
 	liveDescendantPID          int
 	coordination               *nativeCodexPhaseCoordination
@@ -1074,7 +1078,7 @@ type nativeRequestObservation struct {
 
 func newNativeResponsesFixture(t *testing.T, shellCommand, launcherHome string) *nativeResponsesFixture {
 	t.Helper()
-	fixture := &nativeResponsesFixture{completed: make(chan struct{}), preexistingHomes: make(map[string]struct{})}
+	fixture := &nativeResponsesFixture{completed: make(chan struct{}), preexistingHomes: make(map[string]struct{}), launcherHome: launcherHome}
 	for _, home := range nativeSessionHomes(launcherHome) {
 		fixture.preexistingHomes[home] = struct{}{}
 	}
@@ -1380,40 +1384,159 @@ func (fixture *nativeResponsesFixture) targetMCPDiagnostics(terminal string) str
 	if fixture.mcpScenario == nil {
 		return ""
 	}
-	redact := append([]string(nil), fixture.privateSentinels...)
-	var selectedArguments map[string]any
-	if json.Unmarshal([]byte(fixture.mcpScenario.callArguments), &selectedArguments) == nil {
-		for _, value := range selectedArguments {
-			if text, ok := value.(string); ok && text != "" {
-				redact = append(redact, text)
+	lines := strings.Split(terminal, "\n")
+	selected := make([]string, 0, 4)
+	allowedCategories := map[string]bool{
+		"invalid-invocation": true, "session-home-unavailable": true, "recipe-unavailable": true,
+		"recipe-invalid": true, "executable-identity": true, "workspace-identity": true,
+		"path-argument": true, "selected-argument": true, "exec-failed": true, "launch-failed": true,
+	}
+	for _, subject := range []string{"path", "executable"} {
+		for _, stage := range []string{"root", "ancestor", "leaf", "logical-root", "logical-metadata", "logical-ancestor", "other"} {
+			for _, errno := range []string{"eacces", "eperm", "enoent", "eloop", "enotdir", "other"} {
+				allowedCategories[subject+"-open-"+stage+"-"+errno] = true
 			}
 		}
 	}
-	lines := strings.Split(terminal, "\n")
-	selected := make([]string, 0, 4)
 	for _, line := range lines {
 		marker := ""
-		for _, candidate := range []string{"MCP startup failed", "acs: MCP server launch failed ("} {
-			if index := strings.Index(line, candidate); index >= 0 {
-				marker = line[index:]
-				break
-			}
+		if strings.Contains(line, "MCP startup failed") {
+			marker = "MCP startup failed"
+		} else if matches := regexp.MustCompile(`acs: MCP server launch failed \(([a-z0-9-]+)\)`).FindStringSubmatch(line); len(matches) == 2 && allowedCategories[matches[1]] {
+			marker = "acs: MCP server launch failed (" + matches[1] + ")"
 		}
 		if marker == "" {
 			continue
 		}
-		for _, value := range redact {
-			marker = strings.ReplaceAll(marker, value, "[redacted]")
-		}
-		if len(marker) > 4096 {
-			marker = marker[:4096] + "[truncated]"
-		}
-		selected = append(selected, strings.TrimSpace(marker))
+		selected = append(selected, marker)
 		if len(selected) == 4 {
 			break
 		}
 	}
+	if categories := readNewSessionMCPHelperCategories(fixture.launcherHome, fixture.preexistingHomes); categories != "none" {
+		selected = append(selected, "helper-categories="+categories)
+	} else {
+		selected = append(selected, "helper-categories=none")
+	}
 	return strings.Join(selected, " | ")
+}
+
+func readNewSessionMCPHelperCategories(launcherHome string, preexisting map[string]struct{}) string {
+	var homes []string
+	for _, home := range nativeSessionHomes(launcherHome) {
+		if _, existed := preexisting[home]; !existed {
+			homes = append(homes, home)
+		}
+	}
+	if len(homes) != 1 {
+		return "none"
+	}
+	homeFD, err := unix.Open(homes[0], unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_DIRECTORY, 0)
+	if err != nil {
+		return "none"
+	}
+	defer unix.Close(homeFD)
+	codexFD, err := unix.Openat(homeFD, ".codex", unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_DIRECTORY, 0)
+	if err != nil {
+		return "none"
+	}
+	defer unix.Close(codexFD)
+	logFD, err := unix.Openat(codexFD, "log", unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_DIRECTORY, 0)
+	if err != nil {
+		return "none"
+	}
+	defer unix.Close(logFD)
+	fd, err := unix.Openat(logFD, "codex-tui.log", unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0)
+	if err != nil {
+		return "none"
+	}
+	defer unix.Close(fd)
+	var before unix.Stat_t
+	if err := unix.Fstat(fd, &before); err != nil || before.Mode&unix.S_IFMT != unix.S_IFREG || before.Size < 0 || before.Size > 1<<20 {
+		return "none"
+	}
+	contents := make([]byte, int(before.Size))
+	for offset := 0; offset < len(contents); {
+		count, err := unix.Read(fd, contents[offset:])
+		if err == unix.EINTR {
+			continue
+		}
+		if err != nil || count == 0 {
+			return "none"
+		}
+		offset += count
+	}
+	if len(contents) > 1<<20 {
+		return "none"
+	}
+	var after unix.Stat_t
+	if err := unix.Fstat(fd, &after); err != nil || before.Dev != after.Dev || before.Ino != after.Ino || after.Mode&unix.S_IFMT != unix.S_IFREG {
+		return "none"
+	}
+	allowed := map[string]bool{
+		"invalid-invocation": true, "session-home-unavailable": true, "recipe-unavailable": true,
+		"recipe-invalid": true, "executable-identity": true, "workspace-identity": true,
+		"path-argument": true, "selected-argument": true, "exec-failed": true, "launch-failed": true,
+	}
+	for _, subject := range []string{"path", "executable"} {
+		for _, stage := range []string{"root", "ancestor", "leaf", "logical-root", "logical-metadata", "logical-ancestor", "other"} {
+			for _, errno := range []string{"eacces", "eperm", "enoent", "eloop", "enotdir", "other"} {
+				allowed[subject+"-open-"+stage+"-"+errno] = true
+			}
+		}
+	}
+	categoryPattern := regexp.MustCompile(`acs: MCP server launch failed \(([a-z0-9-]+)\)`)
+	seen := map[string]bool{}
+	for _, match := range categoryPattern.FindAllSubmatch(contents, -1) {
+		category := string(match[1])
+		if allowed[category] {
+			seen[category] = true
+		}
+	}
+	if len(seen) == 0 {
+		return "none"
+	}
+	categories := make([]string, 0, len(seen))
+	for category := range seen {
+		categories = append(categories, category)
+	}
+	sort.Strings(categories)
+	return strings.Join(categories, ",")
+}
+
+func TestReadNewSessionMCPHelperCategoriesUsesOnlyAllowlistedLogTokens(t *testing.T) {
+	launcherHome := t.TempDir()
+	sessionHome := filepath.Join(launcherHome, ".acs", "sessions", "session-new", "home")
+	logDirectory := filepath.Join(sessionHome, ".codex", "log")
+	if err := os.MkdirAll(logDirectory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	logPath := filepath.Join(logDirectory, "codex-tui.log")
+	if err := os.WriteFile(logPath, []byte("private /Users/runner/secret\nacs: MCP server launch failed (path-open-logical-ancestor-eacces)\nacs: MCP server launch failed (launch-failed)\nacs: MCP server launch failed (private-token)\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := readNewSessionMCPHelperCategories(launcherHome, nil); got != "launch-failed,path-open-logical-ancestor-eacces" {
+		t.Fatalf("sanitized categories=%q", got)
+	}
+	if got := readNewSessionMCPHelperCategories(launcherHome, map[string]struct{}{sessionHome: {}}); got != "none" {
+		t.Fatalf("preexisting Session log was inspected: %q", got)
+	}
+}
+
+func TestTargetMCPDiagnosticsUsesFixedAllowlistedMarkers(t *testing.T) {
+	fixture := &nativeResponsesFixture{mcpScenario: &nativeMCPResponsesScenario{callArguments: `{"path":"/private/fixture/secret","value":"secret-value"}`}}
+	terminal := "MCP startup failed: /private/fixture/secret secret-value\n" +
+		"acs: MCP server launch failed (launch-failed) /private/fixture/secret secret-value\n" +
+		"acs: MCP server launch failed (private-token) secret-value\n"
+	got := fixture.targetMCPDiagnostics(terminal)
+	if got != "MCP startup failed | acs: MCP server launch failed (launch-failed) | helper-categories=none" {
+		t.Fatalf("diagnostics=%q", got)
+	}
+	for _, forbidden := range []string{"/private/fixture/secret", "secret-value", "private-token"} {
+		if strings.Contains(got, forbidden) {
+			t.Fatalf("diagnostics leaked %q: %q", forbidden, got)
+		}
+	}
 }
 
 func readNativeMCPStartupReceipt(path string) string {
@@ -1841,9 +1964,9 @@ set -eu
 argument_value=${1-}
 input_path=${2-}
 if [ -z "$argument_value" ] || [ -z "$input_path" ]; then exit 91; fi
-input_value=$(/bin/cat "$input_path")
 receipt_path=$input_path.mcp-startup
 /usr/bin/printf 'server-entered\n' >> "$receipt_path"
+input_value=$(/bin/cat "$input_path")
 while IFS= read -r request; do
   request_id=$(/usr/bin/printf '%s' "$request" | /usr/bin/sed -E 's/.*"id":("[^"\\]*"|[0-9][0-9]*).*/\1/')
   case "$request" in

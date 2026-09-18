@@ -130,6 +130,7 @@ func TestSeatbeltPolicyIsDefaultDenyAndUsesParametersForValidatedPaths(t *testin
 		"-DSESSION_ANCESTOR_2=/",
 		"-DRUNTIME_0=" + request.runtimeInputs[0],
 		"-DRUNTIME_PROBE_0=" + request.runtimeProbePaths[0],
+		"-DSESSION_PROTECTED_1=" + request.sessionDirectory,
 		"-DRUNTIME_PROBE_TRAVERSAL_0=" + request.runtimeProbeTraversalPaths[0],
 	}
 	if strings.Join(definitions, "\n") != strings.Join(wantDefinitions, "\n") {
@@ -140,6 +141,44 @@ func TestSeatbeltPolicyIsDefaultDenyAndUsesParametersForValidatedPaths(t *testin
 	}
 	if strings.Contains(policy, `(subpath (param "RUNTIME_PROBE_TRAVERSAL_0"))`) {
 		t.Fatal("runtime probe traversal path grants descendant reads")
+	}
+}
+
+func TestSeatbeltPolicyKeepsValidSessionRootsProtectedWithoutExtraProtections(t *testing.T) {
+	request := validatedProcessRequest{
+		workspace:        "/private/tmp/workspace",
+		sessionDirectory: "/private/tmp/session",
+		sessionHome:      "/private/tmp/session/home",
+		executable:       "/usr/bin/true",
+	}
+	policy, definitions, err := buildSeatbeltPolicy(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, definition := range []string{"-DSESSION_PROTECTED_0=" + request.sessionHome, "-DSESSION_PROTECTED_1=" + request.sessionDirectory} {
+		if !strings.Contains(strings.Join(definitions, "\n"), definition) {
+			t.Fatalf("valid Session root protection missing %q from %#v", definition, definitions)
+		}
+	}
+	for _, rule := range []string{`(deny file-write* (literal (param "SESSION_PROTECTED_0")))`, `(deny file-write* (literal (param "SESSION_PROTECTED_1")))`} {
+		if !strings.Contains(policy, rule) {
+			t.Fatalf("valid Session root denial missing %q", rule)
+		}
+	}
+}
+
+func TestSeatbeltPolicyOmitsEmptySessionRootProtectionParameters(t *testing.T) {
+	policy, definitions, err := buildSeatbeltPolicy(validatedProcessRequest{workspace: "/private/tmp/workspace", executable: "/usr/bin/true"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, definition := range definitions {
+		if strings.HasPrefix(definition, "-DSESSION_PROTECTED_") {
+			t.Fatalf("empty Session root produced a protection parameter: %q", definition)
+		}
+	}
+	if strings.Contains(policy, `(literal (param "SESSION_PROTECTED_0"))`) {
+		t.Fatal("empty Session root produced a denial using a missing parameter")
 	}
 }
 

@@ -23,8 +23,13 @@ explicit local regular file; stdin and remote URLs are not supported.
 ## Export format and output
 
 Exchange version 3 supports common Skills v1, workspace v1, paths v1,
-executables v1, environment v1, and exact maintained Devin v1 and Codex v1
-overlays. Exchange versions 1 and 2 remain decodable and produce their original
+executables v1, environment v1, reference-only MCP v1, and exact maintained
+Devin v1 and Codex v1 overlays. MCP server IDs, transport, ordered typed argv
+references, declared input/environment references, and disabled tool names are
+carried without resolved host values. Local executable, path and secret
+environment references use the explicit bindings described below. Only local
+stdio transport is supported; remote URLs, headers and OAuth fields are
+rejected. Exchange versions 1 and 2 remain decodable and produce their original
 capability sets. A version-1 or version-2 local Profile must first
 use the existing explicit `acs profile migrate NAME` workflow. Export never
 migrates or rewrites its source.

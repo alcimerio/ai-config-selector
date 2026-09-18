@@ -6,10 +6,13 @@ machine-local Profile from an explicit JSON file. The document supplies its
 own name. Standard input and implicit file selection are not supported.
 
 Only the currently supported version-3 representation is accepted. The exact
-common `skills`, optional `instructions`, `workspace`, `paths`, `executables`, and `environment`
-capabilities and supported version-1 `devin` and `codex` overlays may be
-present. Environment source names and secret references are validated as
-logical local bindings; provider values are never read by creation or dry-run.
+common `skills`, optional `instructions`, `workspace`, `paths`, `executables`,
+`environment`, and reference-only `mcp` capabilities and supported version-1
+`devin` and `codex` overlays may be present. MCP declarations must bind to
+selected executable, path and environment entries; see the [MCP Profile
+contract](mcp-profiles.md). Environment source names and secret references are validated as
+logical local bindings; provider values are never read by creation or
+dry-run.
 Future envelope versions, legacy v1/v2
 documents, duplicate keys, unknown fields or common capabilities, unsupported
 or unknown overlays, invalid references and any representation that cannot be
