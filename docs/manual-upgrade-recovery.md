@@ -1,6 +1,6 @@
 # Manual binary upgrades, rollback and data recovery
 
-Current source provides `acs update --check`, `acs update`, and pinned
+Published v0.5.0 provides `acs update --check`, `acs update`, and pinned
 `acs update vMAJOR.MINOR.PATCH` for a direct user-owned Apple Silicon installation.
 The updater replaces only the ACS executable after validating the official
 release archive; it does not back up or migrate data. A pinned older version can
@@ -14,33 +14,39 @@ processes keep their old executable bytes, but a prepared supervisor or delayed
 MCP helper may open the replaced pathname later. Restart the affected Session
 through its normal lifecycle when helper compatibility is uncertain.
 
-This guide targets macOS 26 on Apple Silicon and Intel. As verified on
-2026-09-06 UTC, the [latest published release is immutable v0.4.0](https://github.com/alcimerio/ai-config-selector/releases/tag/v0.4.0).
-The [release metadata](https://api.github.com/repos/alcimerio/ai-config-selector/releases/tags/v0.4.0)
-identifies its four downloadable assets. The examples deliberately pin that
-release; they do not track a moving `latest` download URL. Selecting v0.4.0 when
-you already use newer development source is a binary downgrade.
+The [latest published release is immutable v0.5.0](https://github.com/alcimerio/ai-config-selector/releases/tag/v0.5.0), verified on 2026-09-22 UTC. It supports macOS 26 on Apple Silicon only.
+The executable examples below deliberately pin historical
+[v0.4.0](https://github.com/alcimerio/ai-config-selector/releases/tag/v0.4.0)
+for its recovery procedure; they do not track a moving `latest` download URL.
+Selecting v0.4.0 from v0.5.0 is a binary downgrade, not a stored-data downgrade.
 
 This two-architecture scope is historical and specific to published v0.4.0.
-Current development source and future releases support only macOS 26 on Apple
+Published v0.5.0 and current source support only macOS 26 on Apple
 Silicon (`darwin/arm64`); the Intel asset and checksum below remain unchanged so
 v0.4.0 recovery stays reproducible.
 
-## Bootstrap from published v0.4.0 to proposed v0.5.0
+## Bootstrap from published v0.4.0 to v0.5.0
 
-Proposed v0.5.0 is not published yet. Its future release URL, archive, manifest,
-installer, checksums, attestations, and installed bytes are all pending. Do not
-run a v0.5.0 URL or reuse a development candidate merely because its binary
-reports `v0.5.0`.
+The [published v0.5.0 Release](https://github.com/alcimerio/ai-config-selector/releases/tag/v0.5.0) contains the Apple Silicon archive, checksum manifest, and installer. Use those exact release assets, not an earlier development candidate whose binary merely reports `v0.5.0`.
 
-After the immutable v0.5.0 Release exists, a published v0.4.0 installation must
+An existing v0.4.0 installation must
 bootstrap through the inspected v0.5.0 installer because v0.4.0 has no `update`
 command. Use a new empty, direct, user-owned installation directory; the
 installer intentionally refuses to overwrite an existing `acs`. Retain and hash
 the v0.4.0 binary, install and hash v0.5.0, and change `PATH` only in a dedicated
 maintenance shell after checking `command -v acs` resolves the intended file.
-The future release-specific commands in the README illustrate that bootstrap;
-they are not operational until publication.
+The [release-specific commands in the README](../README.md#install) perform this
+bootstrap. Verify the downloaded installer against the published digest below
+before running it, then inspect it. The [publication record](releases/v0.5.0-checklist.md)
+records the release run, exact asset sizes and checksums, and verification limits.
+
+| Published v0.5.0 asset | Size (bytes) | SHA-256 |
+| --- | ---: | --- |
+| [`acs_0.5.0_darwin_arm64.tar.gz`](https://github.com/alcimerio/ai-config-selector/releases/download/v0.5.0/acs_0.5.0_darwin_arm64.tar.gz) | 4,197,754 | `425186a809a8206a9c2fcf97244215752704497ef964bf96b77bbed2e908c261` |
+| [`SHA256SUMS`](https://github.com/alcimerio/ai-config-selector/releases/download/v0.5.0/SHA256SUMS) | 96 | `3e45ffdca303bf4af75c2c43ab35d4b4d2fc35a31a5c088a292582edb88e5e4f` |
+| [`install.sh`](https://github.com/alcimerio/ai-config-selector/releases/download/v0.5.0/install.sh) | 8,243 | `5723249bb5d69b5878e9178e6dc7cb45812d8d6930029d8c174b5acab3a5b38f` |
+
+The archive member `acs` has SHA-256 `f077d7bb4624a65e8e270df7ab3259d4289ad5410d6a49b53ebcae4c9f283fa5`. The public assets match the final release-run candidate bytes. GitHub attestation verification succeeded for the archive and manifest with the final tag and source provenance; the installer is **not an attestation subject**.
 
 Before any schema-changing write, settle active operations and make the private
 quiescent Profile-file copy in
@@ -52,31 +58,35 @@ v0.4.0: binary rollback cannot downgrade Profile v3, history, Session, exchange,
 or named-authentication state. Filesystem copies do not contain Keychain
 credentials and are not a supported automatic restore mechanism.
 
-The v0.5.0 cut is intentionally unsigned and unnotarized. Checksums and GitHub
-attestations establish byte identity and origin, not Apple signing,
+The v0.5.0 release is intentionally unsigned and unnotarized. Checksums and verified GitHub
+attestations establish byte identity and origin for their subjects, not Apple signing,
 notarization, malware review, or Gatekeeper approval. Do not remove quarantine,
 disable Gatekeeper, ad-hoc sign the binary, or weaken Seatbelt to make it run.
 No Apple credential is required for this cut.
 
 ## Check which capabilities belong to your binary
 
-| Capability | Published v0.4.0 | Current development source |
+| Capability | Published v0.4.0 | Published v0.5.0 |
 | --- | --- | --- |
 | `version`, Devin Profile creation/launch, sandbox shell, launch dry-run | Available | Available |
 | Contextual help, `profile list/show/validate`, `doctor` | Unavailable | Available; passive inspection |
 | `profile edit/clone/rename/delete` | Unavailable | Available with confirmed, conditional writes |
 | Transaction recovery before interactive `devin create-profile` | Unavailable | Available before the duplicate-name check |
 | Named `codex auth` commands, including `recover` | Unavailable | Available with the Keychain and Session protections below |
+| Profile v3, portable exchange, history and explicit migration | Unavailable | Available with separate data ownership and recovery rules |
+| Durable `session list/inspect/recover` | Unavailable | Available with proof-gated cleanup |
+| `update --check` and stable-release replacement | Unavailable | Available for supported direct user-owned Apple Silicon installs |
 
 The release command boundary is defined by the
 [v0.4.0 command dispatcher](https://github.com/alcimerio/ai-config-selector/blob/d5f333c0cf4e32334a92c5fca77a8af0bcb4cd64/internal/cli/cli.go).
 Its creation command does **not** implement the newer transaction recovery entry
-point. Staging this release cannot add recovery capabilities from current main.
-For source-only steps below, retain the compatible source binary that owns the
-state, or build a reviewed compatible revision using the [source instructions](../README.md#install).
-Record its revision and binary SHA-256: `acs devel` alone does not identify a build.
-Development candidate artifacts may report `v0.4.0` too; the version string alone
-does not identify the published release bytes.
+point. Staging v0.4.0 cannot add v0.5.0 recovery capabilities. For the recovery
+steps below, retain a compatible owning v0.5.0 binary, or build a reviewed
+compatible revision using the [source instructions](../README.md#install).
+Record the binary SHA-256 and either its pinned release identity or source
+revision: `acs devel` alone does not identify a build. Historical development
+candidate artifacts may report `v0.4.0` too; a version string alone does not
+identify published release bytes.
 
 ## Discover the executable you actually use
 
@@ -114,7 +124,7 @@ non-ASCII characters in its destination. Spaces are supported. Choose a new
 maintenance directory for each attempt; an existing directory makes this example
 stop instead of mixing old and new evidence.
 
-## Retain the old binary and inspect the selected installer
+## Historical v0.4.0 staging: retain the old binary and inspect the installer
 
 Edit `old_bin` to the resolved executable you inspected. The binary staging,
 switch, rollback and optional backup blocks run in order in the same maintenance
@@ -175,11 +185,11 @@ matching `uname -m` from the pinned release URL:
 | [`acs_0.4.0_darwin_arm64.tar.gz`](https://github.com/alcimerio/ai-config-selector/releases/download/v0.4.0/acs_0.4.0_darwin_arm64.tar.gz) | `fab58eff46bb29d1aaed797530a63e617be5ed5771a4ebafc584cddcf510ee5a` |
 | [`acs_0.4.0_darwin_amd64.tar.gz`](https://github.com/alcimerio/ai-config-selector/releases/download/v0.4.0/acs_0.4.0_darwin_amd64.tar.gz) | `a69264fa7baf9dcf19bfcb5bb34495f1f0eeaed08071993896f4ff38688b59fc` |
 
-The installer digest above comes from the release asset metadata. The binary
+The historical v0.4.0 installer digest above comes from its release asset metadata. The binary
 digests below were computed from the regular `acs` entries in those verified
 archives; they are distinct from the archive digests. For any other release,
 inspect that release's metadata, installer, compatibility notes and artifacts,
-then update all version and digest values together. Do not guess future URLs or
+then update all version and digest values together. Do not guess URLs or
 reuse these digests with another version.
 
 ## Stage and verify before switching
@@ -214,7 +224,8 @@ The version command does not create a Session or mutate Profile/authentication
 state. Staging only places a binary; it does not inspect or migrate your data.
 
 Archives are unsigned and unnotarized. Checksums establish byte identity against
-their trusted reference; release attestations provide separate origin evidence.
+their trusted reference; a verified attestation provides separate origin evidence
+for its subjects.
 Neither grants Apple notarization or proves malware safety. If native trust or
 sandbox checks refuse execution, stop and retain the failure evidence. Do not
 strip quarantine attributes, disable Gatekeeper, ad-hoc sign the binary, or weaken
@@ -276,7 +287,7 @@ state. If compatibility is unknown, stop after `version` and use the owning
 compatible binary for inspection and recovery. An old backup must not overwrite
 new-format live data as a routine fix.
 
-Current source writes Profile envelope v3 with independently versioned common
+v0.5.0 writes Profile envelope v3 with independently versioned common
 Skills/workspace payloads and explicit target overlays. New Profiles default to
 read-only workspace authority; legacy v1/v2 remains writable until explicit
 migration or a later supported edit changes that intent.
@@ -285,7 +296,7 @@ clone and rename show the exact canonical result and explicitly preview any v1
 `skillReferences` to v2 `categories.skills` conversion; clone leaves its source
 unchanged. A v2 rewrite can also change ordering, defaults and formatting. The
 separate `acs profile migrate NAME` command adopts v3 and common material paths.
-transaction journal's format version is separate: recovery settles recorded bytes
+The transaction journal's format version is separate: recovery settles recorded bytes
 without decoding or migrating them. Installing or switching the binary changes
 none of these representations. See the [mutation guide](profile-mutations.md).
 
@@ -320,14 +331,14 @@ done
 Keep backups outside repositories, shared folders and uploads. Record privately
 which binary/revision wrote each format and which changes have occurred since
 the backup. The copy does not include Skill source contents, Session state,
-transaction evidence, or Keychain credentials. ACS has no supported CLI import,
-backup restore or schema-downgrade command. If later recovery requires a restore,
+transaction evidence, or Keychain credentials. Portable Profile import is not a
+backup restore, and ACS has no backup-restore or schema-downgrade command. If later recovery requires a restore,
 preserve the current data separately and plan it against the exact compatible
 schema and settled repository; do not replace the live tree, locks or journals
 with this copy. Missing, corrupt or unsupported data may require case-specific
 maintainer help instead of an automatic repair.
 
-## Recover a Profile transaction with compatible development source
+## Recover a Profile transaction with a compatible binary
 
 The inspection and recovery procedures below use a separate interactive shell.
 Start it with this command, including when you are still in the maintenance Bash:
@@ -348,8 +359,8 @@ interpreting the results, use the [explicit return step below](#leave-the-recove
 to return to the parent without propagating a failed final inspection into its
 fail-fast setting.
 
-Initialize `source_bin` **in this recovery shell** to the inspected, compatible
-source executable, not the staged v0.4.0 binary. Keep this shell for the Profile
+Initialize `source_bin` **in this recovery shell** to an inspected, compatible
+v0.5.0 release binary or reviewed compatible source build, not the staged v0.4.0 binary. Keep this shell for the Profile
 and named-authentication recovery steps. These commands inspect stored structure
 without changing it:
 
@@ -426,9 +437,9 @@ Locked, unavailable, ambiguous or corrupt Keychain state fails closed without a
 plaintext fallback. Restore normal Keychain access through supported macOS
 interfaces and retry; preserve evidence if schema or record integrity is rejected.
 
-Use the [recovery-shell setup above](#recover-a-profile-transaction-with-compatible-development-source)
+Use the [recovery-shell setup above](#recover-a-profile-transaction-with-a-compatible-binary)
 and initialize `source_bin` there even if you only need identity recovery.
-With that compatible source binary, metadata-only listing is safe inspection:
+With that compatible binary, metadata-only listing is safe inspection:
 
 ```sh
 "$source_bin" codex auth list
@@ -502,9 +513,10 @@ and executables, including directories with spaces, verification failures,
 command shadowing, old/new selection and rollback. Such checks establish shell
 behavior and file preservation, not a real-user upgrade or recovery. Existing
 installer tests cover no-overwrite, unsafe destinations, checksum/version failures
-and archive validation. Native PR CI on macOS 26 Apple Silicon remains necessary
-for the installed candidate, filesystem transactions, Session settlement, Seatbelt
-and disposable-Keychain recovery contracts. Its source candidate is not evidence
-that the older published binary contains newer commands. No real credentials or
-user-state migration is required for these checks, and no release publication is
-part of this guide.
+and archive validation. The published v0.5.0 candidate passed its native macOS 26
+Apple Silicon release gate, including installed-artifact containment, Session
+settlement, and synthetic Codex authentication with disposable Keychain and
+loopback simulated API. These checks do not establish a real-account login,
+hosted inference, or the pending week-long two-project observation. Historical
+v0.4.0 examples and temporary fixtures do not establish those v0.5.0 release
+results by themselves.

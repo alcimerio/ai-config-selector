@@ -115,15 +115,15 @@ func TestReleaseArtifactContractIsExactlyOneAppleSiliconTarget(t *testing.T) {
 	}
 }
 
-func TestDevelopmentCandidateVersionIsProposedV050(t *testing.T) {
+func TestDevelopmentCandidateVersionAndPublishedV050Docs(t *testing.T) {
 	repository := ".."
 	promoted := readRepositoryFile(t, repository, filepath.Join(".github", "workflows", "promoted-artifacts.yml"))
 	macos := readRepositoryFile(t, repository, filepath.Join(".github", "workflows", "macos.yml"))
 	if !strings.Contains(promoted, "ACS_CANDIDATE_VERSION: v0.5.0") {
-		t.Fatal("promoted workflow does not use the proposed v0.5.0 development identity")
+		t.Fatal("promoted workflow does not use the v0.5.0 development identity")
 	}
 	if !strings.Contains(macos, "scripts/release-candidate.sh v0.5.0") {
-		t.Fatal("macOS workflow does not verify the proposed v0.5.0 candidate")
+		t.Fatal("macOS workflow does not verify the v0.5.0 candidate")
 	}
 	for _, stale := range []string{
 		"ACS_CANDIDATE_VERSION: v0.4.0",
@@ -145,7 +145,7 @@ func TestDevelopmentCandidateVersionIsProposedV050(t *testing.T) {
 		"daily-use observation",
 	} {
 		if !strings.Contains(notes, required) {
-			t.Errorf("proposed release notes omit %q", required)
+			t.Errorf("release notes omit %q", required)
 		}
 	}
 	for _, preparationOnly := range []string{
@@ -158,9 +158,15 @@ func TestDevelopmentCandidateVersionIsProposedV050(t *testing.T) {
 			t.Errorf("verbatim release notes retain preparation-only content %q", preparationOnly)
 		}
 	}
-	for _, required := range []string{"PENDING", "UNPERFORMED", "refs/tags/v0.5.0"} {
+	for _, required := range []string{
+		"https://github.com/alcimerio/ai-config-selector/releases/tag/v0.5.0",
+		"immutable",
+		"UNPERFORMED / PENDING",
+		"refs/tags/v0.5.0",
+		"installer is part of the byte-matched published artifact set but is **not an attestation subject**",
+	} {
 		if !strings.Contains(checklist, required) {
-			t.Errorf("proposed release checklist omits %q", required)
+			t.Errorf("published release record omits %q", required)
 		}
 	}
 }
