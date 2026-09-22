@@ -162,6 +162,22 @@ explains the compatibility boundary between binary rollback and stored data.
 Profile transaction and named-authentication recovery described there require
 compatible development source; the published v0.4.0 binary does not provide them.
 
+Current source adds `acs update --check` to report the installed version, latest
+published stable target, and availability without downloading an archive or
+changing installation or user data. `acs update` installs a newer published
+stable release; `acs update vMAJOR.MINOR.PATCH` selects a published stable version
+and can reinstall or downgrade. The updater accepts the direct, user-owned
+regular-file installer layout on macOS 26 Apple Silicon. It refuses development,
+symlinked, package-manager, and ambiguous PATH layouts with reinstall guidance.
+It downloads official GitHub release assets over HTTPS and verifies the selected
+archive against `SHA256SUMS` before replacing only the running ACS executable.
+It requires no GitHub login, Apple Developer ID, notarization, or `sudo`.
+The updater does not migrate or downgrade Profiles, identities, history, or
+Sessions. An older binary may not understand newer data. A Session already using
+ACS helpers may need restart before later helper launches after an update;
+follow normal Session cleanup and the manual recovery guide if it cannot settle.
+The published v0.4.0 binary does not have the update command.
+
 ## macOS quickstart (development source)
 
 Contextual help and the guidance below describe the current source build; the
@@ -538,7 +554,7 @@ refresh observation remains supplemental and is never a CI credential gate.
   locked target runs in its supported externally sandboxed no-prompt mode;
   Profile read-only or coding-write access is enforced by ACS, and failure to
   establish that outer containment never falls back to an unrestricted launch.
-- ACS has no automatic updater, package-manager distribution, or uninstaller.
+- ACS has no background update checks, package-manager distribution, or uninstaller.
 
 Read [the architecture](docs/architecture.md), [contribution guide](CONTRIBUTING.md),
 and [v0.4.0 release notes](docs/releases/v0.4.0.md) for more detail.

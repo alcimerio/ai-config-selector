@@ -1,9 +1,18 @@
 # Manual binary upgrades, rollback and data recovery
 
-ACS has no updater. Install a selected immutable release into a new directory,
-verify it, and deliberately change which executable your shell selects. Keep the
-known-good binary and private local Profile backups. Changing the executable does
-not migrate stored Profiles, recover a transaction, or move authentication records.
+Current source provides `acs update --check`, `acs update`, and pinned
+`acs update vMAJOR.MINOR.PATCH` for a direct user-owned Apple Silicon installation.
+The updater replaces only the ACS executable after validating the official
+release archive; it does not back up or migrate data. A pinned older version can
+be unable to read newer Profiles or Session records. Published v0.4.0 has no
+update command. For unsupported layouts or explicit manual rollback, install a
+selected immutable release into a new directory, verify it, and deliberately
+change which executable your shell selects. Keep the known-good binary and private
+local Profile backups. Changing the executable does not migrate stored Profiles,
+recover a transaction, or move authentication records. Already-running ACS
+processes keep their old executable bytes, but a prepared supervisor or delayed
+MCP helper may open the replaced pathname later. Restart the affected Session
+through its normal lifecycle when helper compatibility is uncertain.
 
 This guide targets macOS 26 on Apple Silicon and Intel. As verified on
 2026-09-06 UTC, the [latest published release is immutable v0.4.0](https://github.com/alcimerio/ai-config-selector/releases/tag/v0.4.0).

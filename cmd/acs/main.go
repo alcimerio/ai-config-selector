@@ -4,10 +4,12 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"regexp"
 	"runtime/debug"
 	"strings"
+	"syscall"
 
 	codexadapter "github.com/alcimerio/ai-config-selector/internal/adapter/codex"
 	"github.com/alcimerio/ai-config-selector/internal/adapter/devin"
@@ -18,6 +20,7 @@ import (
 	"github.com/alcimerio/ai-config-selector/internal/launch"
 	"github.com/alcimerio/ai-config-selector/internal/profile"
 	"github.com/alcimerio/ai-config-selector/internal/sandboxshell"
+	"github.com/alcimerio/ai-config-selector/internal/selfupdate"
 )
 
 var releaseVersionPattern = regexp.MustCompile(`^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:\+incompatible)?$`)
@@ -48,6 +51,14 @@ func main() {
 	}
 	if handled, code := informational.RunInformational(os.Args[1:]); handled {
 		os.Exit(code)
+	}
+	if cli.UpdateRequested(os.Args[1:]) {
+		updateContext, stopUpdate := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		handled, code := informational.RunUpdate(updateContext, os.Args[1:], selfupdate.Config{})
+		stopUpdate()
+		if handled {
+			os.Exit(code)
+		}
 	}
 	if cli.ProfileCreateRequested(os.Args[1:]) {
 		existingHome, err := os.UserHomeDir()
