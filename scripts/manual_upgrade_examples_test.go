@@ -12,6 +12,64 @@ import (
 	"testing"
 )
 
+func TestFutureV050BootstrapExampleCreatesParentAndPreservesExistingInstall(t *testing.T) {
+	repository := ".."
+	readme := readRepositoryFile(t, repository, "README.md")
+	pattern := regexp.MustCompile("(?s)<!-- future-v050-bootstrap-example -->\\n```sh\\n(.*?)\\n```")
+	match := pattern.FindStringSubmatch(readme)
+	if len(match) != 2 {
+		t.Fatal("README future v0.5.0 bootstrap example is missing or duplicated")
+	}
+
+	root := t.TempDir()
+	home := filepath.Join(root, "fresh home")
+	tools := filepath.Join(root, "tools")
+	if err := os.MkdirAll(home, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(tools, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	log := writeFixture(t, root, "curl.log", "")
+	writeExecutable(t, tools, "curl", `#!/bin/sh
+printf 'download\n' >>"$TEST_CURL_LOG"
+destination=
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --output) destination="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+test "$destination" = install-v0.5.0.sh
+printf '%s\n' '#!/bin/sh' 'set -eu' 'test "$1" = --bin-dir' 'test "$#" = 2' 'test -d "$2"' 'test ! -e "$2/acs"' 'printf '\''#!/bin/sh\nprintf "acs v0.5.0\\n"\n'\'' > "$2/acs"' 'chmod 0700 "$2/acs"' >"$destination"
+`)
+	writeExecutable(t, tools, "less", "#!/bin/sh\ntest \"$1\" = install-v0.5.0.sh\n")
+
+	run := func() ([]byte, error) {
+		command := exec.Command("/bin/bash", "--noprofile", "--norc", "-c", match[1])
+		command.Dir = root
+		command.Env = append(os.Environ(),
+			"HOME="+home,
+			"PATH="+tools+":/usr/bin:/bin",
+			"TEST_CURL_LOG="+log,
+		)
+		return command.CombinedOutput()
+	}
+	if output, err := run(); err != nil {
+		t.Fatalf("fresh bootstrap example failed: %v\n%s", err, output)
+	}
+	installed := filepath.Join(home, ".local", "opt", "acs-v0.5.0", "acs")
+	if output, err := exec.Command(installed).CombinedOutput(); err != nil || string(output) != "acs v0.5.0\n" {
+		t.Fatalf("installed bootstrap identity = %q, %v", output, err)
+	}
+	if output, err := run(); err == nil {
+		t.Fatalf("bootstrap example reused an existing destination:\n%s", output)
+	}
+	if downloads := strings.Count(string(mustReadFile(t, log)), "download\n"); downloads != 1 {
+		t.Fatalf("download count = %d, want 1", downloads)
+	}
+}
+
 // Execute the documented shell blocks against fake release assets. Only the
 // operator-supplied old path and trusted digest inputs are replaced; the shell
 // operations, checks and PATH changes are the ones a reader runs.

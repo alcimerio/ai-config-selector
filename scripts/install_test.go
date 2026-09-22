@@ -129,7 +129,7 @@ func TestInstallerRejectsUnsupportedInputsBeforeDownloading(t *testing.T) {
 		want     string
 	}{
 		{name: "unsupported operating system", hostOS: "FreeBSD", hostArch: "amd64", want: "unsupported operating system"},
-		{name: "unsupported Linux", hostOS: "Linux", hostArch: "amd64", want: "ACS v0.4 supports macOS only"},
+		{name: "unsupported Linux", hostOS: "Linux", hostArch: "amd64", want: "ACS release installers support macOS only"},
 		{name: "unsupported architecture", hostOS: "Darwin", hostArch: "riscv64", want: "unsupported architecture"},
 		{name: "unsupported Intel Mac", hostOS: "Darwin", hostArch: "x86_64", want: "Apple Silicon (arm64) only"},
 		{name: "unknown argument", hostOS: "Darwin", hostArch: "arm64", args: func(_ *testing.T, _ *installerFixture) []string { return []string{"--version", "v9.9.9"} }, want: "unknown argument"},
