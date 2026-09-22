@@ -29,7 +29,7 @@ import (
 	"time"
 )
 
-// A copied test binary runs the public dispatcher while replacing its own
+// A disposable test binary runs the public dispatcher while replacing its own
 // executable. The release client and certificate exist only in this test.
 func TestNativeDisposablePublicUpdate(t *testing.T) {
 	if os.Getenv("ACS_TEST_UPDATE_CHILD") == "1" {
@@ -53,24 +53,14 @@ func TestNativeDisposablePublicUpdate(t *testing.T) {
 		t.Fatal(e)
 	}
 	installed := filepath.Join(dir, "acs")
-	old, e := os.Executable()
-	if e != nil {
-		t.Fatal(e)
-	}
-	input, e := os.Open(old)
-	if e != nil {
-		t.Fatal(e)
-	}
-	defer input.Close()
-	output, e := os.OpenFile(installed, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0755)
-	if e != nil {
-		t.Fatal(e)
-	}
-	if _, e = io.Copy(output, input); e != nil {
-		t.Fatal(e)
-	}
-	if e = output.Close(); e != nil {
-		t.Fatal(e)
+	// Seatbelt re-executes this binary as its supervisor. The Darwin race runtime
+	// aborts inside that policy, so compile this integration runner like production.
+	// The parent HTTP fixture and updater unit tests still run under go test -race.
+	runnerContext, cancelRunner := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancelRunner()
+	runnerBuild := exec.CommandContext(runnerContext, "go", "test", "-c", "-race=false", "-buildvcs=false", "-o", installed, ".")
+	if b, err := runnerBuild.CombinedOutput(); err != nil {
+		t.Fatalf("build native runner: %v: %s", err, b)
 	}
 	oldInfo, e := os.Stat(installed)
 	if e != nil {
