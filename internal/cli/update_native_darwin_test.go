@@ -117,7 +117,7 @@ func TestNativeDisposablePublicUpdate(t *testing.T) {
 	hash := sha256.Sum256(archive.Bytes())
 	manifest := hex.EncodeToString(hash[:]) + "  acs_0.5.0_darwin_arm64.tar.gz\n"
 	var server *httptest.Server
-	server = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server = httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/latest":
 			fmt.Fprintf(w, `{"tag_name":"v0.5.0","assets":[{"name":"acs_0.5.0_darwin_arm64.tar.gz","browser_download_url":"%s/archive"},{"name":"SHA256SUMS","browser_download_url":"%s/manifest"}]}`, server.URL, server.URL)
@@ -129,6 +129,7 @@ func TestNativeDisposablePublicUpdate(t *testing.T) {
 			http.NotFound(w, r)
 		}
 	}))
+	server.StartTLS()
 	defer server.Close()
 	certificate := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw})
 	childContext, cancelChild := context.WithTimeout(context.Background(), 45*time.Second)
@@ -347,7 +348,7 @@ func nativePreparedSession(t *testing.T, ctx context.Context, root, workspace, l
 	if e != nil {
 		t.Fatal(e)
 	}
-	request := launch.ProcessRequest{Workspace: workspace, WorkspaceAccess: launch.WorkspaceAccessReadWrite, SessionsDirectory: created.SessionsDirectory(), SessionDirectory: created.RootDirectory(), SessionHome: created.HomeDirectory(), TemporaryDirectory: created.TemporaryDirectory(), Executable: target, Arguments: args, RecoveryProofChallenge: challenge, Terminal: launch.Terminal{Input: bytes.NewReader(nil), Output: io.Discard, ErrorOutput: io.Discard}}
+	request := launch.ProcessRequest{Workspace: workspace, WorkspaceAccess: launch.WorkspaceAccessReadWrite, SessionsDirectory: created.SessionsDirectory(), SessionDirectory: created.RootDirectory(), SessionHome: created.HomeDirectory(), TemporaryDirectory: created.TemporaryDirectory(), Executable: target, Arguments: args, RecoveryProofChallenge: challenge, Terminal: launch.Terminal{Input: bytes.NewReader(nil), Output: io.Discard, ErrorOutput: os.Stderr}}
 	process, e := sandbox.Prepare(ctx, request)
 	if e != nil {
 		t.Fatal(e)
