@@ -21,6 +21,16 @@ import (
 	"time"
 )
 
+// canonicalInstallTempDir removes platform temp aliases before testing installation fences.
+func canonicalInstallTempDir(t *testing.T) string {
+	t.Helper()
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
 func TestVersionOrdering(t *testing.T) {
 	for _, s := range []string{"v1.2.3", "v10.0.0"} {
 		if _, e := ParseVersion(s); e != nil {
@@ -104,7 +114,7 @@ func TestCheckOnlyUsesMetadata(t *testing.T) {
 	}
 }
 func TestReplacementAndIdentityFence(t *testing.T) {
-	dir := t.TempDir()
+	dir := canonicalInstallTempDir(t)
 	path := filepath.Join(dir, "acs")
 	old := []byte("old executable")
 	if e := os.WriteFile(path, old, 0755); e != nil {
@@ -150,7 +160,7 @@ func TestReplacementAndIdentityFence(t *testing.T) {
 	}
 }
 func TestChecksumMismatchLeavesOldBytes(t *testing.T) {
-	dir := t.TempDir()
+	dir := canonicalInstallTempDir(t)
 	path := filepath.Join(dir, "acs")
 	old := []byte("original")
 	if e := os.WriteFile(path, old, 0755); e != nil {
@@ -195,7 +205,7 @@ func (m *mutateAtCommit) Err() error {
 	return nil
 }
 func TestStageSubstitutionRejected(t *testing.T) {
-	dir := t.TempDir()
+	dir := canonicalInstallTempDir(t)
 	path := filepath.Join(dir, "acs")
 	if e := os.WriteFile(path, []byte("old"), 0755); e != nil {
 		t.Fatal(e)
@@ -245,7 +255,7 @@ func TestStageSubstitutionRejected(t *testing.T) {
 	}
 }
 func TestSameInodeRewriteRejected(t *testing.T) {
-	dir := t.TempDir()
+	dir := canonicalInstallTempDir(t)
 	path := filepath.Join(dir, "acs")
 	if e := os.WriteFile(path, []byte("old"), 0755); e != nil {
 		t.Fatal(e)
@@ -310,7 +320,7 @@ func TestArchiveRejectsSecondGzipMember(t *testing.T) {
 }
 
 func TestStageModeChangeRejected(t *testing.T) {
-	dir := t.TempDir()
+	dir := canonicalInstallTempDir(t)
 	path := filepath.Join(dir, "acs")
 	if e := os.WriteFile(path, []byte("old"), 0755); e != nil {
 		t.Fatal(e)
@@ -348,7 +358,7 @@ func TestStageModeChangeRejected(t *testing.T) {
 	}
 }
 func TestNamedFIFORefusedWithoutBlocking(t *testing.T) {
-	dir := t.TempDir()
+	dir := canonicalInstallTempDir(t)
 	d, e := pinDirectory(dir)
 	if e != nil {
 		t.Fatal(e)
@@ -372,7 +382,7 @@ func TestNamedFIFORefusedWithoutBlocking(t *testing.T) {
 func TestPublicationBoundaryFailures(t *testing.T) {
 	for _, post := range []bool{false, true} {
 		t.Run(fmt.Sprint("post=", post), func(t *testing.T) {
-			dir := t.TempDir()
+			dir := canonicalInstallTempDir(t)
 			path := filepath.Join(dir, "acs")
 			if e := os.WriteFile(path, []byte("old"), 0755); e != nil {
 				t.Fatal(e)
@@ -445,7 +455,7 @@ func TestStageOperationFailuresKeepOldBytesAndCleanOwnedStage(t *testing.T) {
 }
 func reviewInstall(t *testing.T) (string, *os.File, os.FileInfo, [32]byte) {
 	t.Helper()
-	dir := t.TempDir()
+	dir := canonicalInstallTempDir(t)
 	p := filepath.Join(dir, "acs")
 	if e := os.WriteFile(p, []byte("old"), 0755); e != nil {
 		t.Fatal(e)

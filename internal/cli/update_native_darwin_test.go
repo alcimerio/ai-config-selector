@@ -84,7 +84,8 @@ func TestNativeDisposablePublicUpdate(t *testing.T) {
 	candidate := filepath.Join(dir, "candidate")
 	buildContext, cancelBuild := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancelBuild()
-	build := exec.CommandContext(buildContext, "go", "build", "-ldflags=-X main.releaseVersion=v0.5.0", "-o", candidate, "../../cmd/acs")
+	// This synthetic candidate must not inherit checkout dirtiness from the fixture.
+	build := exec.CommandContext(buildContext, "go", "build", "-buildvcs=false", "-ldflags=-X main.releaseVersion=v0.5.0", "-o", candidate, "../../cmd/acs")
 	if b, e := build.CombinedOutput(); e != nil {
 		t.Fatalf("build fixture: %v: %s", e, b)
 	}
