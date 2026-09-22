@@ -4,7 +4,7 @@ AI Config Selector (`acs`) creates named capability Profiles and launches a
 process with only the selected configuration inside an ephemeral, native
 sandbox.
 
-The current development and future release contract is Apple Silicon-only:
+The v0.5.0 release and current development contract is Apple Silicon-only:
 
 - macOS 26 on `darwin/arm64`;
 - Skills discovered from `~/.config/devin/skills` and `~/.agents/skills`;
@@ -17,7 +17,7 @@ v0.3.3 is the final release with Linux support. The Bubblewrap implementation
 remains in the source tree for possible future work, but v0.4.0 has no Linux
 binary, installer path, native gate, or support commitment.
 
-## Inspect saved Profiles (development source)
+## Inspect saved Profiles (v0.5.0)
 
 Use `acs profile list` to find stored Profiles and `acs profile show NAME` to
 inspect persisted versions and selected Skills, including references to Skills
@@ -44,7 +44,7 @@ is not an export, and Skills or credentials are never embedded. See the
 independent schema, explicit source/auth bindings, stdout/report separation,
 hostile-input limits, and unchecked readiness boundary.
 
-New development-source Profiles use independently versioned common Skills,
+New v0.5.0 Profiles use independently versioned common Skills,
 workspace intent, explicit filesystem paths, additive executable visibility,
 scoped environment mappings, reference-only local MCP server selections, and
 explicit target overlays. MCP argv items resolve only from selected path or
@@ -71,7 +71,7 @@ claim equal local paths, contents, arguments, credentials or readiness. Native
 readiness is unchecked unless `--check-native-readiness` is explicitly supplied.
 See the [effective capability explanation contract](docs/effective-capability-explanation.md).
 
-## Edit and repair Profiles (development source)
+## Edit and repair Profiles (v0.5.0)
 
 Use the seeded Profile Builder to change stored selections or create a copy:
 
@@ -98,7 +98,7 @@ Committed Profile changes also create private recoverable history. Use
 and explicit pin/prune maintenance as described in the
 [Profile history guide](docs/profile-history.md).
 
-## Passive diagnostics (development source)
+## Passive diagnostics (v0.5.0)
 
 Run `acs doctor` for core host and trusted backend-file checks without an account
 or optional clients. Add `--target devin`, `--target sandbox`, or
@@ -115,28 +115,31 @@ for the separate diagnostic JSON format, check IDs, exit behavior, and limits.
 
 ## Install
 
-The latest published immutable release is v0.4.0. Download its release-specific
+The latest published immutable release is [v0.5.0](https://github.com/alcimerio/ai-config-selector/releases/tag/v0.5.0). For a fresh installation, download its release-specific
 installer, inspect it, then run the local file:
 
+<!-- published-v050-fresh-install-example -->
 ```sh
-release_version=v0.4.0
+set -eu
+release_version=v0.5.0
 release_url="https://github.com/alcimerio/ai-config-selector/releases/download/$release_version"
 curl --fail --location --proto '=https' --tlsv1.2 \
   --output install.sh "$release_url/install.sh"
+printf '%s  %s\n' \
+  '5723249bb5d69b5878e9178e6dc7cb45812d8d6930029d8c174b5acab3a5b38f' install.sh \
+  | shasum -a 256 -c -
 less install.sh
 sh ./install.sh
 "$HOME/.local/bin/acs" version
 ```
 
-Proposed v0.5.0 is still unpublished. The following is a future bootstrap shape,
-not a currently usable download promise. After an immutable v0.5.0 Release
-exists, a v0.4.0 user cannot invoke `acs update`; download and inspect the
+The published v0.4.0 binary has no `acs update` command. To move from v0.4.0,
+download and inspect the
 release-pinned v0.5.0 installer, then install it into a **new, empty**, direct
 user-owned directory instead of overwriting the occupied v0.4.0 path:
 
-<!-- future-v050-bootstrap-example -->
+<!-- published-v050-bootstrap-example -->
 ```sh
-# Future/pending until v0.5.0 is published.
 set -eu
 release_version=v0.5.0
 release_url="https://github.com/alcimerio/ai-config-selector/releases/download/$release_version"
@@ -146,6 +149,9 @@ test ! -e "$bootstrap_root"
 mkdir -m 700 "$bootstrap_root"
 curl --fail --location --proto '=https' --tlsv1.2 \
   --output install-v0.5.0.sh "$release_url/install.sh"
+printf '%s  %s\n' \
+  '5723249bb5d69b5878e9178e6dc7cb45812d8d6930029d8c174b5acab3a5b38f' install-v0.5.0.sh \
+  | shasum -a 256 -c -
 less install-v0.5.0.sh
 sh ./install-v0.5.0.sh --bin-dir "$bootstrap_root"
 "$bootstrap_root/acs" version
@@ -171,14 +177,14 @@ go build -o ./bin/acs ./cmd/acs
 
 A source build reports `acs devel`.
 
-For a promoted but unpublished candidate, use the
+For a separate promoted development candidate, use the
 [candidate migration and rollback guide](docs/release-migration-guide.md). It
 requires operator-supplied artifact identity and checksums, keeps binary rollback
 separate from stored-data compatibility, and leaves real daily-use observation
-pending. Do not substitute its current-source commands into v0.4.0 instructions.
+pending. Candidate bytes are distinct from the [published v0.5.0 assets](https://github.com/alcimerio/ai-config-selector/releases/tag/v0.5.0).
 
 The published v0.4.0 installer historically accepts macOS arm64 and amd64.
-Future installers built from current source accept only Apple Silicon (`arm64`).
+The v0.5.0 installer accepts only Apple Silicon (`arm64`).
 Each verifies the selected archive against the release's `SHA256SUMS`, validates the embedded version and
 archive structure, and refuses to replace an existing `acs` file. It defaults
 to `~/.local/bin`, does not use `sudo`, and never edits shell startup files.
@@ -192,9 +198,9 @@ recovery guide](docs/manual-upgrade-recovery.md). It stages a pinned release in 
 separate directory, retains the old binary, checks actual command resolution and
 explains the compatibility boundary between binary rollback and stored data.
 Profile transaction and named-authentication recovery described there require
-compatible development source; the published v0.4.0 binary does not provide them.
+the compatible v0.5.0 binary; the published v0.4.0 binary does not provide them.
 
-Current source adds `acs update --check` to report the installed version, latest
+v0.5.0 adds `acs update --check` to report the installed version, latest
 published stable target, and availability without downloading an archive or
 changing installation or user data. `acs update` installs a newer published
 stable release; `acs update vMAJOR.MINOR.PATCH` selects a published stable version
@@ -210,10 +216,10 @@ ACS helpers may need restart before later helper launches after an update;
 follow normal Session cleanup and the manual recovery guide if it cannot settle.
 The published v0.4.0 binary does not have the update command.
 
-## macOS quickstart (development source)
+## macOS quickstart (v0.5.0)
 
-Contextual help and the guidance below describe the current source build; the
-published v0.4.0 installer does not include these new help and diagnostic commands. Use macOS
+Contextual help and the guidance below apply to v0.5.0 and the current source build;
+the published v0.4.0 installer does not include these help and diagnostic commands. Use macOS
 26 on Apple Silicon, Go 1.25 or later for the source build, and a real
 terminal for Profile creation and interactive launch. The system
 `/usr/bin/sandbox-exec` must be available; ACS checks it and fails closed.
@@ -314,7 +320,7 @@ selectable global catalog roots and are not copied into the sandbox shell.
 Next, read the isolation contract below and use `acs codex auth --help` for
 named authentication or `acs sandbox --help` for shell syntax.
 
-## Command help and grammar (development source)
+## Command help and grammar (v0.5.0)
 
 `acs help` and `acs --help` print root help. Every command path supports both
 forms, for example `acs help codex auth login` and
@@ -373,9 +379,9 @@ required fail-closed sandbox and could not persist in the ephemeral synthetic
 home. This does not change Devin's permission mode. There is no unsandboxed
 fallback.
 
-## Codex authentication identities (development source)
+## Codex authentication identities (v0.5.0)
 
-The current development source can create ACS-owned, named ChatGPT login
+v0.5.0 can create ACS-owned, named ChatGPT login
 identities and verify them through an isolated Codex Session:
 
 ```sh
@@ -562,17 +568,17 @@ refresh observation remains supplemental and is never a CI credential gate.
 - Devin and the fixed interactive Codex recipe are the production CLI adapters.
 - Common Skills and instruction selections are production Profile capabilities.
 - The published v0.4.0 CLI cannot list, edit, delete, import, or export Profiles;
-  current development source provides those commands, including sanitized
+  v0.5.0 provides those commands, including sanitized
   portable exchange with explicit local bindings.
 - Repository-local Skills remain under Devin's control and are not copied into
   the credential-free sandbox shell.
-- Current development source and future releases support only macOS 26 on
+- Published v0.5.0 and current development source support only macOS 26 on
   Apple Silicon (`darwin/arm64`). Published v0.4.0 historical assets also
   include Intel.
 - Linux source is retained without binaries, native CI, or support guarantees.
 - Source builds and authenticated smoke runs are development evidence, not
   immutable-release evidence.
-- Current source projects explicitly selected local STDIO MCP server references
+- v0.5.0 projects explicitly selected local STDIO MCP server references
   for Devin and Codex. ACS does not manage plugins, hooks, agents, remote MCP,
   or arbitrary target settings. Interactive Codex isolates ordinary host/project
   MCP inputs; it does not claim to override every account-service enterprise
@@ -590,7 +596,7 @@ refresh observation remains supplemental and is never a CI credential gate.
 
 Read [the architecture](docs/architecture.md), [contribution guide](CONTRIBUTING.md),
 [immutable v0.4.0 release notes](docs/releases/v0.4.0.md), and
-[proposed v0.5.0 release notes](docs/releases/v0.5.0.md) for more detail.
+[v0.5.0 release notes](docs/releases/v0.5.0.md) for more detail.
 
 ## License
 
@@ -598,12 +604,12 @@ ACS is available under the [MIT License](LICENSE).
 
 ### Profile repository transactions
 
-Development-source Profile creation and mutations use a revisioned byte repository
+v0.5.0 Profile creation and mutations use a revisioned byte repository
 with checked synchronization and explicit process-interruption recovery. Inspection
 and diagnostics remain passive. For an Unknown or recovery-required outcome, use
 the interactive create-profile recovery entry point, cancel the builder if it opens,
 then inspect stored state. A committed result with only reporting failure and no
 recovery requirement needs inspection instead of replay. See the [repository
 transaction contract](docs/profile-repository-transactions.md) for outcomes, byte
-revisions, filesystem limits and native evidence, and the [recovery guide](docs/manual-upgrade-recovery.md#recover-a-profile-transaction-with-compatible-development-source)
+revisions, filesystem limits and native evidence, and the [recovery guide](docs/manual-upgrade-recovery.md#recover-a-profile-transaction-with-a-compatible-binary)
 for supported steps and evidence preservation.

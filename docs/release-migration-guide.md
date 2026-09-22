@@ -1,8 +1,8 @@
 # Candidate migration and rollback guide
 
-This guide prepares an unpublished v0.5.0 development candidate for migration
+This guide prepares a separate, unpublished development candidate for migration
 checks and optional daily-use evaluation. Its embedded version is a development
-identity, not evidence that a v0.5.0 Release exists. The operator must supply the
+identity, not proof that its bytes match the [published v0.5.0 Release](https://github.com/alcimerio/ai-config-selector/releases/tag/v0.5.0). The operator must supply the
 exact candidate version embedded in the artifact, artifact directory, binary
 checksum, and previously trusted executable. Do not substitute a guessed release
 URL, `latest`, or a checksum copied from another build.
@@ -10,15 +10,15 @@ URL, `latest`, or a checksum copied from another build.
 The [historical candidate handoff](current-candidate-handoff.md) records the
 verified PR #118 development candidate and its embedded `v0.4.0` placeholder.
 Its artifact retention expired on 2026-09-19; it is not the current candidate or
-a downloadable distribution channel. A fresh promoted v0.5.0 candidate requires
-new source, run, artifact, checksum, installed-byte, and native-result evidence.
-A future tagged release will build distinct versioned bytes and requires its own
-checksums and validation.
+a downloadable distribution channel. A fresh promoted candidate requires its
+own source, run, artifact, checksum, installed-byte, and native-result evidence.
+The published v0.5.0 tag workflow built distinct versioned bytes; use its own
+checksums and validation when installing the release.
 
 The supported candidate target is macOS 26 on Apple Silicon (`darwin/arm64`).
 The immutable published v0.4.0 release remains available for both Apple Silicon
 and Intel as historical evidence; that fact does not extend Intel support to the
-candidate. See the [v0.4.0 release notes](releases/v0.4.0.md) and the
+candidate or v0.5.0. See the [v0.4.0 release notes](releases/v0.4.0.md) and the
 [release-pinned v0.4.0 maintenance procedure](manual-upgrade-recovery.md).
 
 ## Know which binary owns each capability
@@ -70,7 +70,7 @@ Obtain the promoted candidate directory and all values below through the
 approved artifact handoff. The directory must contain exactly the supplied
 candidate's `install.sh`, `SHA256SUMS`, and Apple Silicon archive. Work from a
 clean checkout with the candidate's exact source tree. Do not use the expired
-PR #118 artifact as the current candidate. For a fresh promoted v0.5.0
+PR #118 artifact as the current candidate. For a fresh promoted
 candidate, record the actual CI source and eventual merged source separately;
 tree equality does not alter build provenance. The validator is a repository
 maintenance interface, not a downloadable release channel.
@@ -307,7 +307,7 @@ through the current codec and can require explicit current-machine bindings.
 
 ## Separate one-week daily-use observation (unperformed)
 
-Automated gates do not provide daily-use evidence. The proposed v0.5.0
+Automated gates do not provide daily-use evidence. The published v0.5.0
 capability release and this observation are separate milestones: publication
 does not complete this template, and an unperformed template does not silently
 become successful. Complete it on two real project contexts without recording
@@ -335,19 +335,17 @@ Terminal input/output, resize, interrupt and descendant settlement:
 Session cleanup or exact sanitized recovery result:
 Two real project contexts used on each date:
 Blockers and public result categories:
-Release decision: PENDING
+Candidate observation decision: PENDING
 ```
 
 Do not fabricate elapsed days, hosted inference, accounts, project work, cleanup,
-or success. Final release artifact selection and native installed-artifact
-validation require their own exact evidence. The release cut is intentionally
+or success. The published final-tag artifact and native installed-artifact
+evidence are recorded in the [v0.5.0 publication record](releases/v0.5.0-checklist.md);
+they do not fill this observation. The release cut is intentionally
 unsigned and unnotarized; checksums and attestations do not provide Apple
 approval. Completion of this observation remains pending independently and must
 not be inferred from a release.
 
-Related tracking remains open in
-[#102](https://github.com/alcimerio/ai-config-selector/issues/102),
-[#104](https://github.com/alcimerio/ai-config-selector/issues/104), and
-[#105](https://github.com/alcimerio/ai-config-selector/issues/105). This
-preparation guide does not complete their release-artifact or real-use evidence,
-and release publication must not close issue #105 without its own observation.
+The separate real-use observation is tracked by
+[#105](https://github.com/alcimerio/ai-config-selector/issues/105). This guide
+does not complete its evidence; publication alone does not justify closing it.

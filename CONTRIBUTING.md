@@ -145,9 +145,13 @@ nonblocking.
 Release tags are immutable and created only after the release-preparation PR is
 merged to protected `main`.
 
-Start with the [next release preparation assessment](docs/release-readiness.md)
-for the exact source boundary, remaining evidence, and operator handoff. It is
-not a release announcement and does not assign a version.
+The [v0.5.0 publication record](docs/release-readiness.md) shows the exact
+source, artifact, native validation, and remaining daily-use evidence for that
+release. For a future version, verify its own exact reviewed source, annotated
+tag identity, release notes, and required checks before pushing the tag. Obtain
+explicit authorization for that tag push: it starts the automatic build, native
+validation, attestation, and immutable publication pipeline with no later
+approval pause.
 
 For a future release (using `v1.2.3` as an example):
 

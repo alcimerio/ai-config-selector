@@ -12,61 +12,111 @@ import (
 	"testing"
 )
 
-func TestFutureV050BootstrapExampleCreatesParentAndPreservesExistingInstall(t *testing.T) {
-	repository := ".."
-	readme := readRepositoryFile(t, repository, "README.md")
-	pattern := regexp.MustCompile("(?s)<!-- future-v050-bootstrap-example -->\\n```sh\\n(.*?)\\n```")
-	match := pattern.FindStringSubmatch(readme)
-	if len(match) != 2 {
-		t.Fatal("README future v0.5.0 bootstrap example is missing or duplicated")
-	}
-
-	root := t.TempDir()
-	home := filepath.Join(root, "fresh home")
-	tools := filepath.Join(root, "tools")
-	if err := os.MkdirAll(home, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(tools, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	log := writeFixture(t, root, "curl.log", "")
-	writeExecutable(t, tools, "curl", `#!/bin/sh
-printf 'download\n' >>"$TEST_CURL_LOG"
+func TestPublishedV050InstallerExamplesVerifyBeforeExecution(t *testing.T) {
+	const publishedInstallerSHA256 = "5723249bb5d69b5878e9178e6dc7cb45812d8d6930029d8c174b5acab3a5b38f"
+	readme := readRepositoryFile(t, "..", "README.md")
+	installer := `#!/bin/sh
+set -eu
+if [ "$#" -eq 0 ]; then
+  destination="$HOME/.local/bin"
+else
+  test "$#" -eq 2
+  test "$1" = --bin-dir
+  destination="$2"
+  test -d "$destination"
+fi
+test ! -e "$destination/acs"
+mkdir -p "$destination"
+printf '#!/bin/sh\nprintf "acs v0.5.0\n"\n' > "$destination/acs"
+chmod 0700 "$destination/acs"
+`
+	for _, example := range []struct {
+		name      string
+		file      string
+		installed string
+	}{
+		{name: "fresh-install", file: "install.sh", installed: ".local/bin/acs"},
+		{name: "bootstrap", file: "install-v0.5.0.sh", installed: ".local/opt/acs-v0.5.0/acs"},
+	} {
+		t.Run(example.name, func(t *testing.T) {
+			pattern := regexp.MustCompile("(?s)<!-- published-v050-" + example.name + "-example -->\\n```sh\\n(.*?)\\n```")
+			match := pattern.FindStringSubmatch(readme)
+			if len(match) != 2 {
+				t.Fatalf("README published v0.5.0 %s example is missing or duplicated", example.name)
+			}
+			if !strings.Contains(match[1], publishedInstallerSHA256) {
+				t.Fatal("README installer example lacks the published installer digest")
+			}
+			fixtureDigest := fmt.Sprintf("%x", sha256.Sum256([]byte(installer)))
+			script := strings.ReplaceAll(match[1], publishedInstallerSHA256, fixtureDigest)
+			root := t.TempDir()
+			tools := filepath.Join(root, "tools")
+			if err := os.MkdirAll(tools, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			fixture := writeFixture(t, root, "installer.sh", installer)
+			tampered := writeFixture(t, root, "tampered-installer.sh", installer+"# tampered\n")
+			log := writeFixture(t, root, "curl.log", "")
+			writeExecutable(t, tools, "curl", `#!/bin/sh
+printf 'download\n' >> "$TEST_CURL_LOG"
 destination=
+url=
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --output) destination="$2"; shift 2 ;;
+    https://*) url="$1"; shift ;;
     *) shift ;;
   esac
 done
-test "$destination" = install-v0.5.0.sh
-printf '%s\n' '#!/bin/sh' 'set -eu' 'test "$1" = --bin-dir' 'test "$#" = 2' 'test -d "$2"' 'test ! -e "$2/acs"' 'printf '\''#!/bin/sh\nprintf "acs v0.5.0\\n"\n'\'' > "$2/acs"' 'chmod 0700 "$2/acs"' >"$destination"
+test "$destination" = "$TEST_INSTALLER_NAME"
+test "$url" = "https://github.com/alcimerio/ai-config-selector/releases/download/v0.5.0/install.sh"
+case "$TEST_TAMPER_INSTALLER" in
+  true) cp "$TEST_TAMPERED_INSTALLER" "$destination" ;;
+  *) cp "$TEST_INSTALLER_FIXTURE" "$destination" ;;
+esac
 `)
-	writeExecutable(t, tools, "less", "#!/bin/sh\ntest \"$1\" = install-v0.5.0.sh\n")
-
-	run := func() ([]byte, error) {
-		command := exec.Command("/bin/bash", "--noprofile", "--norc", "-c", match[1])
-		command.Dir = root
-		command.Env = append(os.Environ(),
-			"HOME="+home,
-			"PATH="+tools+":/usr/bin:/bin",
-			"TEST_CURL_LOG="+log,
-		)
-		return command.CombinedOutput()
-	}
-	if output, err := run(); err != nil {
-		t.Fatalf("fresh bootstrap example failed: %v\n%s", err, output)
-	}
-	installed := filepath.Join(home, ".local", "opt", "acs-v0.5.0", "acs")
-	if output, err := exec.Command(installed).CombinedOutput(); err != nil || string(output) != "acs v0.5.0\n" {
-		t.Fatalf("installed bootstrap identity = %q, %v", output, err)
-	}
-	if output, err := run(); err == nil {
-		t.Fatalf("bootstrap example reused an existing destination:\n%s", output)
-	}
-	if downloads := strings.Count(string(mustReadFile(t, log)), "download\n"); downloads != 1 {
-		t.Fatalf("download count = %d, want 1", downloads)
+			writeExecutable(t, tools, "less", "#!/bin/sh\ntest \"$1\" = \"$TEST_INSTALLER_NAME\"\n")
+			run := func(home string, tamper bool) ([]byte, error) {
+				if err := os.MkdirAll(home, 0o700); err != nil {
+					t.Fatal(err)
+				}
+				command := exec.Command("/bin/bash", "--noprofile", "--norc", "-c", script)
+				command.Dir = root
+				command.Env = append(os.Environ(),
+					"HOME="+home,
+					"PATH="+tools+":/usr/bin:/bin",
+					"TEST_CURL_LOG="+log,
+					"TEST_INSTALLER_NAME="+example.file,
+					"TEST_INSTALLER_FIXTURE="+fixture,
+					"TEST_TAMPERED_INSTALLER="+tampered,
+					fmt.Sprintf("TEST_TAMPER_INSTALLER=%t", tamper),
+				)
+				return command.CombinedOutput()
+			}
+			badHome := filepath.Join(root, "mismatch home")
+			if output, err := run(badHome, true); err == nil {
+				t.Fatalf("installer digest mismatch did not stop the example:\n%s", output)
+			}
+			if _, err := os.Lstat(filepath.Join(badHome, example.installed)); !os.IsNotExist(err) {
+				t.Fatalf("installer ran after digest mismatch: %v", err)
+			}
+			goodHome := filepath.Join(root, "fresh home")
+			if output, err := run(goodHome, false); err != nil {
+				t.Fatalf("verified installer example failed: %v\n%s", err, output)
+			}
+			installed := filepath.Join(goodHome, example.installed)
+			if output, err := exec.Command(installed).CombinedOutput(); err != nil || string(output) != "acs v0.5.0\n" {
+				t.Fatalf("installed identity = %q, %v", output, err)
+			}
+			if example.name == "bootstrap" {
+				if output, err := run(goodHome, false); err == nil {
+					t.Fatalf("bootstrap example reused an existing destination:\n%s", output)
+				}
+			}
+			if downloads := strings.Count(string(mustReadFile(t, log)), "download\n"); downloads != 2 {
+				t.Fatalf("download count = %d, want 2", downloads)
+			}
+		})
 	}
 }
 

@@ -4,11 +4,11 @@ This is a sanitized identity and scope record for a historical development
 candidate on macOS 26 Apple Silicon. It is not a release, a version decision, an
 installed host observation, or evidence of real account use. Private downloads
 and raw logs remain outside the repository. The
-[release preparation](release-readiness.md) retains its original source
-boundary; this page records the later tested tree.
+[v0.5.0 publication record](release-readiness.md) preserves the original
+preparation comparison boundary; this page records the later tested tree.
 
 The candidate's GitHub artifact retention expired on 2026-09-19. It is not the
-current v0.5.0 development candidate and must not be presented as downloadable
+published v0.5.0 artifact and must not be presented as downloadable
 or rebuilt under the old identity. A new candidate needs a new source/run,
 artifact identity, complete digest set, installed-host measurement, and native
 result. The facts below remain unchanged as historical evidence only.
