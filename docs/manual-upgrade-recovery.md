@@ -26,6 +26,38 @@ Current development source and future releases support only macOS 26 on Apple
 Silicon (`darwin/arm64`); the Intel asset and checksum below remain unchanged so
 v0.4.0 recovery stays reproducible.
 
+## Bootstrap from published v0.4.0 to proposed v0.5.0
+
+Proposed v0.5.0 is not published yet. Its future release URL, archive, manifest,
+installer, checksums, attestations, and installed bytes are all pending. Do not
+run a v0.5.0 URL or reuse a development candidate merely because its binary
+reports `v0.5.0`.
+
+After the immutable v0.5.0 Release exists, a published v0.4.0 installation must
+bootstrap through the inspected v0.5.0 installer because v0.4.0 has no `update`
+command. Use a new empty, direct, user-owned installation directory; the
+installer intentionally refuses to overwrite an existing `acs`. Retain and hash
+the v0.4.0 binary, install and hash v0.5.0, and change `PATH` only in a dedicated
+maintenance shell after checking `command -v acs` resolves the intended file.
+The future release-specific commands in the README illustrate that bootstrap;
+they are not operational until publication.
+
+Before any schema-changing write, settle active operations and make the private
+quiescent Profile-file copy in
+[Binary rollback is not a data downgrade](#binary-rollback-is-not-a-data-downgrade).
+Installing or selecting v0.5.0 does not migrate a Profile. Use passive inspection
+first and run `acs profile migrate NAME` only after reviewing its explicit
+preview. Keep the compatible v0.5.0 binary even if command selection returns to
+v0.4.0: binary rollback cannot downgrade Profile v3, history, Session, exchange,
+or named-authentication state. Filesystem copies do not contain Keychain
+credentials and are not a supported automatic restore mechanism.
+
+The v0.5.0 cut is intentionally unsigned and unnotarized. Checksums and GitHub
+attestations establish byte identity and origin, not Apple signing,
+notarization, malware review, or Gatekeeper approval. Do not remove quarantine,
+disable Gatekeeper, ad-hoc sign the binary, or weaken Seatbelt to make it run.
+No Apple credential is required for this cut.
+
 ## Check which capabilities belong to your binary
 
 | Capability | Published v0.4.0 | Current development source |

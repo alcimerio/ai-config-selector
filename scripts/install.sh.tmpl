@@ -35,7 +35,7 @@ fi
 command -v uname >/dev/null 2>&1 || fail "required tool is unavailable: uname"
 case "$(uname -s)" in
   Darwin) target_os="darwin" ;;
-  *) fail "unsupported operating system; ACS v0.4 supports macOS only" ;;
+  *) fail "unsupported operating system; ACS release installers support macOS only" ;;
 esac
 case "$(uname -m)" in
   arm64 | aarch64) target_arch="arm64" ;;

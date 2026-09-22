@@ -1,10 +1,17 @@
-# Current-source unpublished candidate handoff
+# Historical unpublished candidate handoff
 
-This is a sanitized identity and scope record for a development candidate on
-macOS 26 Apple Silicon. It is not a release, a version decision, an installed
-host observation, or evidence of real account use. Private downloads and raw
-logs remain outside the repository. The [historical release preparation](release-readiness.md)
-retains its original source boundary; this page records the later tested tree.
+This is a sanitized identity and scope record for a historical development
+candidate on macOS 26 Apple Silicon. It is not a release, a version decision, an
+installed host observation, or evidence of real account use. Private downloads
+and raw logs remain outside the repository. The
+[release preparation](release-readiness.md) retains its original source
+boundary; this page records the later tested tree.
+
+The candidate's GitHub artifact retention expired on 2026-09-19. It is not the
+current v0.5.0 development candidate and must not be presented as downloadable
+or rebuilt under the old identity. A new candidate needs a new source/run,
+artifact identity, complete digest set, installed-host measurement, and native
+result. The facts below remain unchanged as historical evidence only.
 
 ## Source and artifact identity
 
@@ -89,9 +96,9 @@ provide Intel or Linux release support, destination-specific network control,
 arbitrary target configuration or an unsandboxed fallback. It is unsigned and
 unnotarized; checksums and origin evidence do not establish Gatekeeper approval.
 
-## Preserve and verify the operator copy
+## Historical preservation procedure (retention expired)
 
-Before `2026-09-19T16:56:57Z`, an authorized custodian can run the following in
+Before `2026-09-19T16:56:57Z`, an authorized custodian could run the following in
 a dedicated Bash from an operator-controlled Mac. Set `ACS_CANDIDATE_KEEP_DIR`
 to a **new** absolute private directory outside a repository. The command uses
 the custodian's existing GitHub CLI access to download the exact artifact ZIP;
@@ -151,7 +158,7 @@ the old artifact ID or digests to rebuilt bytes, and never claim the new run
 inherits the previous native result. The operator must receive and verify that
 new identity before starting the evaluation.
 
-## Operator sequence and pending decisions
+## Historical operator sequence and pending decisions
 
 1. Obtain the candidate through the private handoff and complete the preservation
    and verification procedure above.
@@ -165,16 +172,18 @@ new identity before starting the evaluation.
    references and MCP declarations before any migration or write. Keep the
    known-good executable and a compatible candidate available for newer state
    recovery. Binary rollback never downgrades stored data.
-4. Complete the guide's two-project, one-week Devin and Codex observation using
-   aliases and public result categories only. Real-account access and elapsed
-   time are pending operator actions, not CI results. Record failures and
-   recovery without credential values, target output or private paths.
-5. Resolve blockers through reviewed source changes before freezing a final
-   release cut. Final version selection, signing/notary custody, final tag and
-   publication remain pending explicit coordinator decisions. A future tag run
-   builds different, versioned bytes and must establish its own native and
-   attestation evidence. Do not close the release or daily-use issues from this
-   candidate preparation alone. [Release preparation #102](https://github.com/alcimerio/ai-config-selector/issues/102),
+4. The guide's two-project, one-week Devin and Codex observation remained
+   unperformed for this candidate. Any later observation must use its actual
+   candidate identity, aliases, and public result categories only. Real-account
+   access and elapsed time are pending operator actions, not CI results. Record
+   failures and recovery without credential values, target output or private
+   paths.
+5. This historical candidate does not authorize or supply the v0.5.0 release
+   cut. A future tag run builds different, versioned bytes and must establish
+   its own native and attestation evidence. The v0.5.0 release preparation uses
+   an approved unsigned/unnotarized posture; the daily-use observation remains
+   a separate pending milestone. Do not close the release or daily-use issues
+   from this candidate preparation alone. [Release preparation #102](https://github.com/alcimerio/ai-config-selector/issues/102),
    [exact artifact #103](https://github.com/alcimerio/ai-config-selector/issues/103),
    [migration #104](https://github.com/alcimerio/ai-config-selector/issues/104)
    and [daily use #105](https://github.com/alcimerio/ai-config-selector/issues/105)

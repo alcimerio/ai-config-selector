@@ -128,6 +128,38 @@ sh ./install.sh
 "$HOME/.local/bin/acs" version
 ```
 
+Proposed v0.5.0 is still unpublished. The following is a future bootstrap shape,
+not a currently usable download promise. After an immutable v0.5.0 Release
+exists, a v0.4.0 user cannot invoke `acs update`; download and inspect the
+release-pinned v0.5.0 installer, then install it into a **new, empty**, direct
+user-owned directory instead of overwriting the occupied v0.4.0 path:
+
+<!-- future-v050-bootstrap-example -->
+```sh
+# Future/pending until v0.5.0 is published.
+set -eu
+release_version=v0.5.0
+release_url="https://github.com/alcimerio/ai-config-selector/releases/download/$release_version"
+bootstrap_root="$HOME/.local/opt/acs-$release_version"
+mkdir -p "$HOME/.local/opt"
+test ! -e "$bootstrap_root"
+mkdir -m 700 "$bootstrap_root"
+curl --fail --location --proto '=https' --tlsv1.2 \
+  --output install-v0.5.0.sh "$release_url/install.sh"
+less install-v0.5.0.sh
+sh ./install-v0.5.0.sh --bin-dir "$bootstrap_root"
+"$bootstrap_root/acs" version
+```
+
+Before a newer-format write, finish active work and preserve private quiescent
+Profile-file copies as described in the recovery guide. Deliberately put the new
+directory before the old one in the maintenance shell's `PATH`, verify
+`command -v acs`, and keep both binaries. This selects a binary; it does not
+migrate Profiles or other state. Rollback selects the retained old binary but
+does not downgrade data, so keep v0.5.0 available to inspect or recover anything
+v0.4.0 cannot understand. Filesystem Profile copies exclude Keychain identities,
+Sessions, transaction proof, external Skills, and target state.
+
 To build the current source on macOS instead:
 
 ```sh
@@ -557,7 +589,8 @@ refresh observation remains supplemental and is never a CI credential gate.
 - ACS has no background update checks, package-manager distribution, or uninstaller.
 
 Read [the architecture](docs/architecture.md), [contribution guide](CONTRIBUTING.md),
-and [v0.4.0 release notes](docs/releases/v0.4.0.md) for more detail.
+[immutable v0.4.0 release notes](docs/releases/v0.4.0.md), and
+[proposed v0.5.0 release notes](docs/releases/v0.5.0.md) for more detail.
 
 ## License
 

@@ -1,15 +1,19 @@
 # Candidate migration and rollback guide
 
-This guide prepares an unnumbered development candidate for daily-use
-evaluation. It does not announce a release. The operator must supply the exact
-candidate version embedded in the artifact, artifact directory, binary checksum,
-and previously trusted executable. Do not substitute a guessed release URL,
-`latest`, or a checksum copied from another build.
+This guide prepares an unpublished v0.5.0 development candidate for migration
+checks and optional daily-use evaluation. Its embedded version is a development
+identity, not evidence that a v0.5.0 Release exists. The operator must supply the
+exact candidate version embedded in the artifact, artifact directory, binary
+checksum, and previously trusted executable. Do not substitute a guessed release
+URL, `latest`, or a checksum copied from another build.
 
-For the verified PR #118 development candidate, use the actual values and
-source relationship in the [current candidate handoff](current-candidate-handoff.md).
-Its embedded `v0.4.0` is a development placeholder. A future tagged release
-will build distinct versioned bytes and requires new checksums and validation.
+The [historical candidate handoff](current-candidate-handoff.md) records the
+verified PR #118 development candidate and its embedded `v0.4.0` placeholder.
+Its artifact retention expired on 2026-09-19; it is not the current candidate or
+a downloadable distribution channel. A fresh promoted v0.5.0 candidate requires
+new source, run, artifact, checksum, installed-byte, and native-result evidence.
+A future tagged release will build distinct versioned bytes and requires its own
+checksums and validation.
 
 The supported candidate target is macOS 26 on Apple Silicon (`darwin/arm64`).
 The immutable published v0.4.0 release remains available for both Apple Silicon
@@ -32,6 +36,7 @@ candidate. See the [v0.4.0 release notes](releases/v0.4.0.md) and the
 | Selected instruction bundles and Devin always-on rules | Not available | Common references retained; only Devin projects and checks always-on rules |
 | Scoped environment, selected filesystem and executable grants | Not available | Supported under the bounded v3 common contract |
 | Local reference-only STDIO MCP for Devin and Codex | Not available | Supported with selected executable, path and environment references |
+| Stable-release `update` check and executable replacement | Not available | Supported for the direct user-owned Apple Silicon layout; does not migrate stored data |
 | ACS-managed plugins, hooks or agents | Not available | Not supported; current source only assesses target-owned discovery |
 
 Installing or selecting a binary never migrates data. Passive Profile inspection
@@ -64,11 +69,11 @@ descendants; they are not isolated per MCP server.
 Obtain the promoted candidate directory and all values below through the
 approved artifact handoff. The directory must contain exactly the supplied
 candidate's `install.sh`, `SHA256SUMS`, and Apple Silicon archive. Work from a
-clean checkout with the candidate's exact source tree. For the PR #118 candidate,
-merged commit `49a427dbedc1e8b3b9490fac0262d183ebbf42f3` has the same tree
-as CI source `e9b9f652178a1aa2eac80b042da6390ecb5d2b34`. Record both
-identities; tree equality does not alter build provenance. The validator is a
-repository maintenance interface, not a downloadable release channel.
+clean checkout with the candidate's exact source tree. Do not use the expired
+PR #118 artifact as the current candidate. For a fresh promoted v0.5.0
+candidate, record the actual CI source and eventual merged source separately;
+tree equality does not alter build provenance. The validator is a repository
+maintenance interface, not a downloadable release channel.
 
 Start a dedicated Bash with `/bin/bash --noprofile --norc`. Then export the
 operator-supplied values; the example intentionally provides no defaults:
@@ -300,13 +305,15 @@ It does not restore external Skill files, target state, Session state, credentia
 or deleted machine data, and it is not a full backup. A history restore decodes
 through the current codec and can require explicit current-machine bindings.
 
-## One-week daily-use observation (unperformed)
+## Separate one-week daily-use observation (unperformed)
 
-The candidate is not release-ready merely because automated gates pass. Complete
-this template on two real project contexts without recording private content.
-Automated Codex evidence uses the official checksum-locked CLI, synthetic
-authentication and a local simulated API; it is not hosted inference or a real
-account observation.
+Automated gates do not provide daily-use evidence. The proposed v0.5.0
+capability release and this observation are separate milestones: publication
+does not complete this template, and an unperformed template does not silently
+become successful. Complete it on two real project contexts without recording
+private content. Automated Codex evidence uses the official checksum-locked CLI,
+synthetic authentication and a local simulated API; it is not hosted inference
+or a real account observation.
 
 ```text
 Observation status: UNPERFORMED / PENDING
@@ -332,12 +339,15 @@ Release decision: PENDING
 ```
 
 Do not fabricate elapsed days, hosted inference, accounts, project work, cleanup,
-or success. Final release version substitution, artifact selection, signing and
-notarization posture, native installed-artifact validation, and completion of the
-observation remain final-cut dependencies.
+or success. Final release artifact selection and native installed-artifact
+validation require their own exact evidence. The release cut is intentionally
+unsigned and unnotarized; checksums and attestations do not provide Apple
+approval. Completion of this observation remains pending independently and must
+not be inferred from a release.
 
 Related tracking remains open in
 [#102](https://github.com/alcimerio/ai-config-selector/issues/102),
 [#104](https://github.com/alcimerio/ai-config-selector/issues/104), and
 [#105](https://github.com/alcimerio/ai-config-selector/issues/105). This
-preparation guide does not complete their release-artifact or real-use evidence.
+preparation guide does not complete their release-artifact or real-use evidence,
+and release publication must not close issue #105 without its own observation.

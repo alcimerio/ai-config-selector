@@ -1,19 +1,22 @@
 # Next release preparation
 
-This is the source-level handoff for a future stable ACS release. It does not
-assign a version, designate an artifact, report completed daily use, or announce
-a release. The proposed cut remains unpublished while the pre-tag checks below
-are completed and until the authorized maintainer approves the tag push. That
-push authorizes the existing workflow to build, natively validate, attest, and
-publish the final package without another human pause.
+This is the source-level handoff for proposed stable ACS v0.5.0. It does not
+designate an artifact, report completed daily use, authorize a tag push, or
+announce a release. The proposed cut remains unpublished while the versioned
+[release notes](releases/v0.5.0.md) and
+[checklist](releases/v0.5.0-checklist.md) are reviewed and their release fields
+remain pending. A later authorized tag push starts the existing workflow, which
+builds, natively validates, attests, and publishes the final package without
+another human pause.
 
 The comparison boundary below is the historical preparation recorded on
-2026-09-07. The [current-source candidate handoff](current-candidate-handoff.md)
-records the later PR #118 tree, unpublished candidate bytes, new supported
-Profile capabilities, and remaining operator evidence. It does not amend the
-earlier source boundary or designate final release bytes. Selected instruction
-references in the later source have a Devin-specific always-on rule projection;
-Codex does not activate them as ACS-managed rules.
+2026-09-07. The [historical candidate handoff](current-candidate-handoff.md)
+records the later PR #118 tree, now-expired unpublished candidate bytes, new
+supported Profile capabilities, and remaining operator evidence. It does not
+amend the earlier source boundary, identify the v0.5.0 preparation source, or
+designate final release bytes. Selected instruction references in the later
+source have a Devin-specific always-on rule projection; Codex does not activate
+them as ACS-managed rules.
 
 ## Comparison boundary
 
@@ -31,10 +34,12 @@ v0.4.0 remains immutable and includes historical `darwin/arm64` and
 26 on Apple Silicon (`darwin/arm64`); the old Intel artifact is recovery evidence
 for v0.4.0, not a current support promise.
 
-The future release uses the existing stable numeric `vMAJOR.MINOR.PATCH`
-channel. Current preparation, tag, candidate, and publication interfaces reject
-prerelease versions, and publication sets `prerelease=false`. This review does
-not introduce another channel.
+The proposed release uses the existing stable numeric `vMAJOR.MINOR.PATCH`
+channel as v0.5.0. The minor increment communicates the substantial capability
+and persisted-state delta from immutable v0.4.0. Candidate and publication
+interfaces reject prerelease versions, and publication sets `prerelease=false`.
+An embedded v0.5.0 string in CI remains a development identity until a tag
+workflow successfully publishes immutable release assets.
 
 ## User-visible source scope
 
@@ -54,8 +59,13 @@ dry-run, and version interfaces, the prepared source includes:
 - interactive, checksum-locked `codex-cli 0.149.1` with isolated named ChatGPT
   authentication, rather than ambient Codex credentials (the current
   `darwin/arm64` archive lock is SHA-256
-  `ed60f475c6dda6044c2c00fd7f33273cc3f3f98900ccd1204bfdf2fe935f3405`); and
-- durable Session list, inspect, and conservative recovery operations.
+  `ed60f475c6dda6044c2c00fd7f33273cc3f3f98900ccd1204bfdf2fe935f3405`);
+- durable Session list, inspect, and conservative recovery operations;
+- selected common instructions, bounded filesystem and executable grants,
+  scoped environment references, and reference-only local STDIO MCP servers;
+  and
+- explicit stable-release update checks and replacement for supported direct,
+  user-owned Apple Silicon installations.
 
 The detailed operating contract stays in the focused guides linked from the
 [README](../README.md). The [candidate migration and rollback
@@ -77,20 +87,22 @@ eventual exact artifact without treating binary selection as data migration.
   local paths, history, Sessions, authentication, or readiness proof. Local
   history is bounded rollback assistance, not a backup.
 - Interactive Codex is limited to the locked version, named ChatGPT identities,
-  common Skills, and declared workspace access. ACS does not expose arbitrary
-  target arguments, MCP configuration, plugins, API-key import, backend choice,
-  or generic Codex configuration passthrough.
+  selected common capabilities, and declared workspace access. ACS does not
+  expose arbitrary target arguments, remote MCP, plugins, hooks, agents,
+  API-key import, backend choice, or generic Codex configuration passthrough.
 - The supported native boundary is the system Seatbelt backend on macOS 26
   Apple Silicon. Linux compilation is a non-blocking portability observation,
   not release evidence. Intel is not a current source or future release target.
-- ACS has no automatic updater, package-manager distribution, uninstaller, or
-  network destination filter. It does not make target output or third-party
-  service behavior trustworthy.
+- ACS has no background update checks, package-manager distribution,
+  uninstaller, or network destination filter. Its explicit updater replaces
+  only the ACS executable and does not migrate or downgrade stored data. It
+  does not make target output or third-party service behavior trustworthy.
 - Release archives are presently unsigned and unnotarized. SHA-256 proves byte
   identity against a trusted digest, while GitHub attestation supplies separate
   origin evidence; neither supplies Apple Developer ID signing, notarization,
-  malware review, or Gatekeeper approval. No unsigned Gatekeeper distribution
-  has been validated by this preparation.
+  malware review, or Gatekeeper approval. The v0.5.0 cut is intentionally
+  unsigned and unnotarized and requires no Apple credential. Do not remove
+  quarantine, disable Gatekeeper, ad-hoc sign the binary, or weaken Seatbelt.
 
 ## Publication controls inspected
 
@@ -133,11 +145,10 @@ custody of the authorized accounts cannot be established without using protected
 configuration or credentials. Those checks belong to the final controlled cut;
 their values must not be copied into logs or release documents.
 
-## Unpublished daily-use candidate
+## Unpublished development candidate
 
-Daily-use evaluation must finish before the stable tag is pushed. Use the
-existing `Promoted artifact validation` workflow on the exact reviewed commit:
-its candidate job runs `scripts/release-candidate.sh`, uploads the build-once
+Use the existing `Promoted artifact validation` workflow on the exact reviewed
+commit. Its candidate job runs `scripts/release-candidate.sh`, uploads the build-once
 `acs-candidate-<source commit>` artifact set for one day, and its native job
 installs those supplied bytes with `scripts/validate-promoted-artifact.sh`. The
 operator receives that exact artifact directory through the approved handoff and
@@ -148,35 +159,46 @@ created with `scripts/release-candidate.sh vMAJOR.MINOR.PATCH` is also an existi
 inspection interface, but it is not the promoted workflow artifact and must be
 identified separately.
 
-The promoted pre-tag candidate is unpublished and can carry a development
-placeholder version. It supplies exact bytes for the one-week observation, but
-it is not final-tag evidence and must not be described as the published v0.4.0
-or as a future release. After the observation, any blocker is fixed and reviewed
-before the release source is frozen. The eventual tag workflow builds a new
+The promoted pre-tag candidate is unpublished and carries the proposed v0.5.0
+development version. It can supply exact bytes for later daily-use observation,
+but it is not final-tag evidence and must not be described as a published
+release. Any blocker found before a release is fixed and reviewed before the
+release source is frozen. The eventual tag workflow builds a new
 candidate from the chosen stable tag; its versioned archive, installer and binary
 can therefore differ from the evaluated pre-tag bytes. Only that tag workflow's
 native results, digests, attestations and publication result are final-release
 artifact evidence.
 
+## Capability release and daily-use milestone
+
+The proposed v0.5.0 capability release and the week-long Devin/Codex daily-use
+milestone are separate decisions. Final release source review, exact native
+artifact evidence, custody checks, and explicit publication approval can support
+the versioned release without claiming that the observation has occurred. The
+one-week, two-project observation remains unperformed and tracked with the
+sanitized template in the migration guide. CI and release publication cannot
+complete it, and this preparation must not close issue #105 or claim daily-use
+readiness.
+
 The current `release` environment has no public reviewer or wait-timer gate. Do
 not push the tag as a request to inspect a draft: after the native and attestation
 jobs pass, the workflow stages and publishes the immutable Release automatically.
-If the pre-tag observation, custody checks, version decision, release notes, or
-explicit publication approval are incomplete, do not push the tag.
+If custody checks, final source review, release notes, exact preparation
+evidence, or explicit publication approval are incomplete, do not push the tag.
 
 ## Readiness assessment
 
 | Area | Status at this source boundary | Evidence and remaining action |
 | --- | --- | --- |
-| Source scope | **Complete for review** | The exact source commit/tree and immutable v0.4.0 comparison are recorded above. Freeze the final cut at a reviewed commit descended from this boundary and record any intervening changes. |
-| Candidate and target identity | **Needs final substitution** | Choose the final stable version, add `docs/releases/vMAJOR.MINOR.PATCH.md`, and run the clean-main tag preparation interface. Record the annotated tag object, source commit/tree, locked Codex archive and executable digests, candidate archive digest, and installed ACS binary digest. A development candidate labelled v0.4.0 is not the published v0.4.0 artifact. |
+| Source scope | **Preparation identity pending** | The historical comparison boundary and immutable v0.4.0 identity are recorded above, but they do not identify this preparation diff or the final cut. After review and merge, record the exact protected-main preparation/final commit and tree before tag preparation. |
+| Candidate and target identity | **v0.5.0 proposed; exact identity pending** | Review the versioned notes/checklist, then run the clean-main tag preparation interface only after authorization. Record the annotated tag object, source commit/tree, locked target identities, candidate archive digest, and installed ACS binary digest. A development candidate labelled v0.5.0 is not a published artifact. |
 | Native installed-artifact checks | **Needs final artifact execution** | The release workflow contains macOS 26 Apple Silicon normal, race, installed-artifact, containment, terminal, denial, lifecycle, Session recovery, and shared Devin/Codex gates. Run them from the final tag against the candidate built in that run and retain job URLs and sanitized operation witnesses. PR candidate artifacts and source tests do not substitute for final-tag bytes. |
 | Codex authentication evidence | **Needs final artifact execution and optional operator observation** | Automation uses the official checksum-locked CLI, a loopback simulated API, synthetic authentication, and a disposable Keychain. It proves the tested isolated composition, not a maintainer account, hosted inference, quota, or refresh. Any real-account smoke is separately authorized, credential-safe supplemental evidence. |
-| Documentation, migration, and rollback | **Complete for an unnumbered candidate; needs final substitution** | The candidate guide covers compatibility, exact-byte installation, explicit migration, nonzero recovery, binary rollback, and the two-project observation template. Re-run its tested shell examples and replace placeholders only after the final version and artifacts exist; preserve every historical release document. |
+| Documentation, migration, and rollback | **Prepared for proposed v0.5.0; evidence pending** | The guides cover v0.4.0 bootstrap, compatibility, exact-byte installation, backup, explicit migration, nonzero recovery, binary rollback, and the separate observation template. Re-run tested shell examples for the reviewed source and preserve every historical release document. |
 | Artifact trust | **Controls prepared; needs final evidence** | Retain the final build-once artifact name, checksums, native job, attestation verification, draft asset comparison, publication job, and immutable Release result. Do not infer final evidence from a PR artifact or from synthetic authentication. |
-| Apple signing and notarization | **Custody decision required** | Decide before publication whether the cut remains explicitly unsigned/unnotarized or is blocked for a separately reviewed signing flow. There is no signing/notarization machinery in this source, and checksums or attestations cannot fill that gap. Do not weaken Gatekeeper or claim unsigned distribution was validated. |
-| Two-project daily use | **Operator observation required before tag push** | Use the exact promoted pre-tag candidate with both Devin and Codex in two real projects for one full week on macOS 26 Apple Silicon. Complete the sanitized template in the migration guide, including its source and byte identities, quickstart usefulness, Skills/workspace behavior, named-auth isolation, terminal behavior, cleanup/recovery, elapsed dates, and blockers. CI and synthetic authentication cannot complete this item, and the result is not final-tag byte evidence. |
-| Final version and publication | **Approval required** | After daily use and blocker resolution, review and freeze the exact source package, choose the stable version, confirm release identity/configuration custody, and obtain explicit approval before pushing the annotated tag. The push authorizes the full automatic final build, native validation, attestation and publication pipeline; there is no later approval pause. |
+| Apple signing and notarization | **Unsigned/unnotarized posture approved for this cut** | No signing machinery or Apple credential is required. Checksums and attestations cannot fill the Apple trust gap; do not weaken Gatekeeper or claim Apple approval. |
+| Two-project daily use | **Separate milestone; unperformed** | Keep the one-week Devin/Codex observation template and issue #105 open. CI, synthetic authentication, and release publication cannot complete or imply this evidence. Findings can inform a later corrective release without rewriting the evidence for this cut. |
+| Final version and publication | **Approval required** | Review and freeze the exact v0.5.0 source package, confirm release identity/configuration custody, and obtain explicit approval before pushing the annotated tag. The push authorizes the full automatic final build, native validation, attestation and publication pipeline; there is no later approval pause. |
 
 Issues [#102](https://github.com/alcimerio/ai-config-selector/issues/102),
 [#103](https://github.com/alcimerio/ai-config-selector/issues/103),
@@ -187,29 +209,27 @@ requirements by itself.
 
 ## Final operator handoff
 
-1. Land and independently review the intended capability source. From its
+1. Land and independently review the intended v0.5.0 capability source. From its
    `Promoted artifact validation` run, hand the exact unpublished candidate to
    the operator and record its source, artifact, archive and installed-binary
    identities. Do not treat its embedded placeholder version as a release.
-2. Evaluate that exact pre-tag candidate for one full week with Devin and Codex
-   in two real projects. Complete the sanitized observation template and resolve
-   every release blocker through reviewed source changes; repeat affected
-   candidate checks or observation as required.
-3. Freeze and independently review the resulting protected-main commit and
-   tree. Confirm issue scope, decide the numeric stable version, and create its
-   release notes and checklist without modifying historical release documents.
-   Record the signing/notarization decision and custody checks.
-4. From clean, up-to-date `main`, run `scripts/release-candidate.sh
-   vMAJOR.MINOR.PATCH` for a local inspection, then
-   `scripts/prepare-release-tag.sh vMAJOR.MINOR.PATCH`. Review the emitted source
-   and annotated-tag identities. These local bytes are not final workflow
-   evidence.
-5. Obtain explicit approval to publish from that exact tag and evidence package.
-   Then push only `refs/tags/vMAJOR.MINOR.PATCH`. The push authorizes the full
+2. Freeze and independently review the resulting protected-main commit and
+   tree. Confirm issue scope and the proposed v0.5.0 notes/checklist without
+   modifying historical release documents. Record the unsigned/unnotarized
+   posture and custody checks.
+3. From clean, up-to-date `main`, run `scripts/release-candidate.sh v0.5.0` for
+   a local inspection, then `scripts/prepare-release-tag.sh v0.5.0`. Review the
+   emitted source and annotated-tag identities. These local bytes are not final
+   workflow evidence.
+4. Obtain explicit approval to publish from that exact tag and evidence package.
+   Then push only `refs/tags/v0.5.0`. The push authorizes the full
    automatic pipeline; monitor candidate build, native validation, attestation,
    and publication, but do not assume an approval pause between those stages.
    Never move or delete the tag; fix a failed cut in source and choose a new
    version.
-6. Retain the exact public and private evidence named in the table. Verify the
+5. Retain the exact public and private evidence named in the table. Verify the
    final published asset set and attestation against the tag workflow outputs.
-   Keep all issues open until their own acceptance evidence is present.
+   Keep issues open until their own acceptance evidence is present.
+6. Separately perform and record the week-long Devin/Codex observation when it
+   occurs. Do not backfill it from release evidence or close issue #105 merely
+   because v0.5.0 was published.

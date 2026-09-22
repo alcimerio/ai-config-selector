@@ -110,8 +110,58 @@ func TestReleaseArtifactContractIsExactlyOneAppleSiliconTarget(t *testing.T) {
 		t.Fatal("release candidate script still publishes a Linux archive")
 	}
 	installer := readRepositoryFile(t, repository, filepath.Join("scripts", "install.sh.tmpl"))
-	if strings.Contains(installer, "Linux) target_os") || !strings.Contains(installer, "ACS v0.4 supports macOS only") {
+	if strings.Contains(installer, "Linux) target_os") || !strings.Contains(installer, "ACS release installers support macOS only") {
 		t.Fatal("installer does not reject unsupported Linux hosts clearly")
+	}
+}
+
+func TestDevelopmentCandidateVersionIsProposedV050(t *testing.T) {
+	repository := ".."
+	promoted := readRepositoryFile(t, repository, filepath.Join(".github", "workflows", "promoted-artifacts.yml"))
+	macos := readRepositoryFile(t, repository, filepath.Join(".github", "workflows", "macos.yml"))
+	if !strings.Contains(promoted, "ACS_CANDIDATE_VERSION: v0.5.0") {
+		t.Fatal("promoted workflow does not use the proposed v0.5.0 development identity")
+	}
+	if !strings.Contains(macos, "scripts/release-candidate.sh v0.5.0") {
+		t.Fatal("macOS workflow does not verify the proposed v0.5.0 candidate")
+	}
+	for _, stale := range []string{
+		"ACS_CANDIDATE_VERSION: v0.4.0",
+		"scripts/release-candidate.sh v0.4.0",
+	} {
+		if strings.Contains(promoted, stale) || strings.Contains(macos, stale) {
+			t.Fatalf("development workflow retains stale candidate identity %q", stale)
+		}
+	}
+
+	notes := readRepositoryFile(t, repository, filepath.Join("docs", "releases", "v0.5.0.md"))
+	checklist := readRepositoryFile(t, repository, filepath.Join("docs", "releases", "v0.5.0-checklist.md"))
+	for _, required := range []string{
+		"Profile lifecycle",
+		"v0.5.0 adds passive Profile listing",
+		"v0.5.0 is unsigned and unnotarized",
+		"https://github.com/alcimerio/ai-config-selector/blob/v0.5.0/docs/release-migration-guide.md",
+		"https://github.com/alcimerio/ai-config-selector/blob/v0.5.0/docs/manual-upgrade-recovery.md",
+		"daily-use observation",
+	} {
+		if !strings.Contains(notes, required) {
+			t.Errorf("proposed release notes omit %q", required)
+		}
+	}
+	for _, preparationOnly := range []string{
+		"the proposed release adds",
+		"deliberately prepared without Apple Developer ID signing",
+		"](../release-migration-guide.md)",
+		"](../manual-upgrade-recovery.md)",
+	} {
+		if strings.Contains(notes, preparationOnly) {
+			t.Errorf("verbatim release notes retain preparation-only content %q", preparationOnly)
+		}
+	}
+	for _, required := range []string{"PENDING", "UNPERFORMED", "refs/tags/v0.5.0"} {
+		if !strings.Contains(checklist, required) {
+			t.Errorf("proposed release checklist omits %q", required)
+		}
 	}
 }
 
@@ -369,21 +419,12 @@ func TestSharedTargetConformanceDocumentationAndNativeGateStayExplicit(t *testin
 }
 
 func TestHistoricalReleaseRecordsRemainAvailable(t *testing.T) {
-	for _, version := range []string{"v0.2.0", "v0.3.0", "v0.3.1", "v0.3.2", "v0.3.3"} {
+	for _, version := range []string{"v0.2.0", "v0.3.0", "v0.3.1", "v0.3.2", "v0.3.3", "v0.4.0"} {
 		for _, suffix := range []string{".md", "-checklist.md"} {
 			document := filepath.Join("docs", "releases", version+suffix)
 			if strings.TrimSpace(readRepositoryFile(t, "..", document)) == "" {
 				t.Errorf("historical release record %s is empty", document)
 			}
-		}
-	}
-}
-
-func TestDevelopmentWorkflowsBuildTheV040Candidate(t *testing.T) {
-	for _, workflow := range []string{"macos.yml", "promoted-artifacts.yml"} {
-		text := readRepositoryFile(t, "..", filepath.Join(".github", "workflows", workflow))
-		if !strings.Contains(text, "v0.4.0") {
-			t.Errorf("%s does not build the v0.4.0 candidate", workflow)
 		}
 	}
 }
