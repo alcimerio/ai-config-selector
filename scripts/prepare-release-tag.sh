@@ -11,7 +11,7 @@ if [ "$#" -ne 1 ]; then
 fi
 
 release_tag="$1"
-archive_version="${release_tag#v}"
+. "$(dirname "$0")/release-version.sh"
 stage="arguments"
 tag_identity="unvalidated"
 source_identity="unvalidated"
@@ -37,24 +37,7 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-case "$release_tag" in
-  v[0-9]*.[0-9]*.[0-9]*) ;;
-  *) fail "release tag is not canonical SemVer" ;;
-esac
-case "$archive_version" in
-  *[!0-9.]*) fail "release tag is not canonical SemVer" ;;
-esac
-old_ifs="$IFS"
-IFS=.
-set -- $archive_version
-IFS="$old_ifs"
-[ "$#" -eq 3 ] || fail "release tag is not canonical SemVer"
-for component in "$@"; do
-  case "$component" in
-    0 | [1-9] | [1-9][0-9]*) ;;
-    *) fail "release tag is not canonical SemVer" ;;
-  esac
-done
+acs_is_release_version "$release_tag" || fail "release tag is not canonical SemVer"
 tag_identity="$release_tag"
 
 stage="repository"

@@ -66,6 +66,7 @@ func prepareReleaseTagRepository(t *testing.T) (string, string) {
 	}
 	copyTestFile(t, filepath.Join(projectRoot, "scripts", "prepare-release-tag.sh"), filepath.Join(repository, "scripts", "prepare-release-tag.sh"), 0o700)
 	copyTestFile(t, filepath.Join(projectRoot, "scripts", "release-tag-identity.sh"), filepath.Join(repository, "scripts", "release-tag-identity.sh"), 0o700)
+	copyTestFile(t, filepath.Join(projectRoot, "scripts", "release-version.sh"), filepath.Join(repository, "scripts", "release-version.sh"), 0o600)
 	writeExecutable(t, filepath.Join(repository, "scripts"), "release-candidate.sh", "#!/bin/sh\nmkdir -p dist/release-candidate\n")
 	if err := os.WriteFile(filepath.Join(repository, ".gitignore"), []byte("dist/\n"), 0o600); err != nil {
 		t.Fatal(err)

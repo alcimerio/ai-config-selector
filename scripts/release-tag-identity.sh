@@ -11,8 +11,8 @@ if [ "$#" -ne 1 ]; then
 fi
 
 release_tag="$1"
-archive_version="${release_tag#v}"
 tag_identity="unvalidated"
+. "$(dirname "$0")/release-version.sh"
 
 fail() {
   printf 'release tag identity failed: tag=%s stage=%s: %s\n' "$tag_identity" "$stage" "$1" >&2
@@ -20,24 +20,7 @@ fail() {
 }
 
 stage="tag-name"
-case "$release_tag" in
-  v[0-9]*.[0-9]*.[0-9]*) ;;
-  *) fail "tag is not a canonical SemVer release" ;;
-esac
-case "$archive_version" in
-  *[!0-9.]*) fail "tag is not a canonical SemVer release" ;;
-esac
-old_ifs="$IFS"
-IFS=.
-set -- $archive_version
-IFS="$old_ifs"
-[ "$#" -eq 3 ] || fail "tag is not a canonical SemVer release"
-for component in "$@"; do
-  case "$component" in
-    0 | [1-9] | [1-9][0-9]*) ;;
-    *) fail "tag is not a canonical SemVer release" ;;
-  esac
-done
+acs_is_release_version "$release_tag" || fail "tag is not a canonical SemVer release"
 tag_identity="$release_tag"
 
 stage="repository"

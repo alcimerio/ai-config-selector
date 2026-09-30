@@ -31,23 +31,8 @@ passed() {
 }
 
 archive_version="${candidate_version#v}"
-case "$candidate_version" in
-  v[0-9]*.[0-9]*.[0-9]*) ;;
-  *) fail "candidate version is not a canonical SemVer tag" ;;
-esac
-old_ifs="$IFS"
-IFS=.
-set -- $archive_version
-IFS="$old_ifs"
-if [ "$#" -ne 3 ]; then
-  fail "candidate version is not a canonical SemVer tag"
-fi
-for component in "$@"; do
-  case "$component" in
-    0 | [1-9] | [1-9][0-9]*) ;;
-    *) fail "candidate version is not a canonical SemVer tag" ;;
-  esac
-done
+. "$(dirname "$0")/release-version.sh"
+acs_is_release_version "$candidate_version" || fail "candidate version is not a canonical SemVer tag"
 
 case "$target_os/$target_arch" in
   darwin/arm64) ;;
