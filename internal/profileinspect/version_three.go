@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"sort"
 
+	"github.com/alcimerio/ai-config-selector/internal/capabilitycatalog"
 	"github.com/alcimerio/ai-config-selector/internal/codexauthresource"
 	"github.com/alcimerio/ai-config-selector/internal/environmentintent"
 	"github.com/alcimerio/ai-config-selector/internal/executableintent"
@@ -30,11 +31,11 @@ func decodeVersionThree(entry Entry, envelope map[string]json.RawMessage) Entry 
 		return entry.failed("unsupported_content")
 	}
 	for id := range common {
-		if _, supported := commonCapability(id); !supported {
+		if _, supported := capabilitycatalog.LookupCommon(id); !supported {
 			return entry.failed("unsupported_content")
 		}
 	}
-	capabilities := CommonCapabilities()
+	capabilities := capabilitycatalog.CommonCapabilities()
 	if len(common) < 2 || len(common) > len(capabilities) {
 		return entry.failed("invalid_structure")
 	}
