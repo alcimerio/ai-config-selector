@@ -28,7 +28,8 @@ fail() {
   exit 1
 }
 
-[[ "$release_tag" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || fail "release tag is invalid"
+. "$(dirname "$0")/release-version.sh"
+acs_is_release_version "$release_tag" || fail "release tag is invalid"
 tag_identity="$release_tag"
 [[ "$source_commit" =~ ^[0-9a-f]{40}$ ]] || fail "source commit is invalid"
 source_identity="$source_commit"

@@ -9,32 +9,14 @@ fi
 
 release_tag="$1"
 archive_version="${release_tag#v}"
+. "$(dirname "$0")/release-version.sh"
 
 canonical_version_error() {
 	printf '%s\n' "release candidate version must be a canonical SemVer tag" >&2
 	exit 2
 }
 
-if [ "$release_tag" = "$archive_version" ]; then
-	canonical_version_error
-fi
-case "$archive_version" in
-	*[!0-9.]*) canonical_version_error ;;
-esac
-
-old_ifs="$IFS"
-IFS=.
-set -- $archive_version
-IFS="$old_ifs"
-if [ "$#" -ne 3 ]; then
-	canonical_version_error
-fi
-for component in "$@"; do
-	case "$component" in
-		0 | [1-9] | [1-9][0-9]*) ;;
-		*) canonical_version_error ;;
-	esac
-done
+acs_is_release_version "$release_tag" || canonical_version_error
 
 if ! git diff --quiet || ! git diff --cached --quiet || [ -n "$(git ls-files --others --exclude-standard)" ]; then
 	printf '%s\n' "release candidate source must be a clean Git worktree" >&2
