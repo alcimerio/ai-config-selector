@@ -16,13 +16,13 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/alcimerio/ai-config-selector/internal/capabilitycatalog"
 	"github.com/alcimerio/ai-config-selector/internal/codexauth"
 	"github.com/alcimerio/ai-config-selector/internal/commonprofile"
 	"github.com/alcimerio/ai-config-selector/internal/instructions"
 	"github.com/alcimerio/ai-config-selector/internal/launch"
 	"github.com/alcimerio/ai-config-selector/internal/mcpintent"
 	"github.com/alcimerio/ai-config-selector/internal/profile"
-	"github.com/alcimerio/ai-config-selector/internal/profileinspect"
 	"github.com/alcimerio/ai-config-selector/internal/skills"
 )
 
@@ -217,7 +217,7 @@ func Export(candidate profile.Profile) ([]byte, Report, error) {
 	for id := range candidate.Common {
 		commonIDs = append(commonIDs, id)
 	}
-	if !profileinspect.SupportsCommonV3(commonIDs) {
+	if !capabilitycatalog.SupportsCommonV3(commonIDs) {
 		return nil, Report{}, errors.New("unsupported common capability")
 	}
 	skillsPayload, skillsOK := candidate.Common[commonprofile.SkillsCapabilityID]

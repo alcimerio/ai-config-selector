@@ -11,6 +11,7 @@ import (
 	"regexp"
 
 	"github.com/alcimerio/ai-config-selector/internal/authority"
+	"github.com/alcimerio/ai-config-selector/internal/capabilitycatalog"
 	"github.com/alcimerio/ai-config-selector/internal/launch"
 	"github.com/alcimerio/ai-config-selector/internal/profile"
 	"github.com/alcimerio/ai-config-selector/internal/profileinspect"
@@ -421,7 +422,7 @@ func (registry *Registry) supportsCommonV3() bool {
 	for _, registration := range registry.ordered {
 		ids = append(ids, registration.id)
 	}
-	return profileinspect.SupportsCommonV3(ids)
+	return capabilitycatalog.SupportsCommonV3(ids)
 }
 
 func (registry *Registry) newVersionTwoProfile(name string, draft Draft, omitWorkspace bool) (profile.Profile, error) {
