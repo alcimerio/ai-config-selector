@@ -159,14 +159,8 @@ func TestNativeDisposablePublicUpdate(t *testing.T) {
 
 func TestMain(m *testing.M) {
 	// Darwin seatbelt proxy/supervisor dispatch occurs in launch's init before
-	// testing parses helper flags. These remaining public helper routes mirror main.
+	// testing parses helper flags. The MCP helper route mirrors main.
 	if handled, err := launch.RunMCPHelper(os.Args[1:]); handled {
-		if err != nil {
-			os.Exit(1)
-		}
-		os.Exit(0)
-	}
-	if handled, err := launch.RunBubblewrapHelper(os.Args[1:]); handled {
 		if err != nil {
 			os.Exit(1)
 		}

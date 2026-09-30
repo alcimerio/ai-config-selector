@@ -34,17 +34,6 @@ func main() {
 		}
 		return
 	}
-	handled, err := launch.RunBubblewrapHelper(os.Args[1:])
-	if handled {
-		if err != nil {
-			if exitCode, isTargetExit := launch.BubblewrapHelperExitCode(err); isTargetExit {
-				os.Exit(exitCode)
-			}
-			fmt.Fprintln(os.Stderr, "acs: sandbox helper failed")
-			os.Exit(1)
-		}
-		return
-	}
 	informational := cli.App{Version: buildVersion(releaseVersion, debug.ReadBuildInfo), Input: os.Stdin, Output: os.Stdout, ErrorOutput: os.Stderr, Interactive: cli.StandardStreamsInteractive}
 	if handled, code := informational.RunProfileHistory(context.Background(), os.Args[1:], os.UserHomeDir); handled {
 		os.Exit(code)

@@ -6,7 +6,7 @@ ACS resolves a persisted Profile into an immutable authority plan, materializes
 selected content in an ephemeral Session, and runs a registered target or an
 explicit command through a required native process sandbox. The supported
 runtime is macOS 26 on Apple Silicon (`darwin/arm64`), using the verified system
-Seatbelt backend. Retained Linux/Bubblewrap code is unsupported.
+Seatbelt backend. Unsupported hosts have no sandbox backend and fail closed.
 
 ## Domain model
 
@@ -152,8 +152,7 @@ version probes remain value-free.
 Selected values transit trusted supervisor memory and are readable by the
 attached process tree, including local MCP servers. Codex shell snapshots are
 disabled when environment values are selected, avoiding their serialization
-into snapshot files. Linux rejects selected environment transport before
-Session creation rather than rendering secrets into Bubblewrap argv.
+into snapshot files. Unsupported hosts fail closed before Session creation.
 
 Unrelated host paths and Unix sockets remain denied. Directory grants cover
 their descendants; see [path grants and pathname-race limits](common-profile-format.md#explicit-filesystem-paths).

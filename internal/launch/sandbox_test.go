@@ -24,22 +24,17 @@ func TestValidatePlatformCoversSupportedMatrix(t *testing.T) {
 	}{
 		{name: "macOS 26 arm64", platform: Platform{OS: "darwin", Architecture: "arm64", Release: "26.0"}, accepted: true},
 		{name: "unsupported macOS 26 Intel", platform: Platform{OS: "darwin", Architecture: "amd64", Release: "26.9.1"}},
-		{name: "formerly supported Ubuntu 24.04 amd64", platform: Platform{OS: "linux", Architecture: "amd64", Distribution: "ubuntu", Release: "24.04"}},
-		{name: "formerly supported Ubuntu 24.04 arm64", platform: Platform{OS: "linux", Architecture: "arm64", Distribution: "ubuntu", Release: "24.04.3"}},
+		{name: "unsupported Linux amd64", platform: Platform{OS: "linux", Architecture: "amd64", Release: "24.04"}},
+		{name: "unsupported Linux arm64", platform: Platform{OS: "linux", Architecture: "arm64", Release: "24.04.3"}},
 		{name: "old macOS", platform: Platform{OS: "darwin", Architecture: "arm64", Release: "15.6"}},
 		{name: "future macOS", platform: Platform{OS: "darwin", Architecture: "amd64", Release: "27.0"}},
-		{name: "old Ubuntu", platform: Platform{OS: "linux", Architecture: "amd64", Distribution: "ubuntu", Release: "22.04"}},
-		{name: "future Ubuntu", platform: Platform{OS: "linux", Architecture: "arm64", Distribution: "ubuntu", Release: "26.04"}},
-		{name: "other Linux", platform: Platform{OS: "linux", Architecture: "amd64", Distribution: "debian", Release: "24.04"}},
 		{name: "unsupported Darwin architecture", platform: Platform{OS: "darwin", Architecture: "386", Release: "26.0"}},
-		{name: "unsupported Linux architecture", platform: Platform{OS: "linux", Architecture: "riscv64", Distribution: "ubuntu", Release: "24.04"}},
+		{name: "unsupported Linux architecture", platform: Platform{OS: "linux", Architecture: "riscv64", Release: "24.04"}},
 		{name: "Windows", platform: Platform{OS: "windows", Architecture: "amd64", Release: "11"}},
 		{name: "unknown OS", platform: Platform{Architecture: "amd64", Release: "24.04"}},
 		{name: "unknown architecture", platform: Platform{OS: "darwin", Release: "26.0"}},
 		{name: "unknown release", platform: Platform{OS: "darwin", Architecture: "arm64"}},
-		{name: "unknown Linux distribution", platform: Platform{OS: "linux", Architecture: "amd64", Release: "24.04"}},
 		{name: "malformed macOS release", platform: Platform{OS: "darwin", Architecture: "arm64", Release: "26.private"}},
-		{name: "malformed Ubuntu release", platform: Platform{OS: "linux", Architecture: "amd64", Distribution: "ubuntu", Release: "24.04."}},
 	}
 
 	for _, test := range tests {
@@ -73,19 +68,6 @@ func TestSandboxErrorsExposeOnlyStableCategory(t *testing.T) {
 	unknown := (&SandboxError{Category: SandboxErrorCategory("PRIVATE_CATEGORY")}).Error()
 	if got, want := unknown, "setup_failed: process sandbox preparation failed"; got != want {
 		t.Fatalf("unknown sandbox error = %q, want %q", got, want)
-	}
-}
-
-func TestBubblewrapUnavailableProvidesFixedPackageRemediationWithoutBackendOutput(t *testing.T) {
-	err := bubblewrapUnavailable()
-	assertSandboxCategory(t, err, SandboxBackendUnavailable)
-	if got, want := err.Error(), "backend_unavailable: process sandbox unavailable: required system backend is unavailable; review Ubuntu's configured signed apt sources, then install or repair Bubblewrap with 'sudo apt-get update && sudo apt-get install --reinstall bubblewrap'; ACS will not start the requested process without the required sandbox"; got != want {
-		t.Fatalf("Bubblewrap unavailable error = %q, want %q", got, want)
-	}
-	for _, private := range []string{"PRIVATE_BACKEND_OUTPUT", "/home/alice", "policy=(allow"} {
-		if strings.Contains(err.Error(), private) {
-			t.Fatalf("Bubblewrap remediation leaked %q: %v", private, err)
-		}
 	}
 }
 
@@ -463,7 +445,7 @@ func TestNativeSandboxBackendsAreRegisteredOnlyForTheNativeOperatingSystem(t *te
 	backends := nativeSandboxBackends()
 	wantOS := ""
 	switch runtime.GOOS {
-	case "darwin", "linux":
+	case "darwin":
 		wantOS = runtime.GOOS
 	}
 	if wantOS == "" {
@@ -760,7 +742,10 @@ func TestPreparedProcessPreservesChildExitStatus(t *testing.T) {
 	}
 }
 
-func TestCurrentPlatformMatchesRuntimeFamily(t *testing.T) {
+func TestCurrentPlatformMatchesSupportedRuntimeFamily(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("host probing is only supported on macOS")
+	}
 	platform, err := CurrentPlatform()
 	if err != nil {
 		t.Fatalf("identify current platform: %v", err)
@@ -843,4 +828,15 @@ func validProcessRequest(t *testing.T) ProcessRequest {
 		Workspace: workspace, SessionsDirectory: sessions, SessionDirectory: session,
 		SessionHome: home, TemporaryDirectory: temporary, Executable: executable,
 	}
+}
+
+func TestCurrentPlatformRejectsUnsupportedOperatingSystems(t *testing.T) {
+	if runtime.GOOS == "darwin" {
+		t.Skip("unsupported-platform check requires a non-macOS host")
+	}
+	_, err := CurrentPlatform()
+	if err == nil {
+		t.Fatal("unsupported host was probed as an available platform")
+	}
+	assertSandboxCategory(t, err, SandboxUnsupportedPlatform)
 }

@@ -92,8 +92,7 @@ New v3 Profiles default to a read-only workspace and a private writable
 Session. In the Profile Builder, Workspace offers an explicit `Read and write
 (coding work)` choice. The resolved common intent is passed unchanged to native
 sandbox checks and every probe or attached process. Seatbelt omits workspace
-write rules for read-only Profiles; the retained Linux compiler uses a read-only
-workspace bind. Session writes remain allowed in both modes.
+write rules for read-only Profiles. Session writes remain allowed in both modes.
 
 Legacy v1/v2 Profiles retain writable-workspace authority and their established
 synthetic-home paths. An approved legacy edit/clone/rename produces canonical
@@ -257,8 +256,8 @@ snapshots because that target feature serializes exported process variables;
 the selected values remain available to the real tool process and descendants.
 Cleanup retains the private resource lease until descendant settlement is
 proved; uncertain cleanup remains quarantined rather than claiming erasure.
-Selected environment transport is currently macOS-only. Linux fails closed
-before Session creation instead of placing values in Bubblewrap argv.
+Selected environment transport requires the supported macOS runtime. Unsupported
+hosts fail closed before Session creation.
 
 Older v3 Profiles without `environment` read as an empty compatibility default.
 New creation and confirmed mutation emit the explicit selection. Only

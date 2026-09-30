@@ -1,8 +1,8 @@
 # Contributing
 
-ACS supports macOS 26 on Apple Silicon (`darwin/arm64`). Linux/Bubblewrap source
-is retained, but Linux failures are not release blockers and do not imply a
-support promise. Intel Macs are not a supported runtime or release target.
+ACS supports macOS 26 on Apple Silicon (`darwin/arm64`) using Seatbelt.
+There is no Linux sandbox backend. Intel Macs, Linux and other platforms are
+not supported runtimes or release targets.
 
 ## Local setup
 
@@ -80,31 +80,18 @@ go test -race ./internal/launch ./internal/sandboxshell -count=1
 
 Do not weaken macOS security settings to make a test pass.
 
-## Linux source
+## Portable source checks
 
-The retained Linux implementation may be cross-compiled as a non-blocking
-observation. From the repository root, write each architecture's test binaries
-to a separate temporary directory without executing them:
+Small OS-specific filesystem and terminal shims keep shared code testable on
+Linux development hosts. They are not a Linux sandbox or support promise:
+launches on unsupported hosts fail closed, and only the native Apple Silicon
+gates establish runtime behavior.
 
-```sh
-(
-  set -eu
-  compile_dir="$(mktemp -d "${TMPDIR:-/tmp}/acs-linux-compile.XXXXXX")"
-  trap 'rm -rf "$compile_dir"' EXIT
-  mkdir "$compile_dir/amd64" "$compile_dir/arm64"
-  GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go test -c -o "$compile_dir/amd64/" ./...
-  GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go test -c -o "$compile_dir/arm64/" ./...
-)
-```
-
-`-c` is compile-only. `go test -run '^$'` still starts each test executable
-(and its package initialization), so it is not a cross-compilation-only check
-on macOS. Neither this check nor the native Linux CI observation proves Linux
-runtime support.
-
-Do not publish Linux archives, add Linux native release jobs, or describe Linux
-as supported without a separate decision that restores ownership and evidence
-for that platform.
+The non-blocking CI observation compiles package tests with `go test -c` and
+builds the command without executing either. It does not install Bubblewrap or
+publish Linux artifacts. Local portable unit tests may supplement, but never
+replace, the macOS checks above. Do not use `go test -run '^$'` as a
+compile-only check: it starts test executables and package initialization.
 
 ## Native named-authentication evidence
 
@@ -193,7 +180,7 @@ Before opening a PR:
 5. Confirm that no release asset, tag, or external state is changed by the PR.
 
 The PR gates install the candidate bytes on macOS 26 Apple Silicon. The native
-job must pass before merge. The Linux compile observation is explicitly
+job must pass before merge. The portable-source compile observation is explicitly
 nonblocking.
 
 ## Release preparation
