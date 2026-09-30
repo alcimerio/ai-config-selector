@@ -2,7 +2,7 @@
 
 set -eu
 
-readonly goreleaser_version="2.17.1"
+readonly goreleaser_version="2.18.2"
 readonly base_url="https://github.com/goreleaser/goreleaser/releases/download/v${goreleaser_version}"
 
 case "$(uname -s)" in
@@ -25,9 +25,9 @@ esac
 
 asset="goreleaser_${tool_os}_${tool_arch}.tar.gz"
 case "${tool_os}/${tool_arch}" in
-  Darwin/arm64) expected_checksum="b65624885c25da9a677b7ad11cf86a02123cc5a56af66f6b4ebb574658eada2e" ;;
-  Linux/arm64) expected_checksum="702f03769ac8bcb0e47839c82243cc614ae995633599a98c63062e13ea85f829" ;;
-  Linux/x86_64) expected_checksum="a99bbc7ae0d8d897b07c4c497a9b62f222558804715ef219d1af05a7e417bc80" ;;
+  Darwin/arm64) expected_checksum="a811ff154fe136a0cfb55d00126c151fc39ec370a663d805a9ca5547445aa70c" ;;
+  Linux/arm64) expected_checksum="a71681b29194f08f057a68cfcaa5c6b15d907a83a2622c51900c4faff828f322" ;;
+  Linux/x86_64) expected_checksum="0a96edc9d9bc594e4a41cc4d59467c182062910ab24d9d1f6dd7b667d32606d3" ;;
   *)
     printf '%s\n' "goreleaser: unsupported validation host" >&2
     exit 1
