@@ -115,24 +115,26 @@ func TestDevelopmentCandidateVersionHasReleaseNotes(t *testing.T) {
 	repository := ".."
 	promoted := readRepositoryFile(t, repository, filepath.Join(".github", "workflows", "promoted-artifacts.yml"))
 	macos := readRepositoryFile(t, repository, filepath.Join(".github", "workflows", "macos.yml"))
-	if !strings.Contains(promoted, "ACS_CANDIDATE_VERSION: v0.5.0") {
-		t.Fatal("promoted workflow does not use the v0.5.0 development identity")
+	if !strings.Contains(promoted, "ACS_CANDIDATE_VERSION: v0.5.1") {
+		t.Fatal("promoted workflow does not use the v0.5.1 development identity")
 	}
-	if !strings.Contains(macos, "scripts/release-candidate.sh v0.5.0") {
-		t.Fatal("macOS workflow does not verify the v0.5.0 candidate")
+	if !strings.Contains(macos, "scripts/release-candidate.sh v0.5.1") {
+		t.Fatal("macOS workflow does not verify the v0.5.1 candidate")
 	}
 	for _, stale := range []string{
 		"ACS_CANDIDATE_VERSION: v0.4.0",
+		"ACS_CANDIDATE_VERSION: v0.5.0",
 		"scripts/release-candidate.sh v0.4.0",
+		"scripts/release-candidate.sh v0.5.0",
 	} {
 		if strings.Contains(promoted, stale) || strings.Contains(macos, stale) {
 			t.Fatalf("development workflow retains stale candidate identity %q", stale)
 		}
 	}
 
-	notes := readRepositoryFile(t, repository, filepath.Join("docs", "releases", "v0.5.0.md"))
-	if strings.TrimSpace(notes) == "" {
-		t.Fatal("current candidate release notes are empty")
+	notes := readRepositoryFile(t, repository, filepath.Join("docs", "releases", "v0.5.1.md"))
+	if !strings.HasPrefix(notes, "# ACS v0.5.1\n") {
+		t.Fatal("current candidate release notes have the wrong version")
 	}
 	for _, script := range []string{"prepare-release-tag.sh", "release-tag-identity.sh"} {
 		contents := readRepositoryFile(t, repository, filepath.Join("scripts", script))
