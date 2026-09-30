@@ -73,17 +73,11 @@ Dry-run reports the destination condition, the actual sanitized semantic change 
 
 `--as NAME` is a no-clobber destination. For a deleted lineage it appends the restore to that lineage under the new live name. For a renamed lineage whose current Profile remains live elsewhere, it preserves that live Profile and performs the restore as a conditional clone: the destination receives a distinct derived lineage whose immutable restore event records the selected lineage as its source relationship. Preview binds the live source revision, and apply revalidates both that source and the absent destination under the repository lock.
 
-A clone preserves the source name-to-lineage binding. A later source delete
-therefore appends its tombstone to that same lineage; it cannot silently adopt
-the still-present source bytes into a new lineage merely because a derived
-restore was created earlier. Recovery replay preserves the same clone versus
-rename/delete distinction.
-
-A committed restore reports the new `eventId` and resulting `lineageId` separately
-from `selectedEventId` and `sourceLineageId`. For an in-line restore the source and
-result lineage IDs match. For a renamed-live `--as` restore they differ, making
-the derived lineage relationship explicit without claiming that the new event
-was appended to the still-live source lineage.
+A derived restore preserves the source name-to-lineage binding; deleting the
+source later appends its tombstone to that original lineage. Recovery preserves
+this distinction. A committed restore reports resulting `eventId` and
+`lineageId` separately from `selectedEventId` and `sourceLineageId`; the source
+and result lineage IDs differ for a renamed-live `--as` restore.
 
 ## Pins, retention, and pruning
 

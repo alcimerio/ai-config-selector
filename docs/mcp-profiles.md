@@ -165,26 +165,20 @@ bindings; secret references are represented by symbols. Import validates all
 references before conditional Profile creation. History and restore use the
 existing Profile revision and local-binding rules; restore does not replay old
 resolved paths or secret values. See the [common Profile format](common-profile-format.md),
-[Profile creation](profile-creation.md), [portable exchange](portable-profile-exchange.md),
-and [effective capability explanation](effective-capability-explanation.md).
+[Profile creation](profiles.md#declarative-creation), [portable exchange](portable-profile-exchange.md),
+and [effective capability explanation](diagnostics.md#effective-capability-explanation).
 
 ## Devin import compatibility
 
-To suppress documented ambient MCP imports, the Devin Session user config sets
-`read_config_from.cursor`, `windsurf`, `claude`, `opencode`, and `zed` to
-`false`, while leaving `agents_standard` and `copilot` unchanged. ACS seeds
-Devin's deterministic first-run state (`version: 1`, shell setup marked
-complete, and `theme_mode: "dark"`) inside the isolated Session. This avoids
-the first-run configuration rewrite and suppresses shell/PATH bootstrap and
-keeps that config immutable for the Session lifetime. The contained Profile
-launch uses dark theme presentation and does not perform host shell
-integration; the shell flag records only the target's own setup state. The
-pinned CLI observation showed that a selected user `cursor: false` setting excludes
-Cursor MCP configuration even when the project asks to enable it. The same
-switches also suppress their documented non-MCP imports: Cursor rules;
-Windsurf rules and Skills; and Claude rules, Skills and commands. OpenCode and
-Zed switches cover their MCP imports. These compatibility effects also apply
-when no MCP server is selected. Native Devin project rules and ACS-selected
-Skills remain separate. Native target tests must continue to verify this
-composition and ordinary Session writes; config-list output alone is not
-runtime proof.
+The Devin Session config disables imports from Cursor, Windsurf, Claude,
+OpenCode and Zed with `read_config_from` switches, while leaving
+`agents_standard` and `copilot` unchanged. These switches also suppress the
+corresponding non-MCP imports: Cursor rules; Windsurf rules and Skills; and
+Claude rules, Skills and commands. They apply even when no MCP server is selected.
+Native Devin project rules and ACS-selected Skills remain separate.
+
+ACS seeds deterministic first-run state in the isolated Session to prevent a
+configuration rewrite. The contained launch uses dark-theme presentation and
+performs no host shell/PATH integration. The immutable config and these fixed
+compatibility settings are part of the Devin recipe, not user-selectable
+Profile settings. Config-list output alone is not proof of runtime containment.

@@ -153,13 +153,13 @@ Select Skills and workspace access in this separate builder. The earlier Devin
 Profile does not have a Codex overlay; do not just substitute its name here.
 For one Profile with both overlays, use the
 [common Profile format](common-profile-format.md) and
-[declarative creation](profile-creation.md).
+[declarative creation](profiles.md#declarative-creation).
 
 Credentials live in an ACS-specific macOS Keychain namespace, not the Profile.
 ACS does not import or fall back to your global Codex login. Login/status and
 real launch access the named identity; Codex dry-run does not access Keychain,
 probe the target, or establish authentication readiness. Follow
-[named authentication](codex-auth.md) for device login, status, recovery, and logout.
+[named authentication](codex.md#named-authentication) for device login, status, recovery, and logout.
 
 ### A generic command
 
@@ -185,6 +185,6 @@ See [generic commands](generic-run.md) for scripts and runtime dependencies.
 4. Review [troubleshooting](troubleshooting.md) and
    [manual recovery](manual-upgrade-recovery.md) before retrying an uncertain mutation
 
-Next: [edit or clone a Profile](profile-mutations.md),
+Next: [edit or clone a Profile](profiles.md#mutations),
 [share sanitized intent](portable-profile-exchange.md), or
 [understand the architecture](architecture.md).

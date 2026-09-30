@@ -2,7 +2,7 @@
 
 [Documentation index](README.md) · [Common Profile grants](common-profile-format.md)
 
-The current development source supports one explicit command through the same
+ACS supports one explicit command through the same
 ACS-owned Session, common Profile authority, native sandbox, attachment, and
 cleanup machinery as registered targets:
 
@@ -16,7 +16,7 @@ Exactly one `--` separates ACS flags from the child argv. `--profile NAME` and
 `--dry-run` may be reordered before that boundary and may each occur once.
 The optional `--expect-authority-digest DIGEST` also belongs before the boundary;
 it refuses a run whose semantic authority differs from a previously reviewed
-[effective-capability explanation](effective-capability-explanation.md).
+[effective-capability explanation](diagnostics.md#effective-capability-explanation).
 Everything after the boundary is literal: spaces and empty strings remain in
 their individual argv elements, leading dashes stay child arguments, and a
 later `--` is not parsed by ACS. A command is required. Unknown ACS flags,
@@ -111,7 +111,4 @@ the Session protected for startup recovery rather than deleting live state.
 Use the [Session operations guide](session-operations.md) to inspect and recover
 retained state; do not remove private Session or lease files by hand.
 
-The supported runtime is macOS 26 on Apple Silicon. Source identity and the
-exact supplied candidate tested by CI define this development feature; it is
-not attributed to an older published release. Separate multi-project real-use
-observations remain outside this delivery.
+The supported runtime is macOS 26 on Apple Silicon.

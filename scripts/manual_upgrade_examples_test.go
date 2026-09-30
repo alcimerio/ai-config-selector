@@ -124,7 +124,7 @@ esac
 // operator-supplied old path and trusted digest inputs are replaced; the shell
 // operations, checks and PATH changes are the ones a reader runs.
 func TestManualUpgradeExamples(t *testing.T) {
-	for _, arch := range []string{"arm64", "x86_64"} {
+	for _, arch := range []string{"arm64", "aarch64"} {
 		t.Run(arch, func(t *testing.T) {
 			fixture := newManualUpgradeFixture(t, arch)
 			before := fixture.protectedSnapshot()
@@ -133,11 +133,11 @@ func TestManualUpgradeExamples(t *testing.T) {
 				t.Fatalf("manual upgrade examples: %v\n%s", err, output)
 			}
 			fixture.assertProtectedUnchanged(before)
-			root := filepath.Join(fixture.installer.home, "ACS Maintenance v0.4.0")
+			root := filepath.Join(fixture.installer.home, "ACS Maintenance v0.5.0")
 			for name, expected := range map[string]string{
-				"selected-version.txt": "acs v0.4.0\n",
-				"resolved-version.txt": "acs v0.4.0\n",
-				"rollback-version.txt": "acs v0.3.3\n",
+				"selected-version.txt": "acs v0.5.0\n",
+				"resolved-version.txt": "acs v0.5.0\n",
+				"rollback-version.txt": "acs v0.4.0\n",
 			} {
 				got, err := os.ReadFile(filepath.Join(root, name))
 				if err != nil || string(got) != expected {
@@ -175,17 +175,29 @@ func TestManualUpgradeExamples(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			goarch := arch
-			if arch == "x86_64" {
-				goarch = "amd64"
-			}
-			wantURLs := "https://github.com/alcimerio/ai-config-selector/releases/download/v0.4.0/install.sh\n" +
-				"https://github.com/alcimerio/ai-config-selector/releases/download/v0.4.0/acs_0.4.0_darwin_" + goarch + ".tar.gz\n" +
-				"https://github.com/alcimerio/ai-config-selector/releases/download/v0.4.0/SHA256SUMS\n"
+			wantURLs := "https://github.com/alcimerio/ai-config-selector/releases/download/v0.5.0/install.sh\n" +
+				"https://github.com/alcimerio/ai-config-selector/releases/download/v0.5.0/acs_0.5.0_darwin_arm64.tar.gz\n" +
+				"https://github.com/alcimerio/ai-config-selector/releases/download/v0.5.0/SHA256SUMS\n"
 			if string(urls) != wantURLs {
 				t.Fatalf("downloads = %q, want %q", urls, wantURLs)
 			}
 		})
+	}
+}
+
+func TestManualUpgradeExamplesRejectUnsupportedArchitecture(t *testing.T) {
+	fixture := newManualUpgradeFixture(t, "x86_64")
+	before := fixture.protectedSnapshot()
+	output, err := fixture.run("")
+	if err == nil || !strings.Contains(output, "Apple Silicon (arm64) only") {
+		t.Fatalf("unsupported Intel host was not rejected: %v\n%s", err, output)
+	}
+	fixture.assertProtectedUnchanged(before)
+	root := filepath.Join(fixture.installer.home, "ACS Maintenance v0.5.0")
+	for _, relative := range []string{"selected/bin/acs", "resolved-version.txt"} {
+		if _, err := os.Lstat(filepath.Join(root, relative)); !os.IsNotExist(err) {
+			t.Fatalf("unsupported host reached installation/selection: %s: %v", relative, err)
+		}
 	}
 }
 
@@ -204,7 +216,7 @@ func TestManualUpgradeExamplesStopBeforeUnsafeSelection(t *testing.T) {
 				t.Fatalf("%s did not stop the examples:\n%s", fault, output)
 			}
 			fixture.assertProtectedUnchanged(before)
-			root := filepath.Join(fixture.installer.home, "ACS Maintenance v0.4.0")
+			root := filepath.Join(fixture.installer.home, "ACS Maintenance v0.5.0")
 			if fault == "installer digest" || fault == "binary digest" || fault == "binary version" || fault == "shell function" {
 				if _, err := os.Lstat(filepath.Join(root, "resolved-version.txt")); !os.IsNotExist(err) {
 					t.Fatalf("failed verification reached PATH-selected execution: %v", err)
@@ -366,22 +378,12 @@ func newManualUpgradeFixture(t *testing.T, arch string) *manualUpgradeFixture {
 	installer.writeTool("less", "#!/bin/sh\ntest \"$1\" = install.sh\n")
 	blocks := manualExamples(t)
 	fixture := &manualUpgradeFixture{t: t, installer: installer, blocks: blocks, oldBinary: filepath.Join(installer.home, "old bin", "acs")}
-	oldBytes := "#!/bin/sh\ntest \"$#\" -eq 1 && test \"$1\" = version || exit 1\nprintf 'acs v0.3.3\\n'\n"
-	fixture.newBytes = strings.ReplaceAll(oldBytes, "v0.3.3", "v0.4.0")
+	oldBytes := "#!/bin/sh\ntest \"$#\" -eq 1 && test \"$1\" = version || exit 1\nprintf 'acs v0.4.0\\n'\n"
+	fixture.newBytes = strings.ReplaceAll(oldBytes, "v0.4.0", "v0.5.0")
 	if err := os.WriteFile(fixture.oldBinary, []byte(oldBytes), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	rendered := strings.ReplaceAll(readRepositoryFile(t, ".", "install.sh.tmpl"), "__ACS_RELEASE_VERSION__", "v0.4.0")
-	// The guide deliberately exercises the already-published v0.4.0 installer,
-	// whose historical artifact set included Intel. Reconstruct that fixed
-	// fixture from the current forward-only template without changing the guide.
-	rendered = strings.Replace(rendered,
-		"case \"$(uname -m)\" in\n  arm64 | aarch64) target_arch=\"arm64\" ;;",
-		"case \"$(uname -m)\" in\n  x86_64 | amd64) target_arch=\"amd64\" ;;\n  arm64 | aarch64) target_arch=\"arm64\" ;;", 1)
-	rendered = strings.Replace(rendered,
-		"return name == \"acs_\" version \"_darwin_arm64.tar.gz\"",
-		"return name == \"acs_\" version \"_darwin_arm64.tar.gz\" ||\n    name == \"acs_\" version \"_darwin_amd64.tar.gz\"", 1)
-	rendered = strings.Replace(rendered, "invalid || count != 1", "invalid || count != 2", 1)
+	rendered := strings.ReplaceAll(readRepositoryFile(t, ".", "install.sh.tmpl"), "__ACS_RELEASE_VERSION__", "v0.5.0")
 	if err := os.WriteFile(filepath.Join(installer.releaseDirectory, "install.sh"), []byte(rendered), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -413,11 +415,11 @@ func (fixture *manualUpgradeFixture) run(fault string) (string, error) {
 		newBytes += "# Different bytes with the same version.\n"
 	}
 	if fault == "binary version" {
-		newBytes = strings.ReplaceAll(newBytes, "v0.4.0", "v9.9.9")
+		newBytes = strings.ReplaceAll(newBytes, "v0.5.0", "v9.9.9")
 	}
 	var manifest strings.Builder
-	for _, arch := range []string{"arm64", "amd64"} {
-		name := "acs_0.4.0_darwin_" + arch + ".tar.gz"
+	for _, arch := range []string{"arm64"} {
+		name := "acs_0.5.0_darwin_" + arch + ".tar.gz"
 		archivePath := filepath.Join(fixture.installer.releaseDirectory, name)
 		writeInstallerArchive(t, archivePath, newBytes)
 		contents, err := os.ReadFile(archivePath)

@@ -37,8 +37,8 @@ permissions with `acs explain TARGET --profile NAME` and read the
 If a target can read a file, selected secret, credential projection, or prompt,
 it may be able to send that data to its provider or another network destination.
 Read-only means no filesystem writes to that grant, not no disclosure.
-The [network investigation](outbound-network-enforcement.md) is research; it does
-not add destination filtering to the product.
+Destination filtering is not a shipped capability. Native transport experiments
+do not extend the production network contract.
 
 ### Code and instructions inside the Session
 
@@ -47,9 +47,11 @@ ACS controls the OS-level authority they receive; it does not establish that the
 contents are benign, useful, or correctly followed by a model. The selected workspace
 is also readable target input and can contain target-owned project configuration.
 ACS does not currently manage plugins, hooks, custom agents, or remote MCP.
+Selecting their files does not activate them as ACS-managed extensions. The fixed
+Codex recipe disables plugins; target-owned project discovery is a separate boundary.
 
 MCP tool-name filtering and agent permission modes are target behavior, not
-independent ACS containment. There is no per-MCP-server secret boundary: selected
+independent ACS containment or per-agent OS isolation. There is no per-MCP-server secret boundary: selected
 environment values are available to the target, local servers, and descendants.
 See [MCP Profiles](mcp-profiles.md) and [target conformance](shared-target-conformance.md).
 
@@ -70,7 +72,7 @@ no-prompt mode, with preselected Profile grants enforced by ACS and no interacti
 Codex's exact version check and operation snapshot detect supported-version and
 observed local-file changes; they do not authenticate arbitrary locally installed
 target bytes. The CI gates separately use official checksum-locked target archives.
-See [named authentication](codex-auth.md) for storage, token refresh, quarantine,
+See [named authentication](codex.md#named-authentication) for storage, token refresh, quarantine,
 and recovery semantics.
 
 ### Host races and temporary data
@@ -95,8 +97,8 @@ the installer is part of the byte-matched set but is not itself an attestation s
 
 v0.5.0 is unsigned and unnotarized. Do not remove quarantine, disable Gatekeeper,
 or weaken Seatbelt to work around a failure. A release gate is not real-account
-or week-long daily-use evidence; those observations are tracked separately in
-[release readiness](release-readiness.md).
+or week-long daily-use evidence; those observations are separate evidence categories; see
+[maintainer verification](../CONTRIBUTING.md#release-preparation).
 
 ## Sharing a safe bug report
 

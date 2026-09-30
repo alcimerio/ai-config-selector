@@ -42,16 +42,16 @@ return 2); consult their contextual help and [history reference](profile-history
 | Task | Starting command | Detailed contract |
 | --- | --- | --- |
 | Create interactively | `acs devin create-profile --name NAME` or `acs codex create-profile --name NAME [--auth REF]` | [Get started](getting-started.md) |
-| Create from local JSON | `acs profile create --file FILE --dry-run` | [Declarative creation](profile-creation.md) |
-| List / inspect | `acs profile list`, `acs profile show NAME --json` | [Inspection](profile-inspection.md) |
-| Check host / sources | `acs doctor`, `acs profile validate NAME` | [Passive diagnostics](passive-diagnostics.md) |
-| Explain permissions | `acs explain sandbox --profile NAME` | [Effective capability explanation](effective-capability-explanation.md) |
-| Edit / clone / rename / delete / migrate | `acs profile edit NAME` | [Profile mutations](profile-mutations.md) |
+| Create from local JSON | `acs profile create --file FILE --dry-run` | [Declarative creation](profiles.md#declarative-creation) |
+| List / inspect | `acs profile list`, `acs profile show NAME --json` | [Inspection](profiles.md#inspection) |
+| Check host / sources | `acs doctor`, `acs profile validate NAME` | [Passive diagnostics](diagnostics.md#passive-diagnostics) |
+| Explain permissions | `acs explain sandbox --profile NAME` | [Effective capability explanation](diagnostics.md#effective-capability-explanation) |
+| Edit / clone / rename / delete / migrate | `acs profile edit NAME` | [Profile mutations](profiles.md#mutations) |
 | Transfer sanitized intent | `acs profile export NAME`, `acs profile import validate --file FILE` | [Portable exchange](portable-profile-exchange.md) |
 | Inspect / restore history | `acs profile history NAME`, `acs profile restore NAME --revision EVENT --dry-run` | [Profile history](profile-history.md) |
 | Run Devin | `acs devin --profile NAME` | [Target conformance](shared-target-conformance.md) |
-| Run Codex | `acs codex --profile NAME [--auth REF]` | [Interactive Codex](interactive-codex.md) |
-| Manage named login | `acs codex auth login --name REF` | [Codex authentication](codex-auth.md) |
+| Run Codex | `acs codex --profile NAME [--auth REF]` | [Interactive Codex](codex.md#interactive-launch) |
+| Manage named login | `acs codex auth login --name REF` | [Codex authentication](codex.md#named-authentication) |
 | Inspect a shell | `acs sandbox --profile NAME` | [Get started](getting-started.md) |
 | Run literal argv | `acs run --profile NAME -- COMMAND [ARG...]` | [Generic run](generic-run.md) |
 | Inspect / recover a Session | `acs session list`, `acs session inspect ID`, `acs session recover ID` | [Session operations](session-operations.md) |
@@ -90,5 +90,5 @@ commands report cancellation only after required cleanup is proven.
 
 A failed or interrupted mutation does not always mean nothing was written.
 Distinguish **committed**, **not committed**, and **unknown / recovery required**
-outcomes before retrying. Follow [transaction recovery](profile-repository-transactions.md)
+outcomes before retrying. Follow [transaction recovery](architecture.md#profile-repository-transactions)
 and [Session recovery](session-operations.md), not manual deletion of internal state.

@@ -164,7 +164,7 @@ acs session list
 - [CLI guide](docs/cli.md): command groups, grammar, diagnostics, and dry-run limits
 - [Profiles](docs/common-profile-format.md): capabilities, overlays, versions, and migration
 - [Devin/Codex conformance](docs/shared-target-conformance.md): common behavior and target differences
-- [Interactive Codex](docs/interactive-codex.md): fixed `codex-cli 0.149.1` and ACS-owned named ChatGPT login
+- [Interactive Codex](docs/codex.md#interactive-launch): fixed `codex-cli 0.149.1` and ACS-owned named ChatGPT login
 - [Profile exchange](docs/portable-profile-exchange.md): sharing sanitized intent with explicit local bindings
 - [Recovery](docs/manual-upgrade-recovery.md): interrupted writes, retained Sessions, and rollback
 
@@ -197,12 +197,11 @@ Start with the [architecture](docs/architecture.md) and [contribution guide](CON
 The [documentation index](docs/README.md) separates current user guides,
 maintainer procedures, research, and historical release records.
 
-The [v0.5.0 publication record](docs/release-readiness.md) distinguishes native
-artifact tests from hosted-account and week-long daily-use evidence. Publication
-does not complete the separate [daily-use evaluation](https://github.com/alcimerio/ai-config-selector/issues/105).
-
-[Prioritized repository review](docs/reviews/2026-09-30-open-source-review.md)
-records this documentation audit, concrete follow-up work, and verification limits.
+Release-specific changes are in the [v0.5.0 release notes](docs/releases/v0.5.0.md)
+and [GitHub Releases](https://github.com/alcimerio/ai-config-selector/releases).
+Maintainer verification and publication procedures live in
+[Contributing](CONTRIBUTING.md). Native tests do not replace real-account or
+sustained daily-use observations.
 
 ## License
 

@@ -18,8 +18,8 @@ Use `acs COMMAND --help` for that binary's grammar.
 | Tool not found / script cannot run | Generic commands use fixed `/usr/local/bin:/usr/bin:/bin`, not host `PATH` | Use an explicit executable path; select needed non-intrinsic interpreter/runtime visibility rather than assuming shebang inference |
 | Codex version rejected | `codex --version`; supported integration is `codex-cli 0.149.1` | Use the supported target version; a newer target is not automatically compatible |
 | Codex Profile has no supported overlay or auth reference | `acs profile show NAME --json`; `acs codex --help` | Use `codex create-profile`, an explicit supported overlay, and one ACS-owned named identity |
-| Host `codex login` worked but ACS has no identity | `acs codex auth list` | ACS intentionally uses separate named identities; follow [ACS login](codex-auth.md), not global-credential import |
-| Keychain unavailable / identity quarantined | Stable error category and `acs codex auth --help` | Follow [named-auth recovery](codex-auth.md); do not delete or replace credentials manually |
+| Host `codex login` worked but ACS has no identity | `acs codex auth list` | ACS intentionally uses separate named identities; follow [ACS login](codex.md#named-authentication), not global-credential import |
+| Keychain unavailable / identity quarantined | Stable error category and `acs codex auth --help` | Follow [named-auth recovery](codex.md#named-authentication); do not delete or replace credentials manually |
 | Installer refuses existing `acs` | Existing direct file at destination | Stage in a new empty user-owned directory; follow the [manual upgrade guide](manual-upgrade-recovery.md) |
 | `acs update` refuses layout / development binary | `command -v acs`, `acs version`, direct-file vs symlink/package-manager layout | Use the supported release installer; the updater does not adopt arbitrary layouts |
 | Session remains after interruption | `acs session list`, then `acs session inspect ID --json` | Follow `acs session recover ID` and [proof-gated recovery](session-operations.md); no force-delete |

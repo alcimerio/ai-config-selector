@@ -2,7 +2,7 @@
 
 Fixture documentation for contributors, consumed by
 `TestPinnedRendererCorpusReceipts` in `internal/executor/devin_rules_test.go`.
-For user-facing instruction selection, see [instruction bundles](../../../../docs/instruction-bundles.md).
+For user-facing instruction selection, see [instruction bundles](../../../../docs/common-profile-format.md#instruction-bundles).
 
 These included `.body` and `.stdout` fixture pairs were captured from Devin
 CLI 3000.10.21 (`611c1cba`) on Linux x86_64. The measured source corpus had
