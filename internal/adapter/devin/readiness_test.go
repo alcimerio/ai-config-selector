@@ -14,8 +14,8 @@ import (
 func TestPlanLaunchReportsReadOnlySandboxReadinessWithoutPreparingADevinProcess(t *testing.T) {
 	sandbox := &readinessSandbox{readiness: launch.SandboxReadiness{
 		RequiredMode: "native",
-		Backend:      "Bubblewrap",
-		Platform:     "Ubuntu 24.04.3 LTS on linux/arm64",
+		Backend:      "Seatbelt",
+		Platform:     "macOS 26.3 on darwin/arm64",
 		Supported:    true,
 		Ready:        true,
 	}}
@@ -44,8 +44,8 @@ func TestPlanLaunchReportsReadOnlySandboxReadinessWithoutPreparingADevinProcess(
 	output := planSectionText(section)
 	for _, want := range []string{
 		"required sandbox mode: native",
-		"selected native backend: Bubblewrap",
-		"supported platform: supported (Ubuntu 24.04.3 LTS on linux/arm64)",
+		"selected native backend: Seatbelt",
+		"supported platform: supported (macOS 26.3 on darwin/arm64)",
 		"backend readiness: ready",
 		"ACS will not start Devin without the required sandbox.",
 	} {
@@ -58,8 +58,8 @@ func TestPlanLaunchReportsReadOnlySandboxReadinessWithoutPreparingADevinProcess(
 func TestPlanLaunchReportsSafeUnavailableSandboxReadiness(t *testing.T) {
 	sandbox := &readinessSandbox{readiness: launch.SandboxReadiness{
 		RequiredMode: "native",
-		Backend:      "Bubblewrap",
-		Platform:     "Ubuntu 24.04 LTS on linux/amd64",
+		Backend:      "Seatbelt",
+		Platform:     "macOS 26 on darwin/arm64",
 		Supported:    true,
 		Failure:      &launch.SandboxError{Category: launch.SandboxBackendUnavailable},
 	}}

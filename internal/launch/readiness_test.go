@@ -44,7 +44,7 @@ func TestSandboxReadinessReportsUnsupportedPlatformWithoutCheckingABackend(t *te
 	backend := &capturingBackend{}
 	sandbox := newNativeProcessSandbox(
 		func() (Platform, error) {
-			return Platform{OS: "linux", Architecture: "amd64", Distribution: "debian", Release: "12"}, nil
+			return Platform{OS: "linux", Architecture: "amd64", Release: "12"}, nil
 		},
 		map[string]sandboxBackend{"linux": backend},
 	)
@@ -59,10 +59,10 @@ func TestSandboxReadinessReportsUnsupportedPlatformWithoutCheckingABackend(t *te
 	if readiness.Ready {
 		t.Error("unsupported platform reported as ready")
 	}
-	if got, want := readiness.Backend, "Bubblewrap"; got != want {
+	if got, want := readiness.Backend, "None"; got != want {
 		t.Errorf("backend = %q, want %q", got, want)
 	}
-	if got, want := readiness.Platform, "Debian 12 on linux/amd64"; got != want {
+	if got, want := readiness.Platform, "12 on linux/amd64"; got != want {
 		t.Errorf("platform = %q, want %q", got, want)
 	}
 	if got, want := readiness.Failure.Category, SandboxUnsupportedPlatform; got != want {

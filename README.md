@@ -187,8 +187,8 @@ target settings. Target-owned content inside the selected workspace can still
 be discovered. [The security model](docs/security-model.md) explains these
 boundaries and what to avoid sharing in bug reports.
 
-v0.3.3 is the final release with Linux support. Linux source is retained as a
-non-blocking portability observation, with no current release or support promise.
+v0.3.3 is the final release with Linux support. The Linux/Bubblewrap sandbox
+backend has been removed; portable source checks do not imply runtime support.
 Historical v0.4.0 Intel assets do not make Intel Macs supported by v0.5.0.
 
 ## Project status and contributing

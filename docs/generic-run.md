@@ -75,9 +75,8 @@ variables, descriptors, and named target authentication are not inherited.
 Selected environment references can include secrets, so a generic command is
 not necessarily secret-free merely because no target authentication is
 projected. All attached descendants share those selected environment values.
-Selected environment transport is currently macOS-only; retained Linux source
-fails closed without placing values in command or Bubblewrap argv. Linux is
-not a supported runtime.
+Selected environment transport requires the supported macOS runtime. Unsupported
+hosts fail closed before Session creation.
 
 Outbound IP connections and macOS DNS access remain coarse intrinsic authority.
 ACS is not an egress firewall: it does not enforce destination allowlists or

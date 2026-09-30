@@ -142,21 +142,21 @@ func TestDevelopmentCandidateVersionHasReleaseNotes(t *testing.T) {
 	}
 }
 
-func TestLinuxIsOnlyANonBlockingCompileObservation(t *testing.T) {
+func TestPortableSourceCompilationDoesNotExecuteUnsupportedRuntime(t *testing.T) {
 	ci := readRepositoryFile(t, "..", filepath.Join(".github", "workflows", "ci.yml"))
 	for _, required := range []string{
-		"Observe Linux portability (non-blocking)",
+		"Compile portable source (non-blocking)",
 		"continue-on-error: true",
-		"go test -run '^$' ./...",
+		"CGO_ENABLED=0 go test -c",
 		"CGO_ENABLED=0 go build",
 	} {
 		if !strings.Contains(ci, required) {
-			t.Errorf("Linux observation omits %q", required)
+			t.Errorf("Portable compilation omits %q", required)
 		}
 	}
-	for _, forbidden := range []string{"go test ./...", "go test -race ./...", "Bubblewrap", "release-candidate.sh"} {
+	for _, forbidden := range []string{"go test ./...", "go test -race ./...", "go test -run", "Bubblewrap", "release-candidate.sh"} {
 		if strings.Contains(ci, forbidden) {
-			t.Errorf("Linux observation is still a support gate through %q", forbidden)
+			t.Errorf("Portable compilation is still a support gate through %q", forbidden)
 		}
 	}
 }

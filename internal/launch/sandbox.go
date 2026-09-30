@@ -1,7 +1,6 @@
 package launch
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -193,26 +192,11 @@ func sandboxError(category SandboxErrorCategory, _ error) error {
 	return &SandboxError{Category: category}
 }
 
-func bubblewrapUnavailable() error {
-	return &SandboxError{
-		Category:    SandboxBackendUnavailable,
-		remediation: "review Ubuntu's configured signed apt sources, then install or repair Bubblewrap with 'sudo apt-get update && sudo apt-get install --reinstall bubblewrap'",
-	}
-}
-
-func bubblewrapCapabilityUnavailable() error {
-	return &SandboxError{
-		Category:    SandboxVerificationFailed,
-		remediation: "review and enable the targeted AppArmor 'bwrap-userns-restrict' profile for /usr/bin/bwrap",
-	}
-}
-
 // Platform identifies the host properties relevant to the supported sandbox
-// contract. Distribution is required only for Linux.
+// contract. Unsupported operating systems are rejected without host probes.
 type Platform struct {
 	OS           string
 	Architecture string
-	Distribution string
 	Release      string
 }
 
@@ -259,25 +243,6 @@ func CurrentPlatform() (Platform, error) {
 			return Platform{}, sandboxError(SandboxUnsupportedPlatform, err)
 		}
 		platform.Release = strings.TrimSpace(string(output))
-	case "linux":
-		file, err := os.Open("/etc/os-release")
-		if err != nil {
-			return Platform{}, sandboxError(SandboxUnsupportedPlatform, err)
-		}
-		defer file.Close()
-		values := make(map[string]string)
-		scanner := bufio.NewScanner(file)
-		for scanner.Scan() {
-			key, value, found := strings.Cut(scanner.Text(), "=")
-			if found {
-				values[key] = strings.Trim(strings.TrimSpace(value), `"`)
-			}
-		}
-		if err := scanner.Err(); err != nil {
-			return Platform{}, sandboxError(SandboxUnsupportedPlatform, err)
-		}
-		platform.Distribution = values["ID"]
-		platform.Release = values["VERSION_ID"]
 	default:
 		return Platform{}, sandboxError(SandboxUnsupportedPlatform, nil)
 	}
@@ -514,8 +479,6 @@ func nativeBackendName(operatingSystem string) string {
 	switch operatingSystem {
 	case "darwin":
 		return "Seatbelt"
-	case "linux":
-		return "Bubblewrap"
 	default:
 		return "None"
 	}
@@ -527,24 +490,9 @@ func describePlatform(platform Platform) string {
 	switch platform.OS {
 	case "darwin":
 		return fmt.Sprintf("macOS %s on %s/%s", safePlatformToken(platform.Release), operatingSystem, architecture)
-	case "linux":
-		distribution := platformDistributionName(platform.Distribution)
-		release := safePlatformToken(platform.Release)
-		if strings.EqualFold(platform.Distribution, "ubuntu") && releaseLine(platform.Release, "24.04") {
-			release += " LTS"
-		}
-		return fmt.Sprintf("%s %s on %s/%s", distribution, release, operatingSystem, architecture)
 	default:
 		return fmt.Sprintf("%s on %s/%s", safePlatformToken(platform.Release), operatingSystem, architecture)
 	}
-}
-
-func platformDistributionName(distribution string) string {
-	value := safePlatformToken(distribution)
-	if value == "unknown" {
-		return "Unknown Linux"
-	}
-	return strings.ToUpper(value[:1]) + value[1:]
 }
 
 func safePlatformToken(value string) string {
