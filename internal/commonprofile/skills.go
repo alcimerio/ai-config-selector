@@ -56,17 +56,32 @@ func NewSelectedSkillsBinding(discover func(context.Context, []skills.SkillRefer
 	if discover == nil || projection == nil || projection.ID() == "" || projection.Version() < 1 {
 		return SkillsBinding{}, errors.New("common Skills registration is incomplete")
 	}
-	return category.Bind(category.Definition[[]skills.SkillReference, []skills.SkillBundle, SkillsContribution]{
+	definition := skillsDefinition()
+	definition.Resolve = func(ctx context.Context, references []skills.SkillReference) ([]skills.SkillBundle, error) {
+		catalog, err := discover(ctx, references)
+		if err != nil {
+			return nil, fmt.Errorf("discover common Skill Catalog: %w", err)
+		}
+		return skills.ResolveReferences(references, catalog)
+	}
+	definition.Contribute = func(selected []skills.SkillBundle) (SkillsContribution, error) {
+		if err := ValidateCommonDestinations(selected); err != nil {
+			return SkillsContribution{}, err
+		}
+		expected, err := projection.Expected(selected)
+		if err != nil {
+			return SkillsContribution{}, err
+		}
+		return SkillsContribution{selected: selected, expected: expected, projection: projection}, nil
+	}
+	return category.Bind(definition)
+}
+
+func skillsDefinition() category.Definition[[]skills.SkillReference, []skills.SkillBundle, SkillsContribution] {
+	return category.Definition[[]skills.SkillReference, []skills.SkillBundle, SkillsContribution]{
 		ID: SkillsCapabilityID, SchemaVersion: SkillsCapabilityVersion,
 		Empty:  func() []skills.SkillReference { return []skills.SkillReference{} },
 		Encode: EncodeSkillSelection, Decode: DecodeSkillSelection,
-		Resolve: func(ctx context.Context, references []skills.SkillReference) ([]skills.SkillBundle, error) {
-			catalog, err := discover(ctx, references)
-			if err != nil {
-				return nil, fmt.Errorf("discover common Skill Catalog: %w", err)
-			}
-			return skills.ResolveReferences(references, catalog)
-		},
 		ResolveSyntax: func(references []skills.SkillReference) ([]skills.SkillBundle, error) {
 			selected := make([]skills.SkillBundle, 0, len(references))
 			for _, reference := range references {
@@ -74,18 +89,8 @@ func NewSelectedSkillsBinding(discover func(context.Context, []skills.SkillRefer
 			}
 			return selected, nil
 		},
-		Contribute: func(selected []skills.SkillBundle) (SkillsContribution, error) {
-			if err := ValidateCommonDestinations(selected); err != nil {
-				return SkillsContribution{}, err
-			}
-			expected, err := projection.Expected(selected)
-			if err != nil {
-				return SkillsContribution{}, err
-			}
-			return SkillsContribution{selected: selected, expected: expected, projection: projection}, nil
-		},
 		Count: func(references []skills.SkillReference) int { return len(references) },
-	})
+	}
 }
 
 func EncodeSkillSelection(references []skills.SkillReference) (json.RawMessage, error) {

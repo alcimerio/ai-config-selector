@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"path/filepath"
 
-	"github.com/alcimerio/ai-config-selector/internal/adapter/devin"
+	"github.com/alcimerio/ai-config-selector/internal/commonprofile"
 	"github.com/alcimerio/ai-config-selector/internal/exchangefile"
 	"github.com/alcimerio/ai-config-selector/internal/profile"
 	"github.com/alcimerio/ai-config-selector/internal/profileexchange"
@@ -48,34 +48,41 @@ func (app App) RunProfileExchange(ctx context.Context, args []string, home func(
 	if err := ctx.Err(); err != nil {
 		return true, app.fail("Profile exchange was not started")
 	}
-	if app.Repository == nil || app.Categories == nil {
+	if app.Repository == nil {
 		existingHome, err := home()
 		if err != nil {
 			return true, app.fail("resolve user home for Profile exchange")
 		}
-		editor, err := devin.NewProfileEditor(existingHome)
-		if err != nil {
+		if existingHome == "" {
 			return true, app.fail("configure Profile exchange codec")
 		}
 		app.Repository = profilerepo.New(filepath.Join(existingHome, ".acs"))
-		app.Categories = editor.Categories()
+	}
+	codec, err := commonprofile.NewCodec()
+	if err != nil {
+		return true, app.fail("configure Profile exchange codec")
 	}
 	switch inv.command.path {
 	case "profile export":
-		return true, app.exportProfile(ctx, inv)
+		return true, app.exportProfile(ctx, inv, codec)
 	case "profile import validate":
 		return true, app.validateImport(inv)
 	default:
-		return true, app.importProfile(ctx, inv)
+		return true, app.importProfile(ctx, inv, codec)
 	}
 }
 
-func (app App) exportProfile(ctx context.Context, inv invocation) int {
+type exchangeCodec interface {
+	profile.Codec
+	DecodeNamed(string, []byte) (profile.Profile, error)
+}
+
+func (app App) exportProfile(ctx context.Context, inv invocation, codec exchangeCodec) int {
 	snapshot, err := app.Repository.Read(ctx, inv.operand)
 	if err != nil || !snapshot.Exists {
 		return app.fail("export Profile: stored Profile is unavailable or unsafe")
 	}
-	candidate, err := app.Categories.DecodeNamed(inv.operand, snapshot.Bytes)
+	candidate, err := codec.DecodeNamed(inv.operand, snapshot.Bytes)
 	if err != nil {
 		return app.fail("export Profile: stored Profile contains unsupported or invalid content")
 	}
@@ -194,7 +201,7 @@ func (app App) validateImport(inv invocation) int {
 	return 1
 }
 
-func (app App) importProfile(ctx context.Context, inv invocation) int {
+func (app App) importProfile(ctx context.Context, inv invocation, codec exchangeCodec) int {
 	result := app.decodeImport(inv, inv.auxValue)
 	if result.Code == profileexchange.CodeBindingRequired {
 		fmt.Fprintf(app.Output, "Profile import preview: supported exchange intent; %d executable and %d environment binding(s), plus other required symbolic bindings, remain unresolved. Source availability, authentication, path/executable identity, environment provider values, and runtime are unchecked. Nothing was published.\n", result.RequiredExecutables, result.RequiredEnvironment)
@@ -203,7 +210,7 @@ func (app App) importProfile(ctx context.Context, inv invocation) int {
 	if result.Code != profileexchange.CodeValid || result.Candidate == nil {
 		return app.fail("import Profile: exchange or binding document is invalid, unsafe, or unsupported; nothing was published")
 	}
-	candidate, canonical, err := profile.Canonicalize(app.Categories, *result.Candidate)
+	candidate, canonical, err := profile.Canonicalize(codec, *result.Candidate)
 	if err != nil {
 		return app.fail("import Profile: bound Profile intent is unsupported; nothing was published")
 	}
