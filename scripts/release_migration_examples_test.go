@@ -11,7 +11,7 @@ import (
 	"testing"
 )
 
-func TestReleaseMigrationCandidateSelectionAndRollback(t *testing.T) {
+func TestContributorCandidateSelectionAndRollback(t *testing.T) {
 	fixture := newReleaseMigrationFixture(t)
 	blocks := releaseMigrationExamples(t)
 
@@ -35,7 +35,50 @@ func TestReleaseMigrationCandidateSelectionAndRollback(t *testing.T) {
 	}
 }
 
-func TestReleaseMigrationCompatibilityFailureStopsBeforeWrites(t *testing.T) {
+func TestContributorCandidateVerificationStopsBeforeSelection(t *testing.T) {
+	for _, fault := range []string{"archive", "manifest", "installer", "installed binary", "missing version"} {
+		t.Run(fault, func(t *testing.T) {
+			fixture := newReleaseMigrationFixture(t)
+			blocks := releaseMigrationExamples(t)
+			var extra []string
+			switch fault {
+			case "archive", "manifest", "installer":
+				name := map[string]string{
+					"archive":   "acs_1.2.3_darwin_arm64.tar.gz",
+					"manifest":  "SHA256SUMS",
+					"installer": "install.sh",
+				}[fault]
+				if err := os.WriteFile(filepath.Join(fixture.candidateDir, name), []byte("changed bytes\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			case "installed binary":
+				extra = []string{"ACS_CANDIDATE_BINARY_SHA256=" + strings.Repeat("0", 64)}
+			case "missing version":
+				extra = []string{"ACS_CANDIDATE_VERSION="}
+			}
+			knownGoodBefore := mustReadFile(t, fixture.knownGood)
+			output, err := fixture.run(blocks["inputs"]+blocks["install"]+blocks["compatibility"], extra)
+			if err == nil {
+				t.Fatalf("%s verification did not stop candidate selection:\n%s", fault, output)
+			}
+			commands, err := os.ReadFile(fixture.log)
+			if err != nil && !os.IsNotExist(err) {
+				t.Fatal(err)
+			}
+			if strings.Contains(string(commands), "candidate doctor") || strings.Contains(string(commands), "candidate profile") {
+				t.Fatalf("failed verification reached selected candidate commands: %q", commands)
+			}
+			if got := mustReadFile(t, fixture.knownGood); string(got) != string(knownGoodBefore) {
+				t.Fatal("failed verification changed the trusted binary")
+			}
+			if got := mustReadFile(t, fixture.profile); string(got) != "legacy profile bytes\n" {
+				t.Fatal("failed verification changed Profile data")
+			}
+		})
+	}
+}
+
+func TestContributorCandidateCompatibilityFailureStopsBeforeWrites(t *testing.T) {
 	fixture := newReleaseMigrationFixture(t)
 	blocks := releaseMigrationExamples(t)
 	script := blocks["inputs"] + blocks["install"] + blocks["compatibility"] +
@@ -56,12 +99,12 @@ func TestReleaseMigrationCompatibilityFailureStopsBeforeWrites(t *testing.T) {
 	}
 }
 
-func TestReleaseMigrationPreviewCancellationPreservesProfile(t *testing.T) {
+func TestManualMigrationPreviewCancellationPreservesProfile(t *testing.T) {
 	fixture := newReleaseMigrationFixture(t)
 	fixture.installCandidate()
-	block := releaseMigrationExamples(t)["migrate"]
+	block := strings.ReplaceAll(manualExamples(t)["migrate"], `source_bin="/absolute/path/to/compatible-source/acs"`, `source_bin="$TEST_CANDIDATE_BIN/acs"`)
 	command := exec.Command("/bin/bash", "--noprofile", "--norc", "-c", "set +e\n"+block+"status=$?\ntest \"$status\" = 130")
-	command.Env = append(fixture.environment(), "PATH="+fixture.candidateBin+":/usr/bin:/bin")
+	command.Env = append(fixture.environment(), "PATH="+filepath.Dir(fixture.knownGood)+":/usr/bin:/bin")
 	output, err := command.CombinedOutput()
 	if err != nil {
 		t.Fatalf("migration cancellation was not observable: %v\n%s", err, output)
@@ -71,13 +114,13 @@ func TestReleaseMigrationPreviewCancellationPreservesProfile(t *testing.T) {
 	}
 }
 
-func TestReleaseMigrationPostMigrationInspectionAndExport(t *testing.T) {
+func TestManualPostMigrationInspectionAndExport(t *testing.T) {
 	fixture := newReleaseMigrationFixture(t)
 	fixture.installCandidate()
-	block := releaseMigrationExamples(t)["after-migrate"]
+	block := `source_bin="$TEST_CANDIDATE_BIN/acs"` + "\n" + manualExamples(t)["after-migrate"]
 	command := exec.Command("/bin/bash", "--noprofile", "--norc", "-c", "set -eu\n"+block)
 	command.Dir = fixture.root
-	command.Env = append(fixture.environment(), "PATH="+fixture.candidateBin+":/usr/bin:/bin")
+	command.Env = append(fixture.environment(), "PATH="+filepath.Dir(fixture.knownGood)+":/usr/bin:/bin")
 	output, err := command.CombinedOutput()
 	if err != nil {
 		t.Fatalf("post-migration inspection and export failed: %v\n%s", err, output)
@@ -85,28 +128,6 @@ func TestReleaseMigrationPostMigrationInspectionAndExport(t *testing.T) {
 	exported := filepath.Join(fixture.root, "backend-review.acs-profile.json")
 	if got, err := os.ReadFile(exported); err != nil || string(got) != "sanitized exchange\n" {
 		t.Fatalf("exported exchange = %q, %v", got, err)
-	}
-}
-
-func TestReleaseMigrationRecoveryReturnsToStrictParent(t *testing.T) {
-	fixture := newReleaseMigrationFixture(t)
-	fixture.installCandidate()
-	block := releaseMigrationExamples(t)["recovery"]
-	parent := "set -eu\nexport SHELLOPTS\ncandidate_bin=\"$TEST_CANDIDATE_BIN\"\n" + releaseMigrationExamples(t)["recovery-shell"] +
-		"case $- in *e*) ;; *) exit 91 ;; esac\nprintf parent-continued\n"
-	command := exec.Command("/bin/bash", "--noprofile", "--norc", "-c", parent)
-	command.Stdin = strings.NewReader(block)
-	command.Env = append(fixture.environment(),
-		"PATH="+fixture.candidateBin+":/usr/bin:/bin",
-		"TEST_CANDIDATE_BIN="+fixture.candidateBin,
-		"TEST_FAIL_SHOW=1",
-	)
-	output, err := command.CombinedOutput()
-	if err != nil {
-		t.Fatalf("documented recovery did not return safely: %v\n%s", err, output)
-	}
-	if !strings.Contains(string(output), "parent-continued") {
-		t.Fatalf("strict parent did not continue: %s", output)
 	}
 }
 
@@ -238,6 +259,7 @@ func (fixture *releaseMigrationFixture) environment() []string {
 		"ACS_KNOWN_GOOD_BIN=" + fixture.knownGood,
 		"ACS_MAINTENANCE_ROOT=" + fixture.maintenance,
 		"TEST_CANDIDATE_SOURCE=" + os.Getenv("TEST_CANDIDATE_SOURCE"),
+		"TEST_CANDIDATE_BIN=" + fixture.candidateBin,
 		"TEST_COMMAND_LOG=" + fixture.log,
 		"TEST_PROFILE=" + fixture.profile,
 	}
@@ -254,7 +276,7 @@ func (fixture *releaseMigrationFixture) run(script string, extra []string) (stri
 
 func releaseMigrationExamples(t *testing.T) map[string]string {
 	t.Helper()
-	contents, err := os.ReadFile(filepath.Join("..", "docs", "release-migration-guide.md"))
+	contents, err := os.ReadFile(filepath.Join("..", "CONTRIBUTING.md"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -263,7 +285,7 @@ func releaseMigrationExamples(t *testing.T) map[string]string {
 	for _, match := range pattern.FindAllStringSubmatch(string(contents), -1) {
 		blocks[match[1]] = match[2]
 	}
-	for _, required := range []string{"inputs", "install", "compatibility", "migrate", "after-migrate", "recovery-shell", "recovery", "rollback"} {
+	for _, required := range []string{"inputs", "install", "compatibility", "rollback"} {
 		if blocks[required] == "" {
 			t.Fatalf("missing candidate example %q", required)
 		}

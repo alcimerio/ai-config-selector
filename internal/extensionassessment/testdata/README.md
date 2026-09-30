@@ -1,9 +1,16 @@
 # Assessment definitions and compiler boundary
 
+Fixture documentation for contributors. See [research harnesses](../../../CONTRIBUTING.md#research-harnesses)
+for native test setup and the [security model](../../../docs/security-model.md)
+for the supported production boundary.
+
 These are synthetic definitions for Codex 0.149.1 and Devin 3000.10.21. They are
 not production Profile fields or an extension installer. Nothing executes them.
 The JSON, TOML and Markdown are vendor-facing representations; the Go test does
-not implement or claim to replace either vendor's parser.
+not implement or claim to replace either vendor's parser. The instructions in
+`*/plugin/skills/reviewer/SKILL.md` and `devin/agents/reviewer.md` are synthetic
+target input. They are not instructions for working on this repository or
+examples of production extension activation.
 
 `definition_prototypes_test.go` selects each complete plugin directory, role,
 hook definition and input as read-only data through the real common capability
@@ -52,7 +59,7 @@ Codex source at commit
 
 - [`core-plugins/src/agent_plugin_manifest.rs`](https://github.com/openai/codex/blob/ff29a44391deccde0aba0f8390337d7f3c319ea4/codex-rs/core-plugins/src/agent_plugin_manifest.rs), root schema/name and conventional `skills` (lines 64–195).
 - [`core/src/config/agent_roles.rs`](https://github.com/openai/codex/blob/ff29a44391deccde0aba0f8390337d7f3c319ea4/codex-rs/core/src/config/agent_roles.rs), discovery and role metadata; [`core/src/agent/role.rs`](https://github.com/openai/codex/blob/ff29a44391deccde0aba0f8390337d7f3c319ea4/codex-rs/core/src/agent/role.rs), typed role allowlist (lines 35–125).
-- [`config/src/hook_config.rs`](https://github.com/openai/codex/blob/ff29a44391deccde0aba0f8390337d7f3c319ea4/codex-rs/config/src/hook_config.rs), standalone outer `hooks`, command handler and timeout representation. Runtime/trust behavior is separately discussed in the assessment document.
+- [`config/src/hook_config.rs`](https://github.com/openai/codex/blob/ff29a44391deccde0aba0f8390337d7f3c319ea4/codex-rs/config/src/hook_config.rs), standalone outer `hooks`, command handler and timeout representation. This fixture does not exercise runtime execution or trust decisions.
 
 Devin's locked Darwin arm64 archive SHA-256 is
 `c0b97f8197bf3ce895ff14aa19257c511154b49a0a195bba4962acb5e475c68e`.

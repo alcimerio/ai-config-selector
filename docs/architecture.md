@@ -1,227 +1,257 @@
 # Architecture
 
-ACS resolves a persisted Profile into ordered contributions, materializes those
-contributions into an ephemeral Session, and starts one fixed target through a
-required native process sandbox.
+[Documentation index](README.md) · [Security model](security-model.md)
 
-## Supported runtime
-
-The current development and future release matrix is:
-
-| OS | Architecture | Native backend |
-| --- | --- | --- |
-| macOS 26 | `darwin/arm64` | verified system Seatbelt |
-
-Linux and Bubblewrap code remains in the repository but is unsupported. v0.3.3
-is the final Linux release. v0.4.0 does not produce Linux assets or run Linux
-native release gates. A non-blocking compile observation is retained to expose
-obvious portability breakage without turning it into a support promise.
+ACS resolves a persisted Profile into an immutable authority plan, materializes
+selected content in an ephemeral Session, and runs a registered target or an
+explicit command through a required native process sandbox. The supported
+runtime is macOS 26 on Apple Silicon (`darwin/arm64`), using the verified system
+Seatbelt backend. Retained Linux/Bubblewrap code is unsupported.
 
 ## Domain model
 
-- **Profile**: a named persisted selection for one target. The envelope has a
-  version, target, and category-owned payloads.
+- **Profile**: stored capability selections. Version 3 separates independently
+  versioned common capabilities from explicit target overlays; legacy v1/v2
+  Profiles retain their Devin binding and category payloads.
 - **Category**: owns selection schema, discovery, resolution, planning,
   materialization, and optional target verification.
-- **Resolved Profile**: ordered immutable contributions produced before any
-  Session exists.
-- **Session**: a leased ephemeral root containing synthetic `home` and `tmp`
-  directories and materialized Profile content.
-- **Process Sandbox**: validates platform and paths, creates a clean environment,
-  prepares a native contained process, and reports bounded cleanup proof.
-- **Target**: Devin, interactive Codex, or the fixed credential-free sandbox shell.
+- **Resolved authority plan**: ordered contributions, runtime grants, and fixed
+  target requirements resolved before a Session exists.
+- **Session**: a leased root under `~/.acs/sessions` with mode-0700 synthetic
+  home and temporary directories, materialized content, and cleanup state.
+- **Process sandbox**: validates platform and paths, prepares containment and a
+  clean environment, and supplies process-tree cleanup proof.
+- **Execution recipe**: registered Devin or Codex, fixed `/bin/zsh -f`, or the
+  literal executable and argv supplied to `acs run`.
+
+See the [common Profile format](common-profile-format.md) for schemas and
+[effective capability explanation](diagnostics.md#effective-capability-explanation) for the
+plan's public inspection surface.
 
 ## Module boundaries
 
-`internal/cli` owns public grammar, Profile loading, terminal streams, and exit
-codes. It selects a planner and launcher but does not know how Skills,
-credentials, Sessions, or Seatbelt work.
+| Package | Responsibility |
+| --- | --- |
+| `internal/cli` | Public grammar, Profile loading, terminal streams, exit codes, and composition of planners and launchers |
+| `internal/category` | Registry and ordered contribution protocol |
+| `internal/commonprofile` | Common capability codecs, defaults, and materialization |
+| `internal/authority` | Immutable semantic authority plan and digest |
+| `internal/adapter/devin`, `internal/adapter/codex` | Target discovery, Profile editing, projections, and declarative launch requirements |
+| `internal/runcommand`, `internal/genericrun` | Resolve literal command identity and argv, then submit them to the shared executor |
+| `internal/sandboxshell` | Fixed `/bin/zsh -f` request facade |
+| `internal/session` | Target-independent Session creation, leasing, retention, and removal |
+| `internal/profilerepo` | Conditional Profile persistence, history publication, and transaction recovery |
+| `internal/executor` | Required sandbox selection, target preflights, credentials projection, process attachment, and cleanup ordering |
+| `internal/codexauth` | Public named-authentication configuration and typed API facade |
+| `internal/codexauthresource` | Credential validation, Keychain access, locks, marker generations, and secure projection/readback |
+| `internal/launch` | Platform/path/environment validation, Seatbelt policy, signals, terminal handling, descendant settlement, and sanitized failures |
 
-`internal/category` owns the registry and ordered contribution protocol. A
-contribution can plan, materialize into a Session home, and optionally verify a
-target-specific observation.
-
-`internal/session` owns target-independent Session creation and lifecycle. It
-leases a unique root under `~/.acs/sessions`, creates mode-0700 synthetic home
-and temporary directories, asks the resolved Profile to materialize, retains
-the lease while a prepared process may still have descendants, and removes the
-root only after cleanup settles.
-
-`internal/adapter/devin` owns Devin discovery, Profile editing, and declarative
-launch configuration. `internal/adapter/codex` owns the thin fixed Codex recipe,
-common Profile editing, effective authRef selection, and projection locations.
-`internal/executor` owns the allowlisted credentials, Skill catalog verification,
-authentication preflight, and protected Devin, shell, and Codex lifecycles.
-Interactive Devin launches pass `--respect-workspace-trust false`:
-the ephemeral Session cannot retain a workspace-trust decision, while the ACS
-Process Sandbox remains the mandatory boundary. Credential copying happens
-after generic Session creation; it is not part of Profile materialization.
-
-`internal/sandboxshell` owns the fixed `/bin/zsh -f` request facade. The
-executor creates its generic Session and never invokes the Devin executable,
-accesses a Devin credential, or runs category verification.
-
-`internal/codexauth` owns the public named-authentication configuration and
-typed API facade. The executor acquires `internal/codexauthresource` authority
-before executable verification, then owns Codex Session creation, fixed probes,
-cleanup proof, finalization, and recovery ordering. The resource package owns
-credentials, Keychain operations, locks, marker generations, and secure
-projection/readback without importing executor or process lifecycle packages.
-
-`internal/launch` owns platform detection, path and environment validation,
-Seatbelt policy generation, process preparation, signal forwarding, process-tree
-settlement, cleanup quarantine, and stable sanitized failures.
+Adapters supply declarative requirements, not a backend, process handle,
+execution callback, Session lease, or cleanup policy. The authentication
+resource package imports neither executor nor Session/process packages. The
+executor acquires its authority through typed operations and owns all process
+work. Credential projection is separate from generic Profile materialization.
 
 ## Command flows
 
-### Dry run
+### Planning and dry run
 
-Both dry runs load and strictly resolve a Profile without leasing a Session.
+Devin and sandbox-shell dry runs resolve selected material without leasing a
+Session or starting the requested target. They may execute the bounded native
+readiness probe; unlike [passive diagnostics](diagnostics.md#passive-diagnostics), they are
+not strictly process-free.
 
-`acs devin --profile NAME --dry-run` reports materialized global Skills,
-repository-local Skills inherited specifically by Devin, and sandbox readiness.
-
-`acs sandbox --profile NAME --dry-run` reports only content materialized into
-the generic Session plus sandbox-shell readiness. It does not report Devin-only
-repository inheritance.
-
-`acs codex --profile NAME [--auth REF] --dry-run` is a narrower syntax-only
-path. It loads the Profile and explains registered authority without source
+Devin's plan includes inherited repository-local Skills. The generic shell
+plan reports only materialized common content. Codex dry-run is syntax-only:
+it loads the Profile and explains registered authority without source
 discovery, authentication access, executable probes, sandbox checks, or Session
-allocation. Identity existence and status are explicitly unchecked.
-
-### Interactive Codex
-
-1. Resolve the supported Codex overlay and one effective authRef; a command-line
-   reference overrides the stored default.
-2. Acquire that named resource before executable or Session work.
-3. Pin the registered Codex executable, create a private Session, materialize
-   common capabilities, and project only those copies into Codex locations.
-4. Project file credentials and force ChatGPT identity/workspace, provider,
-   endpoint, project-trust and plugin restrictions. The fixed target adapter
-   selects Codex's externally sandboxed no-prompt mode; the resolved Profile's
-   workspace access remains enforced exclusively by the ACS outer sandbox.
-5. Verify exact `codex-cli 0.149.1`, then attach interactive Codex through the
-   shared process executor.
-6. Validate only successful same-identity refreshes; discard ineligible changes.
-7. Prove descendant settlement and projection removal before releasing the
-   identity; retain Session and identity on cleanup uncertainty.
+allocation. Identity existence and status remain unchecked.
 
 ### Devin
 
-1. Validate the supported platform, backend, executable, workspace, Session
-   root, and runtime inputs before leasing a Session.
-2. Create a generic Session and materialize selected Skills.
-3. Copy only the allowlisted Devin credential when present.
-4. Verify the observed Skill catalog and authentication inside Seatbelt.
-5. Prepare and attach Devin without pass-through options.
-6. Preserve terminal streams, signals, resize events, and ordinary exit status.
-7. Settle descendants, then remove the Session; quarantine uncertain cleanup.
+1. Capture termination and resize signals, then validate the native backend,
+   executable, workspace, Session root, and runtime inputs.
+2. Create and materialize a Session, compile selected local MCP references, and
+   copy only the allowlisted `.local/share/devin/credentials.toml`, if present.
+3. Run contained `skills list --json` and `auth status`; selected instructions
+   also require `rules list` and `rules show` observations.
+4. Attach the fixed interactive invocation after the preflights and their
+   cleanup complete. Selected environment values go only to the attached
+   target and its descendants, not the probes.
+5. Preserve terminal streams, signals, resize events, and ordinary exit status;
+   settle descendants before removing the Session.
 
-### Sandbox shell
+Interactive Devin uses `--respect-workspace-trust false` because the ephemeral
+Session cannot retain a workspace-trust decision. The ACS outer sandbox remains
+mandatory. The signal-supervisor handoff is reserved before interactive process
+preparation: a pending termination prevents launch, while a later termination
+is replayed after Start and cannot be replaced by a resize notification.
+`VerifyDevin` uses the same protected preflight path for the opt-in
+[authenticated smoke](../CONTRIBUTING.md#optional-authenticated-smoke), without exposing a Session
+or process to its caller.
 
-1. Validate Seatbelt readiness and the fixed `/bin/zsh` executable before
-   leasing a Session.
-2. Create a generic Session and materialize selected Skills.
-3. Prepare `/bin/zsh -f`; no target argument or environment setting can replace
-   the executable, enable startup files, or bypass containment.
-4. Attach the invoking terminal and preserve signals, resize, and exit status.
-5. Settle descendants, then remove the Session; quarantine uncertain cleanup.
+### Interactive Codex and named authentication
+
+1. Resolve the supported overlay and one effective authRef; `--auth` overrides
+   the stored reference for this run.
+2. Acquire that named resource before executable verification or Session work,
+   then take an immutable executable snapshot.
+3. Create and protect a private Session with a generation-bound marker.
+   Project the selected file credentials before materializing common content
+   and Codex projections.
+4. Force the registered identity/workspace, provider, endpoint, project-trust,
+   and plugin restrictions. Codex uses externally sandboxed no-prompt mode;
+   ACS enforces the resolved workspace and other OS grants.
+5. Verify exact `codex-cli 0.149.1`, then attach interactive Codex through the
+   shared process executor.
+6. Prove cleanup, validate eligible same-identity refreshes, and remove the
+   Session before marker deletion and identity release. Uncertain cleanup
+   retains the protected Session and identity for recovery.
+
+Login is Create-only. Status and successful execution can replace only a valid
+changed projection with the same identity metadata; recovery never turns an
+interrupted login into a credential record. See [named Codex authentication](codex.md#named-authentication)
+and [interactive Codex](codex.md#interactive-launch) for the operator contract.
+
+### Sandbox shell and generic commands
+
+Both paths validate containment, create and materialize a generic Session, and
+use the shared attached-process lifecycle. Neither selects a target overlay,
+projects target authentication, or runs Devin preflights. Explicit common
+environment selections may still include secrets.
+
+The shell always runs `/bin/zsh -f`, ignoring `$SHELL` and startup files.
+`RunCommand` accepts only a resolved literal executable and argv plus the
+common authority plan. It revalidates executable identity after materialization
+and immediately before native preparation; it adds no inferred authority.
+See [generic commands](generic-run.md) for usage and argv semantics.
 
 ## Filesystem and environment policy
 
-Seatbelt begins with `deny default`. Generated parameters contain only validated
-canonical paths. The policy grants:
+Seatbelt starts with `deny default` and validated canonical path parameters.
+The generated policy grants:
 
-- read/write under the workspace and leased Session;
-- read access to the minimal macOS runtime and fixed commands;
-- read-only access to explicitly declared runtime inputs;
-- process creation, same-sandbox process information and signals;
-- the invoking pseudo-terminal and its descriptors;
-- outbound IP networking, mDNS resolution, and the exact trust services needed
-  for platform TLS.
+- workspace reads, with writes only when selected (new v3 Profiles default to
+  read-only; legacy v1/v2 remain writable);
+- private Session reads and writes, except protected configuration;
+- explicitly selected path access and executable visibility;
+- minimal macOS runtime, fixed commands, and declared read-only runtime inputs;
+- process creation, same-sandbox process information/signals, and the invoking
+  pseudo-terminal and descriptors;
+- coarse outbound IP, mDNS resolution, and required platform TLS trust services.
 
-The target environment is reconstructed. It sets synthetic `HOME`, XDG, and
-temporary paths, a fixed `/usr/local/bin:/usr/bin:/bin` `PATH`, and a small
-terminal/locale allowlist. Arbitrary host environment variables and inherited
-file descriptors are absent. Explicit v3 `common.environment` values are
-resolved into a sealed lease before Session creation, then transferred on
-macOS over the private bounded supervisor control channel only after policy
-validation. The supervisor constructs the final target environment immediately
-before start; validation, status, Devin Skills/authentication, Codex version and
-auth/status processes remain value-free. The values necessarily transit
-trusted supervisor memory and remain readable by the target process tree.
-For selected-environment Codex launches, ACS disables the target's shell
-snapshot feature so exported values are not serialized into private Session
-files; the actual Codex tool process and descendants still receive them.
-Linux rejects selected environment transport before Session creation and never
-renders it as Bubblewrap `--setenv` argv.
+The environment is reconstructed with synthetic `HOME`, XDG and temporary paths,
+a fixed `/usr/local/bin:/usr/bin:/bin` `PATH`, and a small terminal/locale
+allowlist. Arbitrary host variables and inherited file descriptors are absent.
+Explicit `common.environment` values are resolved into a sealed lease before
+Session creation and transferred over the private bounded supervisor channel
+after policy validation. The supervisor constructs the attached target's final
+environment immediately before start. Validation, status, authentication, and
+version probes remain value-free.
 
-Unrelated host paths, writes outside workspace/Session, symlink escapes, and
-unrelated Unix sockets remain denied. This is process and filesystem isolation,
-not network destination control. ACS is not an egress firewall.
+Selected values transit trusted supervisor memory and are readable by the
+attached process tree, including local MCP servers. Codex shell snapshots are
+disabled when environment values are selected, avoiding their serialization
+into snapshot files. Linux rejects selected environment transport before
+Session creation rather than rendering secrets into Bubblewrap argv.
+
+Unrelated host paths and Unix sockets remain denied. Directory grants cover
+their descendants; see [path grants and pathname-race limits](common-profile-format.md#explicit-filesystem-paths).
+ACS is not an egress firewall and does not create independent per-tool,
+per-MCP-server, or per-agent authority boundaries. Selecting a plugin, hook, or
+agent definition as readable data does not activate it as a Profile capability;
+Codex plugins are disabled in the registered production recipe.
 
 ## Lifecycle and cleanup
 
-Each Session has a file-lock lease. Startup removes only abandoned Sessions and
-does not disturb Sessions held by concurrent ACS processes. A prepared process
-retains the lease until its backend cleanup channel proves that the contained
-tree is gone.
+Every prepared process is retained by its Session before Start. A failed Start
+is not waited; a successful Start is waited exactly once. Wait returning does
+not prove that descendants have exited. Each probe must settle before its result
+can authorize the next probe or attached target.
 
-Devin's Skills and authentication preflights receive the live Session's process
-retention capability. A missing capability fails before process preparation.
-Each retained probe awaits bounded cleanup before its output or exit is used;
-uncertain cleanup takes precedence over the probe result and keeps the Session
-leased until the backend confirms settlement. Later Session creation cannot
-reclaim that still-owned root.
+The macOS backend supervises a process group and uses a private protocol for
+signals and authenticated cleanup proof. Normal completion, nonzero exit,
+signals, cancellation, startup failure, and surviving descendants follow the
+same lease rule. Cleanup uncertainty or finalization failure takes precedence
+over an ordinary target exit and retains or quarantines ownership until
+settlement is proven.
 
-The macOS backend starts a supervised process group and uses a private control
-protocol for signals and cleanup proof. Normal completion, nonzero exit,
-signals, cancellation, startup failure, and outliving descendants all converge
-on the same lease rule. A bounded failure to prove cleanup returns a stable
-failure and keeps asynchronous quarantine ownership until settlement succeeds.
+Startup cleanup respects file-lock leases held by other ACS processes. An
+unlocked lease alone is insufficient to reclaim a previously prepared Session:
+its matching native cleanup proof is also required. Removal is logical cleanup,
+not physical erasure. See [Session inspection and recovery](session-operations.md)
+for the operator-visible states and recovery procedure.
 
 ## Fail-closed properties
 
-- Users cannot select a backend or request an unsandboxed launch.
+- No backend selector or unsandboxed fallback exists.
 - Unsupported platforms fail before Session creation.
-- The Seatbelt executable must be the root-owned, non-writable system
-  `/usr/bin/sandbox-exec` and must pass a fixed capability probe.
+- `/usr/bin/sandbox-exec` must be the root-owned, non-writable system binary
+  and pass a fixed capability probe.
 - Generated policy is validated before the target starts.
-- Sensitive backend output and paths are replaced with stable error categories.
-- Cleanup failure takes precedence over an ordinary target exit.
-- Dry run never creates a Session or starts a target.
+- Backend detail is replaced with stable sanitized failure categories.
+- Cleanup failure takes precedence over an ordinary target result.
+- Dry run never creates a Session or starts the requested target.
 
 ## Persistence and compatibility
 
-Profiles live under `~/.acs/profiles` with mode 0600 in mode-0700 directories.
-Creation is atomic and refuses replacement. Version-1 Profiles are normalized
-in memory without rewriting their files. Category schemas evolve independently
-inside legacy version-2 envelopes and independently versioned common payloads
-inside version 3; unknown capabilities and unsupported schema
-versions fail strict resolution.
+Profiles use mode-0600 files in mode-0700 directories under `~/.acs/profiles`.
+Creation is atomic and refuses replacement. Legacy v1 Profiles are normalized
+in memory without rewriting their files; migration to v3 is explicit. Capability
+schemas evolve independently, and unsupported selected schemas fail resolution.
 
-Portable exchange is a separate codec and version. It reads strictly admitted
-v3 bytes as pure stored intent, replaces machine-local source/auth references
-with symbolic requirements, and never exports a resolved authority plan or raw
-local JSON. Passive import validation remains outside target, credential,
-Session, discovery, network, and recovery composition. Complete explicit local
-bindings build one immutable canonical candidate; only actual import passes that
-candidate to the existing conditional Create transaction. Export file output
-uses an exchange-owned exclusive no-replace helper and does not alter executor or
-authentication lifecycle ownership.
+[Portable exchange](portable-profile-exchange.md) is a separate versioned codec.
+It exports stored v3 intent with symbolic machine-local source, authentication,
+path, executable, and secret-environment bindings, never a resolved authority
+plan or raw local JSON. Passive validation does not discover sources, access
+credentials, create Sessions, or run targets. Complete explicit bindings produce
+one immutable candidate for conditional Profile creation; export file output
+uses exclusive no-replace creation.
 
-v0.4.0 preserves the existing Profile format and Devin command grammar. It adds
-`acs sandbox --profile NAME [--dry-run]` and removes Linux from the supported
-runtime and artifact matrix.
+## Profile repository transactions
 
-## Release evidence
+`internal/profilerepo` stores bounded opaque canonical documents; Profile codecs
+remain above that boundary. Revisions bind the exact name, presence, and bytes.
+They detect stale current-content conditions, not historical changes that return
+to the same bytes. Create, clone, and rename require an absent destination;
+replace and delete require the observed source revision. Rename can briefly
+expose both names and is not a two-name atomic snapshot.
 
-The candidate is built once. The exact supplied bytes are installed and tested
-on macOS 26 Apple Silicon. The native job runs the repository suite, race
-suite, and installed-artifact acceptance, including sandbox shell Skills,
-credential absence, allowed and denied paths, terminal lifecycle, descendants,
-and cleanup. Attestation and immutable publication depend on that native job.
+Mutations and recovery share one stationary file lock. Under that ownership,
+ACS settles any previous transaction before rechecking the new request's
+conditions. Reads, Profile inspection, and diagnostics never lock, bootstrap,
+or recover the repository. Descriptor-relative no-follow operations, private
+file modes, bounded records, and object-identity checks reject observed unsafe
+state. Advisory locking excludes cooperating writers, not arbitrary same-user
+filesystem interference; do not remove a lock to bypass contention.
 
-The optional authenticated Devin smoke uses local maintainer credentials and is
-supplemental. It cannot replace the credential-free native candidate gates.
+The recoverable transaction has three boundaries:
+
+1. Prepare and synchronize desired bytes and the exact bound history record
+   before publishing the immutable decision.
+2. After the decision, publish the Profile/history pair and synchronize the
+   namespace. Recovery rolls forward; it does not silently restore old bytes.
+3. Synchronize the terminal receipt, then retire private artifacts. Malformed,
+   unknown, or inconsistent evidence is preserved and blocks unsafe mutation.
+
+Before a decision, recovery aborts private preparation. History snapshots and
+lineage are part of the decided transaction, not a later best-effort append.
+Explicit history restore is a new conditional mutation. Clone creates a new
+lineage; rename preserves it. See [Profile history](profile-history.md) for
+retention, pins, and restore behavior.
+
+Outcomes separate `NotCommitted`, `Committed`, or `Unknown` from
+`RecoveryRequired`. Pre-decision rejection is not committed; uncertainty once a
+decision can exist requires recovery. A synchronized terminal receipt establishes
+commit even if later cleanup reports an error. Cancellation after the decision
+does not skip settlement. A lost response is not permission for a blind retry,
+and completed cleanup does not provide a historical exactly-once API.
+
+The durability guarantee is checked file/namespace synchronization and
+process-interruption recovery on the tested filesystem. Successful sync calls
+and process-kill tests do not prove hardware power-loss behavior or all volume
+configurations. Synchronization errors never become success. See the
+[repository implementation and regression tests](../internal/profilerepo),
+[Profile commands](profiles.md), and [manual recovery](manual-upgrade-recovery.md).
+
+For test commands and native release validation, see [Contributing](../CONTRIBUTING.md).

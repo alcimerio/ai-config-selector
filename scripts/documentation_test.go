@@ -7,15 +7,13 @@ import (
 	"testing"
 )
 
-func TestCurrentDocumentationDefinesTheV040MacOSSandboxShellContract(t *testing.T) {
+func TestCurrentDocumentationDefinesTheMacOSSandboxShellContract(t *testing.T) {
 	repository := ".."
 	for _, document := range []string{
 		"README.md",
 		"CONTRIBUTING.md",
 		"docs/architecture.md",
-		"docs/authenticated-release-smoke.md",
-		"docs/releases/v0.4.0.md",
-		"docs/releases/v0.4.0-checklist.md",
+		"docs/manual-upgrade-recovery.md",
 	} {
 		contents := readRepositoryFile(t, repository, document)
 		if len(strings.TrimSpace(contents)) == 0 {
@@ -25,13 +23,11 @@ func TestCurrentDocumentationDefinesTheV040MacOSSandboxShellContract(t *testing.
 
 	readme := readRepositoryFile(t, repository, "README.md")
 	for _, required := range []string{
-		"v0.4.0",
 		"acs sandbox --profile",
 		"/bin/zsh -f",
 		"macOS 26",
 		"darwin/arm64",
 		"Apple Silicon",
-		"v0.3.3 is the final release with Linux support",
 		"There is no unsandboxed fallback",
 		"ACS is not an egress firewall",
 	} {
@@ -115,7 +111,7 @@ func TestReleaseArtifactContractIsExactlyOneAppleSiliconTarget(t *testing.T) {
 	}
 }
 
-func TestDevelopmentCandidateVersionAndPublishedV050Docs(t *testing.T) {
+func TestDevelopmentCandidateVersionHasReleaseNotes(t *testing.T) {
 	repository := ".."
 	promoted := readRepositoryFile(t, repository, filepath.Join(".github", "workflows", "promoted-artifacts.yml"))
 	macos := readRepositoryFile(t, repository, filepath.Join(".github", "workflows", "macos.yml"))
@@ -135,38 +131,13 @@ func TestDevelopmentCandidateVersionAndPublishedV050Docs(t *testing.T) {
 	}
 
 	notes := readRepositoryFile(t, repository, filepath.Join("docs", "releases", "v0.5.0.md"))
-	checklist := readRepositoryFile(t, repository, filepath.Join("docs", "releases", "v0.5.0-checklist.md"))
-	for _, required := range []string{
-		"Profile lifecycle",
-		"v0.5.0 adds passive Profile listing",
-		"v0.5.0 is unsigned and unnotarized",
-		"https://github.com/alcimerio/ai-config-selector/blob/v0.5.0/docs/release-migration-guide.md",
-		"https://github.com/alcimerio/ai-config-selector/blob/v0.5.0/docs/manual-upgrade-recovery.md",
-		"daily-use observation",
-	} {
-		if !strings.Contains(notes, required) {
-			t.Errorf("release notes omit %q", required)
-		}
+	if strings.TrimSpace(notes) == "" {
+		t.Fatal("current candidate release notes are empty")
 	}
-	for _, preparationOnly := range []string{
-		"the proposed release adds",
-		"deliberately prepared without Apple Developer ID signing",
-		"](../release-migration-guide.md)",
-		"](../manual-upgrade-recovery.md)",
-	} {
-		if strings.Contains(notes, preparationOnly) {
-			t.Errorf("verbatim release notes retain preparation-only content %q", preparationOnly)
-		}
-	}
-	for _, required := range []string{
-		"https://github.com/alcimerio/ai-config-selector/releases/tag/v0.5.0",
-		"immutable",
-		"UNPERFORMED / PENDING",
-		"refs/tags/v0.5.0",
-		"installer is part of the byte-matched published artifact set but is **not an attestation subject**",
-	} {
-		if !strings.Contains(checklist, required) {
-			t.Errorf("published release record omits %q", required)
+	for _, script := range []string{"prepare-release-tag.sh", "release-tag-identity.sh"} {
+		contents := readRepositoryFile(t, repository, filepath.Join("scripts", script))
+		if !strings.Contains(contents, `release_notes="docs/releases/$release_tag.md"`) {
+			t.Errorf("%s no longer validates version-controlled release notes", script)
 		}
 	}
 }
@@ -241,7 +212,6 @@ func TestGenericRunDocumentationAndCandidateGateStayBoundToLiteralContainment(t 
 		"workspace-relative executable must",
 		"does not infer a filesystem or network grant catalog",
 		"not a claim that path-based execution provides an atomic kernel",
-		"multi-project real-use",
 	} {
 		if !strings.Contains(document, required) {
 			t.Errorf("generic run documentation omits %q", required)
@@ -331,8 +301,7 @@ func TestReleaseAndPromotedWorkflowsExecuteOneSharedNativeGate(t *testing.T) {
 func TestNamedAuthenticationDocumentationSeparatesAutomatedAndAuthenticatedEvidence(t *testing.T) {
 	for _, document := range []string{
 		"CONTRIBUTING.md",
-		"docs/codex-auth.md",
-		"docs/authenticated-codex-auth-smoke.md",
+		"docs/codex.md",
 	} {
 		contents := readRepositoryFile(t, "..", document)
 		normalized := strings.Join(strings.Fields(contents), " ")
@@ -340,19 +309,22 @@ func TestNamedAuthenticationDocumentationSeparatesAutomatedAndAuthenticatedEvide
 			"credential-free",
 			"0.149.1",
 			"prohibit authentication UI",
-			"locked or unavailable",
 			"supplemental",
 		} {
 			if !strings.Contains(normalized, required) {
 				t.Errorf("%s omits evidence boundary %q", document, required)
 			}
 		}
+		lower := strings.ToLower(normalized)
+		if !strings.Contains(lower, "locked or unavailable") && !strings.Contains(lower, "locked/unavailable") {
+			t.Errorf("%s omits the locked/unavailable Keychain boundary", document)
+		}
 	}
 	workflow := readRepositoryFile(t, "..", filepath.Join(".github", "workflows", "promoted-artifacts.yml"))
 	if !strings.Contains(workflow, "live locked-Keychain and ACL probes remain supplemental") {
 		t.Fatal("native workflow summary omits the locked-Keychain evidence boundary")
 	}
-	smoke := readRepositoryFile(t, "..", "docs/authenticated-codex-auth-smoke.md")
+	smoke := strings.Join(strings.Fields(readRepositoryFile(t, "..", "CONTRIBUTING.md")), " ")
 	if strings.Contains(smoke, "credential-free namespace, size, collision, locked-Keychain") {
 		t.Fatal("authenticated smoke claims live locked-Keychain coverage is automated")
 	}
@@ -360,22 +332,6 @@ func TestNamedAuthenticationDocumentationSeparatesAutomatedAndAuthenticatedEvide
 		if !strings.Contains(smoke, required) {
 			t.Errorf("authenticated named-auth smoke omits safety boundary %q", required)
 		}
-	}
-	authDocumentation := strings.Join(strings.Fields(readRepositoryFile(t, "..", "docs/codex-auth.md")), " ")
-	for _, required := range []string{
-		"deterministic private recovery root",
-		"explicit empty list",
-		"fresh process",
-		"strictly validated relative state-directory component",
-		"locator is removed last",
-		"stable recovery categories",
-	} {
-		if !strings.Contains(authDocumentation, required) {
-			t.Errorf("named-auth documentation omits isolated Keychain recovery guidance %q", required)
-		}
-	}
-	if strings.Contains(authDocumentation, "reports the deterministic locator path") {
-		t.Fatal("named-auth documentation instructs the recovery entrypoint to expose a private locator path")
 	}
 }
 
@@ -385,25 +341,20 @@ func TestSharedTargetConformanceDocumentationAndNativeGateStayExplicit(t *testin
 	for _, required := range []string{
 		"source` plus `relativePath",
 		"read-only or explicit read-write",
-		"TestMaintainedTargetsShareCommonSkillsAndWorkspaceContract",
-		"TestPromotedArtifactSharedTargetConformance",
+		".acs/common/v1/skills",
+		".codex/skills/<source>/<relativePath>",
+		"no fallback to global Codex authentication",
+		"before discovery, target execution, or Session creation",
+		"../internal/adapter/conformance_test.go",
+		"../scripts/run-native-candidate-gates.sh",
 		"supplied ACS candidate without rebuilding it",
-		"ten minutes",
-		"two real projects",
-		"one week",
-		"unperformed/pending",
-		"Development source revision (commit SHA):",
-		"ACS artifact version and SHA-256",
-		"Target version:",
-		"historical published v0.4.0 binary that predates them",
-		"TestNativeInstalledACSExecutesLockedCodexToolThroughNamedIdentity",
-		"no credentials, account data, target output, paths or Session contents",
+		"Portable fixtures do not establish real target discovery or native containment",
 	} {
 		if !strings.Contains(normalizedGuide, required) {
 			t.Errorf("shared target guide omits %q", required)
 		}
 	}
-	for _, document := range []string{"README.md", "docs/common-profile-format.md", "docs/interactive-codex.md"} {
+	for _, document := range []string{"README.md", "docs/common-profile-format.md", "docs/codex.md"} {
 		if !strings.Contains(readRepositoryFile(t, "..", document), "shared-target-conformance.md") {
 			t.Errorf("%s does not link the shared target guide", document)
 		}
@@ -424,13 +375,21 @@ func TestSharedTargetConformanceDocumentationAndNativeGateStayExplicit(t *testin
 	}
 }
 
-func TestHistoricalReleaseRecordsRemainAvailable(t *testing.T) {
-	for _, version := range []string{"v0.2.0", "v0.3.0", "v0.3.1", "v0.3.2", "v0.3.3", "v0.4.0"} {
-		for _, suffix := range []string{".md", "-checklist.md"} {
-			document := filepath.Join("docs", "releases", version+suffix)
-			if strings.TrimSpace(readRepositoryFile(t, "..", document)) == "" {
-				t.Errorf("historical release record %s is empty", document)
-			}
+func TestContributorReleaseProcedurePreservesSafetyBoundaries(t *testing.T) {
+	contributing := strings.Join(strings.Fields(readRepositoryFile(t, "..", "CONTRIBUTING.md")), " ")
+	for _, required := range []string{
+		"docs/releases/vMAJOR.MINOR.PATCH.md",
+		"explicit authorization for the tag push",
+		"no later approval pause",
+		"Never move or delete a release tag",
+		"not an attestation subject",
+		"Never strip quarantine",
+		"archive-member digest is only an expected value",
+		"An expired artifact must be replaced by a newly identified build",
+		"never infer it from automated or publication success",
+	} {
+		if !strings.Contains(contributing, required) {
+			t.Errorf("contributor procedure omits safety boundary %q", required)
 		}
 	}
 }

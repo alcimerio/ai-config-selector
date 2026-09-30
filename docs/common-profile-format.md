@@ -1,10 +1,12 @@
 # Common Profile format, migration, grants and projection
 
-Development source writes new Profiles as envelope version 3. Version 1 and 2
+[Documentation index](README.md)
+
+New Profiles use envelope version 3. Version 1 and 2
 remain readable and are never changed by inspection or launch.
 
 Noninteractive authoring accepts only this supported v3 representation; see
-[Declarative Profile creation](profile-creation.md). Legacy documents continue
+[declarative creation](profiles.md#declarative-creation). Legacy documents continue
 to use the established read, edit and explicit migration paths.
 
 ```json
@@ -96,6 +98,59 @@ workspace bind. Session writes remain allowed in both modes.
 Legacy v1/v2 Profiles retain writable-workspace authority and their established
 synthetic-home paths. An approved legacy edit/clone/rename produces canonical
 v2, preserving that authority and placement. It does not silently adopt v3.
+
+## Instruction bundles
+
+`common.instructions` version 1 selects regular UTF-8 Markdown files under
+`~/.acs/instructions`, including nested paths, through the builder's
+**Instructions** category. Selection is explicit, never every file by default.
+Profiles store only `{source, relativePath}` references with source
+`acs-instructions`; host text is not stored in the Profile. The canonical
+reference array may be empty (`[]`). Omission remains valid for older Profiles;
+unknown present versions and malformed selections fail strict admission.
+
+### Source limits and capture
+
+Select at most 64 files, 128 KiB each and 1 MiB total. Relative paths have at
+most 16 components and 1,024 UTF-8 bytes. Source directories/files must be owned
+by the effective user and not group/world writable. Symlinks, nonregular,
+empty or BOM-prefixed files, invalid UTF-8, NUL and terminal controls are refused.
+Tabs, LF, CRLF and the absence of a final newline are preserved.
+
+Before Session allocation, ACS traverses no-follow directory descriptors,
+reads bounded bytes from each validated file descriptor, and checks identity
+and metadata around capture. Those immutable bytes are materialized at
+`$SESSION_HOME/.acs/common/v1/instructions/<source>/<relativePath>` without
+reopening host sources. Generic `acs run` can consume them without Devin paths.
+Codex receives common material only; ACS does not project it into Codex
+instruction configuration or claim automatic activation.
+
+### Devin projection and ambient configuration
+
+Devin also receives one rule per selected file under synthetic-home
+`.devin/rules`. Names are `acs-instruction-` plus the full lowercase SHA-256 of
+`source + NUL + relativePath`, followed by `.md`. Fixed frontmatter
+`---\ntrigger: always_on\n---\n` precedes the exact bytes; source frontmatter is
+body text and cannot change activation. Before authentication, contained Devin
+must list each selected name exactly once as always-on and show its projected
+path, exact provider, activation and expected rendered body. The renderer trims
+outer whitespace and adds a display newline; ACS separately verifies exact
+prefixed bytes on disk.
+
+Workspace rules and AGENTS files remain ambient Devin configuration. ACS neither
+copies them into Profiles nor rewrites the workspace, and selected rules are
+not necessarily the only discoverable rules. A pinned local observation found
+that a `.git` marker changes AGENTS' workspace root; non-Git workspaces can show
+additional rows that must not automatically be classified as workspace
+inheritance. The selected-rule check does not exhaustively enumerate or classify
+ambient rules and does not prove model obedience.
+
+An absent instruction root yields an empty catalog and missing saved selections;
+a discovery error leaves selections unavailable and retained for repair. These
+labels do not establish the origin of arbitrary AGENTS rows.
+[Exchange](portable-profile-exchange.md) represents instruction sources as required
+symbolic bindings, without host paths or bodies; import must bind
+`acs-instructions` locally.
 
 ## Explicit filesystem paths
 
@@ -206,10 +261,9 @@ Selected environment transport is currently macOS-only. Linux fails closed
 before Session creation instead of placing values in Bubblewrap argv.
 
 Older v3 Profiles without `environment` read as an empty compatibility default.
-New creation and confirmed mutation emit the explicit selection. Durable
-Keychain-backed references are a later delivery; this version supports only
-host-environment references and must not be described as durable
-credential storage.
+New creation and confirmed mutation emit the explicit selection. Only
+host-environment references are supported; they are not durable credential
+storage.
 
 ## Reference-only MCP servers
 
@@ -229,9 +283,8 @@ For v3, selected Skills are copied first to:
 $SESSION_HOME/.acs/common/v1/skills/<source>/<relativePath>/
 ```
 
-Selected instruction files are captured before Session allocation and copied
-as verified bytes to `$SESSION_HOME/.acs/common/v1/instructions/<source>/<relativePath>`.
-They remain available to generic `acs run` without activating Devin paths.
+Selected instruction files use the separate common location and target behavior
+described under [instruction bundles](#instruction-bundles).
 
 The source segment prevents two source identities from being flattened. ACS
 rejects normalized duplicates, parent/child overlaps, and native case aliases
@@ -270,5 +323,5 @@ migrate, canonicalize, discover inactive overlays, inspect target readiness,
 access authentication, allocate a Session or write files. Structural support,
 selected source availability, overlay execution support and native enforcement
 are separate observations. See the [shared Devin/Codex behavior and evidence
-guide](shared-target-conformance.md) for the maintained cross-target contract,
-native fixture boundary and pending real-use checklist.
+guide](shared-target-conformance.md) for the maintained cross-target contract
+and evidence limits.

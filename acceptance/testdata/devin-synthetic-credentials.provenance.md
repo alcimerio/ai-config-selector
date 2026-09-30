@@ -1,3 +1,9 @@
+# Synthetic Devin credential fixture provenance
+
+Contributor evidence record for `devin-synthetic-credentials.toml`, not a login
+guide or a credential template for users. The fixture is consumed by isolated
+acceptance tests; its synthetic values must never be used as real credentials.
+
 This fixture contains only synthetic research values. Do not replace it with account credentials.
 
 Origin: locked real Linux Devin 3000.10.21 (611c1cba), binary SHA-256 ba1956450c0e0bf95f477ccd442a0b45b14765402b2377d6737ae758126d70cd, naturally persisted credentials after documented auth login --force-manual-token-flow against a disposable loopback driver. Case manual-auth-session-token-user-status-qkmoeck6; source home/data/devin/credentials.toml. This was target-generated; no fields have been invented or rewritten.

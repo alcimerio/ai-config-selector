@@ -1,5 +1,7 @@
 # Exchange portable Profile intent
 
+[Documentation index](README.md)
+
 Development source supports a separately versioned, sanitized Profile exchange
 format. Local Profile JSON is machine persistence and is not an export format.
 Exchange documents contain only supported version-3 stored intent and explicit
@@ -22,7 +24,8 @@ explicit local regular file; stdin and remote URLs are not supported.
 
 ## Export format and output
 
-Exchange version 3 supports common Skills v1, workspace v1, paths v1,
+Exchange version 3 supports common Skills v1, optional Instructions v1,
+workspace v1, paths v1,
 executables v1, environment v1, reference-only MCP v1, and exact maintained
 Devin v1 and Codex v1 overlays. MCP server IDs, transport, ordered typed argv
 references, declared input/environment references, and disabled tool names are
@@ -120,13 +123,14 @@ project-relative paths and are never rebound by display name. For example:
 }
 ```
 
-Unknown fields, future versions, unknown or inactive overlays, unsupported
+Unknown fields, future versions, unknown or unsupported overlays, unsupported
 capabilities, embedded assets, and unclassified content refuse the whole export.
 ACS never silently removes them.
 
 ## Explicit local bindings
 
-Import uses a separate local binding document:
+For the exchange example above, use this separate local binding document
+(replace the local path and identity with your own choices):
 
 ```json
 {
@@ -134,14 +138,16 @@ Import uses a separate local binding document:
   "sources": {"source-1": "shared-agents"},
   "authentications": {"authentication-1": "work"},
   "paths": {"path-1": "/Users/example/cache"},
-  "executables": {"executable-1": "/Users/example/bin/tool"},
+  "executables": {},
   "environment": {"environment-1": "ACS_SERVICE_TOKEN"}
 }
 ```
 
-Each requirement needs exactly one mapping and unused mappings are rejected.
-Source values are exact registered identities (`devin-config` or
-`shared-agents`), not display names. Authentication values are only canonical
+Each requirement needs exactly one mapping; missing or unused mapping keys
+produce unresolved bindings (`binding_required`, exit 2) and prevent import.
+Source values are exact registered identities, not display names: Skills use
+`devin-config` or `shared-agents`; instruction references use `acs-instructions`.
+Instruction text and its host path are not exported. Authentication values are only canonical
 opaque ACS identity names; validation never queries Keychain or reads credential
 values. Duplicate, case/Unicode-normalized alias, and parent/child Skill
 destinations are rejected both before and after binding. Two symbols mapped to
