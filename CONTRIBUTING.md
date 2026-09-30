@@ -6,7 +6,7 @@ support promise. Intel Macs are not a supported runtime or release target.
 
 ## Local setup
 
-Install Go 1.25 or later, clone the repository, and run these checks on a
+Install Go 1.27.1 or later, clone the repository, and run these checks on a
 supported Apple Silicon Mac:
 
 ```sh
@@ -16,6 +16,11 @@ go test -race ./...
 go vet ./...
 go build ./cmd/acs
 ```
+
+CI and release workflows select the exact Go version in `go.mod`. Use that
+same version when reproducing their checks or release-candidate artifacts;
+a newer locally installed toolchain can produce different bytes. Keep the
+module version and these setup instructions aligned when updating Go.
 
 Run formatting before committing:
 
