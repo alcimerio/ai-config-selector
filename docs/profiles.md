@@ -79,11 +79,13 @@ have disappeared. `show` and `validate` accept exactly one name before or after
 attached values (`=`), `--`, target pass-through and sandbox bypass are rejected.
 Use `acs help profile` or each command's `--help` for contextual usage.
 
-**Known human-output limitation:** counts can incorrectly show `0 selected`
-for Instructions, paths, executables, environment or MCP. Use
-`acs profile show NAME --json` for instruction references and
+Human output reports the number of stored Skills, Instructions, path grants,
+executables, environment entries and MCP servers. Workspace access is a scalar
+setting, shown as configured with its access mode above. Counts do not resolve
+references or establish runtime access; use
 [`acs explain`](diagnostics.md#effective-capability-explanation) for effective
-capabilities. A zero human count is not evidence of no access.
+capabilities. Private path, executable, environment and MCP selection details
+remain omitted from inspection output.
 
 Inspection reads persisted structure only. It does not check source existence,
 authentication, installed targets or runtime readiness; resolve references;

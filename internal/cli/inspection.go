@@ -78,7 +78,11 @@ func (app App) inspectProfiles(inv invocation) int {
 				if category.SchemaVersion != nil {
 					schema = fmt.Sprint(*category.SchemaVersion)
 				}
-				fmt.Fprintf(app.Output, "    %s: %d selected; stored category version: %s\n", category.ID, len(category.Selection), schema)
+				summary := "configured"
+				if count, counted := category.SelectionCount(); counted {
+					summary = fmt.Sprintf("%d selected", count)
+				}
+				fmt.Fprintf(app.Output, "    %s: %s; stored category version: %s\n", safeTerminalText(category.ID), summary, schema)
 				if operation == "show" {
 					for _, reference := range category.Selection {
 						fmt.Fprintf(app.Output, "      %s: %s\n", safeTerminalText(string(reference.Source)), safeTerminalText(reference.RelativePath))
