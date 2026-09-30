@@ -14,8 +14,8 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  # Development identity only. It is not a published v0.5.0 release.
-  ACS_CANDIDATE_VERSION: v0.5.0
+  # Development identity only. It is not a published v0.5.1 release.
+  ACS_CANDIDATE_VERSION: v0.5.1
 
 jobs:
   candidate:
