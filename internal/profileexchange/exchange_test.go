@@ -245,17 +245,24 @@ func TestDecodeRejectsHostileStructures(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cases := map[string][]byte{
-		"duplicate":         bytes.Replace(valid, []byte(`"exchangeVersion": 1`), []byte(`"exchangeVersion": 1, "exchangeVersion": 1`), 1),
-		"surrogate":         bytes.Replace(valid, []byte("backend-review"), []byte(`bad\uD800`), 1),
-		"traversal":         bytes.Replace(valid, []byte("backend-review"), []byte("../private"), 1),
-		"unknown":           bytes.Replace(valid, []byte(`"exchangeVersion": 1`), []byte(`"future": true, "exchangeVersion": 1`), 1),
-		"too deeply nested": []byte(strings.Repeat("[", MaxDepth+2) + strings.Repeat("]", MaxDepth+2)),
+	version := fmt.Sprintf(`"exchangeVersion": %d`, ExchangeVersion)
+	cases := map[string]struct {
+		data []byte
+		code Code
+	}{
+		"duplicate":         {bytes.Replace(valid, []byte(version), []byte(version+", "+version), 1), CodeDuplicateKey},
+		"surrogate":         {bytes.Replace(valid, []byte("backend-review"), []byte(`bad\uD800`), 1), CodeInvalidUnicode},
+		"traversal":         {bytes.Replace(valid, []byte("backend-review"), []byte("../private"), 1), CodeUnsafePath},
+		"unknown":           {bytes.Replace(valid, []byte(version), []byte(`"future": true, `+version), 1), CodeUnsupportedContent},
+		"too deeply nested": {[]byte(strings.Repeat("[", MaxDepth+2) + strings.Repeat("]", MaxDepth+2)), CodeLimitExceeded},
 	}
-	for name, data := range cases {
+	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			if result := Decode(data, nil, "imported"); result.Code == CodeValid || result.Candidate != nil {
-				t.Fatalf("accepted: %#v", result)
+			if bytes.Equal(tc.data, valid) {
+				t.Fatal("fixture mutation did not change the valid document")
+			}
+			if result := Decode(tc.data, nil, "imported"); result.Code != tc.code || result.Candidate != nil {
+				t.Fatalf("result = %#v; want %s", result, tc.code)
 			}
 		})
 	}
