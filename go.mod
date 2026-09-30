@@ -1,6 +1,6 @@
 module github.com/alcimerio/ai-config-selector
 
-go 1.25.0
+go 1.27.1
 
 require (
 	charm.land/bubbles/v2 v2.1.1

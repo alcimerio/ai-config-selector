@@ -106,7 +106,7 @@ update checks, package-manager distribution, or uninstaller.
 
 ### Build from source
 
-With Go 1.25 or later on a supported Mac:
+With Go 1.27.1 or later on a supported Mac:
 
 ```sh
 git clone https://github.com/alcimerio/ai-config-selector.git
