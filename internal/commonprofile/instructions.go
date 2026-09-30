@@ -33,13 +33,31 @@ func NewInstructionsBinding(resolve func(context.Context, []instructions.Referen
 	if resolve == nil || projection == nil || projection.ID() == "" || projection.Version() < 1 {
 		return InstructionsBinding{}, errors.New("common instructions registration is incomplete")
 	}
-	return category.Bind(category.Definition[[]instructions.Reference, []instructions.Bundle, InstructionsContribution]{
+	definition := instructionsDefinition()
+	definition.Resolve = func(ctx context.Context, refs []instructions.Reference) ([]instructions.Bundle, error) {
+		return resolve(ctx, refs)
+	}
+	definition.Contribute = func(selected []instructions.Bundle) (InstructionsContribution, error) {
+		selected = append([]instructions.Bundle(nil), selected...)
+		seen := map[string]bool{}
+		for i := range selected {
+			name := instructions.DestinationName(selected[i].Reference)
+			if seen[name] {
+				return InstructionsContribution{}, errors.New("instruction target destination collision")
+			}
+			seen[name] = true
+			selected[i].Content = append([]byte(nil), selected[i].Content...)
+		}
+		return InstructionsContribution{selected: selected, projection: projection}, nil
+	}
+	return category.Bind(definition)
+}
+
+func instructionsDefinition() category.Definition[[]instructions.Reference, []instructions.Bundle, InstructionsContribution] {
+	return category.Definition[[]instructions.Reference, []instructions.Bundle, InstructionsContribution]{
 		ID: InstructionsCapabilityID, SchemaVersion: InstructionsCapabilityVersion,
 		Empty: func() []instructions.Reference { return []instructions.Reference{} }, LegacyEmpty: func() []instructions.Reference { return []instructions.Reference{} },
 		Encode: instructions.Encode, Decode: instructions.Decode,
-		Resolve: func(ctx context.Context, refs []instructions.Reference) ([]instructions.Bundle, error) {
-			return resolve(ctx, refs)
-		},
 		ResolveSyntax: func(refs []instructions.Reference) ([]instructions.Bundle, error) {
 			bundles := make([]instructions.Bundle, len(refs))
 			for i, ref := range refs {
@@ -47,21 +65,8 @@ func NewInstructionsBinding(resolve func(context.Context, []instructions.Referen
 			}
 			return bundles, nil
 		},
-		Contribute: func(selected []instructions.Bundle) (InstructionsContribution, error) {
-			selected = append([]instructions.Bundle(nil), selected...)
-			seen := map[string]bool{}
-			for i := range selected {
-				name := instructions.DestinationName(selected[i].Reference)
-				if seen[name] {
-					return InstructionsContribution{}, errors.New("instruction target destination collision")
-				}
-				seen[name] = true
-				selected[i].Content = append([]byte(nil), selected[i].Content...)
-			}
-			return InstructionsContribution{selected: selected, projection: projection}, nil
-		},
 		Count: func(refs []instructions.Reference) int { return len(refs) },
-	})
+	}
 }
 
 func (c InstructionsContribution) Plan(ctx context.Context, _ string, plan *launch.Plan) error {

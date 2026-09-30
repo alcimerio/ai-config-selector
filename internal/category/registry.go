@@ -83,13 +83,24 @@ func (registration Registration) SameBinding(other Registration) bool {
 
 // Bind validates a category definition and creates its typed handle.
 func Bind[S, R any, C launch.Contribution](definition Definition[S, R, C]) (Binding[S, R, C], error) {
+	return bindDefinition(definition, false)
+}
+
+// BindCodec binds only selection syntax, defaults, and cross-capability
+// validation. It requires no resolver or launch contribution. Such a binding
+// is accepted by NewCodec, never by an execution Registry.
+func BindCodec[S, R any, C launch.Contribution](definition Definition[S, R, C]) (Binding[S, R, C], error) {
+	return bindDefinition(definition, true)
+}
+
+func bindDefinition[S, R any, C launch.Contribution](definition Definition[S, R, C], codecOnly bool) (Binding[S, R, C], error) {
 	if !categoryIDPattern.MatchString(definition.ID) {
 		return Binding[S, R, C]{}, fmt.Errorf("invalid category ID %q", definition.ID)
 	}
 	if definition.SchemaVersion < 1 {
 		return Binding[S, R, C]{}, fmt.Errorf("category %q schema version must be positive", definition.ID)
 	}
-	if definition.Empty == nil || definition.Resolve == nil || definition.Contribute == nil || definition.Count == nil {
+	if definition.Empty == nil || definition.Count == nil || (!codecOnly && (definition.Resolve == nil || definition.Contribute == nil)) {
 		return Binding[S, R, C]{}, fmt.Errorf("category %q registration is incomplete", definition.ID)
 	}
 	encode := definition.Encode
@@ -168,6 +179,9 @@ func Bind[S, R any, C launch.Contribution](definition Definition[S, R, C]) (Bind
 	if definition.LegacyEmpty != nil {
 		registration.legacyEmpty = func() any { return definition.LegacyEmpty() }
 	}
+	if codecOnly {
+		registration.resolve, registration.resolveSyntax, registration.contribute = nil, nil, nil
+	}
 	return Binding[S, R, C]{registration: registration}, nil
 }
 
@@ -232,12 +246,25 @@ func NewRegistryWithRequirements(target string, requirements authority.TargetReq
 	if !requirements.Semantics.Supports(requirements.Recipe) {
 		return nil, fmt.Errorf("category Registry target %q has unsupported target semantics", target)
 	}
+	for _, registration := range registrations {
+		if registration.token != nil && (registration.resolve == nil || registration.contribute == nil) {
+			return nil, errors.New("category Registry contains a codec-only registration")
+		}
+	}
+	registry, err := newRegistry(target, registrations, legacyDecoders...)
+	if err != nil {
+		return nil, err
+	}
+	registry.requirements = requirements
+	return registry, nil
+}
+
+func newRegistry(target string, registrations []Registration, legacyDecoders ...LegacyDecoder) (*Registry, error) {
 	registry := &Registry{
-		target:       target,
-		requirements: requirements,
-		ordered:      make([]*Registration, 0, len(registrations)),
-		byID:         make(map[string]*Registration, len(registrations)),
-		legacy:       make(map[int]func([]byte) (profile.Profile, error), len(legacyDecoders)),
+		target:  target,
+		ordered: make([]*Registration, 0, len(registrations)),
+		byID:    make(map[string]*Registration, len(registrations)),
+		legacy:  make(map[int]func([]byte) (profile.Profile, error), len(legacyDecoders)),
 	}
 	for index := range registrations {
 		registration := registrations[index]

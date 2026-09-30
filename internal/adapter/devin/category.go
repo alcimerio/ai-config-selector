@@ -142,39 +142,20 @@ func (devinSkillProjection) Materialize(sessionHome string, selected []skills.Sk
 }
 
 func newCategoryRegistry(adapter *Adapter) (*category.Registry, commonprofile.SkillsBinding, commonprofile.InstructionsBinding, commonprofile.WorkspaceBinding, commonprofile.PathsBinding, commonprofile.ExecutablesBinding, commonprofile.EnvironmentBinding, error) {
-	instructionsBinding, err := commonprofile.NewInstructionsBinding(func(_ context.Context, refs []instructions.Reference) ([]instructions.Bundle, error) {
-		return instructions.Resolve(adapter.existingHomeDir, refs)
-	}, devinInstructionProjection{})
+	bindings, err := commonprofile.NewBindings(commonprofile.Runtime{
+		DiscoverSkills: func(ctx context.Context, references []skills.SkillReference) ([]skills.SkillBundle, error) {
+			return DiscoverExactSkillReferences(ctx, adapter.existingHomeDir, references)
+		},
+		SkillProjection: devinSkillProjection{},
+		ResolveInstructions: func(_ context.Context, refs []instructions.Reference) ([]instructions.Bundle, error) {
+			return instructions.Resolve(adapter.existingHomeDir, refs)
+		},
+		InstructionProjection: devinInstructionProjection{},
+	})
 	if err != nil {
 		return nil, commonprofile.SkillsBinding{}, commonprofile.InstructionsBinding{}, commonprofile.WorkspaceBinding{}, commonprofile.PathsBinding{}, commonprofile.ExecutablesBinding{}, commonprofile.EnvironmentBinding{}, err
 	}
-	skillsBinding, err := commonprofile.NewSelectedSkillsBinding(func(ctx context.Context, references []skills.SkillReference) ([]skills.SkillBundle, error) {
-		return DiscoverExactSkillReferences(ctx, adapter.existingHomeDir, references)
-	}, devinSkillProjection{})
-	if err != nil {
-		return nil, commonprofile.SkillsBinding{}, commonprofile.InstructionsBinding{}, commonprofile.WorkspaceBinding{}, commonprofile.PathsBinding{}, commonprofile.ExecutablesBinding{}, commonprofile.EnvironmentBinding{}, err
-	}
-	workspaceBinding, err := commonprofile.NewWorkspaceBinding()
-	if err != nil {
-		return nil, commonprofile.SkillsBinding{}, commonprofile.InstructionsBinding{}, commonprofile.WorkspaceBinding{}, commonprofile.PathsBinding{}, commonprofile.ExecutablesBinding{}, commonprofile.EnvironmentBinding{}, err
-	}
-	pathsBinding, err := commonprofile.NewPathsBinding()
-	if err != nil {
-		return nil, commonprofile.SkillsBinding{}, commonprofile.InstructionsBinding{}, commonprofile.WorkspaceBinding{}, commonprofile.PathsBinding{}, commonprofile.ExecutablesBinding{}, commonprofile.EnvironmentBinding{}, err
-	}
-	executablesBinding, err := commonprofile.NewExecutablesBinding()
-	if err != nil {
-		return nil, commonprofile.SkillsBinding{}, commonprofile.InstructionsBinding{}, commonprofile.WorkspaceBinding{}, commonprofile.PathsBinding{}, commonprofile.ExecutablesBinding{}, commonprofile.EnvironmentBinding{}, err
-	}
-	environmentBinding, err := commonprofile.NewEnvironmentBinding()
-	if err != nil {
-		return nil, commonprofile.SkillsBinding{}, commonprofile.InstructionsBinding{}, commonprofile.WorkspaceBinding{}, commonprofile.PathsBinding{}, commonprofile.ExecutablesBinding{}, commonprofile.EnvironmentBinding{}, err
-	}
-	mcpBinding, err := commonprofile.NewMCPBinding()
-	if err != nil {
-		return nil, commonprofile.SkillsBinding{}, commonprofile.InstructionsBinding{}, commonprofile.WorkspaceBinding{}, commonprofile.PathsBinding{}, commonprofile.ExecutablesBinding{}, commonprofile.EnvironmentBinding{}, err
-	}
-	adapter.mcpCategory = mcpBinding
+	adapter.mcpCategory = bindings.MCP
 	registry, err := category.NewRegistryWithRequirements("devin", authority.TargetRequirements{
 		Recipe:                  authority.RecipeDevin,
 		Executable:              adapter.binaryPath,
@@ -185,31 +166,9 @@ func newCategoryRegistry(adapter *Adapter) (*category.Registry, commonprofile.Sk
 		ProtectedPaths:          []string{filepath.Join(adapter.existingHomeDir, ".acs"), filepath.Join(adapter.existingHomeDir, ".codex"), filepath.Join(adapter.existingHomeDir, credentialsRelativePath)},
 		ProtectedPathIDs:        []string{"acs-private", "codex-private", "devin-credential"},
 		Semantics:               authority.DevinSemantics(),
-	}, []category.Registration{skillsBinding.Registration(), instructionsBinding.Registration(), workspaceBinding.Registration(), pathsBinding.Registration(), executablesBinding.Registration(), environmentBinding.Registration(), mcpBinding.Registration()}, category.LegacyDecoder{Version: 1, Decode: decodeVersionOneProfile})
+	}, bindings.Registrations(), commonprofile.LegacyDecoders()...)
 	if err != nil {
 		return nil, commonprofile.SkillsBinding{}, commonprofile.InstructionsBinding{}, commonprofile.WorkspaceBinding{}, commonprofile.PathsBinding{}, commonprofile.ExecutablesBinding{}, commonprofile.EnvironmentBinding{}, err
 	}
-	return registry, skillsBinding, instructionsBinding, workspaceBinding, pathsBinding, executablesBinding, environmentBinding, nil
-}
-
-func decodeVersionOneProfile(contents []byte) (profile.Profile, error) {
-	var legacy struct {
-		Version         int             `json:"version"`
-		Name            string          `json:"name"`
-		Target          string          `json:"target"`
-		SkillReferences json.RawMessage `json:"skillReferences"`
-	}
-	if err := json.Unmarshal(contents, &legacy); err != nil {
-		return profile.Profile{}, err
-	}
-	references, err := commonprofile.DecodeSkillSelection(legacy.SkillReferences)
-	if err != nil {
-		return profile.Profile{}, fmt.Errorf("decode version-1 skillReferences: %w", err)
-	}
-	selection, err := commonprofile.EncodeSkillSelection(references)
-	if err != nil {
-		return profile.Profile{}, err
-	}
-	return profile.Profile{Version: profile.LegacyCurrentVersion, SourceVersion: 1, Name: legacy.Name, Target: legacy.Target,
-		Categories: map[string]profile.CategoryPayload{commonprofile.SkillsCapabilityID: {SchemaVersion: commonprofile.SkillsCapabilityVersion, Selection: selection}}}, nil
+	return registry, bindings.Skills, bindings.Instructions, bindings.Workspace, bindings.Paths, bindings.Executables, bindings.Environment, nil
 }

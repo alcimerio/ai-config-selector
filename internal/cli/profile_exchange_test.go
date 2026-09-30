@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/alcimerio/ai-config-selector/internal/adapter/devin"
+	"github.com/alcimerio/ai-config-selector/internal/category"
 	"github.com/alcimerio/ai-config-selector/internal/cli"
 	"github.com/alcimerio/ai-config-selector/internal/commonprofile"
 	"github.com/alcimerio/ai-config-selector/internal/exchangefile"
@@ -47,12 +47,17 @@ func executableExchangeProfile(t *testing.T, name, executablePath string) profil
 
 func exchangeApp(t *testing.T, acsHome string) (cli.App, *bytes.Buffer, *bytes.Buffer) {
 	t.Helper()
-	editor, err := devin.NewProfileEditor(t.TempDir())
+	out, errOut := &bytes.Buffer{}, &bytes.Buffer{}
+	return cli.App{Repository: profilerepo.New(acsHome), Output: out, ErrorOutput: errOut}, out, errOut
+}
+
+func exchangeTestCodec(t *testing.T) profile.Codec {
+	t.Helper()
+	codec, err := commonprofile.NewCodec()
 	if err != nil {
 		t.Fatal(err)
 	}
-	out, errOut := &bytes.Buffer{}, &bytes.Buffer{}
-	return cli.App{Repository: profilerepo.New(acsHome), Categories: editor.Categories(), Output: out, ErrorOutput: errOut}, out, errOut
+	return codec
 }
 
 func TestProfileExchangeGrammarRejectsBeforeDependencies(t *testing.T) {
@@ -76,7 +81,7 @@ func TestProfileExchangeGrammarRejectsBeforeDependencies(t *testing.T) {
 func TestProfileExportAndImportRoundTripSeparateHomes(t *testing.T) {
 	sourceHome := filepath.Join(t.TempDir(), ".acs")
 	app, stdout, stderr := exchangeApp(t, sourceHome)
-	store := profile.NewStore(sourceHome, app.Categories)
+	store := profile.NewStore(sourceHome, exchangeTestCodec(t))
 	if _, err := store.Create(exchangeProfile(t, "source")); err != nil {
 		t.Fatal(err)
 	}
@@ -119,7 +124,7 @@ func TestProfileExportAndImportRoundTripSeparateHomes(t *testing.T) {
 	if code := importApp.Run(context.Background(), args); code != 0 {
 		t.Fatalf("import=%d stdout=%q stderr=%q", code, importOut.String(), importErr.String())
 	}
-	stored, err := profile.NewStore(destinationHome, importApp.Categories).Load("imported")
+	stored, err := profile.NewStore(destinationHome, exchangeTestCodec(t)).Load("imported")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -189,7 +194,7 @@ func TestProfileImportRejectsUnsupportedIntentBeforeRequestingBindings(t *testin
 func TestProfileExchangeReportsAndRebindsExecutableRequirementThroughPublicCLI(t *testing.T) {
 	sourceHome := filepath.Join(t.TempDir(), ".acs")
 	app, stdout, stderr := exchangeApp(t, sourceHome)
-	if _, err := profile.NewStore(sourceHome, app.Categories).Create(executableExchangeProfile(t, "source", "/private/source/tool")); err != nil {
+	if _, err := profile.NewStore(sourceHome, exchangeTestCodec(t)).Create(executableExchangeProfile(t, "source", "/private/source/tool")); err != nil {
 		t.Fatal(err)
 	}
 	if code := app.Run(context.Background(), []string{"profile", "export", "source"}); code != 0 {
@@ -230,7 +235,7 @@ func TestProfileExchangeReportsAndRebindsExecutableRequirementThroughPublicCLI(t
 	if code := importApp.Run(context.Background(), args); code != 0 {
 		t.Fatalf("import=%d out=%q err=%q", code, out.String(), errOut.String())
 	}
-	stored, err := profile.NewStore(destinationHome, importApp.Categories).Load("imported")
+	stored, err := profile.NewStore(destinationHome, exchangeTestCodec(t)).Load("imported")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -243,7 +248,7 @@ func TestProfileExchangeReportsAndRebindsExecutableRequirementThroughPublicCLI(t
 func TestProfileExportFileNoClobberAndTruthfulPostPublicationFailure(t *testing.T) {
 	acsHome := filepath.Join(t.TempDir(), ".acs")
 	app, _, errOut := exchangeApp(t, acsHome)
-	if _, err := profile.NewStore(acsHome, app.Categories).Create(exchangeProfile(t, "source")); err != nil {
+	if _, err := profile.NewStore(acsHome, exchangeTestCodec(t)).Create(exchangeProfile(t, "source")); err != nil {
 		t.Fatal(err)
 	}
 	directory := t.TempDir()
@@ -374,7 +379,7 @@ func TestConcurrentProfileImportsHaveOneNoOverwriteWinner(t *testing.T) {
 	if successes != 1 {
 		t.Fatalf("successes=%d", successes)
 	}
-	if _, err := profile.NewStore(acsHome, apps[0].Categories).Load("winner"); err != nil {
+	if _, err := profile.NewStore(acsHome, exchangeTestCodec(t)).Load("winner"); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -426,4 +431,49 @@ func profileexchangeExportFixture(t *testing.T) ([]byte, error) {
 	// exporting once through the pure package indirectly used by the CLI.
 	value, _, err := profileexchange.Export(exchangeProfile(t, "source"))
 	return value, err
+}
+
+func TestProfileExchangeUsesNeutralCodecWithRepositoryOnly(t *testing.T) {
+	acsHome := filepath.Join(t.TempDir(), ".acs")
+	app, out, errOut := exchangeApp(t, acsHome)
+	// An uninitialized execution registry would panic if exchange consulted it.
+	// Exchange must compose its own passive codec instead.
+	app.Categories = &category.Registry{}
+	app.Interactive = func(io.Reader, io.Writer) bool { t.Fatal("exchange queried terminal"); return false }
+	if _, err := profile.NewStore(acsHome, exchangeTestCodec(t)).Create(exchangeProfile(t, "source")); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", "")
+	t.Setenv("PATH", "")
+	noHome := func() (string, error) {
+		t.Fatal("exchange with a repository requested user home")
+		return "", errors.New("unavailable")
+	}
+	if handled, code := app.RunProfileExchange(context.Background(), []string{"profile", "export", "source"}, noHome); !handled || code != 0 {
+		t.Fatalf("export handled=%v code=%d error=%q", handled, code, errOut.String())
+	}
+	document := append([]byte(nil), out.Bytes()...)
+	app.ReadProfileDocument = func(path string) ([]byte, error) {
+		if path == "exchange.json" {
+			return document, nil
+		}
+		if path == "bindings.json" {
+			return []byte(`{"bindingVersion":1,"sources":{"source-1":"shared-agents"},"authentications":{"authentication-1":"work"}}`), nil
+		}
+		t.Fatalf("unexpected input %q", path)
+		return nil, errors.New("unexpected input")
+	}
+	for _, args := range [][]string{
+		{"profile", "import", "validate", "--file", "exchange.json", "--bindings", "bindings.json", "--json"},
+		{"profile", "import", "--file", "exchange.json", "--as", "imported", "--bindings", "bindings.json", "--dry-run"},
+	} {
+		out.Reset()
+		errOut.Reset()
+		if handled, code := app.RunProfileExchange(context.Background(), args, noHome); !handled || code != 0 {
+			t.Fatalf("%q handled=%v code=%d error=%q", args, handled, code, errOut.String())
+		}
+	}
+	if _, err := os.Lstat(filepath.Join(acsHome, "profiles", "imported.json")); !os.IsNotExist(err) {
+		t.Fatalf("preview wrote destination: %v", err)
+	}
 }

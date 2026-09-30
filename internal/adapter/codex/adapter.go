@@ -61,78 +61,56 @@ func New(config Config) (*Adapter, error) {
 		return nil, errors.New("create Codex Adapter: every runtime input requires a stable semantic ID")
 	}
 	a := &Adapter{home: filepath.Clean(config.ExistingHomeDir), auth: config.Executor}
-	skillsBinding, err := commonprofile.NewSelectedSkillsBinding(
-		func(ctx context.Context, references []skills.SkillReference) ([]skills.SkillBundle, error) {
+	bindings, err := commonprofile.NewBindings(commonprofile.Runtime{
+		DiscoverSkills: func(ctx context.Context, references []skills.SkillReference) ([]skills.SkillBundle, error) {
 			return devin.DiscoverExactSkillReferences(ctx, a.home, references)
 		},
-		codexSkillProjection{},
-	)
+		SkillProjection: codexSkillProjection{},
+		ResolveInstructions: func(_ context.Context, refs []instructions.Reference) ([]instructions.Bundle, error) {
+			return instructions.Resolve(a.home, refs)
+		},
+		InstructionProjection: codexInstructionProjection{},
+	})
 	if err != nil {
 		return nil, err
 	}
-	workspaceBinding, err := commonprofile.NewWorkspaceBinding()
-	if err != nil {
-		return nil, err
-	}
-	instructionsBinding, err := commonprofile.NewInstructionsBinding(func(_ context.Context, refs []instructions.Reference) ([]instructions.Bundle, error) {
-		return instructions.Resolve(a.home, refs)
-	}, codexInstructionProjection{})
-	if err != nil {
-		return nil, err
-	}
-	pathsBinding, err := commonprofile.NewPathsBinding()
-	if err != nil {
-		return nil, err
-	}
-	executablesBinding, err := commonprofile.NewExecutablesBinding()
-	if err != nil {
-		return nil, err
-	}
-	environmentBinding, err := commonprofile.NewEnvironmentBinding()
-	if err != nil {
-		return nil, err
-	}
-	mcpBinding, err := commonprofile.NewMCPBinding()
-	if err != nil {
-		return nil, err
-	}
-	a.mcp = mcpBinding
+	a.mcp = bindings.MCP
 	a.categories, err = category.NewRegistryWithRequirements("codex", authority.TargetRequirements{
 		Recipe: authority.RecipeCodex, Executable: config.BinaryPath, ExecutableRequirementID: "codex-cli-0.149.1",
 		RuntimeInputs: append([]string(nil), config.RuntimeInputs...), RuntimeInputIDs: append([]string(nil), config.RuntimeInputIDs...),
 		ProtectedPaths:   []string{filepath.Join(a.home, ".acs"), filepath.Join(a.home, ".codex"), filepath.Join(a.home, ".local", "share", "devin", "credentials.toml")},
 		ProtectedPathIDs: []string{"acs-private", "codex-private", "devin-credential"}, Semantics: authority.CodexSemantics(),
-	}, []category.Registration{skillsBinding.Registration(), instructionsBinding.Registration(), workspaceBinding.Registration(), pathsBinding.Registration(), executablesBinding.Registration(), environmentBinding.Registration(), mcpBinding.Registration()})
+	}, bindings.Registrations())
 	if err != nil {
 		return nil, err
 	}
-	skillsEditor, err := builder.RegisterSkillsEditor(skillsBinding, func(ctx context.Context) ([]skills.SkillBundle, error) {
+	skillsEditor, err := builder.RegisterSkillsEditor(bindings.Skills, func(ctx context.Context) ([]skills.SkillBundle, error) {
 		return devin.DiscoverCommonSkillCatalog(ctx, a.home)
 	})
 	if err != nil {
 		return nil, err
 	}
-	workspaceEditor, err := builder.RegisterWorkspaceEditor(workspaceBinding)
+	workspaceEditor, err := builder.RegisterWorkspaceEditor(bindings.Workspace)
 	if err != nil {
 		return nil, err
 	}
-	instructionsEditor, err := builder.RegisterInstructionsEditor(instructionsBinding, func(context.Context) ([]instructions.Bundle, error) { return instructions.Discover(a.home) })
+	instructionsEditor, err := builder.RegisterInstructionsEditor(bindings.Instructions, func(context.Context) ([]instructions.Bundle, error) { return instructions.Discover(a.home) })
 	if err != nil {
 		return nil, err
 	}
-	pathsEditor, err := builder.RegisterPathsEditor(pathsBinding)
+	pathsEditor, err := builder.RegisterPathsEditor(bindings.Paths)
 	if err != nil {
 		return nil, err
 	}
-	executablesEditor, err := builder.RegisterExecutablesEditor(executablesBinding)
+	executablesEditor, err := builder.RegisterExecutablesEditor(bindings.Executables)
 	if err != nil {
 		return nil, err
 	}
-	environmentEditor, err := builder.RegisterEnvironmentEditor(environmentBinding)
+	environmentEditor, err := builder.RegisterEnvironmentEditor(bindings.Environment)
 	if err != nil {
 		return nil, err
 	}
-	mcpEditor, err := builder.RegisterMCPEditor(mcpBinding)
+	mcpEditor, err := builder.RegisterMCPEditor(bindings.MCP)
 	if err != nil {
 		return nil, err
 	}
