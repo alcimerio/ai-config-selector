@@ -428,6 +428,11 @@ func Export(candidate profile.Profile) ([]byte, Report, error) {
 	if len(encoded) > MaxBytes {
 		return nil, Report{}, errors.New("exchange document exceeds limit")
 	}
+	// Export and import share exactly the same bounded symbolic admission.
+	// Never successfully emit a document that the receiving codec rejects.
+	if _, code := admitDocument(encoded); code != CodeValid {
+		return nil, Report{}, errors.New("exported Profile intent exceeds exchange limits or supported semantics")
+	}
 	return encoded, Report{SourceBindings: len(reqs.Sources), AuthenticationBindings: len(reqs.Authentications), PathBindings: len(reqs.Paths), ExecutableBindings: len(reqs.Executables), EnvironmentBindings: len(reqs.Environment)}, nil
 }
 
@@ -435,361 +440,16 @@ func Export(candidate profile.Profile) ([]byte, Report, error) {
 // candidate only after every required symbolic binding is complete.
 func Decode(data, bindingData []byte, name string) Result {
 	result := Result{Code: CodeInvalidStructure, Bindings: "fail", SourceAvailability: "unchecked", Authentication: "unchecked", Runtime: "unchecked"}
-	if len(data) > MaxBytes {
-		result.Code = CodeLimitExceeded
-		return result
-	}
-	if code := preflight(data); code != CodeValid {
+	doc, code := admitDocument(data)
+	if code != CodeValid {
 		result.Code = code
-		return result
-	}
-	var doc document
-	if err := validateExactJSONFieldNames(data, reflect.TypeOf(doc)); err != nil {
-		result.Code = CodeUnsupportedContent
-		return result
-	}
-	if err := decodeStrict(data, &doc); err != nil {
-		result.Code = CodeUnsupportedContent
-		return result
-	}
-	pathsPresent := exchangeCommonFieldPresent(data, "paths")
-	executablesPresent := exchangeCommonFieldPresent(data, "executables")
-	environmentPresent := exchangeCommonFieldPresent(data, "environment")
-	instructionsPresent := exchangeCommonFieldPresent(data, "instructions")
-	mcpPresent := exchangeCommonFieldPresent(data, "mcp")
-	executableRequirementsPresent := exchangeRequirementsFieldPresent(data, "executables")
-	environmentRequirementsPresent := exchangeRequirementsFieldPresent(data, "environment")
-	if executableRequirementsPresent && exchangeRequirementsFieldNull(data, "executables") {
-		result.Code = CodeInvalidStructure
-		return result
-	}
-	if environmentRequirementsPresent && exchangeRequirementsFieldNull(data, "environment") {
-		result.Code = CodeInvalidStructure
-		return result
-	}
-	if doc.ExchangeVersion != 1 && doc.ExchangeVersion != 2 && doc.ExchangeVersion != ExchangeVersion {
-		result.Code = CodeUnsupportedVersion
 		return result
 	}
 	if profile.ValidateName(name) != nil {
-		result.Code = CodeInvalidStructure
-		return result
-	}
-	if doc.Profile.Common.Skills.Version != 1 || doc.Profile.Common.Workspace.Version != 1 || len(doc.Profile.Common.Skills.Selection) > maxArray {
-		result.Code = CodeUnsupportedContent
-		return result
-	}
-	if doc.ExchangeVersion == 1 {
-		if pathsPresent || executablesPresent || environmentPresent || executableRequirementsPresent || environmentRequirementsPresent || doc.Requirements.Paths != nil || doc.Requirements.Executables != nil || doc.Requirements.Environment != nil {
-			result.Code = CodeUnsupportedContent
-			return result
-		}
-	} else if doc.Profile.Common.Paths.Version != commonprofile.PathsCapabilityVersion || doc.Profile.Common.Paths.Selection == nil || len(doc.Profile.Common.Paths.Selection) > maximumPortablePathEntries {
-		result.Code = CodeUnsupportedContent
-		return result
-	}
-	if doc.ExchangeVersion >= 2 && executablesPresent && (doc.Profile.Common.Executables.Version != commonprofile.ExecutablesCapabilityVersion || doc.Profile.Common.Executables.Selection == nil || len(doc.Profile.Common.Executables.Selection) > 128) {
-		result.Code = CodeUnsupportedContent
-		return result
-	}
-	if doc.ExchangeVersion == 2 && (environmentPresent || environmentRequirementsPresent || doc.Requirements.Environment != nil) {
-		result.Code = CodeUnsupportedContent
-		return result
-	}
-	if doc.ExchangeVersion == ExchangeVersion && (!environmentPresent || doc.Profile.Common.Environment.Version != commonprofile.EnvironmentCapabilityVersion || doc.Profile.Common.Environment.Selection == nil || len(doc.Profile.Common.Environment.Selection) > 128) {
-		result.Code = CodeUnsupportedContent
-		return result
-	}
-	if doc.ExchangeVersion == ExchangeVersion && !validExchangeEnvironmentSourceShapes(data) {
-		result.Code = CodeInvalidStructure
-		return result
-	}
-	if mcpPresent {
-		if doc.ExchangeVersion != ExchangeVersion || doc.Profile.Common.MCP == nil || doc.Profile.Common.MCP.Version != commonprofile.MCPCapabilityVersion {
-			result.Code = CodeUnsupportedContent
-			return result
-		}
-		if _, err := commonprofile.DecodeMCPSelection(doc.Profile.Common.MCP.Selection); err != nil {
-			result.Code = CodeInvalidStructure
-			return result
-		}
-	}
-	if instructionsPresent && (doc.ExchangeVersion != ExchangeVersion || doc.Profile.Common.Instructions == nil || doc.Profile.Common.Instructions.Version != 1 || doc.Profile.Common.Instructions.Selection == nil || len(doc.Profile.Common.Instructions.Selection) > instructions.MaxEntries) {
-		result.Code = CodeUnsupportedContent
-		return result
-	}
-	if doc.Profile.Common.Workspace.Selection.Access != launch.WorkspaceAccessReadOnly && doc.Profile.Common.Workspace.Selection.Access != launch.WorkspaceAccessReadWrite {
-		result.Code = CodeInvalidStructure
-		return result
-	}
-	if err := validateSymbolicReferences(doc.Profile.Common.Skills.Selection); err != nil {
-		result.Code = CodeUnsafePath
-		return result
-	}
-	if doc.Profile.Common.Instructions != nil {
-		if err := validateSymbolicInstructionReferences(doc.Profile.Common.Instructions.Selection); err != nil {
-			result.Code = CodeUnsafePath
-			return result
-		}
-	}
-	if code := validateDocumentRelations(&doc); code != CodeValid {
-		result.Code = code
 		return result
 	}
 	result.RequiredSources, result.RequiredAuthentication, result.RequiredPaths, result.RequiredExecutables, result.RequiredEnvironment = len(doc.Requirements.Sources), len(doc.Requirements.Authentications), len(doc.Requirements.Paths), len(doc.Requirements.Executables), len(doc.Requirements.Environment)
-	if bindingData == nil {
-		if result.RequiredSources+result.RequiredAuthentication+result.RequiredPaths+result.RequiredExecutables+result.RequiredEnvironment != 0 {
-			result.Code = CodeBindingRequired
-			result.Bindings = "unresolved"
-			return result
-		}
-		if doc.ExchangeVersion == 1 {
-			bindingData = []byte(`{"bindingVersion":1,"sources":{},"authentications":{}}`)
-		} else if doc.ExchangeVersion == 2 {
-			bindingData = []byte(`{"bindingVersion":2,"sources":{},"authentications":{},"paths":{},"executables":{}}`)
-		} else {
-			bindingData = []byte(`{"bindingVersion":3,"sources":{},"authentications":{},"paths":{},"executables":{},"environment":{}}`)
-		}
-	}
-	if len(bindingData) > MaxBytes {
-		result.Code = CodeLimitExceeded
-		return result
-	}
-	if code := preflight(bindingData); code != CodeValid {
-		result.Code = code
-		return result
-	}
-	if doc.ExchangeVersion == 1 && jsonObjectFieldPresent(bindingData, "executables") {
-		result.Code = CodeUnsupportedContent
-		return result
-	}
-	if jsonObjectFieldNull(bindingData, "executables") {
-		result.Code = CodeBindingInvalid
-		return result
-	}
-	if jsonObjectFieldNull(bindingData, "environment") {
-		result.Code = CodeBindingInvalid
-		return result
-	}
-	var bindings bindingDocument
-	if err := decodeStrict(bindingData, &bindings); err != nil {
-		result.Code = CodeBindingInvalid
-		return result
-	}
-	if bindings.BindingVersion < 3 && jsonObjectFieldPresent(bindingData, "environment") {
-		result.Code = CodeBindingInvalid
-		return result
-	}
-	bindingVersionCompatible := bindings.BindingVersion == doc.ExchangeVersion ||
-		(doc.ExchangeVersion == 2 && len(doc.Requirements.Paths) == 0 && len(doc.Requirements.Executables) == 0 && bindings.BindingVersion == 1) ||
-		(doc.ExchangeVersion == 3 && len(doc.Requirements.Environment) == 0 && bindings.BindingVersion == 2) ||
-		(doc.ExchangeVersion == 3 && len(doc.Requirements.Paths) == 0 && len(doc.Requirements.Executables) == 0 && len(doc.Requirements.Environment) == 0 && bindings.BindingVersion == 1)
-	if !bindingVersionCompatible || bindings.Sources == nil || bindings.Authentications == nil || (doc.ExchangeVersion >= 2 && len(doc.Requirements.Paths) != 0 && bindings.Paths == nil) || (doc.ExchangeVersion >= 2 && len(doc.Requirements.Executables) != 0 && bindings.Executables == nil) || (doc.ExchangeVersion == 3 && len(doc.Requirements.Environment) != 0 && bindings.Environment == nil) {
-		result.Code = CodeBindingInvalid
-		return result
-	}
-	if len(bindings.Sources) > maxBindings || len(bindings.Authentications) > maxBindings || len(bindings.Paths) > maxBindings || len(bindings.Executables) > maxBindings || len(bindings.Environment) > maxBindings {
-		result.Code = CodeLimitExceeded
-		return result
-	}
-	if !exactBindingKeys(doc.Requirements.Sources, bindings.Sources) || !exactBindingKeys(doc.Requirements.Authentications, bindings.Authentications) || !exactBindingKeys(doc.Requirements.Paths, bindings.Paths) || !exactBindingKeys(doc.Requirements.Executables, bindings.Executables) || !exactBindingKeys(doc.Requirements.Environment, bindings.Environment) {
-		result.Code = CodeBindingRequired
-		result.Bindings = "unresolved"
-		return result
-	}
-	localReferences := make([]skills.SkillReference, 0, len(doc.Profile.Common.Skills.Selection))
-	for _, reference := range doc.Profile.Common.Skills.Selection {
-		local := bindings.Sources[reference.SourceBinding]
-		if local != "devin-config" && local != "shared-agents" {
-			result.Code = CodeBindingInvalid
-			return result
-		}
-		localReferences = append(localReferences, skills.SkillReference{Source: skills.Source(local), RelativePath: reference.RelativePath})
-	}
-	localInstructionRefs := []instructions.Reference{}
-	if doc.Profile.Common.Instructions != nil {
-		for _, reference := range doc.Profile.Common.Instructions.Selection {
-			local := bindings.Sources[reference.SourceBinding]
-			if local != instructions.SourceID {
-				result.Code = CodeBindingInvalid
-				return result
-			}
-			localInstructionRefs = append(localInstructionRefs, instructions.Reference{Source: local, RelativePath: reference.RelativePath})
-		}
-	}
-	if err := validateLocalReferences(localReferences); err != nil {
-		result.Code = CodeBindingConflict
-		return result
-	}
-	localPathEntries := make([]commonprofile.PathEntry, 0, len(doc.Profile.Common.Paths.Selection))
-	for _, entry := range doc.Profile.Common.Paths.Selection {
-		localReference := commonprofile.PathReference{}
-		switch entry.Reference.Kind {
-		case string(launch.PathReferenceWorkspaceRelative):
-			if entry.Reference.PathBinding != "" || entry.Reference.RelativePath != "" {
-				result.Code = CodeInvalidStructure
-				return result
-			}
-			localReference = commonprofile.PathReference{Kind: entry.Reference.Kind, Path: entry.Reference.Path}
-		case "bound":
-			if entry.Reference.Path != "" || entry.Reference.PathBinding == "" || entry.Reference.RelativePath != "" {
-				result.Code = CodeInvalidStructure
-				return result
-			}
-			localReference = commonprofile.PathReference{Kind: string(launch.PathReferenceLocalAbsolute), Path: bindings.Paths[entry.Reference.PathBinding]}
-		default:
-			result.Code = CodeInvalidStructure
-			return result
-		}
-		localPathEntries = append(localPathEntries, commonprofile.PathEntry{ID: entry.ID, Access: entry.Access, Type: entry.Type, Reference: localReference})
-	}
-	encodedPaths, err := commonprofile.EncodePathSelection(commonprofile.PathSelection{Entries: localPathEntries})
-	if err != nil {
-		result.Code = CodeBindingInvalid
-		return result
-	}
-	localExecutableEntries := make([]commonprofile.ExecutableEntry, 0, len(doc.Profile.Common.Executables.Selection))
-	for _, entry := range doc.Profile.Common.Executables.Selection {
-		var reference commonprofile.ExecutableReference
-		switch entry.Reference.Kind {
-		case string(launch.ExecutableReferenceFixedSearchName):
-			if entry.Reference.Name == "" || entry.Reference.Path != "" || entry.Reference.ExecutableBinding != "" {
-				result.Code = CodeInvalidStructure
-				return result
-			}
-			reference = commonprofile.ExecutableReference{Kind: entry.Reference.Kind, Name: entry.Reference.Name}
-		case string(launch.ExecutableReferenceWorkspaceRelative):
-			if entry.Reference.Name != "" || entry.Reference.Path == "" || entry.Reference.ExecutableBinding != "" {
-				result.Code = CodeInvalidStructure
-				return result
-			}
-			reference = commonprofile.ExecutableReference{Kind: entry.Reference.Kind, Path: entry.Reference.Path}
-		case "bound":
-			if entry.Reference.Name != "" || entry.Reference.Path != "" || entry.Reference.ExecutableBinding == "" {
-				result.Code = CodeInvalidStructure
-				return result
-			}
-			reference = commonprofile.ExecutableReference{Kind: string(launch.ExecutableReferenceLocalAbsolute), Path: bindings.Executables[entry.Reference.ExecutableBinding]}
-		default:
-			result.Code = CodeInvalidStructure
-			return result
-		}
-		localExecutableEntries = append(localExecutableEntries, commonprofile.ExecutableEntry{ID: entry.ID, Reference: reference})
-	}
-	encodedExecutables, err := commonprofile.EncodeExecutableSelection(commonprofile.ExecutableSelection{Entries: localExecutableEntries})
-	if err != nil {
-		result.Code = CodeBindingInvalid
-		return result
-	}
-	localEnvironmentEntries := make([]commonprofile.EnvironmentEntry, 0, len(doc.Profile.Common.Environment.Selection))
-	for _, entry := range doc.Profile.Common.Environment.Selection {
-		source := commonprofile.EnvironmentSource{Kind: entry.Source.Kind}
-		switch entry.Source.Kind {
-		case "host-environment":
-			if entry.Source.Name == "" || entry.Source.Provider != "" || entry.Source.ReferenceBinding != "" {
-				result.Code = CodeInvalidStructure
-				return result
-			}
-			source.Name = entry.Source.Name
-		case "secret-reference":
-			if entry.Source.Name != "" || entry.Source.Provider != "host-environment" || entry.Source.ReferenceBinding == "" {
-				result.Code = CodeInvalidStructure
-				return result
-			}
-			source.Provider = entry.Source.Provider
-			source.Reference = bindings.Environment[entry.Source.ReferenceBinding]
-		default:
-			result.Code = CodeInvalidStructure
-			return result
-		}
-		localEnvironmentEntries = append(localEnvironmentEntries, commonprofile.EnvironmentEntry{ID: entry.ID, Destination: entry.Destination, Scope: entry.Scope, Source: source, Required: entry.Required, Classification: entry.Classification})
-	}
-	encodedEnvironment, err := commonprofile.EncodeEnvironmentSelection(commonprofile.EnvironmentSelection{Entries: localEnvironmentEntries})
-	if err != nil {
-		result.Code = CodeBindingInvalid
-		return result
-	}
-	var encodedMCP json.RawMessage
-	if mcpPresent {
-		mcpSelection, decodeErr := commonprofile.DecodeMCPSelection(doc.Profile.Common.MCP.Selection)
-		if decodeErr != nil {
-			result.Code = CodeInvalidStructure
-			return result
-		}
-		localExecutables := commonprofile.ExecutableSelection{Entries: localExecutableEntries}
-		localPaths := commonprofile.PathSelection{Entries: localPathEntries}
-		localEnvironment := commonprofile.EnvironmentSelection{Entries: localEnvironmentEntries}
-		if err := mcpintent.ValidateReferences(mcpSelection, localExecutables, localPaths, localEnvironment); err != nil {
-			result.Code = CodeInvalidStructure
-			return result
-		}
-		encodedMCP, err = commonprofile.EncodeMCPSelection(mcpSelection)
-		if err != nil {
-			result.Code = CodeInvalidStructure
-			return result
-		}
-	}
-	overlays := make(map[string]profile.OverlayPayload, len(doc.Profile.Overlays))
-	for id, payload := range doc.Profile.Overlays {
-		switch id {
-		case "devin":
-			if payload.Version != 1 || payload.AuthBinding != "" {
-				result.Code = CodeUnsupportedContent
-				return result
-			}
-			overlays[id] = profile.OverlayPayload{Version: 1}
-		case "codex":
-			if payload.Version != 1 {
-				result.Code = CodeUnsupportedContent
-				return result
-			}
-			local := ""
-			if payload.AuthBinding != "" {
-				local = bindings.Authentications[payload.AuthBinding]
-				if _, err := codexauth.ParseCredentialRef(local); err != nil {
-					result.Code = CodeBindingInvalid
-					return result
-				}
-			}
-			overlays[id] = profile.OverlayPayload{Version: 1, AuthRef: local}
-		default:
-			result.Code = CodeUnsupportedContent
-			return result
-		}
-	}
-	if len(overlays) == 0 {
-		result.Code = CodeInvalidStructure
-		return result
-	}
-	encodedSkills, err := commonprofile.EncodeSkillSelection(localReferences)
-	if err != nil {
-		result.Code = CodeInvalidStructure
-		return result
-	}
-	encodedInstructions, err := instructions.Encode(localInstructionRefs)
-	if err != nil {
-		result.Code = CodeInvalidStructure
-		return result
-	}
-	encodedWorkspace, _ := json.Marshal(workspaceSelection{Access: doc.Profile.Common.Workspace.Selection.Access})
-	candidate := profile.Profile{Version: profile.CurrentVersion, SourceVersion: profile.CurrentVersion, Name: name, Common: map[string]profile.CommonPayload{
-		"skills": {Version: 1, Selection: encodedSkills}, "workspace": {Version: 1, Selection: encodedWorkspace},
-	}, Overlays: overlays}
-	if doc.ExchangeVersion >= 2 {
-		candidate.Common[commonprofile.PathsCapabilityID] = profile.CommonPayload{Version: commonprofile.PathsCapabilityVersion, Selection: encodedPaths}
-		candidate.Common[commonprofile.ExecutablesCapabilityID] = profile.CommonPayload{Version: commonprofile.ExecutablesCapabilityVersion, Selection: encodedExecutables}
-	}
-	if doc.ExchangeVersion == 3 {
-		candidate.Common[commonprofile.EnvironmentCapabilityID] = profile.CommonPayload{Version: commonprofile.EnvironmentCapabilityVersion, Selection: encodedEnvironment}
-	}
-	if mcpPresent {
-		candidate.Common[commonprofile.MCPCapabilityID] = profile.CommonPayload{Version: commonprofile.MCPCapabilityVersion, Selection: encodedMCP}
-	}
-	if doc.Profile.Common.Instructions != nil {
-		candidate.Common[commonprofile.InstructionsCapabilityID] = profile.CommonPayload{Version: commonprofile.InstructionsCapabilityVersion, Selection: encodedInstructions}
-	}
-	result.Code, result.Bindings, result.Candidate = CodeValid, "complete", &candidate
-	return result
+	return bindDocument(doc, bindingData, name, result)
 }
 
 // encoding/json accepts case-insensitive matches for struct fields. Exchange
@@ -1100,17 +760,14 @@ func validateSymbolicReferences(references []exchangeSkillReference) error {
 }
 
 func validateSymbolicInstructionReferences(references []exchangeInstructionReference) error {
-	seen := map[exchangeInstructionReference]bool{}
+	local := make([]instructions.Reference, 0, len(references))
 	for _, reference := range references {
-		if !bindingIDPattern.MatchString(reference.SourceBinding) || !strings.HasPrefix(reference.SourceBinding, "source-") || !safeRelativePath(reference.RelativePath) || !strings.HasSuffix(reference.RelativePath, ".md") {
+		if !bindingIDPattern.MatchString(reference.SourceBinding) || !strings.HasPrefix(reference.SourceBinding, "source-") {
 			return errors.New("unsafe symbolic instruction reference")
 		}
-		if seen[reference] {
-			return errors.New("duplicate symbolic instruction reference")
-		}
-		seen[reference] = true
+		local = append(local, instructions.Reference{Source: instructions.SourceID, RelativePath: reference.RelativePath})
 	}
-	return nil
+	return instructions.ValidateSelection(local)
 }
 
 func validateLocalReferences(references []skills.SkillReference) error {

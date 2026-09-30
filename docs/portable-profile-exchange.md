@@ -206,6 +206,13 @@ string. Each binding class permits 64 entries; Skills permit 4,096 entries; a
 Skill path permits 1,024 UTF-8 bytes and 128 components. Binding IDs and local
 Profile/auth names have their documented bounded ASCII grammars.
 
+The complete portable document is checked before missing local bindings are
+reported. Unsupported overlays, invalid common intent, and inconsistent MCP or
+source references fail even when bindings are absent or incomplete. Exchange and
+binding field names are case-sensitive; aliases such as `Sources` are rejected.
+Export uses the same bounded document admission as import and refuses to emit
+an exchange document that exceeds a binding-class limit.
+
 Human and JSON diagnostics distinguish structure, semantics, `bindings:
 complete` or `unresolved`, and destination status from unchecked source
 availability/authentication/runtime. JSON format 1 contains exactly

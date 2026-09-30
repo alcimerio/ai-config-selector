@@ -154,6 +154,38 @@ func TestProfileImportValidationUnresolvedIsPassive(t *testing.T) {
 	}
 }
 
+func TestProfileImportRejectsUnsupportedIntentBeforeRequestingBindings(t *testing.T) {
+	document, err := profileexchangeExportFixture(t)
+	if err != nil {
+		t.Fatal(err)
+	}
+	document = bytes.Replace(document, []byte(`"devin":`), []byte(`"unsupported-private-target":`), 1)
+	root := t.TempDir()
+	input := filepath.Join(root, "exchange.json")
+	if err := os.WriteFile(input, document, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	acsHome := filepath.Join(root, "absent")
+	app, out, errOut := exchangeApp(t, acsHome)
+	if code := app.Run(context.Background(), []string{"profile", "import", "validate", "--file", input, "--json"}); code != 1 {
+		t.Fatalf("invalid document reported unresolved: code=%d output=%q error=%q", code, out.String(), errOut.String())
+	}
+	if !strings.Contains(out.String(), `"semantics":"fail"`) || strings.Contains(out.String(), `"bindings":"unresolved"`) || strings.Contains(out.String(), "unsupported-private-target") {
+		t.Fatalf("incorrect or unsanitized admission diagnostic: %q", out.String())
+	}
+	out.Reset()
+	errOut.Reset()
+	if code := app.Run(context.Background(), []string{"profile", "import", "--file", input, "--as", "imported", "--dry-run"}); code != 1 {
+		t.Fatalf("invalid import preview reported unresolved: code=%d output=%q error=%q", code, out.String(), errOut.String())
+	}
+	if strings.Contains(out.String(), "supported exchange intent") {
+		t.Fatalf("invalid intent advertised as supported: %q", out.String())
+	}
+	if _, err := os.Stat(acsHome); !os.IsNotExist(err) {
+		t.Fatalf("validation created storage: %v", err)
+	}
+}
+
 func TestProfileExchangeReportsAndRebindsExecutableRequirementThroughPublicCLI(t *testing.T) {
 	sourceHome := filepath.Join(t.TempDir(), ".acs")
 	app, stdout, stderr := exchangeApp(t, sourceHome)
