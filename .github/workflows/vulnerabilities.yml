@@ -1,0 +1,54 @@
+name: Go vulnerabilities
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  schedule:
+    # Recheck main for newly disclosed vulnerabilities even without code changes.
+    - cron: "23 7 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: vulnerabilities-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  govulncheck:
+    name: govulncheck (darwin/arm64)
+    runs-on: macos-26
+    timeout-minutes: 10
+    env:
+      GOTOOLCHAIN: local
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install pinned govulncheck
+        # golang.org/x/vuln v1.8.0; review this immutable source pin with Go upgrades.
+        env:
+          GOBIN: ${{ runner.temp }}/govulncheck-bin
+        run: go install golang.org/x/vuln/cmd/govulncheck@709015412431dd2b5b28a53c06c70bc02d49074c
+
+      - name: Scan supported release target
+        env:
+          GOOS: darwin
+          GOARCH: arm64
+          CGO_ENABLED: "0"
+          GOVULNCHECK: ${{ runner.temp }}/govulncheck-bin/govulncheck
+        # Text mode returns a failing status for reachable vulnerabilities.
+        # JSON/SARIF output alone would not preserve that vulnerability gate.
+        run: '"$GOVULNCHECK" -format=text ./...'

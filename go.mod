@@ -13,7 +13,7 @@ require (
 	github.com/ebitengine/purego v0.10.0
 	github.com/klauspost/compress v1.18.0
 	golang.org/x/sys v0.46.0
-	golang.org/x/text v0.30.0
+	golang.org/x/text v0.39.0
 )
 
 require (
