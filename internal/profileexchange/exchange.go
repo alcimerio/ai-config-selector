@@ -14,7 +14,6 @@ import (
 	"regexp"
 	"sort"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/alcimerio/ai-config-selector/internal/codexauth"
 	"github.com/alcimerio/ai-config-selector/internal/commonprofile"
@@ -24,6 +23,7 @@ import (
 	"github.com/alcimerio/ai-config-selector/internal/profile"
 	"github.com/alcimerio/ai-config-selector/internal/profileinspect"
 	"github.com/alcimerio/ai-config-selector/internal/skills"
+	"github.com/alcimerio/ai-config-selector/internal/strictjson"
 )
 
 const (
@@ -816,134 +816,25 @@ func decodeStrict(data []byte, destination any) error {
 }
 
 func preflight(data []byte) Code {
-	if !utf8.Valid(data) || !pairedUnicodeEscapes(data) {
+	if !strictjson.ValidUnicode(data) {
 		return CodeInvalidUnicode
 	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.UseNumber()
-	tokens := 0
-	if code := scanValue(decoder, 0, &tokens); code != CodeValid {
-		return code
-	}
-	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
-		return CodeInvalidJSON
-	}
-	return CodeValid
-}
-
-func scanValue(decoder *json.Decoder, depth int, tokens *int) Code {
-	if depth > MaxDepth {
-		return CodeLimitExceeded
-	}
-	token, err := decoder.Token()
-	if err != nil {
-		return CodeInvalidJSON
-	}
-	(*tokens)++
-	if *tokens > maxTokens {
-		return CodeLimitExceeded
-	}
-	if value, ok := token.(string); ok && len(value) > maxStringBytes {
-		return CodeLimitExceeded
-	}
-	delim, ok := token.(json.Delim)
-	if !ok {
+	err := strictjson.Scan(decoder, strictjson.Limits{
+		MaxDepth: MaxDepth, MaxTokens: maxTokens, MaxMembers: maxMembers,
+		MaxArray: maxArray, MaxStringBytes: maxStringBytes,
+	}, nil)
+	switch {
+	case err == nil:
 		return CodeValid
-	}
-	count := 0
-	switch delim {
-	case '{':
-		seen := map[string]bool{}
-		for decoder.More() {
-			key, err := decoder.Token()
-			if err != nil {
-				return CodeInvalidJSON
-			}
-			name, ok := key.(string)
-			if !ok {
-				return CodeInvalidJSON
-			}
-			(*tokens)++
-			count++
-			if *tokens > maxTokens || len(name) > maxStringBytes || count > maxMembers {
-				return CodeLimitExceeded
-			}
-			if seen[name] {
-				return CodeDuplicateKey
-			}
-			seen[name] = true
-			if code := scanValue(decoder, depth+1, tokens); code != CodeValid {
-				return code
-			}
-		}
-	case '[':
-		for decoder.More() {
-			count++
-			if count > maxArray {
-				return CodeLimitExceeded
-			}
-			if code := scanValue(decoder, depth+1, tokens); code != CodeValid {
-				return code
-			}
-		}
+	case errors.Is(err, strictjson.ErrDuplicateKey):
+		return CodeDuplicateKey
+	case errors.Is(err, strictjson.ErrLimit):
+		return CodeLimitExceeded
 	default:
 		return CodeInvalidJSON
 	}
-	if _, err := decoder.Token(); err != nil {
-		return CodeInvalidJSON
-	}
-	return CodeValid
-}
-
-func pairedUnicodeEscapes(data []byte) bool {
-	// json.Valid accepts lone UTF-16 surrogates and replaces them. Reject them
-	// before typed decoding so logical identities cannot silently change.
-	for i := 0; i < len(data); i++ {
-		if data[i] != '\\' {
-			continue
-		}
-		i++
-		if i >= len(data) || data[i] != 'u' {
-			continue
-		}
-		if i+4 >= len(data) {
-			return false
-		}
-		var code uint16
-		for j := 1; j <= 4; j++ {
-			digit := strings.IndexByte("0123456789abcdef", byte(strings.ToLower(string(data[i+j]))[0]))
-			if digit < 0 {
-				return false
-			}
-			code = code*16 + uint16(digit)
-		}
-		i += 4
-		if code >= 0xdc00 && code <= 0xdfff {
-			return false
-		}
-		if code >= 0xd800 && code <= 0xdbff {
-			if i+6 >= len(data) || data[i+1] != '\\' || data[i+2] != 'u' {
-				return false
-			}
-			var low uint16
-			for j := 3; j <= 6; j++ {
-				b := data[i+j]
-				if b >= 'A' && b <= 'F' {
-					b += 'a' - 'A'
-				}
-				digit := strings.IndexByte("0123456789abcdef", b)
-				if digit < 0 {
-					return false
-				}
-				low = low*16 + uint16(digit)
-			}
-			if low < 0xdc00 || low > 0xdfff {
-				return false
-			}
-			i += 6
-		}
-	}
-	return true
 }
 
 func KnownFieldClassifications() map[string]string {
