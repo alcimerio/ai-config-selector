@@ -24,14 +24,19 @@ is a measured research result: the record retains the sanitized minimal rule
 and does not turn rejection, timeout, connection refusal, or absent receipt
 into an enforcement claim.
 
-Run the probe only on its disposable native runner:
+The workflow retains the artifact for 14 days. Preserve its verified JSON and
+source/run identity privately if it is needed after that retention window; a
+missing artifact is not a passing observation.
+
+Run the probe and its evidence-classification tests only on the disposable native
+runner. The command below matches the workflow:
 
 ```sh
 ACS_RUN_NATIVE_TRANSPORT_PROBE=1 \
 ACS_NATIVE_TRANSPORT_EVIDENCE="$RUNNER_TEMP/native-transport-evidence.json" \
 ACS_NATIVE_TRANSPORT_JOB="Native transport research / Transport probes (darwin/arm64)" \
 go test -count=1 -v -timeout=8m ./internal/launch \
-  -run '^TestNativeSeatbeltTransportResearchMatrix$'
+  -run '^(TestNativeSeatbeltTransportResearchMatrix|TestSeatbeltTransport.*)$'
 ```
 
 This matrix does not exercise a Network Extension. Provider activation and

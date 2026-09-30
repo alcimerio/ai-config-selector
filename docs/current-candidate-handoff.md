@@ -48,8 +48,10 @@ and three Devin hook repetitions. This proves bounded credential-free installed
 operation, including the existing containment and lifecycle cases. It does not
 supply an installed-file digest, real account use, hosted inference, or a week
 of use.
-The candidate is suitable for an operator evaluation once the Mac records the
-installed-file digest and verifies it against the expected member digest.
+At the time of this handoff, the candidate could proceed to operator evaluation
+once the Mac recorded the installed-file digest and verified it against the
+expected member digest. That installed-host observation is still unrecorded
+here; use the published release or a newly identified candidate for new work.
 
 The native target locks for this source are Codex CLI `0.149.1` arm64 archive
 `ed60f475c6dda6044c2c00fd7f33273cc3f3f98900ccd1204bfdf2fe935f3405`,
@@ -59,9 +61,9 @@ and Devin `3000.10.21` arm64 archive
 `c0b97f8197bf3ce895ff14aa19257c511154b49a0a195bba4962acb5e475c68e`.
 These are target archive locks, not digests of installed target executables.
 
-## Current-source release-note scope
+## Historical candidate release-note scope
 
-Compared with immutable published v0.4.0, the current candidate includes the
+Compared with immutable published v0.4.0, this historical candidate includes the
 previously prepared Profile v3, Codex, contained execution, explanation, local
 history and Session operations described in [release readiness](release-readiness.md).
 It also adds selected common instruction file references, verified Devin

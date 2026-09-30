@@ -1,7 +1,10 @@
 # Named Codex authentication and contained status
 
+[Documentation index](README.md) · [Interactive Codex](interactive-codex.md)
+
 This document describes named authentication and interactive Codex in the
-development source. It is not part of the published v0.4.0 release.
+development source on macOS 26 Apple Silicon. It is not part of the published
+v0.4.0 release; consult the release notes for the artifact you installed.
 
 ## The three authentication states
 
@@ -14,8 +17,8 @@ Keep these states separate:
    a name such as `work` in the macOS Keychain service
    `com.alcimerio.ai-config-selector.codex-auth`.
 3. **A Session-local projection** is a private `auth.json` created for one
-   contained status probe or interactive launch. It is owned by one leased synthetic home and never
-   becomes a shared Codex cache.
+   contained status probe or interactive launch. It is owned by one leased
+   synthetic home and never becomes a shared Codex cache.
 
 ACS named-auth commands never read, import, replace, delete, or fall back to
 global Codex authentication. Consequently, `codex login` or `codex logout`
@@ -60,14 +63,17 @@ import are unsupported.
 
 ## Contained login and cleanup
 
-Before creating any temporary state, ACS resolves, hashes, and pins one
-canonical Codex executable identity, then verifies that its native Process
-Sandbox is available for the workspace, Session root, pinned executable, and
-runtime inputs. Each operation copies those verified bytes once into a private
-read-only snapshot outside the target-writable workspace and Session. Both the
-version probe and credential-bearing subprocess execute that same snapshot, so
-path replacement and in-place rewriting cannot switch the executable after
-verification. Codex also checks the optional
+Before creating a Session or projecting credentials, ACS resolves, hashes,
+and pins the installed Codex executable. It copies those bytes into a private
+read-only operation snapshot outside the target-writable workspace and Session,
+then checks native Process Sandbox availability for the workspace, Session
+root, snapshot and runtime inputs. When the supported installation layout
+contains `codex-code-mode-host`, ACS also pins and copies that companion into
+the same private snapshot. Both the version probe and credential-bearing
+subprocess use that operation snapshot, so changing the original installed
+files cannot switch their bytes after verification. These are executable
+identity checks, not verification of a vendor signature or distribution
+checksum for an arbitrary local installation. Codex also checks the optional
 managed-requirements file at
 `/etc/codex/requirements.toml`. ACS grants an exact, read-only probe for that
 file: Codex can enforce it when present and receives the normal not-found result
@@ -169,11 +175,20 @@ the projection after verified cleanup.
 
 ## Quarantine and recovery
 
+If ACS reports a quarantined binding or uncertain cleanup, keep the Session and
+its recovery files intact. Once the earlier operation is no longer active, run
+`acs codex auth recover --name work`, then retry `acs codex auth status --name
+work`. Recovery refuses to remove a projection whose process cleanup cannot be
+proved; deleting its files or logging out is not a substitute for that proof.
+The [Session operations guide](session-operations.md) explains passive Session
+inspection.
+
 Before projecting credentials, ACS creates a private, credential-free marker under
 `~/.acs/quarantine/codex-auth` and a private recovery-protection marker in the
 Session lease directory. Quarantine metadata contains only its version, the
-identity name, the random Session identifier, a lifecycle phase, and a random
-cleanup-proof challenge that is never exposed to the contained target. It never
+identity name, the random Session identifier, a lifecycle phase, the refresh
+eligibility flag when set, and a random cleanup-proof challenge that is never
+exposed to the contained target. It never
 contains credential bytes, metadata fingerprints, authentication tokens,
 workspace identifiers, or `auth.json`.
 
@@ -222,8 +237,8 @@ the filesystem or storage media.
 
 ## Concurrency and current boundary
 
-Login, status, recovery, and logout acquire a private, non-blocking file lock
-for the selected name. Concurrent use of the same identity returns an in-use
+Login, status, interactive launch, recovery, and logout acquire a private,
+non-blocking file lock for the selected name. Concurrent use of the same identity returns an in-use
 error through final projection removal or quarantine; different names can
 proceed independently. Keychain creation is also atomic, so a duplicate cannot
 replace the existing record even across processes.
@@ -262,9 +277,10 @@ workspace restriction, the official ChatGPT endpoint, the OpenAI provider,
 untrusted project configuration, `sandbox_mode="danger-full-access"`, and
 `approval_policy="never"` at runtime precedence. The last two settings are the
 locked target's supported externally sandboxed no-prompt mode: ACS alone
-enforces the Profile's read-only or coding-write workspace access and owns all
-tool approval decisions. This prevents hostile project configuration from
-selecting another credential store, endpoint, provider, plugin, project-local
+enforces the Profile's read-only or coding-write workspace access and selected
+common grants. There is no interactive per-tool approval step; the stored
+Profile authority is enforced by the outer sandbox. This prevents hostile
+project configuration from selecting another credential store, endpoint, provider, plugin, project-local
 MCP configuration, sandbox mode, or approval policy. A missing or uncertain ACS
 outer sandbox fails closed; Codex is never launched directly as a fallback.
 Current source can project explicitly selected local STDIO MCP server references
@@ -280,6 +296,12 @@ or workspace changes, unknown schema, and invalid projections cannot replace
 the last valid record. Process settlement, projection removal, marker deletion,
 and identity release use the same quarantine and recovery machinery described
 above; ordinary target success never overrides cleanup uncertainty.
+
+The projected file is necessarily readable by the contained Codex process and
+its descendants within that Session. A selected Skill or MCP helper does not
+receive a separate credential-isolation boundary. Coarse outbound IP access
+also means ACS cannot prevent transmission of readable data. Choose the
+workspace, executable, Skills and helpers with this authority in mind.
 
 Profiles persist neither credentials nor Keychain records. Deleting a Profile
 therefore never deletes a named Codex authentication identity.
@@ -363,5 +385,5 @@ modes in the [official authentication documentation](https://learn.chatgpt.com/d
 The [official managed-configuration documentation](https://learn.chatgpt.com/docs/enterprise/managed-configuration)
 defines `/etc/codex/requirements.toml` as the Unix system path for enforced
 requirements.
-ACS deliberately uses Codex file storage only inside temporary contained login
-and status homes; its durable namespace is owned directly by ACS.
+ACS deliberately uses Codex file storage only inside temporary contained login,
+status and interactive homes; its durable namespace is owned directly by ACS.

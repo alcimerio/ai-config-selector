@@ -1,5 +1,11 @@
 # Shared Devin and Codex behavior and evidence
 
+[Documentation index](README.md) · [Common Profile format](common-profile-format.md)
+
+This is a contract and evidence guide for the current source on macOS 26 Apple
+Silicon. The quickstart below uses separate target Profiles; a single shared
+stored Profile must explicitly contain both supported target overlays.
+
 ACS supports one common Profile contract across its maintained Devin and Codex
 adapters. A version-3 Profile selects global Skills by exact `source` plus
 `relativePath` identity and declares either read-only or explicit read-write
@@ -93,14 +99,27 @@ acs profile validate backend-review
 acs profile show backend-review
 acs sandbox --profile backend-review --dry-run
 acs devin --profile backend-review --dry-run
-acs codex --profile backend-review --auth work --dry-run
 ```
 
-Use the builder to select the same common Skills and choose read-only or the
-explicit `Read and write (coding work)` grant. Create the named Codex identity
-separately with `acs codex auth login --name work`; never record its credential
-or account output. A Profile needs a supported Codex overlay before the Codex
-commands above are valid.
+Use the builder to select common Skills and choose read-only or the explicit
+`Read and write (coding work)` grant. The Devin builder creates only a Devin
+overlay. For a separate Codex Profile, select the same common Skills and
+workspace intent in its builder:
+
+```sh
+acs codex auth login --name work
+acs codex create-profile --name backend-review-codex --auth work
+acs profile validate backend-review-codex
+acs profile show backend-review-codex
+acs codex --profile backend-review-codex --dry-run
+```
+
+Never record login credential or account output. Codex dry-run requires a valid
+reference but does not check whether the identity exists or works. To use one
+stored Profile with both targets, author both version-1 overlay entries using
+[declarative Profile creation](profile-creation.md), following the
+[common-format example](common-profile-format.md). `--auth work` overrides an
+existing Codex overlay's reference; it does not add a missing overlay.
 
 ## Daily-use checklist
 

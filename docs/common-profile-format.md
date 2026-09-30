@@ -1,5 +1,7 @@
 # Common Profile format, migration, grants and projection
 
+[Documentation index](README.md)
+
 Development source writes new Profiles as envelope version 3. Version 1 and 2
 remain readable and are never changed by inspection or launch.
 

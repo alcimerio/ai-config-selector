@@ -18,10 +18,14 @@ from a normal terminal. Do not run it in CI or with a shared account.
 
 ## Run
 
-Build the candidate without publishing it:
+Build the candidate without publishing it. Set `ACS_CANDIDATE_VERSION` to the
+reviewed development identity (currently `v0.5.0` in the promoted workflow).
+The same version string does not make a local build the published release;
+record the exact source commit and candidate digest as well:
 
 ```sh
-candidate_version=v0.4.0
+: "${ACS_CANDIDATE_VERSION:?supply the reviewed candidate embedded version}"
+candidate_version="$ACS_CANDIDATE_VERSION"
 scripts/release-candidate.sh "$candidate_version"
 ```
 
@@ -38,9 +42,12 @@ The accepted observation is deliberately narrow:
 - exiting Devin returned control to the terminal;
 - no leased Session remained after cleanup.
 
-Destroy the temporary install directory after the observation. Record only the
-candidate version, source commit, macOS architecture, and pass/fail result in
-the release checklist.
+Remove the temporary install directory only after successful Session cleanup is
+confirmed. If cleanup is uncertain, retain the compatible candidate executable
+and private evidence for the [supported recovery procedure](manual-upgrade-recovery.md);
+do not manually remove Session state. Record only the candidate version, source
+commit, archive and installed-binary SHA-256, macOS architecture, and pass/fail
+result in the release checklist.
 
 ## Safety boundary
 
@@ -50,5 +57,6 @@ data, target output, Session contents, private paths, generated policy,
 environment values, or terminal control characters to logs or artifacts.
 
 If it fails, stop and diagnose locally. Do not weaken Seatbelt, bypass the
-sandbox, copy additional host configuration, or publish the candidate based on
-the credential-free gates alone.
+sandbox, copy additional host configuration, or treat a failing account-dependent
+smoke as a passing observation. Record the failure separately from the credential-free native gate; neither result
+substitutes for the other.

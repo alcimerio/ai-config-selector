@@ -1,7 +1,9 @@
 # Declarative Profile creation
 
-In development source beyond the published v0.4.0 release,
-`acs profile create --file FILE [--dry-run]` validates or creates one
+[Documentation index](README.md)
+
+In the current source, `acs profile create --file FILE [--dry-run]`
+validates or creates one
 machine-local Profile from an explicit JSON file. The document supplies its
 own name. Standard input and implicit file selection are not supported.
 
@@ -24,10 +26,14 @@ nonblocking, validates the opened descriptor and reads that descriptor once;
 FIFOs, devices and directories are rejected without waiting for content.
 Symlinks to regular files are deliberately supported. Replacing the source
 pathname after it is opened does not change the captured candidate. ACS never
-changes the input bytes or mode.
+changes the input bytes or mode. The opened descriptor pins file identity, not
+an atomic snapshot against concurrent in-place writes; immutable candidate
+bytes are established after the read completes.
 
-Instruction references use the `acs-instructions` source and validated bounded
-UTF-8 Markdown files; see the [instruction bundle contract](instruction-bundles.md).
+Instruction references use the `acs-instructions` source. Creation validates
+reference structure without reading instruction files; launch validates and
+captures bounded UTF-8 Markdown files. See the
+[instruction bundle contract](instruction-bundles.md).
 An omitted instructions capability remains compatible with earlier Profiles;
 when present, its version and reference array are strict.
 
@@ -50,8 +56,9 @@ there is no terminal confirmation. ACS recovers the repository through its
 existing transaction lock and calls the same conditional, no-overwrite Profile
 Store creation transaction used by the interactive Profile Builder. It does
 not reread the source after validation. An occupied destination, concurrent
-winner, cancellation before publication or invalid input does not replace or
-modify a stored Profile.
+winner, cancellation observed before the transaction decision, or invalid input
+does not replace or modify a stored Profile. Cancellation after the decision
+begins does not undo a committed creation.
 
 If ACS reports that publication committed and only output reporting failed, the
 Profile exists and repository recovery is not required; inspect it before doing

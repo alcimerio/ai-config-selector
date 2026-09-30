@@ -1,5 +1,10 @@
 # Outbound network enforcement investigation
 
+[Documentation index](README.md) · [Current runtime authority](common-profile-format.md)
+
+Audience: contributors reviewing a future native feasibility prototype. The
+gates below are proposed research work, not ACS setup or configuration steps.
+
 Status: research decision for a separately reviewed native prototype. This is
 not a supported feature, a production design, or evidence that destination
 filtering works. The current product contract remains unchanged: ACS permits

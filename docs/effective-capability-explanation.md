@@ -1,5 +1,7 @@
 # Explain effective Profile capabilities
 
+[Documentation index](README.md)
+
 Use `acs explain` to inspect the semantic authority and registered recipe a
 fresh execution would use:
 
@@ -10,9 +12,9 @@ acs explain codex --profile backend-review --auth work
 acs explain run --profile backend-review -- /usr/bin/git status
 ```
 
-The command strictly reads the stored Profile, resolves only selected Skill
-sources by exact `source` plus `relativePath` identity, and validates a generic
-command when requested. It creates no Session, reads no credential value,
+The command strictly reads the stored Profile, resolves selected Skill sources
+and captures selected instruction files by exact `source` plus `relativePath`
+identity, and validates a generic command when requested. It creates no Session, reads no credential value,
 queries no authentication provider, writes no generated configuration, and
 starts no target or user command. Project-local files are not enumerated.
 
@@ -28,7 +30,8 @@ unchecked. Linux and cross-compilation are not native support evidence.
 `--json` emits deterministic format 1 with `requested`, `targetAdded`,
 `effective`, and `unsupported` fact arrays. Each fact has a stable ID, kind,
 typed value, reason, and source object. The effective list includes workspace
-read/write, private Session access, selected common and projected Skills,
+access, private Session access, selected common and projected Skills and
+instruction material,
 process, system-read, metadata, sysctl, exact Mach-service, terminal/device,
 environment, and coarse network authority. Codex facts include the fixed
 generated configuration and state explicitly that target full-permission and
@@ -59,8 +62,8 @@ server, removed a disabled tool, excluded every ambient source, or enforced a
 boundary around MCP children. Generic `acs run` preserves this intent without
 projecting or starting a server.
 
-Selected Skill identities and environment destinations, scope, source/provider
-class, required state, and classification are intentionally public.
+Selected Skill and instruction identities and environment destinations, scope,
+source/provider class, required state, and classification are intentionally public.
 Environment source names, secret references, resolved values, canonical source,
 workspace, executable, runtime and Session paths, argument values, auth
 references, credentials, project files, raw native policy, and backend/target
@@ -78,7 +81,8 @@ never migrates or rewrites them.
 `authorityDigest` is SHA-256 over a versioned length-prefixed canonical encoding
 of the plan's complete semantic ACS authority and registered recipe
 requirements. It is not a hash of JSON or human prose. Workspace mode, exact
-Skill identities, recipe/overlay/projection, registered requirement IDs,
+Skill and instruction identities, recipe/overlay/projection, registered
+requirement IDs,
 generated configuration, inheritance, environment-name policy, Session/process/
 terminal/device/system/Mach/sysctl grants, and coarse network mode affect it.
 Explicit path IDs, access/type/reference class, and workspace-relative logical

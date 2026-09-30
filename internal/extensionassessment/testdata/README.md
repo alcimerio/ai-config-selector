@@ -1,9 +1,16 @@
 # Assessment definitions and compiler boundary
 
+Fixture documentation for contributors. See the [extension assessment](../../../docs/extension-assessment.md)
+for the evidence boundary and the [documentation index](../../../docs/README.md)
+for supported user workflows.
+
 These are synthetic definitions for Codex 0.149.1 and Devin 3000.10.21. They are
 not production Profile fields or an extension installer. Nothing executes them.
 The JSON, TOML and Markdown are vendor-facing representations; the Go test does
-not implement or claim to replace either vendor's parser.
+not implement or claim to replace either vendor's parser. The instructions in
+`*/plugin/skills/reviewer/SKILL.md` and `devin/agents/reviewer.md` are synthetic
+target input. They are not instructions for working on this repository or
+examples of production extension activation.
 
 `definition_prototypes_test.go` selects each complete plugin directory, role,
 hook definition and input as read-only data through the real common capability

@@ -1,5 +1,7 @@
 # Recoverable local Profile history
 
+[Documentation index](README.md)
+
 Current development source records private local history for every committed Profile create, edit, clone, rename, delete, import, migration, and restore. History is recovery state, not a portable backup or export format.
 
 ## Commands
@@ -20,6 +22,9 @@ acs profile restore backend-review \
   --revision ev_0123456789abcdef0123456789abcdef \
   --expect hg_DIGEST_FROM_PREVIEW --confirm backend-review
 ```
+
+Use the actual `eventId` and `lineageId` from `history --json` in these examples;
+the displayed IDs and `hg_DIGEST_FROM_PREVIEW` are placeholders.
 
 Exactly one live `NAME` or opaque `--lineage ID` selects history. Event IDs use fixed lowercase `ev_` plus 32 hexadecimal digits; lineage IDs use `ln_` plus 32 hexadecimal digits. They are identifiers, never paths or repository content hashes. A live name resolves only its current lineage. Rename preserves a lineage; deletion leaves a selectable tombstone addressable by lineage ID. Reusing a deleted name creates a new lineage.
 

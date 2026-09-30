@@ -1,8 +1,10 @@
 # Edit, clone, rename and delete stored Profiles
 
-These commands describe the development source on macOS 26 Apple Silicon.
-They are not part of the published v0.4.0 binary. Build the current source
-as described in the [README](../README.md).
+[Documentation index](README.md)
+
+These commands describe the current source on macOS 26 Apple Silicon.
+For setup, see [getting started](getting-started.md); check a published
+version's release notes before assuming it has every current-source feature.
 
 ```sh
 acs profile edit backend-review
@@ -16,8 +18,8 @@ acs profile delete service-review --confirm service-review
 Command words come first. After them, the single source `NAME` and separate-token
 flags may appear in either order, for example `acs profile clone --name new old`.
 Names use 1–64 ASCII letters, digits, dots, underscores or hyphens, starting with
-a letter or digit. Clone/rename destinations must have a distinct name, including
-case, and be absent. Unknown, duplicate, missing or attached flags (`--name=new`),
+a letter or digit. Clone/rename destinations must be absent and differ from the
+source by more than ASCII letter case; case-only renames are refused. Unknown, duplicate, missing or attached flags (`--name=new`),
 extra operands, `--`, `--yes`, force, overwrite and pass-through options are
 rejected. Each command has contextual `--help`; help and malformed requests do
 not inspect HOME, cwd, terminal capabilities, storage or runtime dependencies.

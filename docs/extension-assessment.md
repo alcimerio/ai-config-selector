@@ -1,5 +1,10 @@
 # Plugins, hooks, and agent definitions: assessment
 
+[Documentation index](README.md) · [Supported MCP references](mcp-profiles.md)
+
+Audience: contributors evaluating future extension support. The commands and
+fixtures below are opt-in test harnesses, not a user installation procedure.
+
 Status: assessment and test-only harness preparation. No extension schema,
 target adapter, production execution path, or containment exception is added.
 
@@ -55,7 +60,7 @@ ACS Profile capability. The rows distinguish prepared cases from observed runs.
 | Codex role/agent | `TestNativeInstalledCustomCodexAgentDiscovery` checks the initial Responses request for the exact custom role catalog entry in selected and absent cases. | Selected and absent cases passed (25.43 seconds total); no child-agent invocation, custom-instruction execution, or independent agent authority claim. |
 | Devin custom agent | `TestPromotedArtifactNativeCustomDevinAgentDiscovery` checks the initial request system catalog for the exact Markdown profile entry in selected and absent cases. | Selected and absent cases passed (18.84 seconds total); no child-agent invocation or child lifecycle claim. |
 
-The latest observations are from commit
+The latest observations recorded in this assessment are from commit
 `8aca958410d26a7762106e760d945f2aa466d9c0` in the
 [promoted artifact validation job](https://github.com/alcimerio/ai-config-selector/actions/runs/35369714139/job/105680652306).
 The shared native gates, both plugin cases, both paired agent catalog cases,

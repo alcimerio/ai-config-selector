@@ -1,5 +1,7 @@
 # Durable Session inspection and recovery
 
+[Documentation index](README.md)
+
 ACS records sanitized lifecycle information for every contained shell, Devin,
 Codex, Codex authentication, and explicit command Session. The record is an
 operator view, not deletion authority: recovery additionally requires the
@@ -13,6 +15,7 @@ acs session inspect ses_abcd234567abcdef234567abcd
 acs session recover ses_abcd234567abcdef234567abcd
 ```
 
+Replace the illustrative Session ID with one returned by `acs session list`.
 Session IDs are `ses_` followed by exactly 26 lowercase base32 characters.
 Valid filters are `active`, `settling`, `retryable`, `unproven`, `removable`,
 `removed`, `unknown`, and `corrupt`. Help and grammar failures do not discover

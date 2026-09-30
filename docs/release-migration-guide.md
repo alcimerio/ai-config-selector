@@ -222,7 +222,9 @@ After confirmation, heed `not committed`, `committed`, `unknown`, and
 `recovery required` literally. Do not blindly retry an unknown outcome.
 
 After a confirmed migration, inspect the stored v3 Profile and optionally create
-a sanitized exchange document. Export does not include Skill contents, resolved
+a sanitized exchange document. First run `cd "$maintenance_root"` in the
+maintenance shell so the relative export path below is in the private directory,
+not in the source checkout. Export does not include Skill contents, resolved
 paths, history, Sessions, or authentication:
 
 <!-- candidate-example: after-migrate -->
@@ -233,14 +235,18 @@ acs profile export backend-review --file backend-review.acs-profile.json
 acs profile import validate --file backend-review.acs-profile.json
 ```
 
-The no-overwrite export file belongs outside a repository or shared directory if
-its logical intent is private. Import elsewhere requires explicit local bindings
-and checks structure, not actual Skill/auth/target readiness.
+The no-overwrite export file belongs outside a repository or shared directory.
+Import elsewhere requires explicit local bindings and checks structure, not
+actual Skill/auth/target readiness.
 
 ## Recover after interruption
 
 For inspection after an expected nonzero result, start a separate recovery Bash
-with an explicit candidate-directory handoff:
+with an explicit candidate-directory handoff. The strict maintenance shell exits
+on a failing check or migration cancellation, so its local variables may no
+longer exist. If it exited, first set `candidate_bin` in your current shell to
+the absolute installed `candidate/bin` directory you already verified; do not
+rerun the new-directory setup against the retained evidence. Then run:
 
 <!-- candidate-example: recovery-shell -->
 ```sh

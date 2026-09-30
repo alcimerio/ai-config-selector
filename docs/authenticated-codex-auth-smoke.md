@@ -8,7 +8,8 @@ Silicon merge gate.
 
 ## Preconditions
 
-- Use a dedicated test account on a trusted macOS 26 host.
+- Use a dedicated test account on a trusted macOS 26 Apple Silicon host
+  (`darwin/arm64`).
 - Disable terminal recording, shell tracing, debug logging, and output capture.
 - Build ACS from the exact reviewed commit and install the matching target from
   `scripts/codex-test-targets.lock` with the repository verification scripts.
@@ -21,7 +22,10 @@ From a normal terminal, run a browser or device login for the disposable name,
 then run contained status. A refresh may be observed only when the target
 naturally performs one; do not force, inject, copy, decode, compare, or print
 tokens. Remove the disposable identity through the ACS logout command and
-confirm that no leased Session or quarantine remains.
+confirm that no leased Session or quarantine remains. If either remains or
+cleanup is uncertain, retain the compatible ACS binary and use the
+[supported authentication recovery procedure](manual-upgrade-recovery.md#recover-a-named-codex-identity-without-exposing-credentials);
+do not delete Session or Keychain state by hand.
 
 Record only the source commit, locked target digest, host architecture, command
 category, and pass/fail result. Account identifiers, device codes, browser

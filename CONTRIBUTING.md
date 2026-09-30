@@ -77,12 +77,25 @@ Do not weaken macOS security settings to make a test pass.
 
 ## Linux source
 
-The retained Linux implementation may be compiled as a non-blocking observation:
+The retained Linux implementation may be cross-compiled as a non-blocking
+observation. From the repository root, write each architecture's test binaries
+to a separate temporary directory without executing them:
 
 ```sh
-GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go test -run '^$' ./...
-GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go test -run '^$' ./...
+(
+  set -eu
+  compile_dir="$(mktemp -d "${TMPDIR:-/tmp}/acs-linux-compile.XXXXXX")"
+  trap 'rm -rf "$compile_dir"' EXIT
+  mkdir "$compile_dir/amd64" "$compile_dir/arm64"
+  GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go test -c -o "$compile_dir/amd64/" ./...
+  GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go test -c -o "$compile_dir/arm64/" ./...
+)
 ```
+
+`-c` is compile-only. `go test -run '^$'` still starts each test executable
+(and its package initialization), so it is not a cross-compilation-only check
+on macOS. Neither this check nor the native Linux CI observation proves Linux
+runtime support.
 
 Do not publish Linux archives, add Linux native release jobs, or describe Linux
 as supported without a separate decision that restores ownership and evidence
@@ -112,7 +125,10 @@ For a local credential-free run, first use
 native installation. Also set `ACS_NATIVE_AUTH_RECOVERY_ROOT` to a deterministic
 private path, and run the separate `TestNativeKeychainRecoveryEntrypoint`
 invocation afterward even when the native test invocation fails. The promoted
-workflow does this in an `always()` step on the native Apple Silicon runner.
+workflow's shared `scripts/run-native-candidate-gates.sh` does this in its
+exit/signal cleanup trap on the native Apple Silicon runner. A hard runner
+termination can prevent that trap from running; retain recovery evidence when
+cleanup was not observed.
 Run these focused tests only from a normal macOS terminal. The
 automated gate proves the isolated Keychain contract and contained status
 lifecycle; it does not prove interactive login completion or target-origin
@@ -153,15 +169,27 @@ explicit authorization for that tag push: it starts the automatic build, native
 validation, attestation, and immutable publication pipeline with no later
 approval pause.
 
-For a future release (using `v1.2.3` as an example):
+For a future release (using `v1.2.3` as an example), first merge its release
+notes and preparation changes. From a clean `main` checkout, fetch and confirm
+that `HEAD` is the reviewed `origin/main` commit, then prepare the local tag:
 
 ```sh
-scripts/release-candidate.sh v1.2.3
+git fetch origin main
 scripts/prepare-release-tag.sh v1.2.3
+```
+
+The preparation script requires `main` to match the fetched `origin/main`,
+refuses an existing local or remote tag, runs `scripts/release-candidate.sh`,
+and prints the source commit and annotated tag-object identity. Review those
+identities and obtain authorization before separately running:
+
+```sh
 git push origin refs/tags/v1.2.3
 ```
 
-The first command requires a clean worktree and creates exactly:
+For a standalone local artifact check without creating a tag, run
+`scripts/release-candidate.sh v1.2.3`. It requires a clean worktree and places
+exactly these files in `dist/release-candidate/`:
 
 ```text
 acs_1.2.3_darwin_arm64.tar.gz
@@ -179,5 +207,7 @@ new commit and prepare a new version. Do not treat a local build or authenticate
 smoke as a replacement for the native Apple Silicon artifact gate.
 
 Record pre-tag and post-publication evidence in a version-specific file under
-`docs/releases/`. The published v0.4.0 evidence remains in
-[docs/releases/v0.4.0-checklist.md](docs/releases/v0.4.0-checklist.md).
+`docs/releases/`. The latest publication record is
+[docs/releases/v0.5.0-checklist.md](docs/releases/v0.5.0-checklist.md); older
+records remain historical evidence rather than templates for the current
+support matrix.

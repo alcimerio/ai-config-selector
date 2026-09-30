@@ -1,6 +1,9 @@
 # Passive diagnostics and Profile validation
 
-These commands describe the development source, not the published v0.4.0 binary.
+[Documentation index](README.md)
+
+These commands describe the current source. For setup and choosing a first
+workflow, see [getting started](getting-started.md).
 
 ```sh
 acs doctor
@@ -45,8 +48,11 @@ source access. References use exact source-plus-relative-path identity: removed,
 ambiguous, nested, or differently spelled references are not silently rebound.
 Symlink handling follows existing discovery. Manifest contents and complete
 bundle contents are not validated; a regular `SKILL.md` is the discovery rule.
-No launch plan is constructed. Restore selected bundles or create a new Profile
-selection when references no longer resolve.
+No launch plan is constructed. Instruction references, path/executable grants,
+environment entries, and MCP references are checked structurally, but validation
+does not open instruction files, inspect grant targets, resolve environment
+values, or start MCP servers. Restore selected bundles or edit the Profile
+selection when Skill references no longer resolve.
 
 Both commands are strictly passive. They do not start any subprocess (including
 `--version`), query credentials, infer authentication from an identity name,
@@ -80,7 +86,9 @@ It contains exactly:
 | Check ID | Doctor | Profile validation |
 | --- | --- | --- |
 | `profile.structure` | unchecked | supported stored structure |
-| `profile.sources` | unchecked | selected source resolution after valid structure |
+| `profile.sources` | unchecked | selected Skill source resolution after valid structure |
+| `profile.overlays` | unchecked | supported overlay structure, or unchecked legacy/unknown inactive overlays |
+| `profile.authority` | unchecked | legacy workspace write or explicit common workspace authority |
 | `host.platform` | native metadata and supported-platform policy | unchecked |
 | `backend.file` | trusted system backend-file availability on macOS | unchecked |
 | `executable.availability` | selected target only; otherwise unchecked | unchecked |
@@ -104,6 +112,8 @@ Stable codes are:
 | `executable_available`, `executable_unavailable` | Requested executable found, or absent/unsafe/inaccessible. |
 | `valid_structure` | Supported persisted Profile structure. |
 | `structure_required` | Sources unchecked because structure could not be validated. |
+| `legacy_workspace_write`, `explicit_common_authority` | Supported legacy workspace-write compatibility or explicit v3 workspace authority; no native enforcement check. |
+| `legacy_implicit_target`, `supported_inactive_overlays`, `inactive_overlay_unknown` | No explicit overlays, supported inactive overlay structure, or an unknown/unsupported inactive overlay; no overlay is selected or executed. |
 | `selected_sources_resolved`, `selected_sources_unresolved`, `sources_unavailable` | Exact selected references resolved, missing/ambiguous, or selected root cannot be enumerated. |
 | Inspection failure codes | `storage_unavailable`, `invalid_name`, `missing`, `unreadable`, `non_regular`, `too_large`, `invalid_structure`, `identity_mismatch`, `unsupported_content`; meanings match inspection. |
 

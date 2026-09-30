@@ -1,5 +1,7 @@
 # Inspect stored Profiles
 
+[Documentation index](README.md)
+
 `acs profile list [--json]` lists direct `.json` entries in `~/.acs/profiles`.
 `acs profile show NAME [--json]` inspects one saved Profile, even when its selected
 Skills have been removed. `acs profile show --json NAME` is also accepted.
@@ -10,14 +12,24 @@ Flags occur once. Extra operands, unknown options, `=`, `--`, target pass-throug
 and sandbox bypass are rejected. Use `acs help profile`, `acs profile list --help`,
 or `acs profile show --help` for contextual help.
 
+For the effective authority of a launch, use
+[`acs explain`](effective-capability-explanation.md).
+
+Current human output can incorrectly show `0 selected` for Instructions, paths,
+executables, environment, or MCP even when entries are selected. Use
+`acs profile show NAME --json` for instruction references and `acs explain` for
+the effective capability view; a zero human count is not evidence of no access.
+
 Inspection reads persisted structure only. It does not check source existence,
 authentication, installed targets, or launch readiness. It does not resolve
 references, normalize or migrate files, create directories or Sessions, recover
 quarantine, change permissions, or access a terminal. Launch and authentication
 contracts are unchanged. For selected-source resolution, use
 `acs profile validate NAME`; for passive host prerequisites, use `acs doctor`.
-See the [passive diagnostics contract](passive-diagnostics.md). To create a Profile, use
-`acs devin create-profile --name NAME` in an interactive terminal.
+See the [passive diagnostics contract](passive-diagnostics.md). To create a
+Profile interactively, use `acs devin create-profile --name NAME` or
+`acs codex create-profile --name NAME`. For explicit JSON input, use
+[`acs profile create --file FILE`](profile-creation.md).
 
 A missing store is an empty successful list. Entries are ordered by filename;
 non-`.json` files (including `.profile-*.tmp`) are ignored and preserved. Invalid
@@ -38,7 +50,7 @@ Help remains human text; syntax errors retain exit 1 and contextual stderr usage
 Example `acs profile show legacy --json` for a valid stored version-1 Profile:
 
 ```json
-{"formatVersion":1,"operation":"show","storage":"present","entries":[{"file":"legacy.json","name":"legacy","status":"valid","storedVersion":1,"target":"devin","categories":[{"id":"skills","schemaVersion":null,"selection":[{"source":"shared-agents","relativePath":"review"}]}],"diagnostic":null}],"diagnostic":null,"checks":{"sources":"unchecked","auth":"unchecked","runtime":"unchecked"}}
+{"formatVersion":1,"operation":"show","storage":"present","entries":[{"file":"legacy.json","name":"legacy","status":"valid","storedVersion":1,"target":"devin","categories":[{"id":"skills","schemaVersion":null,"selection":[{"source":"shared-agents","relativePath":"review"}]}],"overlays":[],"workspaceAccess":null,"diagnostic":null}],"diagnostic":null,"checks":{"sources":"unchecked","auth":"unchecked","runtime":"unchecked"}}
 ```
 
 Every object has these fields, with stable types:
@@ -56,27 +68,38 @@ Each entry always has `file` (ASCII-escaped basename, or null for an invalid
 requested name; backslashes and non-ASCII/control bytes use Go string escapes,
 without surrounding quotes), `name` (validated filename stem, or null for an invalid
 name), `status` (`valid`, `invalid`, `unsupported`, `missing`, or `unreadable`),
-`storedVersion` (integer or null when not safely decoded), `target` (`devin` for
-legacy entries and `common` for v3), `categories` (array), `workspaceAccess`,
-`overlays`, and `diagnostic` (null for
+`storedVersion` (integer or null when not safely decoded), `target` (`devin`
+for valid legacy entries,
+`common` for valid v3 entries, otherwise null), `categories` (array),
+`workspaceAccess` (`read-only` or `read-write` for valid v3 entries, otherwise
+null), `overlays` (array), and `diagnostic` (null for
 valid entries, otherwise the diagnostic object). No corrupt or unknown payload
 is echoed. Invalid/unsupported entries have empty categories. A valid entry
 means supported persisted structure only; it does **not** mean executable.
 
-Categories are ordered by ID; each has `id`, `schemaVersion` (stored integer;
-null for version-1 legacy Skills, which had no category envelope), and `selection`
-(array). Skills references have exactly `source` and `relativePath` strings and
-are ordered by source then relativePath. Stored aliases `devin-config` and
-`shared-agents` and safe relative spellings are preserved, without normalization.
+Each category has `id` and `schemaVersion` (stored integer; null for version-1
+legacy Skills, which had no category envelope). Consumers should select
+categories by ID rather than depend on array order. A nonempty Skills category
+adds `selection`; a nonempty Instructions category adds `instructions`. Both
+contain references with exactly `source` and `relativePath` strings. Empty
+reference arrays are omitted, as are selection details for other categories.
+Skill references are ordered by source then relativePath.
+
+Overlays are ordered by ID. Each has `id`, `version`, and `support`
+(`supported`, `unsupported`, or `inactive-unknown`); inspection never selects
+an overlay for execution.
+
+Stored Skill aliases `devin-config` and `shared-agents` and safe relative
+spellings are preserved, without normalization.
 Absolute, empty, NUL-containing, or escaping paths and duplicate normalized
 references are invalid. JSON escapes controls; human output escapes non-ASCII
 and terminal controls. Private absolute paths and arbitrary decoder errors are
 never printed.
 
 Supported structures are Devin Profile envelopes 1 and 2 plus common Profile
-envelope 3. Version 3 has independently versioned Skills, workspace, path,
-executable, and environment capabilities plus explicit overlays. Environment
-inspection validates logical shape without reading a source/provider and does
+envelope 3. Version 3 has independently versioned Skills, Instructions,
+workspace, path, executable, environment, and MCP capabilities plus explicit
+overlays. Environment inspection validates logical shape without reading a source/provider and does
 not report local source names, secret references, or values. Unknown inactive
 overlays are reported without being selected or executed. Version 2 may have
 an empty categories object. Unknown fields, category

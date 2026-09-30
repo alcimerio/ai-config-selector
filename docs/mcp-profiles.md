@@ -1,5 +1,7 @@
 # MCP server selections in Profiles
 
+[Documentation index](README.md)
+
 Development-source version-3 Profiles may select local MCP servers under
 `common.mcp`. The category has version 1 and a `selection.servers` array. ACS
 stores references to already selected executables, filesystem paths, and

@@ -1,122 +1,40 @@
 # AI Config Selector
 
-AI Config Selector (`acs`) creates named capability Profiles and launches a
-process with only the selected configuration inside an ephemeral, native
-sandbox.
+AI Config Selector (`acs`) lets you save a named **Profile** of capabilities,
+then run Devin, Codex, a shell, or a command inside a native macOS sandbox with
+those capabilities. Use it to choose which Skills, files, environment variables,
+and local MCP servers a coding session can access instead of inheriting your
+whole host configuration.
 
-The v0.5.0 release and current development contract is Apple Silicon-only:
+**Supported runtime:** macOS 26 on Apple Silicon (`darwin/arm64`).
+**Latest published release:** [v0.5.0](https://github.com/alcimerio/ai-config-selector/releases/tag/v0.5.0).
+ACS is a Go command-line tool. It does not include Devin or Codex; install the
+target you want separately. You can try the sandbox without an AI account.
 
-- macOS 26 on `darwin/arm64`;
-- Skills discovered from `~/.config/devin/skills` and `~/.agents/skills`;
-- explicitly selected common Markdown instruction bundles, with a verified Devin rules projection;
-- Devin launches with selected Skills and its allowlisted credential;
-- a credential-free sandbox shell for inspecting the same isolation directly.
-- literal generic argv execution under common Profile authority, without a shell.
+[Get started](docs/getting-started.md) · [Documentation](docs/README.md) ·
+[Security boundaries](docs/security-model.md) · [Contribute](CONTRIBUTING.md)
 
-v0.3.3 is the final release with Linux support. The Bubblewrap implementation
-remains in the source tree for possible future work, but v0.4.0 has no Linux
-binary, installer path, native gate, or support commitment.
+## How it works
 
-## Inspect saved Profiles (v0.5.0)
+1. **Choose a Profile.** A Profile saves references and permissions, not copies
+   of credentials or Skill files. New v3 Profiles default to a read-only workspace.
+2. **Launch from your project.** Your current directory becomes the workspace.
+   ACS resolves the selected material and creates a private, temporary Session
+   with a synthetic home and a clean environment.
+3. **Work inside the sandbox.** ACS applies the required Seatbelt policy to the
+   process and its descendants, then waits for cleanup proof before removing
+   the Session. Uncertain cleanup is retained for conservative recovery.
 
-Use `acs profile list` to find stored Profiles and `acs profile show NAME` to
-inspect persisted versions and selected Skills, including references to Skills
-that no longer exist. These commands only read stored structure; source,
-authentication, and runtime readiness remain unchecked. They create no directories
-or Sessions and do not modify Profile or quarantine state.
-
-Add `--json` for deterministic output format 1; `acs profile show --json NAME` is
-also accepted. See the [inspection and JSON contract](docs/profile-inspection.md)
-for status codes, exit behavior, limits, and examples. Run `acs profile --help`
-for contextual help.
-
-Use `acs profile create --file FILE [--dry-run]` to validate and publish a
-strict version-3 Profile document without a terminal, target installation,
-credential lookup or Skill discovery. See the [declarative Profile creation
-contract](docs/profile-creation.md) for input safety, previews, collisions and
-recovery.
-
-Move sanitized version-3 intent between machines with `acs profile export NAME`,
-`acs profile import validate --file FILE`, and conditional no-overwrite `acs
-profile import --file FILE --as NAME [--bindings FILE] [--dry-run]`. Local JSON
-is not an export, and Skills or credentials are never embedded. See the
-[portable Profile exchange contract](docs/portable-profile-exchange.md) for the
-independent schema, explicit source/auth bindings, stdout/report separation,
-hostile-input limits, and unchecked readiness boundary.
-
-New v0.5.0 Profiles use independently versioned common Skills,
-workspace intent, explicit filesystem paths, additive executable visibility,
-scoped environment mappings, reference-only local MCP server selections, and
-explicit target overlays. MCP argv items resolve only from selected path or
-non-secret environment references; selected secret environment entries remain
-available to the attached process tree. See the [MCP Profile contract](docs/mcp-profiles.md)
-for the schema, launch behavior and verification limits. Environment entries
-map exact host names or host-backed secret references into the final attached
-process tree without persisting values. Executable entries support fixed ACS search names,
-workspace-relative paths, and private local bindings; they do not form an
-exclusive command allowlist. Scripts may need separately visible non-intrinsic
-interpreter symlinks or runtime files, and ACS never derives those grants from
-a script. See the [common Profile format,
-migration, grants and projection contract](docs/common-profile-format.md) and
-the [shared Devin/Codex behavior, evidence boundaries and daily-use
-checklist](docs/shared-target-conformance.md).
-Selected instruction references and their Devin always-on projection are
-described in the [instruction bundle contract](docs/instruction-bundles.md).
-
-Explain the effective common and target authority without creating a Session or
-starting a target with `acs explain sandbox|devin|codex|run --profile NAME`.
-The versioned output separates requested, target-added, effective and
-unsupported facts and gives a semantic authority digest; equal digests do not
-claim equal local paths, contents, arguments, credentials or readiness. Native
-readiness is unchecked unless `--check-native-readiness` is explicitly supplied.
-See the [effective capability explanation contract](docs/effective-capability-explanation.md).
-
-## Edit and repair Profiles (v0.5.0)
-
-Use the seeded Profile Builder to change stored selections or create a copy:
-
-```sh
-acs profile edit backend-review
-acs profile clone backend-review --name frontend-review
-acs profile rename backend-review --name service-review
-acs profile delete service-review
-acs profile migrate legacy-review
-```
-
-Edit and clone retain missing selections until explicitly removed. Every rewrite
-previews exact canonical bytes. Ordinary legacy mutations preserve canonical v2
-authority and placement; `profile migrate` explicitly adopts v3 common paths;
-unresolved selections require a separate warning acknowledgement. Rename confirms
-both filename and embedded identity. Deletion requires typing the exact name, or
-an exact `--confirm NAME` for deliberate noninteractive use. Destination collisions
-and stale revisions never overwrite newer data. These commands need no client,
-credentials or Session. See the [mutation and recovery guide](docs/profile-mutations.md)
-for selection repair, preview controls, cancellation and uncertain outcomes.
-
-Committed Profile changes also create private recoverable history. Use
-`acs profile history`, sanitized `profile diff`, digest-bound `profile restore`,
-and explicit pin/prune maintenance as described in the
-[Profile history guide](docs/profile-history.md).
-
-## Passive diagnostics (v0.5.0)
-
-Run `acs doctor` for core host and trusted backend-file checks without an account
-or optional clients. Add `--target devin`, `--target sandbox`, or
-`--target codex-auth` to check only that workflow's executable availability.
-`codex-auth` describes named authentication workflows. Interactive Codex has a
-separate syntax-only `--dry-run`; neither command checks versions,
-authentication readiness, or actual containment.
-
-Run `acs profile validate NAME` to validate supported stored structure and resolve
-selected Skill sources without constructing a launch plan. Unselected sources
-are not required. Both commands accept `--json`, need no terminal, execute no
-processes, and change no files. See the [passive diagnostics contract](docs/passive-diagnostics.md)
-for the separate diagnostic JSON format, check IDs, exit behavior, and limits.
+The same common Profile capabilities can be used by multiple targets. Target
+**overlays** add the fixed Devin or Codex integration. A Profile created for
+Devin is not automatically a Codex Profile; see the
+[common format](docs/common-profile-format.md) for explicit overlays.
 
 ## Install
 
-The latest published immutable release is [v0.5.0](https://github.com/alcimerio/ai-config-selector/releases/tag/v0.5.0). For a fresh installation, download its release-specific
-installer, inspect it, then run the local file:
+For a **fresh installation**, download the release-pinned installer, verify its
+published checksum, inspect it (`q` exits `less`), then run it locally. Use a
+scratch directory that does not already contain `install.sh`:
 
 <!-- published-v050-fresh-install-example -->
 ```sh
@@ -133,10 +51,27 @@ sh ./install.sh
 "$HOME/.local/bin/acs" version
 ```
 
-The published v0.4.0 binary has no `acs update` command. To move from v0.4.0,
-download and inspect the
-release-pinned v0.5.0 installer, then install it into a **new, empty**, direct
-user-owned directory instead of overwriting the occupied v0.4.0 path:
+The installer defaults to `~/.local/bin`, refuses to overwrite an existing
+`acs`, needs no `sudo`, and does not edit shell startup files. Add the installed
+directory to this terminal's search path and verify which binary will run:
+
+```sh
+export PATH="$HOME/.local/bin:$PATH"
+command -v acs
+acs version
+```
+
+Release archives are **unsigned and unnotarized**. SHA-256 checks byte identity
+against a trusted digest; GitHub attestations provide separate origin evidence.
+Neither is Apple approval or a malware review. Do not disable Gatekeeper,
+remove quarantine, or weaken sandbox settings to make ACS run. See
+[installation and recovery](docs/manual-upgrade-recovery.md).
+
+### Upgrading from v0.4.0
+
+The published v0.4.0 binary has no `acs update` command. Install v0.5.0 into a
+**new, empty** user-owned directory and retain the old binary. Use a scratch
+directory that does not already contain `install-v0.5.0.sh`:
 
 <!-- published-v050-bootstrap-example -->
 ```sh
@@ -157,459 +92,118 @@ sh ./install-v0.5.0.sh --bin-dir "$bootstrap_root"
 "$bootstrap_root/acs" version
 ```
 
-Before a newer-format write, finish active work and preserve private quiescent
-Profile-file copies as described in the recovery guide. Deliberately put the new
-directory before the old one in the maintenance shell's `PATH`, verify
-`command -v acs`, and keep both binaries. This selects a binary; it does not
-migrate Profiles or other state. Rollback selects the retained old binary but
-does not downgrade data, so keep v0.5.0 available to inspect or recover anything
-v0.4.0 cannot understand. Filesystem Profile copies exclude Keychain identities,
-Sessions, transaction proof, external Skills, and target state.
+Before newer-format writes, finish active work and preserve private quiescent
+Profile-file copies as described in the [recovery guide](docs/manual-upgrade-recovery.md).
+Then deliberately select the new directory with `PATH` and check `command -v acs`.
+Binary rollback does not downgrade Profiles, identities, history, or Sessions.
+Keep a compatible v0.5.0 binary available for inspecting or recovering newer data.
 
-To build the current source on macOS instead:
+With an existing supported v0.5.0 installer layout, `acs update --check` reads
+stable-release metadata without changing files; `acs update` explicitly installs
+a newer stable release. [Update and rollback limits](docs/manual-upgrade-recovery.md)
+cover layout restrictions and explicit version selection. There are no background
+update checks, package-manager distribution, or uninstaller.
+
+### Build from source
+
+With Go 1.25 or later on a supported Mac:
 
 ```sh
 git clone https://github.com/alcimerio/ai-config-selector.git
 cd ai-config-selector
 go build -o ./bin/acs ./cmd/acs
 ./bin/acs version
-```
-
-A source build reports `acs devel`.
-
-For a separate promoted development candidate, use the
-[candidate migration and rollback guide](docs/release-migration-guide.md). It
-requires operator-supplied artifact identity and checksums, keeps binary rollback
-separate from stored-data compatibility, and leaves real daily-use observation
-pending. Candidate bytes are distinct from the [published v0.5.0 assets](https://github.com/alcimerio/ai-config-selector/releases/tag/v0.5.0).
-
-The published v0.4.0 installer historically accepts macOS arm64 and amd64.
-The v0.5.0 installer accepts only Apple Silicon (`arm64`).
-Each verifies the selected archive against the release's `SHA256SUMS`, validates the embedded version and
-archive structure, and refuses to replace an existing `acs` file. It defaults
-to `~/.local/bin`, does not use `sudo`, and never edits shell startup files.
-
-Release archives are unsigned and unnotarized. GitHub attestations and SHA-256
-prove origin and byte identity; they do not represent Apple notarization or
-malware review.
-
-For an existing installation, follow the [manual upgrade, rollback and data
-recovery guide](docs/manual-upgrade-recovery.md). It stages a pinned release in a
-separate directory, retains the old binary, checks actual command resolution and
-explains the compatibility boundary between binary rollback and stored data.
-Profile transaction and named-authentication recovery described there require
-the compatible v0.5.0 binary; the published v0.4.0 binary does not provide them.
-
-v0.5.0 adds `acs update --check` to report the installed version, latest
-published stable target, and availability without downloading an archive or
-changing installation or user data. `acs update` installs a newer published
-stable release; `acs update vMAJOR.MINOR.PATCH` selects a published stable version
-and can reinstall or downgrade. The updater accepts the direct, user-owned
-regular-file installer layout on macOS 26 Apple Silicon. It refuses development,
-symlinked, package-manager, and ambiguous PATH layouts with reinstall guidance.
-It downloads official GitHub release assets over HTTPS and verifies the selected
-archive against `SHA256SUMS` before replacing only the running ACS executable.
-It requires no GitHub login, Apple Developer ID, notarization, or `sudo`.
-The updater does not migrate or downgrade Profiles, identities, history, or
-Sessions. An older binary may not understand newer data. A Session already using
-ACS helpers may need restart before later helper launches after an update;
-follow normal Session cleanup and the manual recovery guide if it cannot settle.
-The published v0.4.0 binary does not have the update command.
-
-## macOS quickstart (v0.5.0)
-
-Contextual help and the guidance below apply to v0.5.0 and the current source build;
-the published v0.4.0 installer does not include these help and diagnostic commands. Use macOS
-26 on Apple Silicon, Go 1.25 or later for the source build, and a real
-terminal for Profile creation and interactive launch. The system
-`/usr/bin/sandbox-exec` must be available; ACS checks it and fails closed.
-
-Build using the source instructions above, then make that binary available in
-this terminal (run this from the cloned repository):
-
-```sh
 export PATH="$PWD/bin:$PATH"
-acs help
-acs devin create-profile --help
-acs doctor
+```
+
+A source build reports `acs devel` and cannot self-update. See
+[Contributing](CONTRIBUTING.md) for checks and release-evidence requirements.
+
+## Try a credential-free sandbox
+
+No Devin or Codex installation is needed for this path:
+
+```sh
 acs doctor --target sandbox
+acs devin create-profile --name first-review
 ```
 
-For a Devin launch, install and authenticate Devin separately so `devin` is on
-`PATH` and its credential is available at
-`~/.local/share/devin/credentials.toml`. The sandbox-shell path below requires
-neither Devin nor a Devin account; it uses the system `/bin/zsh -f`. Named
-Codex login/status additionally require exactly `codex-cli 0.149.1` and an
-available macOS Keychain, as described in the authentication section below.
+The builder command is named `devin create-profile`, but does not start Devin
+or require its credentials. Choose **Create Profile** and confirm the empty
+selection for a minimal first run; leave Workspace read-only. Or follow the
+[getting-started guide](docs/getting-started.md) to add your first Skill.
 
-Run ordinary tools without adding a target adapter or inheriting host PATH or
-credentials:
+From the project directory you want to inspect:
 
 ```sh
-acs run --profile backend-review -- /usr/bin/git status
-acs run --dry-run --profile backend-review -- ./scripts/check --format short
+acs profile validate first-review
+acs sandbox --profile first-review --dry-run
+acs sandbox --profile first-review
 ```
 
-The first `--` is the required ACS boundary; later arguments remain literal.
-Bare executable names search only `/usr/local/bin:/usr/bin:/bin`. Use an
-absolute path for tools elsewhere. See the [generic command contract](docs/generic-run.md)
-for executable forms, common Skills paths, workspace modes, environment,
-descriptor, exit, dry-run, and recovery behavior.
+The shell is always `/bin/zsh -f`, with a synthetic home and no user startup
+files. Type `exit` to return. A dry-run does not start the requested target;
+its precise checks vary by command, so it is not a promise that a real launch
+will succeed. [Get started](docs/getting-started.md) explains each step and how
+to continue with Devin or Codex.
 
-ACS discovers selectable global Skills in `~/.config/devin/skills` and
-`~/.agents/skills`. Each immediate child directory must contain a regular
-`SKILL.md`: for example, `~/.agents/skills/backend-review/SKILL.md`. A loose
-`SKILL.md` at the root or deeper nested bundles are not catalog entries.
-To add a small first Skill without overwriting an existing bundle:
+## Everyday commands
 
-```sh
-mkdir -p "$HOME/.agents/skills"
-mkdir "$HOME/.agents/skills/acs-first-review" && cat > "$HOME/.agents/skills/acs-first-review/SKILL.md" <<'EOF'
----
-name: acs-first-review
-description: Review code for correctness and useful tests.
----
-Review the current changes for correctness and missing behavioral tests.
-EOF
-```
-
-Create the Profile:
+Use `acs help` or `acs COMMAND --help` for the exact grammar of your binary.
+These examples assume a saved Profile named `first-review`:
 
 ```sh
-acs devin create-profile --name backend-review
-```
-
-Press Enter on Skills, select `acs-first-review` with Space/Enter, and use
-Instructions to select files under `~/.acs/instructions`. Return with
-Left/Esc, then choose Create Profile. `/` searches; Esc while searching clears
-the filter. An empty catalog explains where to add Skills; an empty search
-suggests clearing the filter. Restart creation after adding a bundle. Ctrl+C
-cancels with exit 130 (confirm discarding a changed draft); no Profile is saved.
-An empty Profile requires explicit confirmation, and existing names cannot be
-overwritten.
-
-Validate the saved Profile without runtime checks:
-
-```sh
-acs profile validate backend-review
-```
-
-From the workspace you want the sandboxed process to read (and, only when the
-Profile explicitly grants coding write, modify), inspect
-and launch the credential-free shell:
-
-```sh
-acs sandbox --profile backend-review --dry-run
-acs sandbox --profile backend-review
-```
-
-Dry-run prints the planned selected contents and sandbox readiness without
-allocating a Session. In the shell, inspect the synthetic home with
-`find "$HOME" -maxdepth 5 -type f`, then type `exit` to return. To use Devin
-with the same Profile after its separate installation and authentication:
-
-```sh
-acs doctor --target devin
-acs devin --profile backend-review --dry-run
-acs devin --profile backend-review
-```
-
-Devin dry-run also reports repository-local inheritance. Workspace-local
-`.devin/skills` and `.agents/skills` remain under Devin's control; they are not
-selectable global catalog roots and are not copied into the sandbox shell.
-Next, read the isolation contract below and use `acs codex auth --help` for
-named authentication or `acs sandbox --help` for shell syntax.
-
-## Command help and grammar (v0.5.0)
-
-`acs help` and `acs --help` print root help. Every command path supports both
-forms, for example `acs help codex auth login` and
-`acs codex auth login --help`. Help succeeds on stdout with exit 0, requires no
-interactive terminal, and performs no discovery, credential access, Profile
-writes, Session allocation, target launch, or recovery sweep. Invalid syntax
-fails on stderr with exit 1 and points to contextual help; an empty invocation
-also fails with root guidance.
-
-Write the complete command path first, then its flags in any order:
-
-```sh
-acs devin --dry-run --profile backend-review
-acs codex auth login --device-auth --name work
-```
-
-Values follow their flag as one separate, nonempty token; flags occur at most
-once. Help may appear among otherwise valid flags and does not require the
-command's mandatory name flag. Invalid flags or malformed values still fail
-even when `--help` is present. Positional arguments after a command, `--flag=value`,
-`--` separators, target pass-through, backend selection, and sandbox bypass
-are rejected. Existing target exit codes and Profile cancellation semantics
-are preserved.
-
-## Profiles
-
-Create a Profile with the interactive builder:
-
-```sh
-acs devin create-profile --name backend-review
-```
-
-Profiles are stored under `~/.acs/profiles`. Names contain 1–64 letters,
-numbers, dots, underscores, or hyphens and must begin with a letter or number.
-ACS refuses to overwrite an existing Profile.
-
-Inspect the selected Skills, Devin-specific repository-local inheritance, and
-native sandbox readiness without creating a Session:
-
-```sh
-acs devin --profile backend-review --dry-run
-```
-
-Launch Devin:
-
-```sh
-acs devin --profile backend-review
-```
-
-The Devin path creates a synthetic home, materializes selected Skills and
-common instructions, projects and verifies selected rules before authentication,
-copies only `~/.local/share/devin/credentials.toml` when present, verifies the Skill
-catalog and authentication inside Seatbelt, and then starts Devin with its
-workspace-trust prompt disabled. The trust decision is redundant inside ACS's
-required fail-closed sandbox and could not persist in the ephemeral synthetic
-home. This does not change Devin's permission mode. There is no unsandboxed
-fallback.
-
-## Codex authentication identities (v0.5.0)
-
-v0.5.0 can create ACS-owned, named ChatGPT login
-identities and verify them through an isolated Codex Session:
-
-```sh
-acs codex auth login --name work
-acs codex auth login --name personal --device-auth
-acs codex auth list
-acs codex auth status --name work
-acs codex auth recover --name work
-acs codex auth logout --name work
-```
-
-Names use 1–64 lowercase ASCII letters, numbers, dots, underscores, or hyphens
-and must begin with a letter or number. Login requires interactive stdin and
-stdout and the supported `codex-cli 0.149.1`. ACS runs that login inside its
-mandatory process sandbox with a private synthetic home and file credential
-storage, validates the resulting credential, then stores one versioned record
-per name in the macOS Keychain under an ACS-specific service. Existing names
-are never replaced implicitly. `list` retrieves only non-secret Keychain
-attributes; `logout` is idempotent for an absent valid name.
-
-`status` acquires exactly one named identity before creating a Session, copies
-it into that Session's private synthetic home, forces Codex file credential
-storage plus the validated login-method/workspace restrictions, and runs the
-version-pinned `codex login status` inside the mandatory process sandbox. An
-unchanged projection is discarded. A schema-valid token refresh replaces the
-Keychain record only when its method, workspace, and identity fingerprint still
-match. Projected deletion, logout, schema changes, or identity changes never
-delete or replace the last valid durable identity.
-
-If contained-process settlement, durable replacement, or logical projection
-removal is uncertain, the Session and identity become quarantined and new use
-of that name fails closed. `recover` proves the protected Session is inactive,
-makes one commit-or-discard decision, removes the projection, and then clears
-the secret-free quarantine marker. Recovery is idempotent when no marker
-remains.
-
-These identities are separate from the invoking user's global Codex login.
-ACS never reads, imports, replaces, deletes, or falls back to global
-`~/.codex/auth.json` or Codex's global OS-store namespace. Running `codex login`
-outside ACS may change that global login, but it does not change ACS-owned
-records. A locked, unavailable, ambiguous, or corrupt Keychain fails closed;
-there is no plaintext fallback.
-
-Create and launch a common Profile with a supported Codex overlay:
-
-```sh
-acs codex create-profile --name backend-review --auth work
-acs codex --profile backend-review --dry-run
-acs codex --profile backend-review
-acs codex --profile backend-review --auth personal
-```
-
-The Profile stores only the opaque identity reference when one is supplied;
-omit it during creation to require `--auth` on every launch. A per-run `--auth`
-overrides it without rewriting the Profile. Dry-run loads the selected Profile,
-validates Profile and reference syntax, and explains the immutable plan; it does
-not access Keychain, acquire an identity lock, discover source bundles, probe
-Codex, create a Session, or claim authentication readiness. Real execution
-acquires exactly one named identity before Session creation and keeps that exact
-binding through the version check, interactive process, refresh decision,
-projection removal, and lock release. Deleting a Profile never deletes an
-identity.
-
-See [interactive Codex](docs/interactive-codex.md) and
-[named Codex authentication](docs/codex-auth.md) for the launch, storage,
-isolation, failure, and cleanup contracts.
-
-## Inspect and recover durable Sessions
-
-Every contained target publishes a sanitized durable Session ID and a private,
-generation-bound native cleanup capability. Passive inspection does not start a
-target or access credentials:
-
-```sh
+acs profile list
+acs profile show first-review --json
+acs explain sandbox --profile first-review
+acs profile edit first-review
+acs run --profile first-review -- /usr/bin/git status
 acs session list
-acs session inspect SESSION_ID --json
-acs session recover SESSION_ID
 ```
 
-Recovery never kills or force-deletes a process. It requires an inactive lease,
-the exact current private generation, and a matching native supervisor proof;
-Codex Sessions also retain their typed identity and marker checks. See the
-[durable Session operations contract](docs/session-operations.md) for states,
-bounded JSON, retention, privacy, and failure behavior.
+- [CLI guide](docs/cli.md): command groups, grammar, diagnostics, and dry-run limits
+- [Profiles](docs/common-profile-format.md): capabilities, overlays, versions, and migration
+- [Devin/Codex conformance](docs/shared-target-conformance.md): common behavior and target differences
+- [Interactive Codex](docs/interactive-codex.md): fixed `codex-cli 0.149.1` and ACS-owned named ChatGPT login
+- [Profile exchange](docs/portable-profile-exchange.md): sharing sanitized intent with explicit local bindings
+- [Recovery](docs/manual-upgrade-recovery.md): interrupted writes, retained Sessions, and rollback
 
-## Inspect the sandbox directly
+## Isolation and limitations
 
-Open the fixed system shell inside the selected Profile's isolated Session:
+There is no unsandboxed fallback. ACS fails closed if the required native
+sandbox cannot be established. New v3 Profiles make the workspace read-only
+unless you explicitly select coding write; legacy v1/v2 Profiles retain their
+writable-workspace behavior. The Session is writable. Additional selected path,
+executable, and environment grants apply to the contained process tree.
 
-```sh
-acs sandbox --profile backend-review
-```
+**ACS is not an egress firewall.** Outbound IP and DNS are permitted; destination
+allowlisting is research, not a shipped feature. A target can send data it is
+allowed to read to an external service. Skills, instructions, MCP programs, and
+workspace content still need your trust. Selected secrets are available to the
+attached process tree, including local MCP servers, rather than isolated per server.
 
-This always launches `/bin/zsh -f`. It does not consult `$SHELL`, load user
-startup files, invoke Devin, copy a Devin credential, or run Devin preflights.
-The selected Skills are available under the synthetic Session home, so commands
-such as these show the process's real view:
+ACS does not manage plugins, hooks, custom agents, remote MCP, or arbitrary
+target settings. Target-owned content inside the selected workspace can still
+be discovered. [The security model](docs/security-model.md) explains these
+boundaries and what to avoid sharing in bug reports.
 
-```sh
-pwd
-echo "$HOME"
-find "$HOME" -maxdepth 5 -type f
-env | sort
-```
+v0.3.3 is the final release with Linux support. Linux source is retained as a
+non-blocking portability observation, with no current release or support promise.
+Historical v0.4.0 Intel assets do not make Intel Macs supported by v0.5.0.
 
-Use dry-run to inspect planned Session contents and Seatbelt readiness without
-creating a Session or starting a shell:
+## Project status and contributing
 
-```sh
-acs sandbox --profile backend-review --dry-run
-```
+Start with the [architecture](docs/architecture.md) and [contribution guide](CONTRIBUTING.md).
+The [documentation index](docs/README.md) separates current user guides,
+maintainer procedures, research, and historical release records.
 
-## Isolation contract
+The [v0.5.0 publication record](docs/release-readiness.md) distinguishes native
+artifact tests from hosted-account and week-long daily-use evidence. Publication
+does not complete the separate [daily-use evaluation](https://github.com/alcimerio/ai-config-selector/issues/105).
 
-On supported macOS hosts, ACS verifies the root-owned, non-writable system
-`/usr/bin/sandbox-exec` and applies a generated default-deny Seatbelt policy to
-the target and its descendants.
-
-The contained process can:
-
-- read and write the selected workspace;
-- read and write its leased Session, including synthetic home and temporary
-  storage;
-- read the minimal macOS runtime and fixed-PATH commands required to run;
-- use the invoking terminal, signals, resize events, and normal outbound IP and
-  DNS.
-
-It cannot read unrelated host files through tested direct or symlink paths,
-write outside the workspace or Session, inherit arbitrary host environment
-variables or file descriptors, or use unrelated host Unix sockets. ACS uses a
-clean environment with synthetic `HOME`, XDG paths, temporary paths, and a
-fixed `PATH`. A v3 Profile may explicitly map bounded host-environment names or
-host-backed secret references to non-reserved names in the final attached
-process tree; preflights and passive commands do not receive or resolve them.
-This selected transport is currently macOS-only and Linux fails closed rather
-than exposing values through Bubblewrap arguments.
-
-ACS waits for the contained process tree to settle before deleting the Session.
-If cleanup cannot prove that descendants are gone, the Session remains leased
-and quarantined instead of being treated as safely removed.
-
-There is no unsandboxed fallback. ACS will not start the requested process
-without the required sandbox. ACS is not an egress firewall: outbound network
-destinations are neither filtered nor approved.
-
-## Failure categories
-
-Sandbox failures use stable categories without exposing generated policy,
-credentials, private paths, environment values, backend output, or terminal
-control characters:
-
-- `unsupported_platform`
-- `backend_unavailable`
-- `policy_rejected`
-- `sandbox_verification_failed`
-- `unsafe_path`
-- `invalid_environment`
-- `invalid_descriptor`
-- `setup_failed`
-- `process_start_failed`
-- `process_wait_failed`
-
-Devin preflights additionally report sanitized Skill-isolation and
-authentication failures. Ordinary target exits preserve the target exit code.
-
-## Release evidence
-
-A release candidate is built once, installed, and exercised as the exact same
-bytes on macOS 26 `darwin/arm64`. The native Apple Silicon job runs normal,
-race, installed-artifact, containment, terminal, descendant, and cleanup tests.
-Attestation and immutable publication depend on that job. Linux compilation is
-recorded separately as a non-blocking portability observation and is not release
-evidence.
-
-The credential-free candidate gate is authoritative. The optional authenticated
-Devin smoke is supplemental and never replaces the native Apple Silicon gate.
-Development named-authentication changes additionally gate the locked official
-`codex-cli 0.149.1` Apple Silicon target with disposable Keychain,
-synthetic-home, and mandatory Seatbelt evidence. Real login and target-origin
-refresh observation remains supplemental and is never a CI credential gate.
-
-## Compatibility and limitations
-
-- Devin and the fixed interactive Codex recipe are the production CLI adapters.
-- Common Skills and instruction selections are production Profile capabilities.
-- The published v0.4.0 CLI cannot list, edit, delete, import, or export Profiles;
-  v0.5.0 provides those commands, including sanitized
-  portable exchange with explicit local bindings.
-- Repository-local Skills remain under Devin's control and are not copied into
-  the credential-free sandbox shell.
-- Published v0.5.0 and current development source support only macOS 26 on
-  Apple Silicon (`darwin/arm64`). Published v0.4.0 historical assets also
-  include Intel.
-- Linux source is retained without binaries, native CI, or support guarantees.
-- Source builds and authenticated smoke runs are development evidence, not
-  immutable-release evidence.
-- v0.5.0 projects explicitly selected local STDIO MCP server references
-  for Devin and Codex. ACS does not manage plugins, hooks, agents, remote MCP,
-  or arbitrary target settings. Interactive Codex isolates ordinary host/project
-  MCP inputs; it does not claim to override every account-service enterprise
-  policy.
-- Interactive Codex supports only `codex-cli 0.149.1`, ChatGPT named identities,
-  selected common capabilities and workspace access. It exposes no arbitrary
-  target arguments,
-  backend selection, plugin configuration, API-key import, or generic Codex
-  configuration passthrough.
-- ACS is the sole sandbox and approval authority for interactive Codex. The
-  locked target runs in its supported externally sandboxed no-prompt mode;
-  Profile read-only or coding-write access is enforced by ACS, and failure to
-  establish that outer containment never falls back to an unrestricted launch.
-- ACS has no background update checks, package-manager distribution, or uninstaller.
-
-Read [the architecture](docs/architecture.md), [contribution guide](CONTRIBUTING.md),
-[immutable v0.4.0 release notes](docs/releases/v0.4.0.md), and
-[v0.5.0 release notes](docs/releases/v0.5.0.md) for more detail.
+[Prioritized repository review](docs/reviews/2026-09-30-open-source-review.md)
+records this documentation audit, concrete follow-up work, and verification limits.
 
 ## License
 
 ACS is available under the [MIT License](LICENSE).
-
-### Profile repository transactions
-
-v0.5.0 Profile creation and mutations use a revisioned byte repository
-with checked synchronization and explicit process-interruption recovery. Inspection
-and diagnostics remain passive. For an Unknown or recovery-required outcome, use
-the interactive create-profile recovery entry point, cancel the builder if it opens,
-then inspect stored state. A committed result with only reporting failure and no
-recovery requirement needs inspection instead of replay. See the [repository
-transaction contract](docs/profile-repository-transactions.md) for outcomes, byte
-revisions, filesystem limits and native evidence, and the [recovery guide](docs/manual-upgrade-recovery.md#recover-a-profile-transaction-with-a-compatible-binary)
-for supported steps and evidence preservation.

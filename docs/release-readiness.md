@@ -6,7 +6,7 @@ The immutable Release body links to documentation at the v0.5.0 tag, where the
 manual recovery and candidate guides retain pre-publication wording. Use the
 current [main-branch manual recovery guide](https://github.com/alcimerio/ai-config-selector/blob/main/docs/manual-upgrade-recovery.md)
 and [candidate guide](https://github.com/alcimerio/ai-config-selector/blob/main/docs/release-migration-guide.md)
-for corrected procedures after this documentation update lands.
+for the corrected post-publication procedures.
 
 ## Source and release identity
 

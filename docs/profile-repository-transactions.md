@@ -1,5 +1,7 @@
 # Revisioned Profile repository transactions
 
+[Documentation index](README.md)
+
 The development source stores direct `NAME.json` documents through
 `internal/profilerepo`. This internal boundary accepts canonical desired bytes;
 it has no Profile decoder, category registry, Session dependency, or authentication
