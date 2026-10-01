@@ -87,8 +87,13 @@ jobs:
           git diff --exit-code -- go.mod go.sum
           go mod verify
 
+      - name: Test terminal isolation
+        run: >-
+          go test -v -timeout=90s ./internal/launch
+          -run '^TestSeatbelt(Policy.*Terminal.*|Terminal.*|NativeRestrictsTerminalAccessToInheritedPTYs|NativeRetainsControllingTTYWithRedirectedStdio|PreservesRawTerminalDescriptors|PreservesTerminalResize|NativeRoutesTerminalSignalsOnlyToContainedTarget)$'
+
       - name: Test
-        run: go test -v ./...
+        run: go test -v -timeout=5m ./...
 
       - name: Race test
         run: go test -race ./...
