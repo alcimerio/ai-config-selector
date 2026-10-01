@@ -52,6 +52,8 @@ For Devin's first launch or the fixed sandbox shell, start with
 
 - [Upgrade and recovery](manual-upgrade-recovery.md): installing updates, rollback,
   private data preservation and interrupted-state recovery
+- [v0.5.1 release preparation](releases/v0.5.1.md): upcoming security and maintenance
+  update; these notes do not establish publication
 - [Current release notes](releases/v0.5.0.md): exact v0.5.0 capabilities; this file is
   also an input to the release tooling
 - [GitHub Releases](https://github.com/alcimerio/ai-config-selector/releases): published artifacts and version history

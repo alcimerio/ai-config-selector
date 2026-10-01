@@ -431,7 +431,7 @@ func waitCodexProtectionReady(t *testing.T, path string, result *nativeCodexProt
 		if output.Present() {
 			outputState = "output-present"
 		}
-		t.Fatalf("Codex protection readiness %s (%s)", category, outputState)
+		t.Fatalf("Codex protection readiness %s (%s; known-failure=%s)", category, outputState, output.KnownFailure())
 	}
 	return ready
 }
@@ -456,13 +456,32 @@ func waitCodexProtectionReadyState(path string, result *nativeCodexProtectionRes
 }
 
 type nativeDiagnosticSink struct {
-	mutex   sync.Mutex
-	present bool
+	mutex        sync.Mutex
+	present      bool
+	knownFailure string
 }
 
 func (sink *nativeDiagnosticSink) Write(p []byte) (int, error) {
 	sink.mutex.Lock()
 	sink.present = sink.present || len(p) != 0
+	// Only retain an allowlisted label, never captured target output.
+	for _, category := range []launch.SandboxErrorCategory{
+		launch.SandboxInvalidDescriptor, launch.SandboxSetupFailed, launch.SandboxPolicyRejected,
+		launch.SandboxProcessStartFailed, launch.SandboxProcessWaitFailed, launch.SandboxUnsafePath,
+	} {
+		if bytes.Contains(p, []byte(string(category)+":")) {
+			sink.knownFailure = string(category)
+		}
+	}
+	for _, known := range []struct{ text, label string }{
+		{"contained interactive Codex failed", "interactive-failed"},
+		{"Codex executable changed after preflight", "executable-changed"},
+		{"Codex code-mode host changed after preflight", "companion-changed"},
+	} {
+		if bytes.Contains(p, []byte(known.text)) {
+			sink.knownFailure = known.label
+		}
+	}
 	sink.mutex.Unlock()
 	return len(p), nil
 }
@@ -474,6 +493,15 @@ func (sink *nativeDiagnosticSink) Present() bool {
 	return present
 }
 
+func (sink *nativeDiagnosticSink) KnownFailure() string {
+	sink.mutex.Lock()
+	defer sink.mutex.Unlock()
+	if sink.knownFailure == "" {
+		return "unclassified"
+	}
+	return sink.knownFailure
+}
+
 func nativeProtectionExitCategory(result *nativeCodexProtectionResult) string {
 	if result.err == nil {
 		return "early-exit-success"
@@ -482,6 +510,7 @@ func nativeProtectionExitCategory(result *nativeCodexProtectionResult) string {
 		if status, statusOK := exit.ProcessState.Sys().(syscall.WaitStatus); statusOK && status.Signaled() {
 			return "early-exit-signal"
 		}
+		return "early-exit-code-" + strconv.Itoa(exit.ExitCode())
 	}
 	return "early-exit"
 }
@@ -562,4 +591,16 @@ func nativeCodexFileIdentity(t *testing.T, path string) (uint64, uint64) {
 		t.Fatalf("protected path lacks stable identity: %s", path)
 	}
 	return uint64(stat.Dev), uint64(stat.Ino)
+}
+
+func TestNativeDiagnosticSinkRetainsOnlyKnownFailureLabel(t *testing.T) {
+	sink := &nativeDiagnosticSink{}
+	_, _ = sink.Write([]byte("private-output setup_failed: private-detail"))
+	if got := sink.KnownFailure(); got != "setup_failed" {
+		t.Fatalf("known category = %q", got)
+	}
+	_, _ = sink.Write([]byte("other-private-output"))
+	if got := sink.KnownFailure(); got != "setup_failed" {
+		t.Fatalf("unknown output changed category = %q", got)
+	}
 }

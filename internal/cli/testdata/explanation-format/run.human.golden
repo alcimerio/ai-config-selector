@@ -1,6 +1,6 @@
 Effective capability explanation for Profile "format-profile" (stored version 3)
 Intent: command
-Semantic authority digest: sha256:a2aec83b429d7ebfe2be5f3c96d8f5821d0d4d9fd048119dee631011ca6cfc54
+Semantic authority digest: sha256:6e4c3a6587b5f7dbf2e96814289e47c17dbb26c30177d8283ce79569fbc78c20
 Digest scope: semantic ACS authority and recipe requirements only; excluded local bindings are rechecked separately where execution requires it.
 
 Requested:
@@ -17,7 +17,7 @@ Target-added:
 
 Effective:
   executable.fixed-tool [filesystem]: access=read-execute; location=fixed-tool; names=fixed-search-name (reason=profile_visibility_identity_unchecked; source=profile:executables@v1)
-  runtime.devices [device]: mode=bounded-tty-random-null-fd (reason=acs_runtime; source=acs:native-sandbox@v1)
+  runtime.devices [device]: mode=inherited-and-owned-pty-random-null-fd (reason=acs_runtime; source=acs:native-sandbox@v1)
   runtime.environment [environment]: mode=conditional-inheritance-values-omitted; names=COLORTERM,LANG,LC_ALL,LC_CTYPE,TERM (reason=acs_runtime; source=acs:native-sandbox@v1)
   runtime.environment.fixed-path [environment]: mode=/usr/local/bin:/usr/bin:/bin; names=PATH (reason=acs_runtime; source=acs:native-sandbox@v1)
   runtime.environment.synthetic [environment]: mode=session-relative-values-omitted; names=HOME,TMPDIR,XDG_CACHE_HOME,XDG_CONFIG_HOME,XDG_DATA_HOME,XDG_STATE_HOME (reason=acs_runtime; source=acs:native-sandbox@v1)
