@@ -98,6 +98,12 @@ jobs:
       - name: Race test
         run: go test -race ./...
 
+      - name: Stress Profile Builder panic restoration
+        run: >-
+          go test -race ./internal/builder
+          -run '^TestProfileBuilderPTYRestoresTerminal/recovered_panic$'
+          -count=20 -timeout=2m
+
       - name: Build
         run: go build -o /tmp/acs ./cmd/acs
 

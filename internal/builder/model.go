@@ -60,6 +60,7 @@ type Model struct {
 	outcome             Outcome
 	terminalError       error
 	runtimeSaves        *saveRuntime
+	runtimePanics       *panicRuntime
 	mutation            *MutationOptions
 	prepared            PreparedMutation
 	previewDraft        category.Draft
@@ -149,8 +150,29 @@ func (m Model) WithContext(ctx context.Context) Model {
 func (m Model) Init() tea.Cmd { return nil }
 
 // Update applies terminal and user events to the root builder state.
-func (m Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
+func (m Model) Update(message tea.Msg) (next tea.Model, command tea.Cmd) {
+	returned := false
+	defer func() {
+		if !returned {
+			_ = recover()
+			next, command = m.callbackPanic()
+		}
+	}()
+	next, command = m.update(message)
+	returned = true
+	return next, command
+}
+
+func (m Model) update(message tea.Msg) (tea.Model, tea.Cmd) {
+	if m.runtimePanics.failed() {
+		return m.callbackPanic()
+	}
+	if m.terminalError != nil {
+		return m, tea.Quit
+	}
 	switch message := message.(type) {
+	case callbackPanicMsg:
+		return m.callbackPanic()
 	case discoveryCompletedMsg:
 		index := m.editorIndex(message.categoryID)
 		if index < 0 || m.editors[index].loadState != loading {
@@ -326,8 +348,17 @@ func (m Model) updateEditor(press tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 func (m Model) discoveryCommand(index int) tea.Cmd {
 	registration, ctx := m.editors[index].registration, m.context
-	return func() tea.Msg {
+	return func() (message tea.Msg) {
+		returned := false
+		defer func() {
+			if !returned {
+				_ = recover()
+				m.runtimePanics.record()
+				message = callbackPanicMsg{}
+			}
+		}()
 		discovered, err := registration.discover(ctx)
+		returned = true
 		return discoveryCompletedMsg{categoryID: registration.id, discovered: discovered, err: err}
 	}
 }
@@ -383,7 +414,7 @@ func (m Model) startSave() (tea.Model, tea.Cmd) {
 		if m.runtimeSaves != nil {
 			return m.runtimeSaves.execute(attemptContext, snapshot, save)
 		}
-		path, err := save(attemptContext, snapshot)
+		path, err := saveWithRecovery(attemptContext, snapshot, save)
 		return saveCompletedMsg{draft: snapshot, path: path, err: err}
 	}
 }
@@ -454,12 +485,14 @@ func Run(ctx context.Context, model Model, input io.Reader, output io.Writer) (O
 		ctx = context.Background()
 	}
 	// Keep terminal shutdown orderly: Bubble Tea killed shutdown can close a
-	// macOS cancellable reader before joining it. Our context still cancels
+	// macOS cancellable reader without its normal read-loop wait. Our context cancels
 	// discovery and saves; the watcher requests Quit and settlement follows.
 	runContext, cancel := context.WithCancel(ctx)
 	defer cancel()
 	tracker := &saveRuntime{}
 	model.runtimeSaves = tracker
+	panics := &panicRuntime{done: make(chan struct{}), saves: tracker}
+	model.runtimePanics = panics
 	program := tea.NewProgram(
 		model.WithContext(runContext),
 		tea.WithContext(context.WithoutCancel(ctx)),
@@ -475,15 +508,20 @@ func Run(ctx context.Context, model Model, input io.Reader, output io.Writer) (O
 	interrupted := make(chan struct{}, 1)
 	go func() {
 		defer close(watcherDone)
+		interrupt := true
 		select {
 		case <-ctx.Done():
 		case <-signals:
+		case <-panics.done:
+			interrupt = false
 		case <-stopped:
 			return
 		}
 		cancel()
 		tracker.stop()
-		interrupted <- struct{}{}
+		if interrupt {
+			interrupted <- struct{}{}
+		}
 		program.Quit()
 	}()
 	outcome, err := finishRuntime(program)
@@ -496,8 +534,18 @@ func Run(ctx context.Context, model Model, input io.Reader, output io.Writer) (O
 		}
 	default:
 	}
+	return settleRuntime(outcome, err, tracker, panics)
+}
 
+func settleRuntime(outcome Outcome, err error, tracker *saveRuntime, panics *panicRuntime) (Outcome, error) {
 	settled := tracker.settle()
+	if panics.failed() {
+		outcome = Outcome{}
+		if !errors.Is(err, tea.ErrProgramPanic) {
+			err = errors.Join(err, tea.ErrProgramPanic)
+		}
+	}
+
 	if settled != nil {
 		if settled.err == nil {
 			committed := Outcome{Draft: settled.draft, Path: settled.path, Create: true}
@@ -537,8 +585,26 @@ func cancellationOnly(err error) bool {
 	return err == context.Canceled || err == context.DeadlineExceeded
 }
 
-// View renders the single alternate-screen builder UI.
-func (m Model) View() tea.View {
+// View renders the single alternate-screen builder UI. Run owns panic reporting
+// and shutdown; a direct View call can only return a safe, empty view on panic.
+func (m Model) View() (view tea.View) {
+	if m.terminalError != nil || m.runtimePanics.failed() {
+		return stoppedView()
+	}
+	returned := false
+	defer func() {
+		if !returned {
+			_ = recover()
+			m.runtimePanics.record()
+			view = stoppedView()
+		}
+	}()
+	view = m.view()
+	returned = true
+	return view
+}
+
+func (m Model) view() tea.View {
 	if m.tooSmall() {
 		footer := "\n\nResize the terminal to continue."
 		switch m.screen {

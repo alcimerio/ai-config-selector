@@ -25,7 +25,7 @@ import (
 // emits QuitMsg for SIGTERM and would otherwise return a nil runtime error.
 func TestMutationRuntimeCancellationWaitsForCommitOutcome(t *testing.T) {
 	for _, termination := range []string{"context", "SIGTERM", "SIGINT", "Ctrl+C", "input-error", "input-error-with-cancel"} {
-		for _, state := range []string{"success", "committed", "unknown"} {
+		for _, state := range []string{"success", "committed", "unknown", "panic"} {
 			for _, flow := range []string{"create", "edit"} {
 				t.Run(termination+"/"+state+"/"+flow, func(t *testing.T) {
 					binding, registry := newBuilderFixture(t)
@@ -36,6 +36,9 @@ func TestMutationRuntimeCancellationWaitsForCommitOutcome(t *testing.T) {
 						<-release
 						if state == "success" {
 							return "saved", nil
+						}
+						if state == "panic" {
+							panic("private save callback detail")
 						}
 						return "", &profilerepo.OutcomeError{Outcome: profilerepo.Outcome{State: profilerepo.State(state), RecoveryRequired: true}, Err: context.Canceled}
 					})
@@ -123,6 +126,16 @@ func TestMutationRuntimeCancellationWaitsForCommitOutcome(t *testing.T) {
 							}
 							if result.err != nil || !result.outcome.Create || result.outcome.Path != "saved" {
 								t.Fatalf("lost committed success: %#v %v", result.outcome, result.err)
+							}
+							return
+						}
+						if state == "panic" {
+							assertUnknownSavePanic(t, result.err)
+							if result.outcome.Create || result.outcome.Path != "" {
+								t.Fatal("panic fabricated a committed outcome")
+							}
+							if strings.HasPrefix(termination, "input-error") && !errors.Is(result.err, inputFailure) {
+								t.Fatalf("panic masked terminal input failure: %v", result.err)
 							}
 							return
 						}
