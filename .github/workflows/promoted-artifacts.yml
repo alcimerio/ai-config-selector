@@ -35,6 +35,9 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      - name: Scan candidate source for Go vulnerabilities
+        run: scripts/check-go-vulnerabilities.sh source
+
       - name: Build and verify candidate artifact set
         run: scripts/release-candidate.sh "$ACS_CANDIDATE_VERSION"
 
@@ -119,6 +122,12 @@ jobs:
             "${{ matrix.arch }}" \
             dist/release-candidate \
             "$install_root/bin"
+
+      - name: Scan exact installed candidate for Go vulnerabilities
+        shell: bash
+        run: |
+          scripts/check-go-vulnerabilities.sh binary \
+            "${RUNNER_TEMP}/acs-promoted-${{ matrix.os }}-${{ matrix.arch }}/bin/acs"
 
       - name: Install verified matching authentication target
         shell: bash

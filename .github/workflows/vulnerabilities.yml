@@ -37,18 +37,5 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Install pinned govulncheck
-        # golang.org/x/vuln v1.8.0; review this immutable source pin with Go upgrades.
-        env:
-          GOBIN: ${{ runner.temp }}/govulncheck-bin
-        run: go install golang.org/x/vuln/cmd/govulncheck@709015412431dd2b5b28a53c06c70bc02d49074c
-
       - name: Scan supported release target
-        env:
-          GOOS: darwin
-          GOARCH: arm64
-          CGO_ENABLED: "0"
-          GOVULNCHECK: ${{ runner.temp }}/govulncheck-bin/govulncheck
-        # Text mode returns a failing status for reachable vulnerabilities.
-        # JSON/SARIF output alone would not preserve that vulnerability gate.
-        run: '"$GOVULNCHECK" -test -show=verbose -format=text ./...'
+        run: scripts/check-go-vulnerabilities.sh source

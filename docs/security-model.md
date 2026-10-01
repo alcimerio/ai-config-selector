@@ -123,6 +123,20 @@ records checksums and GitHub provenance. SHA-256 only proves identity relative t
 trusted expected bytes. The archive and checksum manifest are attestation subjects;
 the installer is part of the byte-matched set but is not itself an attestation subject.
 
+Current-source release automation also requires Go vulnerability checks of the
+tagged source (including tests for `darwin/arm64`, CGO disabled) and the exact
+installed candidate. PR promoted-artifact CI exercises the same gates. The
+scanner is pinned, but its public advisory database is live: a prior clean
+result may change without a code change. Reachable source findings, binary
+findings and scanner/database failures block promotion.
+
+A source pass means no known reachable Go vulnerability was reported for that
+configuration. Binary analysis is conservative and falls back to module-level
+advisories when symbols are unavailable; a binary finding need not prove a
+reachable call. Neither mode establishes that the entire module graph, Actions,
+external target binaries or all security risks are covered. See the
+[check semantics and reproduction steps](../CONTRIBUTING.md#dependency-maintenance-and-vulnerability-checks).
+
 v0.5.0 is unsigned and unnotarized. Do not remove quarantine, disable Gatekeeper,
 or weaken Seatbelt to work around a failure. A release gate is not real-account
 or week-long daily-use evidence; those observations are separate evidence categories; see
