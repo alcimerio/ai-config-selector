@@ -26,6 +26,7 @@ import (
 	"github.com/alcimerio/ai-config-selector/internal/launch"
 	"github.com/alcimerio/ai-config-selector/internal/runcommand"
 	"github.com/alcimerio/ai-config-selector/internal/session"
+	"github.com/alcimerio/ai-config-selector/internal/skillmaterial"
 	"github.com/alcimerio/ai-config-selector/internal/skills"
 	"golang.org/x/sys/unix"
 )
@@ -1024,26 +1025,10 @@ func copyDevinCredentialIfPresent(source, destination string) error {
 	if !info.Mode().IsRegular() {
 		return errors.New("allowlisted credentials path is not a regular file")
 	}
-	if err := os.MkdirAll(filepath.Dir(destination), 0o700); err != nil {
-		return err
-	}
-	in, err := os.Open(source)
-	if err != nil {
+	if err := skillmaterial.CopyFile(source, destination, 0o600); err != nil {
 		return errors.New("allowlisted credentials could not be copied safely")
 	}
-	defer in.Close()
-	out, err := os.OpenFile(destination, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-	if err != nil {
-		return errors.New("allowlisted credentials could not be copied safely")
-	}
-	_, copyErr := io.Copy(out, in)
-	syncErr := out.Sync()
-	closeErr := out.Close()
-	if copyErr != nil || syncErr != nil || closeErr != nil {
-		_ = os.Remove(destination)
-		return errors.New("allowlisted credentials could not be copied safely")
-	}
-	return os.Chmod(destination, 0o600)
+	return nil
 }
 
 func cleanupPrecedence(outcome, cleanup error) error {

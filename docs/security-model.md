@@ -97,6 +97,19 @@ that is not a kernel-level promise that a cooperating same-user process can neve
 replace a pathname after its final check. Keep target binaries and selected material
 under your control and avoid concurrent changes during launch.
 
+Current-source Skill copying opens the selected bundle root, which may be a
+symlink alias, then traverses descendants using pinned directory descriptors,
+no-follow child opens, and validation of opened objects. Descendant symlinks stay
+symlinks, including dangling and out-of-bundle targets; their contents are not
+copied. Output files are created exclusively and retain their permission bits.
+
+This copy assumes a private destination parent provided by Session
+materialization. It rejects directory symlinks at the bundle destination and
+below, but does not authenticate the initial root selection, snapshot concurrent
+edits, exclude hard links or mounts, or change runtime access to copied links.
+The separate allowlisted Devin credential copy still accepts symlink-backed
+regular files and validates the opened input before creating output.
+
 Session removal is logical cleanup, not a guarantee of secure physical erasure.
 If ACS cannot prove that descendants and ownership have settled, it retains or
 quarantines the Session. Do not force-delete that state. Use
