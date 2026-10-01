@@ -11,9 +11,9 @@ require (
 	github.com/charmbracelet/x/vt v0.0.0-20260913004009-c615ff2f7805
 	github.com/creack/pty v1.1.24
 	github.com/ebitengine/purego v0.10.0
-	github.com/klauspost/compress v1.18.0
+	github.com/klauspost/compress v1.18.7
 	golang.org/x/sys v0.46.0
-	golang.org/x/text v0.39.0
+	golang.org/x/text v0.42.0
 )
 
 require (
@@ -28,5 +28,5 @@ require (
 	github.com/muesli/cancelreader v0.2.2 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
-	golang.org/x/sync v0.21.0 // indirect
+	golang.org/x/sync v0.23.0 // indirect
 )
