@@ -7,7 +7,7 @@ import (
 
 func TestDependencyMaintenanceDoesNotHideSecurityFindings(t *testing.T) {
 	workflow := readRepositoryFile(t, "..", ".github/workflows/vulnerabilities.yml")
-	for _, required := range []string{"-test -show=verbose -format=text ./...", "GOTOOLCHAIN: local", "GOOS: darwin", "GOARCH: arm64"} {
+	for _, required := range []string{"scripts/check-go-vulnerabilities.sh source", "GOTOOLCHAIN: local"} {
 		if !strings.Contains(workflow, required) {
 			t.Errorf("vulnerability workflow omits %q", required)
 		}

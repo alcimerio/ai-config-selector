@@ -48,6 +48,9 @@ jobs:
           echo "source_commit=${identity[0]}" >>"$GITHUB_OUTPUT"
           echo "tag_object=${identity[1]}" >>"$GITHUB_OUTPUT"
 
+      - name: Scan tagged source for Go vulnerabilities
+        run: scripts/check-go-vulnerabilities.sh source
+
       - name: Build the candidate exactly once
         run: scripts/release-candidate.sh "$GITHUB_REF_NAME"
 
@@ -139,6 +142,12 @@ jobs:
             "${{ matrix.arch }}" \
             dist/release-candidate \
             "$install_root/bin"
+
+      - name: Scan exact installed candidate for Go vulnerabilities
+        shell: bash
+        run: |
+          scripts/check-go-vulnerabilities.sh binary \
+            "${RUNNER_TEMP}/acs-release-${{ matrix.os }}-${{ matrix.arch }}/bin/acs"
 
       - name: Install verified matching authentication target
         shell: bash

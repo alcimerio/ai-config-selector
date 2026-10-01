@@ -49,30 +49,48 @@ Updates require review and the existing native gates;
 they are not merged automatically. Keep Actions pinned to full commit SHAs.
 
 The [Go vulnerability workflow](.github/workflows/vulnerabilities.yml) runs on
-PRs, pushes to `main`, weekly, and manually. It scans all packages, including
-test dependencies, for the
-supported `darwin/arm64`, `CGO_ENABLED=0` release configuration, using the exact
-Go version in `go.mod` and an immutable `govulncheck` source pin. Review the
-scanner pin when upgrading Go; Dependabot does not update this inline tool pin.
-The scanner loads source without running ACS or its tests. Text output makes
-reachable findings fail the job; database or analysis errors also fail closed.
-Verbose output also lists vulnerable modules and packages that are not reachable.
-Review those findings separately: a passing exit status does not mean every
-module is advisory-free.
+PRs, pushes to `main`, weekly, and manually. The release-tag and promoted-artifact
+workflows also run the same source gate before building, and scan the exact
+installed candidate on the native runner before the shared native tests.
+Attestation and publication require that native job to succeed. These gates do
+not rebuild or substitute the candidate.
 
-To reproduce the scan using the repository's Go toolchain:
+All three workflows use [one helper](scripts/check-go-vulnerabilities.sh) with
+an immutable `govulncheck` source pin and the exact Go version in `go.mod`.
+Review that pin when upgrading Go; Dependabot does not update it. The helper
+installs the scanner for the host in a disposable directory, ignoring inherited
+cross-compilation settings, then scans source as `darwin/arm64`,
+`CGO_ENABLED=0`, including tests. It loads source without executing ACS or tests.
+Binary mode reads the supplied installed file and verifies its SHA-256 is
+unchanged across the scan; it does not execute or rebuild ACS.
+
+The helper fixes the database to the live public `https://vuln.go.dev` service.
+The scanner is pinned; advisory data is not. The same source or candidate can
+fail later as advisories change. Text/version output records scanner, Go and
+database metadata and keeps findings and scanner/database errors fail-closed.
+Do not replace it with JSON/SARIF-only output, which can succeed with findings.
+
+Source findings are based on reachable symbols, including test paths. Verbose
+output also lists vulnerable modules/packages without a reachable call; review
+those separately. Binary analysis is more conservative: it cannot establish
+source call paths and can report unreachable included symbols. When symbols
+cannot be extracted (including stripped artifacts), the scanner falls back to
+module-level advisory matches. Those findings block the binary gate too; they
+are not proof that each vulnerable function is callable. See the
+[scanner's documented limitations](https://pkg.go.dev/golang.org/x/vuln/cmd/govulncheck#hdr-Limitations).
+
+To reproduce either scan using the repository's exact Go toolchain:
 
 ```sh
-go install golang.org/x/vuln/cmd/govulncheck@709015412431dd2b5b28a53c06c70bc02d49074c
-GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 GOTOOLCHAIN=local \
-  "$(go env GOPATH)/bin/govulncheck" -test -show=verbose -format=text ./...
+scripts/check-go-vulnerabilities.sh source
+scripts/check-go-vulnerabilities.sh binary /absolute/path/to/installed/acs
 ```
 
-Use the binary in `GOBIN` instead if that variable is set. Investigate a finding
-and update the affected dependency or Go toolchain; do not bypass the check or
-add arbitrary exclusions. A clean scan covers known reachable Go
-vulnerabilities for this build configuration, not every security risk, and does
-not replace the native macOS tests.
+Investigate failures and update the affected dependency or Go toolchain; do not
+bypass findings or add arbitrary exclusions. A passing scan is not a complete
+module-graph audit, coverage of GitHub Actions or external target executables,
+or proof against unknown vulnerabilities. It does not replace native macOS
+containment tests, dependency review, or separate target verification.
 
 Dependabot version updates are distinct from GitHub's Dependabot alerts and
 security updates. This configuration does not enable or prove access to those
@@ -276,8 +294,9 @@ install.sh
 ```
 
 The tag workflow validates annotated tag identity and ancestry, builds the
-candidate once, installs the exact bytes on the native Apple Silicon target,
-runs normal, race, and black-box acceptance tests, attests the archive and
+candidate once after a tagged-source vulnerability scan, installs the exact bytes
+on the native Apple Silicon target, scans that installed binary, runs normal,
+race, and black-box acceptance tests, attests the archive and
 checksum manifest, and publishes through the protected `release` environment.
 
 Never move or delete a release tag. If a candidate fails, fix the source in a
