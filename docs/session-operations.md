@@ -41,7 +41,9 @@ force/proof override.
 
 Only successful physical removal followed by durable publication reports
 `removed`. Removed metadata is retained for 720 hours; a bounded maintenance
-pass may delete it during a later mutating Session operation. `unproven`,
+pass may delete it during a later mutating Session operation, but only after
+private capability and root-binding finalization is complete. Pending or
+unverifiable finalization evidence is retained for recovery regardless of age. `unproven`,
 `unknown`, and `corrupt` evidence has no automatic destructive expiry. Never
 delete Session roots, lease files, protection, capabilities, proofs, or Codex
 markers by hand.

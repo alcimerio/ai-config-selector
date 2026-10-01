@@ -24,6 +24,7 @@ type privateDirectory struct {
 	afterRename  func(string) error
 	beforeUnlink func(string) error
 	afterUnlink  func(string) error
+	beforeSync   func() error
 }
 
 func pinPrivateChild(parent *privateDirectory, name string, create bool) (*privateDirectory, error) {
@@ -265,6 +266,11 @@ func (directory *privateDirectory) unlink(name string) error {
 func (directory *privateDirectory) sync() error {
 	if directory == nil || directory.validate() != nil {
 		return errors.New("private directory changed")
+	}
+	if directory.beforeSync != nil {
+		if err := directory.beforeSync(); err != nil {
+			return err
+		}
 	}
 	return directory.file.Sync()
 }

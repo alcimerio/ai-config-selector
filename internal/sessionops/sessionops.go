@@ -1109,11 +1109,17 @@ func (store Store) pruneRemoved() error {
 		}
 		fresh, freshExists, freshErr := store.readRecord(id)
 		if freshErr == nil && freshExists && fresh.Revision == rec.Revision && fresh.State == StateRemoved {
-			if err := store.storage.capabilities.unlink(id + ".json"); err == nil {
-				// Per-ID lock inodes are permanent. Unlinking one while this
-				// descriptor is held would let a concurrent opener create and
-				// lock a different inode for the same Session ID.
-				_ = store.storage.records.unlink(id + ".json")
+			// Removed is published before typed marker and private binding
+			// finalization. Retention must never discard their retry authority.
+			_, capExists, capErr := store.readCapability(id)
+			if capErr == nil && !capExists && validCompletionBinding(fresh) {
+				_, bound, bindingErr := store.readRootBinding(fresh.CompletionRoot)
+				if bindingErr == nil && !bound && store.storage.capabilities.sync() == nil && store.storage.locks.sync() == nil {
+					// Per-ID lock inodes are permanent. Unlinking one while this
+					// descriptor is held would let a concurrent opener create and
+					// lock a different inode for the same Session ID.
+					_ = store.storage.records.unlink(id + ".json")
+				}
 			}
 		}
 		closeLocked(fence)

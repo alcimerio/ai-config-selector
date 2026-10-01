@@ -548,3 +548,147 @@ func TestPrivateChildRejectsParentReplacementWithoutFollowingNewPath(t *testing.
 		t.Fatalf("replacement path changed = (%q, %v)", got, err)
 	}
 }
+
+func TestRetentionPreservesIncompleteFinalization(t *testing.T) {
+	for _, retryPath := range []string{"direct", "general"} {
+		t.Run(retryPath, func(t *testing.T) {
+			sessions := filepath.Join(t.TempDir(), ".acs", "sessions")
+			store, id, rootName, _, challenge := newFinalizationFaultFixture(t, sessions)
+			fault := errors.New("injected marker finalization failure")
+			if err := store.FinalizeRemoval(rootName, challenge, func() (bool, error) {
+				return true, nil
+			}, func() error { return fault }); !errors.Is(err, fault) {
+				t.Fatalf("initial finalization = %v", err)
+			}
+			store, err := (Store{SessionsDirectory: sessions}).bindStorage(false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer store.storage.close()
+			store.Now = func() time.Time { return time.Now().Add(RemovedRetention + time.Hour) }
+			if err := store.pruneRemoved(); err != nil {
+				t.Fatal(err)
+			}
+			if _, exists, err := store.readRecord(id); err != nil || !exists {
+				t.Fatalf("retention discarded incomplete finalization: exists=%v err=%v", exists, err)
+			}
+			markerCalls := 0
+			if retryPath == "direct" {
+				if err := store.FinalizeRemoval(rootName, challenge, func() (bool, error) {
+					t.Fatal("retry repeated physical removal")
+					return false, nil
+				}, func() error { markerCalls++; return nil }); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				store.AuthRecovery = func() (AuthRecovery, error) {
+					return faultRetryAuth{rootName: rootName, challenge: challenge, finalized: &markerCalls}, nil
+				}
+				if result, err := store.Recover(id); err != nil || result.Outcome != "removed" {
+					t.Fatalf("retry = (%+v, %v)", result, err)
+				}
+			}
+			if markerCalls != 1 {
+				t.Fatalf("marker calls = %d", markerCalls)
+			}
+			store, err = (Store{SessionsDirectory: sessions, Now: store.Now}).bindStorage(false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer store.storage.close()
+			if err := store.pruneRemoved(); err != nil {
+				t.Fatal(err)
+			}
+			if _, exists, err := store.readRecord(id); err != nil || exists {
+				t.Fatalf("completed record retained: exists=%v err=%v", exists, err)
+			}
+		})
+	}
+}
+
+func TestRetentionPreservesUnverifiableFinalization(t *testing.T) {
+	for _, evidence := range []string{"root binding", "malformed capability", "malformed root binding", "missing completion binding"} {
+		t.Run(evidence, func(t *testing.T) {
+			sessions := filepath.Join(t.TempDir(), ".acs", "sessions")
+			store, id, rootName, _, _ := newFinalizationFaultFixture(t, sessions)
+			defer store.storage.close()
+			rec, _, err := store.readRecord(id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			cap, _, err := store.readCapability(id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			old := formatTime(time.Now().Add(-RemovedRetention - time.Hour))
+			rec.State, rec.RemovedAt, rec.UpdatedAt = StateRemoved, old, old
+			setCompletionBinding(&rec, cap)
+			if evidence == "missing completion binding" {
+				rec.CompletionRoot, rec.CompletionChallengeHash = "", ""
+			}
+			if err := store.writeRecord(rec); err != nil {
+				t.Fatal(err)
+			}
+			if evidence == "malformed capability" {
+				if err := os.WriteFile(filepath.Join(store.storage.capabilities.path, id+".json"), []byte("{}"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			} else if err := store.removeCapability(id); err != nil {
+				t.Fatal(err)
+			}
+			if evidence == "malformed root binding" {
+				if err := os.WriteFile(filepath.Join(store.storage.locks.path, rootBindingName(rootName)), []byte("{}"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if evidence == "missing completion binding" {
+				if err := store.removeRootBinding(rootName); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := store.pruneRemoved(); err != nil {
+				t.Fatal(err)
+			}
+			if _, exists, err := store.readRecord(id); err != nil || !exists {
+				t.Fatalf("retention discarded unverifiable finalization: exists=%v err=%v", exists, err)
+			}
+		})
+	}
+}
+
+func TestRetentionRequiresDurablePrivateAbsence(t *testing.T) {
+	for _, directory := range []string{"capabilities", "locks"} {
+		t.Run(directory, func(t *testing.T) {
+			sessions := filepath.Join(t.TempDir(), ".acs", "sessions")
+			store, id, rootName, _, challenge := newFinalizationFaultFixture(t, sessions)
+			injected := errors.New("injected post-unlink failure")
+			store.storage.capabilities.afterUnlink = func(string) error { return injected }
+			if err := store.FinalizeRemoval(rootName, challenge, func() (bool, error) { return true, nil }, func() error { return nil }); err == nil {
+				t.Fatalf("finalization = %v", err)
+			}
+			store, err := (Store{SessionsDirectory: sessions, Now: func() time.Time { return time.Now().Add(RemovedRetention + time.Hour) }}).bindStorage(false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer store.storage.close()
+			target := store.storage.capabilities
+			if directory == "locks" {
+				target = store.storage.locks
+			}
+			target.beforeSync = func() error { return injected }
+			if err := store.pruneRemoved(); err != nil {
+				t.Fatal(err)
+			}
+			if _, exists, err := store.readRecord(id); err != nil || !exists {
+				t.Fatalf("pruned before durable absence: exists=%v err=%v", exists, err)
+			}
+			target.beforeSync = nil
+			if err := store.pruneRemoved(); err != nil {
+				t.Fatal(err)
+			}
+			if _, exists, err := store.readRecord(id); err != nil || exists {
+				t.Fatalf("durable completed record retained: exists=%v err=%v", exists, err)
+			}
+		})
+	}
+}
