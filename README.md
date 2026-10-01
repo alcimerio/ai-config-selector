@@ -1,18 +1,26 @@
 # AI Config Selector
 
-AI Config Selector (`acs`) lets you save a named **Profile** of capabilities,
-then run Devin, Codex, a shell, or a command inside a native macOS sandbox with
-those capabilities. Use it to choose which Skills, files, environment variables,
-and local MCP servers a coding session can access instead of inheriting your
-whole host configuration.
+Choose what your AI coding session can access.
+
+AI Config Selector (`acs`) is a Go CLI that runs Devin, Codex, a shell, or a
+command inside a native macOS sandbox. Save reusable **Profiles** of local
+Skills, instructions, file permissions, environment references, and local MCP
+servers, then launch them from the project you want to work on.
 
 **Supported runtime:** macOS 26 on Apple Silicon (`darwin/arm64`).
 **Latest published release:** [v0.5.0](https://github.com/alcimerio/ai-config-selector/releases/tag/v0.5.0).
-ACS is a Go command-line tool. It does not include Devin or Codex; install the
-target you want separately. You can try the sandbox without an AI account.
+Devin and Codex are installed separately. You can try the sandbox without an
+AI account. Linux and Intel Macs are not supported runtimes.
 
 [Get started](docs/getting-started.md) · [Documentation](docs/README.md) ·
 [Security boundaries](docs/security-model.md) · [Contribute](CONTRIBUTING.md)
+
+## What you can do
+
+- Keep separate Profiles for read-only review and coding work
+- Expose selected local Skills and tools through a temporary, synthetic home
+- Inspect effective permissions before launching a target
+- Reuse common capabilities across targets with explicit target overlays
 
 ## How it works
 
@@ -25,9 +33,8 @@ target you want separately. You can try the sandbox without an AI account.
    process and its descendants, then waits for cleanup proof before removing
    the Session. Uncertain cleanup is retained for conservative recovery.
 
-The same common Profile capabilities can be used by multiple targets. Target
-**overlays** add the fixed Devin or Codex integration. A Profile created for
-Devin is not automatically a Codex Profile; see the
+Target **overlays** add the fixed Devin or Codex integration. A Devin Profile
+is not automatically a Codex Profile; see the
 [common format](docs/common-profile-format.md) for explicit overlays.
 
 ## Install
@@ -67,42 +74,16 @@ Neither is Apple approval or a malware review. Do not disable Gatekeeper,
 remove quarantine, or weaken sandbox settings to make ACS run. See
 [installation and recovery](docs/manual-upgrade-recovery.md).
 
-### Upgrading from v0.4.0
+### Upgrading
 
-The published v0.4.0 binary has no `acs update` command. Install v0.5.0 into a
-**new, empty** user-owned directory and retain the old binary. Use a scratch
-directory that does not already contain `install-v0.5.0.sh`:
+Already have ACS? Follow the [upgrade and recovery guide](docs/manual-upgrade-recovery.md)
+to retain your working binary and verify the replacement before switching.
+v0.4.0 has no updater; the guide includes that bootstrap path.
 
-<!-- published-v050-bootstrap-example -->
-```sh
-set -eu
-release_version=v0.5.0
-release_url="https://github.com/alcimerio/ai-config-selector/releases/download/$release_version"
-bootstrap_root="$HOME/.local/opt/acs-$release_version"
-mkdir -p "$HOME/.local/opt"
-test ! -e "$bootstrap_root"
-mkdir -m 700 "$bootstrap_root"
-curl --fail --location --proto '=https' --tlsv1.2 \
-  --output install-v0.5.0.sh "$release_url/install.sh"
-printf '%s  %s\n' \
-  '5723249bb5d69b5878e9178e6dc7cb45812d8d6930029d8c174b5acab3a5b38f' install-v0.5.0.sh \
-  | shasum -a 256 -c -
-less install-v0.5.0.sh
-sh ./install-v0.5.0.sh --bin-dir "$bootstrap_root"
-"$bootstrap_root/acs" version
-```
-
-Before newer-format writes, finish active work and preserve private quiescent
-Profile-file copies as described in the [recovery guide](docs/manual-upgrade-recovery.md).
-Then deliberately select the new directory with `PATH` and check `command -v acs`.
-Binary rollback does not downgrade Profiles, identities, history, or Sessions.
-Keep a compatible v0.5.0 binary available for inspecting or recovering newer data.
-
-With an existing supported v0.5.0 installer layout, `acs update --check` reads
-stable-release metadata without changing files; `acs update` explicitly installs
-a newer stable release. [Update and rollback limits](docs/manual-upgrade-recovery.md)
-cover layout restrictions and explicit version selection. There are no background
-update checks, package-manager distribution, or uninstaller.
+For supported v0.5.0 installer layouts, `acs update --check` checks stable-release
+metadata without changing files, and `acs update` installs a newer stable release.
+Binary rollback does not downgrade stored data. There are no background update
+checks, package-manager distribution, or uninstaller.
 
 ### Build from source
 
@@ -119,7 +100,7 @@ export PATH="$PWD/bin:$PATH"
 A source build reports `acs devel` and cannot self-update. See
 [Contributing](CONTRIBUTING.md) for checks and release-evidence requirements.
 
-## Try a credential-free sandbox
+## Quickstart: try a credential-free sandbox
 
 No Devin or Codex installation is needed for this path:
 
@@ -191,17 +172,31 @@ v0.3.3 is the final release with Linux support. The Linux/Bubblewrap sandbox
 backend has been removed; portable source checks do not imply runtime support.
 Historical v0.4.0 Intel assets do not make Intel Macs supported by v0.5.0.
 
-## Project status and contributing
+## Contributing and getting help
 
-Start with the [architecture](docs/architecture.md) and [contribution guide](CONTRIBUTING.md).
-The [documentation index](docs/README.md) separates current user guides,
-maintainer procedures, research, and historical release records.
+Bug reports, documentation fixes, and focused pull requests are welcome.
 
-Release-specific changes are in the [v0.5.0 release notes](docs/releases/v0.5.0.md)
-and [GitHub Releases](https://github.com/alcimerio/ai-config-selector/releases).
-Maintainer verification and publication procedures live in
-[Contributing](CONTRIBUTING.md). Native tests do not replace real-account or
-sustained daily-use observations.
+- Start with [Contributing](CONTRIBUTING.md) for setup, development rules, and checks
+- Read the [architecture](docs/architecture.md) before changing execution or containment
+- Check [troubleshooting](docs/troubleshooting.md), then [open an issue](https://github.com/alcimerio/ai-config-selector/issues/new)
+  with your ACS version, macOS version, and a minimal sanitized reproduction
+- Discuss changes to permissions or supported targets in an issue before implementing them
+
+Do not post credentials, target output, Session contents, private paths,
+environment values, or generated sandbox policy. See the
+[security model](docs/security-model.md) for reporting guidance.
+
+## Documentation and releases
+
+The [documentation index](docs/README.md) separates user guides, maintainer
+procedures, research, and historical records. Start with the
+[walkthrough](docs/getting-started.md) for Devin or Codex setup.
+
+See [GitHub Releases](https://github.com/alcimerio/ai-config-selector/releases)
+for published artifacts and release notes. Documentation on `main` can describe
+changes that have not shipped; use the documentation at your release tag when
+checking release behavior. Native tests do not replace real-account or sustained
+daily-use observations.
 
 ## License
 

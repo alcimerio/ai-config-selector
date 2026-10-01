@@ -12,7 +12,7 @@ import (
 	"testing"
 )
 
-func TestPublishedV050InstallerExamplesVerifyBeforeExecution(t *testing.T) {
+func TestPublishedV050FreshInstallerExampleVerifiesBeforeExecution(t *testing.T) {
 	const publishedInstallerSHA256 = "5723249bb5d69b5878e9178e6dc7cb45812d8d6930029d8c174b5acab3a5b38f"
 	readme := readRepositoryFile(t, "..", "README.md")
 	installer := `#!/bin/sh
@@ -36,7 +36,6 @@ chmod 0700 "$destination/acs"
 		installed string
 	}{
 		{name: "fresh-install", file: "install.sh", installed: ".local/bin/acs"},
-		{name: "bootstrap", file: "install-v0.5.0.sh", installed: ".local/opt/acs-v0.5.0/acs"},
 	} {
 		t.Run(example.name, func(t *testing.T) {
 			pattern := regexp.MustCompile("(?s)<!-- published-v050-" + example.name + "-example -->\\n```sh\\n(.*?)\\n```")
@@ -107,11 +106,6 @@ esac
 			installed := filepath.Join(goodHome, example.installed)
 			if output, err := exec.Command(installed).CombinedOutput(); err != nil || string(output) != "acs v0.5.0\n" {
 				t.Fatalf("installed identity = %q, %v", output, err)
-			}
-			if example.name == "bootstrap" {
-				if output, err := run(goodHome, false); err == nil {
-					t.Fatalf("bootstrap example reused an existing destination:\n%s", output)
-				}
 			}
 			if downloads := strings.Count(string(mustReadFile(t, log)), "download\n"); downloads != 2 {
 				t.Fatalf("download count = %d, want 2", downloads)

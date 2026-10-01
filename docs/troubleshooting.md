@@ -9,7 +9,7 @@ Use `acs COMMAND --help` for that binary's grammar.
 | Symptom | Check | Safe next step |
 | --- | --- | --- |
 | `acs: command not found` | `"$HOME/.local/bin/acs" version` for the default installer | Add the intended directory to the current terminal's `PATH`; the installer does not edit startup files |
-| A documented command is unknown | `acs version`; v0.4.0 lacks the newer Profile, auth and update commands | Follow the [v0.5.0 installation/upgrade](../README.md#upgrading-from-v040) instructions and verify command resolution |
+| A documented command is unknown | `acs version`; v0.4.0 lacks the newer Profile, auth and update commands | Follow the [v0.5.0 installation/upgrade](manual-upgrade-recovery.md) instructions and verify command resolution |
 | `unsupported_platform` / backend unavailable | macOS 26, Apple Silicon, system `/usr/bin/sandbox-exec`; `acs doctor` | Use a supported host; do not bypass containment or weaken security settings |
 | Native tests fail only inside another sandbox | Run context and [Contributing](../CONTRIBUTING.md) | Run native tests from a normal supported macOS terminal; report which environment failed |
 | Skill missing from builder | Immediate child bundle under `~/.agents/skills` or `~/.config/devin/skills`, regular `SKILL.md` | Check source layout, clear the search, restart builder after adding material |

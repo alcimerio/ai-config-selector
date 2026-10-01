@@ -81,3 +81,15 @@ func TestDocumentationIndexCoversMaintainedGuides(t *testing.T) {
 		}
 	}
 }
+
+// Keep the README focused on first use; upgrade safety stays in the executable
+// examples exercised by TestManualUpgradeExamples.
+func TestReadmeRoutesExistingInstallsToRecoveryGuide(t *testing.T) {
+	readme := readRepositoryFile(t, "..", "README.md")
+	if !strings.Contains(readme, "[upgrade and recovery guide](docs/manual-upgrade-recovery.md)") {
+		t.Fatal("README must route existing installs to the tested recovery procedure")
+	}
+	if strings.Contains(readme, "published-v050-bootstrap-example") {
+		t.Fatal("README duplicates the recovery guide's bootstrap procedure")
+	}
+}
