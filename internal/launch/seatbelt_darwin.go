@@ -89,6 +89,17 @@ func verifySeatbeltBackend(ctx context.Context, executable string) error {
 }
 
 func (backend *seatbeltBackend) prepare(ctx context.Context, request validatedProcessRequest) (Process, error) {
+	terminal, terminalPins, err := pinSeatbeltTerminal(request.terminal)
+	if err != nil {
+		return nil, sandboxError(SandboxInvalidDescriptor, err)
+	}
+	request.terminal = terminal
+	prepared := false
+	defer func() {
+		if !prepared {
+			closeSeatbeltTerminalPins(terminalPins)
+		}
+	}()
 	policy, definitions, err := backend.policy(request)
 	if err != nil {
 		return nil, sandboxError(SandboxSetupFailed, err)
@@ -176,20 +187,22 @@ func (backend *seatbeltBackend) prepare(ctx context.Context, request validatedPr
 	command.Stdout = request.terminal.Output
 	command.Stderr = request.terminal.ErrorOutput
 	command.ExtraFiles = []*os.File{proxyStatus, helperControl}
-	terminal, foregroundGroup := seatbeltForegroundTerminal(request.terminal)
+	foregroundTerminal, foregroundGroup := seatbeltForegroundTerminal(request.terminal)
 	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	if terminal != nil {
+	if foregroundTerminal != nil {
 		command.SysProcAttr.Foreground = true
-		command.SysProcAttr.Ctty = int(terminal.Fd())
+		command.SysProcAttr.Ctty = int(foregroundTerminal.Fd())
 	}
 	process := &seatbeltProcess{
-		ctx: ctx, command: command, terminal: terminal, foregroundGroup: foregroundGroup,
-		cleanupDone: make(chan struct{}), supervised: true, control: control,
+		ctx: ctx, command: command, terminal: foregroundTerminal, foregroundGroup: foregroundGroup,
+		terminalPins: terminalPins,
+		cleanupDone:  make(chan struct{}), supervised: true, control: control,
 		helperControl: helperControl, statusControl: statusControl, proxyStatus: proxyStatus,
 		challenge: challenge, environmentProjection: request.environmentProjection,
 	}
 	command.Cancel = process.cancel
 	command.WaitDelay = time.Second
+	prepared = true
 	return process, nil
 }
 
@@ -218,6 +231,7 @@ type seatbeltProcess struct {
 	ctx                       context.Context
 	command                   *exec.Cmd
 	terminal                  *os.File
+	terminalPins              []*os.File
 	foregroundGroup           int
 	startupIdentityMutex      sync.Mutex
 	identityMutex             sync.Mutex
@@ -274,9 +288,10 @@ func (process *seatbeltProcess) Start() error {
 		if writeErr := process.startSupervisor(); writeErr != nil {
 			process.closeControl()
 			process.closeStatusControl()
+			terminalErr := process.restoreForegroundTerminal()
 			process.quarantineUnprovenCleanup()
 			process.reapStartedSupervisor()
-			return errors.Join(sandboxError(SandboxProcessStartFailed, writeErr), process.restoreForegroundTerminal())
+			return errors.Join(sandboxError(SandboxProcessStartFailed, writeErr), terminalErr)
 		}
 		process.supervisorStarted.Store(true)
 	}
@@ -285,8 +300,9 @@ func (process *seatbeltProcess) Start() error {
 	}
 	process.closeControl()
 	process.closeStatusControl()
+	terminalErr := process.restoreForegroundTerminal()
 	process.markCleanupDone()
-	return errors.Join(err, process.restoreForegroundTerminal())
+	return errors.Join(err, terminalErr)
 }
 
 // AbortPrepared closes setup descriptors without starting an untrusted target
@@ -707,7 +723,10 @@ func (process *seatbeltProcess) markCleanupDone() {
 	if process.cleanupDone == nil {
 		return
 	}
-	process.cleanupDoneOnce.Do(func() { close(process.cleanupDone) })
+	process.cleanupDoneOnce.Do(func() {
+		closeSeatbeltTerminalPins(process.terminalPins)
+		close(process.cleanupDone)
+	})
 }
 
 func (process *seatbeltProcess) quarantineCleanup() {
@@ -942,6 +961,16 @@ func buildSeatbeltPolicy(request validatedProcessRequest) (string, []string, err
 	for _, name := range runtimeAuthority.MachServices {
 		fmt.Fprintf(&machServiceRules, "\n(allow mach-lookup\n  (global-name %q))", name)
 	}
+	terminalPaths, err := seatbeltTerminalPaths(request.terminal)
+	if err != nil {
+		return "", nil, err
+	}
+	var terminalRules strings.Builder
+	for index, path := range terminalPaths {
+		name := "TERMINAL_" + strconv.Itoa(index)
+		definitions = append(definitions, "-D"+name+"="+path)
+		fmt.Fprintf(&terminalRules, "\n  (literal (param %q))", name)
+	}
 	policy := `(version 1)
 (deny default)
 
@@ -1002,7 +1031,9 @@ func buildSeatbeltPolicy(request validatedProcessRequest) (string, []string, err
 ; through these exact Mach services. All other Mach services remain denied.
 ` + machServiceRules.String() + `
 
-; Preserve the invoking terminal, raw mode, and resize operations.
+; Preserve only explicitly inherited terminals and the controlling-terminal
+; alias. Newly allocated slave PTYs require the kernel-issued ownership
+; extension; a path pattern alone would expose other Sessions' terminals.
 (allow pseudo-tty)
 (allow file-read-metadata
   (literal "/dev/null"))
@@ -1012,12 +1043,12 @@ func buildSeatbeltPolicy(request validatedProcessRequest) (string, []string, err
   (literal "/dev/random")
   (literal "/dev/urandom")
   (literal "/dev/ptmx")
-  (literal "/dev/tty")
-  (regex #"^/dev/ttys[0-9]+"))
+  (literal "/dev/tty")` + terminalRules.String() + `
+  (require-all (regex #"^/dev/ttys[0-9]+$") (extension "com.apple.sandbox.pty")))
+(allow file-read-metadata
+  (literal "/dev/tty")` + terminalRules.String() + `
+  (require-all (regex #"^/dev/ttys[0-9]+$") (extension "com.apple.sandbox.pty")))
 (allow file-read-data file-write-data
-  (literal "/dev/ptmx")
-  (literal "/dev/tty")
-  (regex #"^/dev/ttys[0-9]+")
   (literal "/dev/fd")
   (subpath "/dev/fd"))`
 	return policy, definitions, nil

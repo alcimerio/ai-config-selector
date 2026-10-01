@@ -318,7 +318,7 @@ type RuntimeAuthority struct {
 func DefaultRuntimeAuthority() RuntimeAuthority {
 	return RuntimeAuthority{Version: 1, ProcessMode: "same-sandbox-descendants", SystemReadMode: "bounded-macos-runtime",
 		MetadataMode: "executable-and-session-ancestors", SessionAccess: "private-read-write",
-		NetworkMode: "local-ip-socket-bind-no-listen-coarse-outbound-ip-macos-dns", TerminalMode: "attached-pty-signals-resize", DeviceMode: "bounded-tty-random-null-fd",
+		NetworkMode: "local-ip-socket-bind-no-listen-coarse-outbound-ip-macos-dns", TerminalMode: "attached-pty-signals-resize", DeviceMode: "inherited-and-owned-pty-random-null-fd",
 		FixedPath:                 safeProcessPath,
 		SyntheticEnvironmentNames: []string{"HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME", "XDG_STATE_HOME", "TMPDIR"},
 		InheritedEnvironmentNames: []string{"TERM", "COLORTERM", "LANG", "LC_ALL", "LC_CTYPE"},
