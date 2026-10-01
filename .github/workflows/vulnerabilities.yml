@@ -51,4 +51,4 @@ jobs:
           GOVULNCHECK: ${{ runner.temp }}/govulncheck-bin/govulncheck
         # Text mode returns a failing status for reachable vulnerabilities.
         # JSON/SARIF output alone would not preserve that vulnerability gate.
-        run: '"$GOVULNCHECK" -format=text ./...'
+        run: '"$GOVULNCHECK" -test -show=verbose -format=text ./...'

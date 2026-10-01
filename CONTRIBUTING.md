@@ -36,23 +36,36 @@ target output, private paths, environment values, or generated Seatbelt policy.
 [Dependabot](.github/dependabot.yml) checks Go modules and GitHub Actions every
 Monday at 07:00 UTC. Minor and patch version updates are grouped per ecosystem;
 major updates remain separate. At most three Go and two Actions version-update
-PRs can be open at once. Updates require review and the existing native gates;
+PRs can be open at once. The sole version exception is the nonexistent
+`github.com/charmbracelet/x/vt` candidate `= v0.1.0`: the parent repository
+tag is not a valid `vt/v0.1.0` submodule tag. The explicit equality is important;
+a bare Go version would exclude a wider range. Review this exception when the
+upstream module gains real tags. Dependabot does not reliably discover newer
+pseudo-versions, so check `go list -m -json github.com/charmbracelet/x/vt@latest`
+when reviewing terminal-library updates. The vulnerability scan still includes
+the selected pseudo-version; this exception does not suppress an advisory.
+
+Updates require review and the existing native gates;
 they are not merged automatically. Keep Actions pinned to full commit SHAs.
 
 The [Go vulnerability workflow](.github/workflows/vulnerabilities.yml) runs on
-PRs, pushes to `main`, weekly, and manually. It scans all packages for the
+PRs, pushes to `main`, weekly, and manually. It scans all packages, including
+test dependencies, for the
 supported `darwin/arm64`, `CGO_ENABLED=0` release configuration, using the exact
 Go version in `go.mod` and an immutable `govulncheck` source pin. Review the
 scanner pin when upgrading Go; Dependabot does not update this inline tool pin.
 The scanner loads source without running ACS or its tests. Text output makes
 reachable findings fail the job; database or analysis errors also fail closed.
+Verbose output also lists vulnerable modules and packages that are not reachable.
+Review those findings separately: a passing exit status does not mean every
+module is advisory-free.
 
 To reproduce the scan using the repository's Go toolchain:
 
 ```sh
 go install golang.org/x/vuln/cmd/govulncheck@709015412431dd2b5b28a53c06c70bc02d49074c
 GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 GOTOOLCHAIN=local \
-  "$(go env GOPATH)/bin/govulncheck" -format=text ./...
+  "$(go env GOPATH)/bin/govulncheck" -test -show=verbose -format=text ./...
 ```
 
 Use the binary in `GOBIN` instead if that variable is set. Investigate a finding

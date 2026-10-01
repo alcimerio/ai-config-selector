@@ -9,6 +9,12 @@ updates:
       time: "07:00"
       timezone: Etc/UTC
     open-pull-requests-limit: 3
+    # The parent x repository tags v0.1.0, but the vt submodule has no
+    # vt/v0.1.0 tag. Ignore only that nonexistent candidate, not all vt
+    # updates. The explicit equality avoids a Go caret-version range.
+    ignore:
+      - dependency-name: github.com/charmbracelet/x/vt
+        versions: ["= v0.1.0"]
     groups:
       go-minor-and-patch:
         update-types:
