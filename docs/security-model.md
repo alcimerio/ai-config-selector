@@ -75,6 +75,21 @@ target bytes. The CI gates separately use official checksum-locked target archiv
 See [named authentication](codex.md#named-authentication) for storage, token refresh, quarantine,
 and recovery semantics.
 
+### Terminal devices
+
+The target inherits the terminal devices explicitly attached to its standard
+streams and the kernel's `/dev/tty` controlling-terminal alias. ACS derives exact
+PTY device grants from the open descriptors, checks their vnode identity, and
+retains private close-on-exec copies until process cleanup is proven. Redirected
+files and pipes do not gain pathname permissions.
+
+PTYs newly created inside the sandbox require macOS's ownership-tracked PTY
+extension. Other terminals receive no blanket device-path or ioctl permission.
+The native gate checks attached and child-created PTYs, unrelated disposable
+PTY denial, and terminal input, resize, signals, and cleanup. This restriction
+does not make output or terminal-control operations on the invoking terminal
+harmless, or isolate tools sharing one Session's authority.
+
 ### Host races and temporary data
 
 Filesystem grants are pathname-based. ACS validates at defined boundaries;
