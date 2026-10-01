@@ -35,11 +35,9 @@ func pinSeatbeltTerminal(terminal Terminal) (Terminal, []*os.File, error) {
 		var operationErr error
 		var duplicate *os.File
 		err = raw.Control(func(fd uintptr) {
-			if _, operationErr = unix.IoctlGetTermios(int(fd), unix.TIOCGETA); errors.Is(operationErr, unix.ENOTTY) {
-				operationErr = nil
-				return
-			}
-			if operationErr != nil {
+			var terminal bool
+			terminal, operationErr = isSeatbeltTerminalDescriptor(fd)
+			if operationErr != nil || !terminal {
 				return
 			}
 			var copyFD int
@@ -114,10 +112,8 @@ func seatbeltTerminalPaths(terminal Terminal) ([]string, error) {
 }
 
 func seatbeltTerminalDescriptorPath(fd uintptr) (string, error) {
-	if _, err := unix.IoctlGetTermios(int(fd), unix.TIOCGETA); err != nil {
-		if errors.Is(err, unix.ENOTTY) {
-			return "", nil
-		}
+	terminal, err := isSeatbeltTerminalDescriptor(fd)
+	if err != nil || !terminal {
 		return "", err
 	}
 	// F_GETPATH interrogates the opened vnode, never os.File.Name (which is
@@ -163,4 +159,25 @@ func validSeatbeltTerminalPath(path string) bool {
 		}
 	}
 	return true
+}
+
+// Only character devices can be terminals. Preserve redirected files, pipes
+// and sockets without issuing terminal ioctls or granting their paths.
+func isSeatbeltTerminalDescriptor(fd uintptr) (bool, error) {
+	var info unix.Stat_t
+	if err := unix.Fstat(int(fd), &info); err != nil {
+		return false, err
+	}
+	if info.Mode&unix.S_IFMT != unix.S_IFCHR {
+		return false, nil
+	}
+	if _, err := unix.IoctlGetTermios(int(fd), unix.TIOCGETA); err != nil {
+		// Darwin's /dev/null and other memory devices return ENODEV for
+		// unsupported ioctls. Neither result proves a terminal or grants a path.
+		if errors.Is(err, unix.ENOTTY) || errors.Is(err, unix.ENODEV) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
 }

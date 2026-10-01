@@ -104,6 +104,30 @@ func TestSeatbeltNativeRetainsControllingTTYWithRedirectedStdio(t *testing.T) {
 	if err := seatbeltTerminalNativeRaw(terminal); err != nil {
 		t.Fatal(err)
 	}
+	// Drain while the session leader is alive. Darwin can wait for unread
+	// controlling-terminal output during exit, so Wait-before-read deadlocks
+	// even when the output is smaller than the PTY buffer and SIGKILL is sent.
+	output := &seatbeltBoundedCapture{limit: 4096}
+	drainCancel := make(chan struct{})
+	drainDone := make(chan error, 1)
+	go func() { drainDone <- seatbeltTerminalNativeDrain(master, output, drainCancel) }()
+	drainStopped := false
+	stopDrain := func() {
+		if drainStopped {
+			return
+		}
+		drainStopped = true
+		close(drainCancel)
+		select {
+		case err := <-drainDone:
+			if err != nil {
+				t.Errorf("controlling-terminal output drain: %v", err)
+			}
+		case <-time.After(time.Second):
+			t.Error("controlling-terminal output drain did not honor cancellation")
+		}
+	}
+	defer stopDrain()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	command := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestSeatbeltTerminalNativeHelper$", "--", "controlling-harness", root)
@@ -116,18 +140,100 @@ func TestSeatbeltNativeRetainsControllingTTYWithRedirectedStdio(t *testing.T) {
 		fixture.settled = true // No harness or contained target started.
 		t.Fatalf("start controlling-terminal harness: %s", fixture.diagnostic(err))
 	}
-	err := command.Wait()
+	waitDone := make(chan error, 1)
+	go func() { waitDone <- command.Wait() }()
+	var waitErr error
+	waitSettled := true
+	select {
+	case waitErr = <-waitDone:
+	case <-ctx.Done():
+		_ = command.Process.Kill()
+		select {
+		case waitErr = <-waitDone:
+		case <-time.After(5 * time.Second):
+			waitSettled = false
+		}
+		waitErr = errors.Join(waitErr, ctx.Err())
+	}
+	stopDrain()
 	// This receipt is outside the sandbox-writable Session and can only be
 	// published by the trusted harness after authenticated backend cleanup.
-	fixture.settled = string(readSeatbeltPTYFile(filepath.Join(root, "harness-cleanup-proven"))) == seatbeltTerminalProbeOK
-	if err != nil || !fixture.settled {
-		t.Fatalf("redirected controlling terminal failed: %s; cleanup=%v; result=%q", fixture.diagnostic(err), fixture.settled, fixture.diagnostic(string(readSeatbeltPTYFile(result))))
+	fixture.settled = waitSettled && string(readSeatbeltPTYFile(filepath.Join(root, "harness-cleanup-proven"))) == seatbeltTerminalProbeOK
+	if waitErr != nil || !fixture.settled {
+		t.Fatalf("redirected controlling terminal failed: %s; cleanup=%v; stage=%q; result=%q; output=%q", fixture.diagnostic(waitErr), fixture.settled, readSeatbeltPTYFile(filepath.Join(root, "harness-stage")), fixture.diagnostic(string(readSeatbeltPTYFile(result))), fixture.diagnostic(output.String()))
 	}
 	if got := string(readSeatbeltPTYFile(result)); got != seatbeltTerminalProbeOK {
 		t.Fatalf("redirected terminal result = %q, want %q", fixture.diagnostic(got), seatbeltTerminalProbeOK)
 	}
-	if err := seatbeltTerminalNativeRead(master, seatbeltTerminalProbeOutput); err != nil {
+	if output.Exceeded() || output.String() != seatbeltTerminalProbeOutput {
+		t.Fatalf("controlling-terminal write = %q, exceeded=%v; want %q", fixture.diagnostic(output.String()), output.Exceeded(), seatbeltTerminalProbeOutput)
+	}
+}
+
+func seatbeltTerminalNativeDrain(master *os.File, output *seatbeltBoundedCapture, cancel <-chan struct{}) error {
+	descriptor := int(master.Fd())
+	if err := unix.SetNonblock(descriptor, true); err != nil {
+		return err
+	}
+	buffer := make([]byte, 4096)
+	for {
+		select {
+		case <-cancel:
+			return nil
+		default:
+		}
+		count, err := unix.Read(descriptor, buffer)
+		if count > 0 {
+			_, _ = output.Write(buffer[:count])
+		}
+		if errors.Is(err, syscall.EINTR) {
+			continue
+		}
+		if errors.Is(err, syscall.EAGAIN) {
+			select {
+			case <-cancel:
+				return nil
+			case <-time.After(time.Millisecond):
+				continue
+			}
+		}
+		// A controlling-terminal revoke can report EIO at PTY EOF. The outer
+		// test still requires the entire exact payload and authenticated cleanup.
+		if errors.Is(err, syscall.EIO) || count == 0 && err == nil {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+	}
+}
+
+func TestSeatbeltTerminalNativeDrainCancelsWithOpenSlave(t *testing.T) {
+	master, terminal := seatbeltTerminalNativePair(t)
+	output := &seatbeltBoundedCapture{limit: 4096}
+	cancel := make(chan struct{})
+	done := make(chan error, 1)
+	go func() { done <- seatbeltTerminalNativeDrain(master, output, cancel) }()
+	defer func() {
+		close(cancel)
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Errorf("drain disposable PTY: %v", err)
+			}
+		case <-time.After(time.Second):
+			t.Error("drain failed to stop while slave remained open")
+		}
+	}()
+	if err := seatbeltTerminalNativeWrite(terminal, seatbeltTerminalProbeOutput); err != nil {
 		t.Fatal(err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for output.String() != seatbeltTerminalProbeOutput {
+		if output.Exceeded() || time.Now().After(deadline) {
+			t.Fatalf("active drain output = %q, want %q", output.String(), seatbeltTerminalProbeOutput)
+		}
+		time.Sleep(time.Millisecond)
 	}
 }
 
@@ -160,6 +266,7 @@ func TestSeatbeltTerminalNativeHelper(t *testing.T) {
 		if len(arguments) != 2 {
 			os.Exit(125)
 		}
+		_ = os.WriteFile(filepath.Join(arguments[1], "harness-stage"), []byte("preparing"), 0o600)
 		var request validatedProcessRequest
 		request, err = seatbeltNativePTYRequest(arguments[1])
 		if err == nil {
@@ -168,7 +275,13 @@ func TestSeatbeltTerminalNativeHelper(t *testing.T) {
 			var output bytes.Buffer
 			request.terminal = Terminal{Input: strings.NewReader(""), Output: &output, ErrorOutput: &output}
 			var settled bool
+			_ = os.WriteFile(filepath.Join(arguments[1], "harness-stage"), []byte("running"), 0o600)
 			settled, err = seatbeltTerminalNativeRun(request)
+			stage := "cleanup-unproven"
+			if settled {
+				stage = "cleanup-proven"
+			}
+			_ = os.WriteFile(filepath.Join(arguments[1], "harness-stage"), []byte(stage), 0o600)
 			if settled {
 				err = errors.Join(err, os.WriteFile(filepath.Join(arguments[1], "harness-cleanup-proven"), []byte(seatbeltTerminalProbeOK), 0o600))
 			}

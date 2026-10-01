@@ -236,3 +236,37 @@ func TestSeatbeltTerminalPinsCloseOnAbortAndStartFailure(t *testing.T) {
 		})
 	}
 }
+
+func TestSeatbeltTerminalDiscoveryPreservesRedirectedDescriptors(t *testing.T) {
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	defer writer.Close()
+	sockets, err := unix.Socketpair(unix.AF_UNIX, unix.SOCK_STREAM, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	socket := os.NewFile(uintptr(sockets[0]), "redirected-socket")
+	peer := os.NewFile(uintptr(sockets[1]), "redirected-peer")
+	defer socket.Close()
+	defer peer.Close()
+	null, err := os.Open("/dev/null")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer null.Close()
+	for _, file := range []*os.File{reader, writer, socket, null} {
+		original := Terminal{Input: file, Output: file, ErrorOutput: file}
+		paths, err := seatbeltTerminalPaths(original)
+		if err != nil || len(paths) != 0 {
+			t.Fatalf("redirected descriptor discovery: paths=%d error=%v", len(paths), err)
+		}
+		got, pins, err := pinSeatbeltTerminal(original)
+		defer closeSeatbeltTerminalPins(pins)
+		if err != nil || len(pins) != 0 || got != original {
+			t.Fatalf("redirected descriptor was not preserved: pins=%d error=%v", len(pins), err)
+		}
+	}
+}
