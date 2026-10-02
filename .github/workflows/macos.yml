@@ -53,7 +53,10 @@ jobs:
   verify:
     name: Verify (macOS)
     runs-on: macos-26
-    timeout-minutes: 10
+    # Allow headroom for serial normal/race/stress suites, setup, and
+    # candidate builds. Preserve the per-package Go test deadlines
+    # below so a hung package still fails promptly.
+    timeout-minutes: 25
 
     steps:
       - name: Check out repository
@@ -96,7 +99,7 @@ jobs:
         run: go test -v -timeout=5m ./...
 
       - name: Race test
-        run: go test -race ./...
+        run: go test -race -timeout=10m ./...
 
       - name: Stress Profile Builder panic restoration
         run: >-
