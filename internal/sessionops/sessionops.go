@@ -31,7 +31,6 @@ var ErrAuthBusy = errors.New("typed authentication busy")
 const (
 	SchemaVersion      = 1
 	MaxRecordBytes     = 16 << 10
-	MaxScannedEntries  = 4096
 	MaxPublicJSONBytes = 1 << 20
 	RemovedRetention   = 720 * time.Hour
 )
@@ -71,6 +70,7 @@ type ListResult struct {
 	SchemaVersion  int             `json:"schemaVersion"`
 	Sessions       []PublicSession `json:"sessions"`
 	UntrackedCount int             `json:"untrackedCount"`
+	NextAfter      string          `json:"nextAfter,omitempty"`
 }
 
 type InspectResult struct {
@@ -166,7 +166,7 @@ func NewTracker(sessionsDirectory, root, target string) (*Tracker, error) {
 		return nil, errors.New("track ACS Session: coordination failed")
 	}
 	defer closeLocked(allocation)
-	_ = store.pruneRemoved()
+	_ = store.pruneRemovedLocked()
 	var id string
 	for attempt := 0; attempt < 8; attempt++ {
 		idBytes := make([]byte, 16)
@@ -323,63 +323,104 @@ func (tracker *Tracker) transition(state State, removedAt string) error {
 }
 
 func (store Store) List(filter State) (ListResult, error) {
+	return store.list(filter, "", 0)
+}
+
+// ListPage traverses record IDs, not just matching states. An empty filtered
+// page can therefore have a continuation. Concurrent changes are not a snapshot.
+func (store Store) ListPage(filter State, after string, limit int) (ListResult, error) {
+	if limit < 1 || limit > MaxListPageSize || (after != "" && !ValidID(after)) {
+		return ListResult{}, errors.New("invalid_session_page")
+	}
+	return store.list(filter, after, limit)
+}
+
+func (store Store) list(filter State, after string, limit int) (ListResult, error) {
 	result := ListResult{SchemaVersion: SchemaVersion, Sessions: []PublicSession{}}
+	fail := func(err error) (ListResult, error) {
+		return ListResult{SchemaVersion: SchemaVersion, Sessions: []PublicSession{}}, err
+	}
 	bound, err := store.bindStorage(false)
 	if errors.Is(err, os.ErrNotExist) {
-		count, countErr := store.countUntracked(nil)
+		count, countErr := store.countUntracked()
 		if countErr != nil {
-			return result, errors.New("session_registry_limit")
+			return fail(errors.New("session_registry_unavailable"))
 		}
 		result.UntrackedCount = count
 		return result, nil
 	}
 	if err != nil {
-		return result, errors.New("session_registry_unavailable")
+		return fail(errors.New("session_registry_unavailable"))
 	}
 	store = bound
 	defer store.storage.close()
-	entries, err := store.storage.records.entries(MaxScannedEntries)
-	if err != nil {
-		return result, errors.New("session_registry_limit")
-	}
-	trackedRoots := map[string]bool{}
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
-			continue
-		}
-		id := strings.TrimSuffix(entry.Name(), ".json")
-		if !ValidID(id) {
-			continue
+	bytesUsed := 0                   // public item bytes; validate the exact envelope after counting roots
+	emitted := make(map[string]bool) // bounded by the public output budget
+	appendID := func(id string) error {
+		if emitted[id] {
+			return nil
 		}
 		rec, exists, readErr := store.readRecord(id)
+		var item PublicSession
 		if readErr != nil {
-			item := corruptPublic(id)
-			if filter == "" || filter == StateCorrupt {
-				result.Sessions = append(result.Sessions, item)
-			}
-			continue
+			item = corruptPublic(id)
+		} else if !exists {
+			return nil
+		} else {
+			cap, capExists, _ := store.readCapability(id)
+			item = store.public(rec, cap, capExists)
 		}
-		if !exists {
-			continue
-		}
-		cap, capExists, _ := store.readCapability(id)
-		if capExists && cap.RootToken == rec.RootToken {
-			trackedRoots[cap.RootName] = true
-		}
-		item := store.public(rec, cap, capExists)
 		if filter == "" || item.State == filter {
+			encoded, _ := json.Marshal(item)
+			bytesUsed += len(encoded)
+			if len(result.Sessions) > 0 {
+				bytesUsed++
+			}
+			if bytesUsed > MaxPublicJSONBytes {
+				return errors.New("session_output_limit")
+			}
 			result.Sessions = append(result.Sessions, item)
+			emitted[id] = true
+		}
+		return nil
+	}
+	if limit == 0 {
+		err = store.storage.records.walkEntries(func(entry os.DirEntry) error {
+			if id := recordEntryID(entry); id != "" {
+				return appendID(id)
+			}
+			return nil
+		})
+	} else {
+		var ids []string
+		var more bool
+		ids, more, err = store.recordPage(after, limit)
+		if err == nil {
+			for _, id := range ids {
+				if err = appendID(id); err != nil {
+					break
+				}
+			}
+			if more {
+				result.NextAfter = ids[len(ids)-1]
+			}
 		}
 	}
+	if err != nil {
+		if err.Error() == "session_output_limit" {
+			return fail(err)
+		}
+		return fail(errors.New("session_registry_unavailable"))
+	}
 	sort.Slice(result.Sessions, func(i, j int) bool { return result.Sessions[i].ID < result.Sessions[j].ID })
-	count, countErr := store.countUntracked(trackedRoots)
+	count, countErr := store.countUntracked()
 	if countErr != nil {
-		return result, errors.New("session_registry_limit")
+		return fail(errors.New("session_registry_unavailable"))
 	}
 	result.UntrackedCount = count
 	encoded, _ := json.Marshal(result)
 	if len(encoded) > MaxPublicJSONBytes {
-		return ListResult{SchemaVersion: SchemaVersion, Sessions: []PublicSession{}}, errors.New("session_output_limit")
+		return fail(errors.New("session_output_limit"))
 	}
 	return result, nil
 }
@@ -690,27 +731,27 @@ func (store Store) FinalizeRemoval(rootName, challenge string, remove func() (bo
 	}
 	store = bound
 	defer store.storage.close()
-	entries, err := store.storage.capabilities.entries(MaxScannedEntries)
-	if err != nil {
-		return errors.New("session_registry_unavailable")
-	}
 	var matched capability
-	for _, entry := range entries {
-		id := strings.TrimSuffix(entry.Name(), ".json")
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") || !ValidID(id) {
-			continue
+	err = store.storage.capabilities.walkEntries(func(entry os.DirEntry) error {
+		id := recordEntryID(entry)
+		if id == "" {
+			return nil
 		}
-		capability, exists, readErr := store.readCapability(id)
+		candidate, exists, readErr := store.readCapability(id)
 		if readErr != nil {
-			return errors.New("session_registry_unavailable")
+			return readErr
 		}
-		if !exists || capability.RootName != rootName {
-			continue
+		if !exists || candidate.RootName != rootName {
+			return nil
 		}
 		if matched.ID != "" {
-			return errors.New("session_registry_unavailable")
+			return errors.New("ambiguous Session capability")
 		}
-		matched = capability
+		matched = candidate
+		return nil
+	})
+	if err != nil {
+		return errors.New("session_registry_unavailable")
 	}
 	if matched.ID == "" {
 		completed, completionErr := store.completedRecordFor(rootName, challenge)
@@ -800,28 +841,28 @@ func (store Store) FinalizeRemoval(rootName, challenge string, remove func() (bo
 }
 
 func (store Store) completedRecordFor(rootName, challenge string) (record, error) {
-	entries, err := store.storage.records.entries(MaxScannedEntries)
-	if err != nil {
-		return record{}, err
-	}
 	want := completionChallengeHash(challenge)
 	var matched record
-	for _, entry := range entries {
-		id := strings.TrimSuffix(entry.Name(), ".json")
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") || !ValidID(id) {
-			continue
+	err := store.storage.records.walkEntries(func(entry os.DirEntry) error {
+		id := recordEntryID(entry)
+		if id == "" {
+			return nil
 		}
 		rec, exists, readErr := store.readRecord(id)
 		if readErr != nil {
-			return record{}, readErr
+			return readErr
 		}
 		if !exists || rec.State != StateRemoved || rec.CompletionRoot != rootName || rec.CompletionChallengeHash != want {
-			continue
+			return nil
 		}
 		if matched.ID != "" {
-			return record{}, errors.New("ambiguous completed Session")
+			return errors.New("ambiguous completed Session")
 		}
 		matched = rec
+		return nil
+	})
+	if err != nil {
+		return record{}, err
 	}
 	return matched, nil
 }
@@ -862,7 +903,7 @@ func corruptPublic(id string) PublicSession {
 	return PublicSession{ID: id, State: StateCorrupt, Observation: "durable", Recovery: Recovery{Allowed: false, Action: "none"}}
 }
 
-func (store Store) countUntracked(tracked map[string]bool) (int, error) {
+func (store Store) countUntracked() (int, error) {
 	directory, err := os.Open(store.SessionsDirectory)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -871,20 +912,64 @@ func (store Store) countUntracked(tracked map[string]bool) (int, error) {
 		return 0, err
 	}
 	defer directory.Close()
-	entries, err := directory.ReadDir(MaxScannedEntries + 1)
-	if err != nil && !errors.Is(err, io.EOF) {
-		return 0, err
-	}
-	if len(entries) > MaxScannedEntries {
-		return 0, errors.New("session registry limit")
-	}
 	count := 0
-	for _, entry := range entries[:min(len(entries), MaxScannedEntries)] {
-		if entry.IsDir() && strings.HasPrefix(entry.Name(), "session-") && !tracked[entry.Name()] {
-			count++
+	for {
+		entries, err := directory.ReadDir(scanBatchSize)
+		if err != nil && !errors.Is(err, io.EOF) {
+			return 0, err
+		}
+		pending := make(map[string]bool, len(entries))
+		for _, entry := range entries {
+			if !entry.IsDir() || !strings.HasPrefix(entry.Name(), "session-") {
+				continue
+			}
+			if !store.directRootTracked(entry.Name()) {
+				pending[entry.Name()] = true
+			}
+		}
+		// Legacy or incomplete metadata falls back to a full record scan per
+		// root batch, preserving the former global-map count without retaining
+		// every root. The direct binding avoids this scan for ordinary roots.
+		if store.storage != nil && len(pending) > 0 {
+			if scanErr := store.storage.records.walkEntries(func(entry os.DirEntry) error {
+				id := recordEntryID(entry)
+				if id == "" {
+					return nil
+				}
+				rec, exists, readErr := store.readRecord(id)
+				if readErr != nil || !exists {
+					return nil
+				}
+				cap, capExists, _ := store.readCapability(id)
+				if capExists && cap.RootToken == rec.RootToken {
+					delete(pending, cap.RootName)
+				}
+				return nil
+			}); scanErr != nil {
+				return 0, scanErr
+			}
+		}
+		count += len(pending)
+		if errors.Is(err, io.EOF) {
+			return count, nil
 		}
 	}
-	return count, nil
+}
+
+func (store Store) directRootTracked(root string) bool {
+	if store.storage == nil {
+		return false
+	}
+	binding, exists, err := store.readRootBinding(root)
+	if err != nil || !exists {
+		return false
+	}
+	rec, exists, err := store.readRecord(binding.ID)
+	if err != nil || !exists {
+		return false
+	}
+	cap, capExists, _ := store.readCapability(binding.ID)
+	return capExists && cap.RootToken == rec.RootToken && cap.RootName == root
 }
 
 func (store Store) readRecord(id string) (record, bool, error) {
@@ -935,7 +1020,9 @@ func (store Store) readRootBinding(rootName string) (rootBinding, bool, error) {
 }
 
 func readStrict(directory *privateDirectory, name string, value any) (bool, error) {
-	file, err := directory.open(name, 0, 0)
+	// Reject special files after opening without allowing a FIFO to stall
+	// allocation or inspection before the regular-file validation below.
+	file, err := directory.open(name, syscall.O_NONBLOCK, 0)
 	if errors.Is(err, os.ErrNotExist) {
 		return false, nil
 	}
@@ -1084,17 +1171,41 @@ func (store Store) bindStorage(create bool) (Store, error) {
 	return store, nil
 }
 
+const retentionCursorName = ".retention-cursor.json"
+
+type retentionCursor struct {
+	Version int    `json:"version"`
+	After   string `json:"after"`
+}
+
 func (store Store) pruneRemoved() error {
-	entries, err := store.storage.records.entries(MaxScannedEntries)
+	allocation, err := store.storage.base.lock(".allocation.lock", true)
 	if err != nil {
 		return err
 	}
-	cutoff := store.now().Add(-RemovedRetention)
-	for _, entry := range entries {
-		id := strings.TrimSuffix(entry.Name(), ".json")
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") || !ValidID(id) {
-			continue
+	defer closeLocked(allocation)
+	return store.pruneRemovedLocked()
+}
+
+// Caller holds the allocation lock. The cursor is advisory, never removal
+// authority: tampering or a failed publication can only restart/reorder checks.
+func (store Store) pruneRemovedLocked() error {
+	var cursor retentionCursor
+	if exists, err := readStrict(store.storage.base, retentionCursorName, &cursor); err != nil || !exists || cursor.Version != SchemaVersion || (cursor.After != "" && !ValidID(cursor.After)) {
+		cursor = retentionCursor{Version: SchemaVersion}
+	}
+	ids, more, err := store.recordPage(cursor.After, maintenancePageSize)
+	if err != nil {
+		return err
+	}
+	if len(ids) == 0 && cursor.After != "" {
+		ids, more, err = store.recordPage("", maintenancePageSize)
+		if err != nil {
+			return err
 		}
+	}
+	cutoff := store.now().Add(-RemovedRetention)
+	for _, id := range ids {
 		rec, exists, err := store.readRecord(id)
 		if err != nil || !exists || rec.State != StateRemoved || rec.RemovedAt == "" {
 			continue
@@ -1108,7 +1219,7 @@ func (store Store) pruneRemoved() error {
 			continue
 		}
 		fresh, freshExists, freshErr := store.readRecord(id)
-		if freshErr == nil && freshExists && fresh.Revision == rec.Revision && fresh.State == StateRemoved {
+		if freshErr == nil && freshExists && fresh == rec && fresh.State == StateRemoved {
 			// Removed is published before typed marker and private binding
 			// finalization. Retention must never discard their retry authority.
 			_, capExists, capErr := store.readCapability(id)
@@ -1124,7 +1235,11 @@ func (store Store) pruneRemoved() error {
 		}
 		closeLocked(fence)
 	}
-	return nil
+	next := retentionCursor{Version: SchemaVersion}
+	if more && len(ids) > 0 {
+		next.After = ids[len(ids)-1]
+	}
+	return store.writeJSON(store.storage.base, retentionCursorName, next)
 }
 
 func (store Store) baseDirectory() string {
@@ -1204,7 +1319,7 @@ func Diagnostic(err error) string {
 	if err == nil {
 		return ""
 	}
-	allowed := []string{"active", "busy", "still_retryable", "unproven", "not_recoverable", "removal_failed", "session_registry_unavailable", "session_registry_limit", "session_output_limit", "session_not_found", "invalid_session_id"}
+	allowed := []string{"active", "busy", "still_retryable", "unproven", "not_recoverable", "removal_failed", "session_registry_unavailable", "session_registry_limit", "session_output_limit", "session_not_found", "invalid_session_id", "invalid_session_page"}
 	for _, token := range allowed {
 		if errors.Is(err, errors.New(token)) || err.Error() == token {
 			return token

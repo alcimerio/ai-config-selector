@@ -14,6 +14,7 @@ import (
 
 type sessionOperations interface {
 	List(sessionops.State) (sessionops.ListResult, error)
+	ListPage(sessionops.State, string, int) (sessionops.ListResult, error)
 	Inspect(string) (sessionops.InspectResult, error)
 	Recover(string) (sessionops.RecoverResult, error)
 }
@@ -96,7 +97,13 @@ func (app App) RunSessionOperations(args []string, home func() (string, error)) 
 		if inv.value != "" {
 			filter, _ = sessionops.ParseState(inv.value)
 		}
-		result, err := operations.List(filter)
+		var result sessionops.ListResult
+		var err error
+		if inv.sessionListLimit != 0 {
+			result, err = operations.ListPage(filter, inv.thirdValue, inv.sessionListLimit)
+		} else {
+			result, err = operations.List(filter)
+		}
 		if err != nil {
 			return true, app.sessionFailure(inv, sessionops.Diagnostic(err))
 		}
@@ -111,6 +118,13 @@ func (app App) RunSessionOperations(args []string, home func() (string, error)) 
 			fmt.Fprintf(app.Output, "  %s  %s  %s  recovery=%s\n", item.ID, item.State, item.Target, item.Recovery.Action)
 		}
 		fmt.Fprintf(app.Output, "Untracked roots: %d\n", result.UntrackedCount)
+		if result.NextAfter != "" {
+			fmt.Fprintf(app.Output, "Next page: acs session list --limit %d --after %s", inv.sessionListLimit, result.NextAfter)
+			if filter != "" {
+				fmt.Fprintf(app.Output, " --state %s", filter)
+			}
+			fmt.Fprintln(app.Output)
+		}
 		return true, 0
 	case "session inspect":
 		result, err := operations.Inspect(inv.operand)

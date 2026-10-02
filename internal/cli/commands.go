@@ -2,12 +2,14 @@ package cli
 
 import (
 	"fmt"
+	"strconv"
+	"strings"
+
 	"github.com/alcimerio/ai-config-selector/internal/codexauth"
 	"github.com/alcimerio/ai-config-selector/internal/profile"
 	"github.com/alcimerio/ai-config-selector/internal/runcommand"
 	"github.com/alcimerio/ai-config-selector/internal/selfupdate"
 	"github.com/alcimerio/ai-config-selector/internal/sessionops"
-	"strings"
 )
 
 // commandSpec is the public grammar. Command words precede flags; valued flags
@@ -46,7 +48,7 @@ var commands = []commandSpec{
 	{path: "profile diff", syntax: "acs profile diff [NAME | --lineage ID] --revision EVENT [--to EVENT] [--json]", description: "Passively compare supported Profile intent using sanitized semantic descriptors.", example: "acs profile diff backend-review --revision ev_0123456789abcdef0123456789abcdef --json"},
 	{path: "profile restore", syntax: "acs profile restore [NAME | --lineage ID] --revision EVENT [--as NAME] [--bindings FILE] --dry-run [--json]\n       acs profile restore [NAME | --lineage ID] --revision EVENT [--as NAME] [--bindings FILE] --expect DIGEST --confirm NAME [--json]", description: "Preview or apply a no-clobber, digest-bound restore through current Profile validation. An absent destination requires explicit bounded local bindings when the selected intent contains binding references.", example: "acs profile restore backend-review --revision ev_0123456789abcdef0123456789abcdef --dry-run"},
 	{path: "session", syntax: "acs session <list|inspect|recover> [flags]", description: "Inspect durable Session lifecycle records or attempt proof-gated recovery.", example: "acs session list --json", group: true},
-	{path: "session list", syntax: "acs session list [--state STATE] [--json]", description: "Passively list bounded sanitized durable Session records. Missing storage is empty; no runtime or provider is accessed.", example: "acs session list\n  acs session list --state retryable --json", valueFlag: "--state", optionalValue: true, boolFlag: "--json"},
+	{path: "session list", syntax: "acs session list [--state STATE] [--limit N [--after ID]] [--json]", description: "Passively list sanitized durable Session records, completely or in bounded pages. Missing storage is empty; no runtime or provider is accessed.", example: "acs session list\n  acs session list --state retryable --json\n  acs session list --limit 128 --json", valueFlag: "--state", optionalValue: true, auxValueFlag: "--limit", optionalAuxValue: true, thirdValueFlag: "--after", optionalThirdValue: true, boolFlag: "--json"},
 	{path: "session inspect", syntax: "acs session inspect ID [--json]", description: "Passively inspect one sanitized durable Session record without taking locks or changing files.", example: "acs session inspect ses_abcd234567abcdef234567abcd --json", nameOperand: true, boolFlag: "--json"},
 	{path: "session recover", syntax: "acs session recover ID [--json]", description: "Attempt bounded recovery using the exact private generation, inactive lease and native cleanup proof. It never kills or force-deletes a process.", example: "acs session recover ses_abcd234567abcdef234567abcd --json", nameOperand: true, boolFlag: "--json"},
 	{path: "explain", syntax: "acs explain <sandbox|devin|codex|run> [flags]", description: "Explain semantic Profile authority and registered execution requirements without creating a Session or starting a target.", example: "acs explain devin --profile backend-review\n  acs explain codex --profile backend-review --json", group: true},
@@ -81,6 +83,7 @@ type invocation struct {
 	operand                      string
 	enabled, secondEnabled, help bool
 	arguments                    []string
+	sessionListLimit             int
 }
 
 func parseCommand(args []string) (inv invocation, problem string) {
@@ -177,9 +180,26 @@ func parseCommand(args []string) (inv invocation, problem string) {
 	if inv.command.path == "doctor" && inv.value != "" && inv.value != "devin" && inv.value != "sandbox" && inv.value != "codex-auth" {
 		return inv, "target must be devin, sandbox or codex-auth"
 	}
-	if inv.command.path == "session list" && inv.value != "" {
-		if _, ok := sessionops.ParseState(inv.value); !ok {
-			return inv, "state must be active, settling, retryable, unproven, removable, removed, unknown or corrupt"
+	if inv.command.path == "session list" {
+		if inv.value != "" {
+			if _, ok := sessionops.ParseState(inv.value); !ok {
+				return inv, "state must be active, settling, retryable, unproven, removable, removed, unknown or corrupt"
+			}
+		}
+		if inv.auxValue != "" {
+			limit, err := strconv.Atoi(inv.auxValue)
+			if err != nil || strings.Trim(inv.auxValue, "0123456789") != "" || limit < 1 || limit > sessionops.MaxListPageSize {
+				return inv, "limit must be an integer from 1 to 512"
+			}
+			inv.sessionListLimit = limit
+		}
+		if inv.thirdValue != "" {
+			if inv.sessionListLimit == 0 {
+				return inv, "--after requires --limit"
+			}
+			if !sessionops.ValidID(inv.thirdValue) {
+				return inv, "invalid Session ID for --after"
+			}
 		}
 	}
 	if inv.help {
@@ -375,6 +395,8 @@ func (app App) printHelp(command commandSpec) {
 			fmt.Fprintf(app.Output, "  --as NAME  %s destination Profile name\n", requirement)
 		} else if command.auxValueFlag == "--bindings" {
 			fmt.Fprintf(app.Output, "  --bindings FILE  %s explicit local binding document\n", requirement)
+		} else if command.auxValueFlag == "--limit" {
+			fmt.Fprintln(app.Output, "  --limit N  Optional page size, 1 to 512 record candidates in ascending Session ID order")
 		} else {
 			fmt.Fprintf(app.Output, "  %s <ref>  %s canonical named authentication reference\n", command.auxValueFlag, requirement)
 		}
@@ -382,6 +404,8 @@ func (app App) printHelp(command commandSpec) {
 	if command.thirdValueFlag != "" {
 		if command.thirdValueFlag == "--expect-authority-digest" {
 			fmt.Fprintf(app.Output, "  %s DIGEST  Optional expected semantic authority digest\n", command.thirdValueFlag)
+		} else if command.thirdValueFlag == "--after" {
+			fmt.Fprintln(app.Output, "  --after ID  Optional exclusive Session ID cursor; requires --limit")
 		} else {
 			fmt.Fprintf(app.Output, "  %s FILE  Optional explicit local binding document\n", command.thirdValueFlag)
 		}
