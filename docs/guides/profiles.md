@@ -1,6 +1,6 @@
 # Create and manage Profiles
 
-[Documentation index](README.md)
+[Documentation index](../README.md)
 
 Profiles are machine-local JSON documents in `~/.acs/profiles`. Use the
 interactive builder for guided selection, or an explicit JSON file for
@@ -22,7 +22,7 @@ acs profile show backend-review --json
 acs profile validate backend-review
 ```
 
-The [common format](common-profile-format.md) defines schema versions, grants,
+The [common format](../reference/common-profile-format.md) defines schema versions, grants,
 and migration. Inspection reports stored structure; [validation and
 explanation](diagnostics.md) report selected-source availability and effective
 authority separately. None of these observations alone proves launch readiness.
@@ -47,7 +47,7 @@ pins identity, not an atomic snapshot against in-place writes; candidate bytes
 become immutable after the read completes. ACS never changes input bytes or mode.
 
 Creation validates logical environment bindings without reading provider values,
-and [instruction references](common-profile-format.md#instruction-bundles)
+and [instruction references](../reference/common-profile-format.md#instruction-bundles)
 without opening instruction files. Omitted instructions remain compatible;
 a present capability has a strict version and reference array. Missing Skill
 material and absent named Codex authentication are not structural errors. Exact
@@ -233,7 +233,7 @@ Preview discloses v1 → v2 conversion (`skillReferences` to schema-1
 final newline, or supported v2 canonicalization. Even unchanged legacy
 selections require preview. Ordinary legacy mutations remain canonical v2 with
 writable-workspace authority and old placement. Explicit
-[`acs profile migrate NAME`](common-profile-format.md#explicit-migration-and-outcomes)
+[`acs profile migrate NAME`](../reference/common-profile-format.md#explicit-migration-and-outcomes)
 adopts v3 through the same revision-bound Replace transaction and previews
 retained/reduced authority and common/Devin projection paths.
 
@@ -277,7 +277,7 @@ automatic undo.
 
 ## Uncertain outcomes and recovery
 
-Creation and mutations use the [revisioned repository](architecture.md#profile-repository-transactions).
+Creation and mutations use the [revisioned repository](../development/architecture.md#profile-repository-transactions).
 Apply owns recovery under the same stationary lock after authorization;
 preparation and cancellation create no locks or journals. There is no second
 publication or recovery engine.

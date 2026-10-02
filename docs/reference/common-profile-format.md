@@ -1,12 +1,12 @@
 # Common Profile format, migration, grants and projection
 
-[Documentation index](README.md)
+[Documentation index](../README.md)
 
 New Profiles use envelope version 3. Version 1 and 2
 remain readable and are never changed by inspection or launch.
 
 Noninteractive authoring accepts only this supported v3 representation; see
-[declarative creation](profiles.md#declarative-creation). Legacy documents continue
+[declarative creation](../guides/profiles.md#declarative-creation). Legacy documents continue
 to use the established read, edit and explicit migration paths.
 
 ```json
@@ -147,7 +147,7 @@ ambient rules and does not prove model obedience.
 An absent instruction root yields an empty catalog and missing saved selections;
 a discovery error leaves selections unavailable and retained for repair. These
 labels do not establish the origin of arbitrary AGENTS rows.
-[Exchange](portable-profile-exchange.md) represents instruction sources as required
+[Exchange](../guides/portable-profile-exchange.md) represents instruction sources as required
 symbolic bindings, without host paths or bodies; import must bind
 `acs-instructions` locally.
 
@@ -270,7 +270,7 @@ storage.
 `common.executables`, `common.paths`, and `common.environment` selections.
 Arguments are ordered path or non-secret environment references; secret
 environment entries may be delivered to the attached process tree but cannot
-be used as argv items. See the [MCP Profile contract](mcp-profiles.md) for the
+be used as argv items. See the [MCP Profile contract](../guides/mcp-profiles.md) for the
 full schema, target projection, remote transport boundary, public lifecycle,
 and current evidence limitations.
 

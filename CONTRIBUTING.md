@@ -99,6 +99,17 @@ database and reports through Actions without requiring GitHub alert access.
 
 ## Development rules
 
+### Documentation
+
+Use [the documentation index](docs/README.md) as the entry point. Put practical
+user tasks in `docs/guides/`, stable contracts in `docs/reference/`, and
+architecture or contributor research in `docs/development/`. Keep release-note
+sources in `docs/releases/` and fixture-specific explanations beside their tests.
+When moving a page, update its relative links, incoming references and tests,
+and keep it linked from the index. Preserve version-tagged historical links.
+
+### Code
+
 - Add a failing test before changing behavior.
 - Keep public CLI parsing in `internal/cli` and target behavior behind planner
   and launcher boundaries.
@@ -206,7 +217,7 @@ exact reviewed candidate as described below; use verified, locked target binarie
   with ACS logout and check that no leased Session or quarantine remains.
 
 If cleanup is uncertain, retain the compatible ACS binary and private evidence
-and use the [recovery guide](docs/manual-upgrade-recovery.md). Do not delete
+and use the [recovery guide](docs/guides/manual-upgrade-recovery.md). Do not delete
 Session or Keychain state by hand, use logout to bypass quarantine, copy global
 Codex authentication, weaken Seatbelt, or bypass a native trust failure.
 
@@ -230,7 +241,7 @@ cleanup beyond the tested containment contract. Run the portable fixtures with
 `TestPromotedArtifactNativeDevinSessionStartHook`; do not fold it into the
 mandatory release gate or use account credentials in it.
 
-The [native transport probes](docs/native-transport-research.md) run on a
+The [native transport probes](docs/development/native-transport-research.md) run on a
 disposable macOS runner and preserve bounded transport evidence. They do not
 change runtime policy or establish destination-specific network enforcement.
 Keep test fixtures and workflow evidence distinct from production feature claims.
@@ -435,7 +446,7 @@ acs session list
 These checks are passive. A nonzero status is not permission to migrate, delete,
 restore or retry; Session listing does not prove active owners have settled.
 Before a confirmed write, settle operations and make a private quiescent copy of
-Profile bytes. Follow the [migration and recovery steps](docs/manual-upgrade-recovery.md#binary-rollback-is-not-a-data-downgrade)
+Profile bytes. Follow the [migration and recovery steps](docs/guides/manual-upgrade-recovery.md#binary-rollback-is-not-a-data-downgrade)
 for explicit Profile migration, preview cancellation and interrupted operations.
 
 To select the retained executable again in the same maintenance shell:

@@ -1,6 +1,6 @@
 # Codex launch and named authentication
 
-[Documentation index](README.md)
+[Documentation index](../README.md)
 
 ACS supports interactive Codex on macOS 26 Apple Silicon with the exact target
 version `codex-cli 0.149.1`. The adapter uses ChatGPT authentication and a named
@@ -18,8 +18,8 @@ acs codex --profile backend-review --dry-run
 acs codex --profile backend-review
 ```
 
-The builder uses the [common format](common-profile-format.md) and
-[revisioned repository](architecture.md#profile-repository-transactions). Its version-1
+The builder uses the [common format](../reference/common-profile-format.md) and
+[revisioned repository](../development/architecture.md#profile-repository-transactions). Its version-1
 Codex overlay stores only opaque `authRef`, never credentials or arbitrary
 Codex settings. Launch `--auth personal` overrides the reference for one run
 without changing the Profile. Creation may omit `--auth`; that Profile requires
@@ -65,7 +65,7 @@ collision checks without rereading host origins. Repository `.agents/skills`
 and bundled system Skills remain Codex-owned: selected-only describes
 ACS-managed global projections, not all readable workspace files.
 
-[Instructions](common-profile-format.md#instruction-bundles) are copied to common
+[Instructions](../reference/common-profile-format.md#instruction-bundles) are copied to common
 Session material only; ACS does not automatically activate them as Codex
 instructions or project Devin rules into Codex. Paths, executables, environment
 and [local STDIO MCP references](mcp-profiles.md) retain common semantics.
@@ -269,9 +269,9 @@ failed-update preservation and contained status configuration, projection,
 quarantine and redaction. Deterministic tests cover refresh decisions and
 no-UI locked-provider failures. Real interactive login and target-origin refresh
 remain supplemental trusted-host observations; automated success does not
-prove them. See [Contributing](../CONTRIBUTING.md#native-named-authentication-evidence)
+prove them. See [Contributing](../../CONTRIBUTING.md#native-named-authentication-evidence)
 for the native gate, recovery precautions and authenticated-smoke procedure,
-and [shared target conformance](shared-target-conformance.md) for cross-target
+and [shared target conformance](../reference/shared-target-conformance.md) for cross-target
 behavior and evidence limits.
 
 Codex's [authentication documentation](https://learn.chatgpt.com/docs/auth)

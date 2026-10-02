@@ -31,7 +31,7 @@ func (app App) RunUpdate(ctx context.Context, args []string, cfg selfupdate.Conf
 	}
 	fmt.Fprintf(app.Output, "Installed acs %s at %s\n", result.Target, result.Installation)
 	if result.Downgrade {
-		fmt.Fprintln(app.Output, "Older ACS may not support your current Profiles or data. The update did not change user data; see docs/manual-upgrade-recovery.md for backup and recovery guidance.")
+		fmt.Fprintln(app.Output, "Older ACS may not support your current Profiles or data. The update did not change user data; see docs/guides/manual-upgrade-recovery.md for backup and recovery guidance.")
 	}
 	return true, 0
 }

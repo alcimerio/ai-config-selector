@@ -1,6 +1,6 @@
 # MCP server selections in Profiles
 
-[Documentation index](README.md)
+[Documentation index](../README.md)
 
 Development-source version-3 Profiles may select local MCP servers under
 `common.mcp`. The category has version 1 and a `selection.servers` array. ACS
@@ -164,7 +164,7 @@ path, and secret environment references use the existing explicit exchange
 bindings; secret references are represented by symbols. Import validates all
 references before conditional Profile creation. History and restore use the
 existing Profile revision and local-binding rules; restore does not replay old
-resolved paths or secret values. See the [common Profile format](common-profile-format.md),
+resolved paths or secret values. See the [common Profile format](../reference/common-profile-format.md),
 [Profile creation](profiles.md#declarative-creation), [portable exchange](portable-profile-exchange.md),
 and [effective capability explanation](diagnostics.md#effective-capability-explanation).
 

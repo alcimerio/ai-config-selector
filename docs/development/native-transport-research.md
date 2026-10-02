@@ -1,13 +1,13 @@
 # Native transport research probes
 
-[Documentation index](README.md) · [Contributor test setup](../CONTRIBUTING.md#research-harnesses)
+[Documentation index](../README.md) · [Contributor test setup](../../CONTRIBUTING.md#research-harnesses)
 
 These isolated tests measure a bounded transport matrix on macOS 26 Apple
 Silicon. They do not change ACS runtime policy, public commands, Profile
 schema, grants, or target composition. They also do not establish that ACS is
 an egress firewall.
 
-The [Native transport research workflow](../.github/workflows/native-transport-research.yml)
+The [Native transport research workflow](../../.github/workflows/native-transport-research.yml)
 creates disposable,
 independently ready listeners and first reaches each one with a unique positive
 control. A descendant then attempts numeric IPv4 and IPv6 TCP and UDP, plus two

@@ -1,6 +1,6 @@
 # CLI guide
 
-[Documentation index](README.md) · [Get started](getting-started.md)
+[Documentation index](../README.md) · [Get started](../guides/getting-started.md)
 
 This is a navigation guide for v0.5.0/current source. The exact command grammar
 ships with your binary: run `acs help`, `acs COMMAND --help`, or
@@ -35,27 +35,27 @@ argument. `acs help COMMAND` takes the command path, not an invocation's flags.
 Successful help returns exit 0 on stdout. Most command syntax errors return
 exit 1 on stderr, including malformed flags alongside `--help`. Profile
 history/diff/restore use a separate grammar and status contract (syntax errors
-return 2); consult their contextual help and [history reference](profile-history.md).
+return 2); consult their contextual help and [history reference](../guides/profile-history.md).
 
 ## Find the right command
 
 | Task | Starting command | Detailed contract |
 | --- | --- | --- |
-| Create interactively | `acs devin create-profile --name NAME` or `acs codex create-profile --name NAME [--auth REF]` | [Get started](getting-started.md) |
-| Create from local JSON | `acs profile create --file FILE --dry-run` | [Declarative creation](profiles.md#declarative-creation) |
-| List / inspect | `acs profile list`, `acs profile show NAME --json` | [Inspection](profiles.md#inspection) |
-| Check host / sources | `acs doctor`, `acs profile validate NAME` | [Passive diagnostics](diagnostics.md#passive-diagnostics) |
-| Explain permissions | `acs explain sandbox --profile NAME` | [Effective capability explanation](diagnostics.md#effective-capability-explanation) |
-| Edit / clone / rename / delete / migrate | `acs profile edit NAME` | [Profile mutations](profiles.md#mutations) |
-| Transfer sanitized intent | `acs profile export NAME`, `acs profile import validate --file FILE` | [Portable exchange](portable-profile-exchange.md) |
-| Inspect / restore history | `acs profile history NAME`, `acs profile restore NAME --revision EVENT --dry-run` | [Profile history](profile-history.md) |
+| Create interactively | `acs devin create-profile --name NAME` or `acs codex create-profile --name NAME [--auth REF]` | [Get started](../guides/getting-started.md) |
+| Create from local JSON | `acs profile create --file FILE --dry-run` | [Declarative creation](../guides/profiles.md#declarative-creation) |
+| List / inspect | `acs profile list`, `acs profile show NAME --json` | [Inspection](../guides/profiles.md#inspection) |
+| Check host / sources | `acs doctor`, `acs profile validate NAME` | [Passive diagnostics](../guides/diagnostics.md#passive-diagnostics) |
+| Explain permissions | `acs explain sandbox --profile NAME` | [Effective capability explanation](../guides/diagnostics.md#effective-capability-explanation) |
+| Edit / clone / rename / delete / migrate | `acs profile edit NAME` | [Profile mutations](../guides/profiles.md#mutations) |
+| Transfer sanitized intent | `acs profile export NAME`, `acs profile import validate --file FILE` | [Portable exchange](../guides/portable-profile-exchange.md) |
+| Inspect / restore history | `acs profile history NAME`, `acs profile restore NAME --revision EVENT --dry-run` | [Profile history](../guides/profile-history.md) |
 | Run Devin | `acs devin --profile NAME` | [Target conformance](shared-target-conformance.md) |
-| Run Codex | `acs codex --profile NAME [--auth REF]` | [Interactive Codex](codex.md#interactive-launch) |
-| Manage named login | `acs codex auth login --name REF` | [Codex authentication](codex.md#named-authentication) |
-| Inspect a shell | `acs sandbox --profile NAME` | [Get started](getting-started.md) |
-| Run literal argv | `acs run --profile NAME -- COMMAND [ARG...]` | [Generic run](generic-run.md) |
-| Inspect / recover a Session | `acs session list`, `acs session inspect ID`, `acs session recover ID` | [Session operations](session-operations.md) |
-| Check / update ACS | `acs version`, `acs update --check` | [Upgrade and recovery](manual-upgrade-recovery.md) |
+| Run Codex | `acs codex --profile NAME [--auth REF]` | [Interactive Codex](../guides/codex.md#interactive-launch) |
+| Manage named login | `acs codex auth login --name REF` | [Codex authentication](../guides/codex.md#named-authentication) |
+| Inspect a shell | `acs sandbox --profile NAME` | [Get started](../guides/getting-started.md) |
+| Run literal argv | `acs run --profile NAME -- COMMAND [ARG...]` | [Generic run](../guides/generic-run.md) |
+| Inspect / recover a Session | `acs session list`, `acs session inspect ID`, `acs session recover ID` | [Session operations](../guides/session-operations.md) |
+| Check / update ACS | `acs version`, `acs update --check` | [Upgrade and recovery](../guides/manual-upgrade-recovery.md) |
 
 Use `--help` before copying a mutation or recovery command. Remove `--dry-run`
 only when you intend that command's documented change. Not every mutation is
@@ -90,5 +90,5 @@ commands report cancellation only after required cleanup is proven.
 
 A failed or interrupted mutation does not always mean nothing was written.
 Distinguish **committed**, **not committed**, and **unknown / recovery required**
-outcomes before retrying. Follow [transaction recovery](architecture.md#profile-repository-transactions)
-and [Session recovery](session-operations.md), not manual deletion of internal state.
+outcomes before retrying. Follow [transaction recovery](../development/architecture.md#profile-repository-transactions)
+and [Session recovery](../guides/session-operations.md), not manual deletion of internal state.

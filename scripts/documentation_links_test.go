@@ -70,12 +70,21 @@ func TestDocumentationIndexCoversMaintainedGuides(t *testing.T) {
 		if !strings.Contains(index, "("+filepath.ToSlash(relative)+")") {
 			t.Errorf("docs/README.md does not link %s", relative)
 		}
+		// Every maintained guide/reference/development page provides a route
+		// back to the hub. Release bodies are published verbatim on GitHub,
+		// so their links deliberately remain absolute and version-pinned.
+		if !strings.HasPrefix(filepath.ToSlash(relative), "releases/") {
+			contents := readRepositoryFile(t, "..", filepath.Join("docs", relative))
+			if !strings.Contains(contents, "[Documentation index](../README.md)") {
+				t.Errorf("%s does not link back to the documentation index", relative)
+			}
+		}
 		return nil
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, guide := range []string{"docs/getting-started.md", "docs/README.md", "docs/security-model.md", "CONTRIBUTING.md"} {
+	for _, guide := range []string{"docs/guides/getting-started.md", "docs/README.md", "docs/reference/security-model.md", "CONTRIBUTING.md"} {
 		if !strings.Contains(readRepositoryFile(t, "..", "README.md"), "("+guide+")") {
 			t.Errorf("README.md does not link newcomer entry point %s", guide)
 		}
@@ -86,7 +95,7 @@ func TestDocumentationIndexCoversMaintainedGuides(t *testing.T) {
 // examples exercised by TestManualUpgradeExamples.
 func TestReadmeRoutesExistingInstallsToRecoveryGuide(t *testing.T) {
 	readme := readRepositoryFile(t, "..", "README.md")
-	if !strings.Contains(readme, "[upgrade and recovery guide](docs/manual-upgrade-recovery.md)") {
+	if !strings.Contains(readme, "[upgrade and recovery guide](docs/guides/manual-upgrade-recovery.md)") {
 		t.Fatal("README must route existing installs to the tested recovery procedure")
 	}
 	if strings.Contains(readme, "published-v050-bootstrap-example") {

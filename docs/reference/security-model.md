@@ -1,6 +1,6 @@
 # Security model and trust boundaries
 
-[Documentation index](README.md) · [Architecture](architecture.md) · [Troubleshooting](troubleshooting.md)
+[Documentation index](../README.md) · [Architecture](../development/architecture.md) · [Troubleshooting](../guides/troubleshooting.md)
 
 This guide describes the v0.5.0/current-source boundary on macOS 26 Apple Silicon.
 It is a user-facing summary, not a claim of a complete security audit or proof
@@ -53,7 +53,7 @@ Codex recipe disables plugins; target-owned project discovery is a separate boun
 MCP tool-name filtering and agent permission modes are target behavior, not
 independent ACS containment or per-agent OS isolation. There is no per-MCP-server secret boundary: selected
 environment values are available to the target, local servers, and descendants.
-See [MCP Profiles](mcp-profiles.md) and [target conformance](shared-target-conformance.md).
+See [MCP Profiles](../guides/mcp-profiles.md) and [target conformance](shared-target-conformance.md).
 
 ### Target authentication
 
@@ -72,7 +72,7 @@ no-prompt mode, with preselected Profile grants enforced by ACS and no interacti
 Codex's exact version check and operation snapshot detect supported-version and
 observed local-file changes; they do not authenticate arbitrary locally installed
 target bytes. The CI gates separately use official checksum-locked target archives.
-See [named authentication](codex.md#named-authentication) for storage, token refresh, quarantine,
+See [named authentication](../guides/codex.md#named-authentication) for storage, token refresh, quarantine,
 and recovery semantics.
 
 ### Terminal devices
@@ -113,8 +113,8 @@ regular files and validates the opened input before creating output.
 Session removal is logical cleanup, not a guarantee of secure physical erasure.
 If ACS cannot prove that descendants and ownership have settled, it retains or
 quarantines the Session. Do not force-delete that state. Use
-[Session operations](session-operations.md) and the
-[manual recovery guide](manual-upgrade-recovery.md).
+[Session operations](../guides/session-operations.md) and the
+[manual recovery guide](../guides/manual-upgrade-recovery.md).
 
 ## Release integrity and evidence
 
@@ -135,12 +135,12 @@ configuration. Binary analysis is conservative and falls back to module-level
 advisories when symbols are unavailable; a binary finding need not prove a
 reachable call. Neither mode establishes that the entire module graph, Actions,
 external target binaries or all security risks are covered. See the
-[check semantics and reproduction steps](../CONTRIBUTING.md#dependency-maintenance-and-vulnerability-checks).
+[check semantics and reproduction steps](../../CONTRIBUTING.md#dependency-maintenance-and-vulnerability-checks).
 
 v0.5.0 is unsigned and unnotarized. Do not remove quarantine, disable Gatekeeper,
 or weaken Seatbelt to work around a failure. A release gate is not real-account
 or week-long daily-use evidence; those observations are separate evidence categories; see
-[maintainer verification](../CONTRIBUTING.md#release-preparation).
+[maintainer verification](../../CONTRIBUTING.md#release-preparation).
 
 ## Sharing a safe bug report
 

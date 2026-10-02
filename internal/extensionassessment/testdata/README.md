@@ -1,7 +1,7 @@
 # Assessment definitions and compiler boundary
 
 Fixture documentation for contributors. See [research harnesses](../../../CONTRIBUTING.md#research-harnesses)
-for native test setup and the [security model](../../../docs/security-model.md)
+for native test setup and the [security model](../../../docs/reference/security-model.md)
 for the supported production boundary.
 
 These are synthetic definitions for Codex 0.149.1 and Devin 3000.10.21. They are

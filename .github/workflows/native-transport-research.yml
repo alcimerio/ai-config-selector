@@ -4,7 +4,7 @@ on:
   pull_request:
     paths:
       - ".github/workflows/native-transport-research.yml"
-      - "docs/native-transport-research.md"
+      - "docs/development/native-transport-research.md"
       - "internal/launch/**"
   workflow_dispatch:
 
