@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 
@@ -63,6 +65,22 @@ func TestSessionHelpAndGrammarDoNotDiscoverHome(t *testing.T) {
 	}{
 		{[]string{"session", "list", "--help"}, 0, "Usage:"},
 		{[]string{"session", "list", "--state", "invalid"}, 2, "state must be"},
+		{[]string{"session", "list", "--limit", "0"}, 2, "limit must be"},
+		{[]string{"session", "list", "--limit", "513"}, 2, "limit must be"},
+		{[]string{"session", "list", "--limit", "1.5"}, 2, "limit must be"},
+		{[]string{"session", "list", "--limit", "+1"}, 2, "limit must be"},
+		{[]string{"session", "list", "--limit", "9999999999999999999999999999"}, 2, "limit must be"},
+		{[]string{"session", "list", "--limit"}, 2, "missing value"},
+		{[]string{"session", "list", "--limit", "-1"}, 2, "missing value"},
+		{[]string{"session", "list", "--limit", "1", "--limit", "2"}, 2, "duplicate flag"},
+		{[]string{"session", "list", "--after", "ses_abcd234567abcdef234567abcd"}, 2, "--after requires --limit"},
+		{[]string{"session", "list", "--limit", "1", "--after", "session-private"}, 2, "invalid Session ID"},
+		{[]string{"session", "list", "--limit", "1", "--after", "ses_Abcd234567abcdef234567abcd"}, 2, "invalid Session ID"},
+		{[]string{"session", "list", "--limit", "1", "--after", "../private"}, 2, "invalid Session ID"},
+		{[]string{"session", "list", "--limit", "1", "--after"}, 2, "missing value"},
+		{[]string{"session", "list", "--limit=1"}, 2, "separate arguments"},
+		{[]string{"session", "list", "--limit", "1", "--after=ses_abcd234567abcdef234567abcd"}, 2, "separate arguments"},
+		{[]string{"session", "inspect", "ses_abcd234567abcdef234567abcd", "--limit", "1"}, 2, "unsupported flag"},
 		{[]string{"session", "recover", "session-private"}, 2, "invalid Session ID"},
 		{[]string{"session", "inspect"}, 2, "missing required"},
 		{[]string{"session", "unknown"}, 2, "unknown command"},
@@ -121,5 +139,70 @@ func TestSessionRecoverOperationalJSONIsOneSanitizedObject(t *testing.T) {
 	var extra any
 	if err := decoder.Decode(&extra); err == nil {
 		t.Fatalf("multiple JSON values: %#v", extra)
+	}
+}
+
+func TestSessionListPagesVisitSortedRecords(t *testing.T) {
+	home := t.TempDir()
+	sessions := filepath.Join(home, ".acs", "sessions")
+	var ids []string
+	for range 3 {
+		created, err := session.CreateTracked(sessions, home, nil, "shell")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer created.Remove()
+		if _, err := created.ArmOperation(nil); err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, created.PublicID())
+	}
+	sort.Strings(ids)
+
+	after := ""
+	for index, id := range ids {
+		var output, stderr bytes.Buffer
+		app := cli.App{Output: &output, ErrorOutput: &stderr}
+		args := []string{"session", "list", "--limit", "1", "--state", "active", "--json"}
+		if after != "" {
+			args = append(args, "--after", after)
+		}
+		handled, code := app.RunSessionOperations(args, func() (string, error) { return home, nil })
+		if !handled || code != 0 || stderr.Len() != 0 {
+			t.Fatalf("page %d = (%t, %d, %q)", index, handled, code, stderr.String())
+		}
+		var result sessionops.ListResult
+		if err := json.Unmarshal(output.Bytes(), &result); err != nil {
+			t.Fatal(err)
+		}
+		if len(result.Sessions) != 1 || result.Sessions[0].ID != id {
+			t.Fatalf("page %d = %+v, want %s", index, result, id)
+		}
+		if index < len(ids)-1 && result.NextAfter != id || index == len(ids)-1 && result.NextAfter != "" {
+			t.Fatalf("page %d cursor = %q", index, result.NextAfter)
+		}
+		after = result.NextAfter
+	}
+}
+
+func TestSessionListPageMissingStorageStaysAbsent(t *testing.T) {
+	for _, after := range []string{"", "ses_abcd234567abcdef234567abcd"} {
+		home := t.TempDir()
+		var output, stderr bytes.Buffer
+		app := cli.App{Output: &output, ErrorOutput: &stderr}
+		args := []string{"session", "list", "--limit", "512", "--json"}
+		if after != "" {
+			args = append(args, "--after", after)
+		}
+		handled, code := app.RunSessionOperations(args, func() (string, error) { return home, nil })
+		if !handled || code != 0 || stderr.Len() != 0 {
+			t.Fatalf("missing page = (%t, %d, %q)", handled, code, stderr.String())
+		}
+		if output.String() != "{\"schemaVersion\":1,\"sessions\":[],\"untrackedCount\":0}\n" {
+			t.Fatalf("missing page JSON = %q", output.String())
+		}
+		if _, err := os.Lstat(filepath.Join(home, ".acs")); !os.IsNotExist(err) {
+			t.Fatalf("passive page created storage: %v", err)
+		}
 	}
 }

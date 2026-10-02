@@ -376,19 +376,20 @@ func TestPassiveMissingStoreDoesNotCreateState(t *testing.T) {
 	}
 }
 
-func TestListRejectsBoundedUntrackedEnumerationWithoutPartialCounts(t *testing.T) {
+func TestListStreamsUntrackedEnumerationWithoutPartialCounts(t *testing.T) {
+	const formerRecordLimit = 4096
 	sessions := filepath.Join(t.TempDir(), ".acs", "sessions")
 	if err := os.MkdirAll(sessions, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	for index := 0; index <= sessionops.MaxScannedEntries; index++ {
+	for index := 0; index <= formerRecordLimit; index++ {
 		if err := os.Mkdir(filepath.Join(sessions, fmt.Sprintf("session-untracked-%04d", index)), 0o700); err != nil {
 			t.Fatal(err)
 		}
 	}
 	result, err := (sessionops.Store{SessionsDirectory: sessions}).List("")
-	if sessionops.Diagnostic(err) != "session_registry_limit" || len(result.Sessions) != 0 || result.UntrackedCount != 0 {
-		t.Fatalf("bounded list = (%+v, %v)", result, err)
+	if err != nil || len(result.Sessions) != 0 || result.UntrackedCount != formerRecordLimit+1 {
+		t.Fatalf("complete streamed list = (%+v, %v)", result, err)
 	}
 }
 
