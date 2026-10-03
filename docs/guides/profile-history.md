@@ -57,9 +57,7 @@ unsupported destination is rejected, rather than treated as absent.
 
 If the destination is absent or cannot supply every required binding, pass
 `--bindings FILE` with the local binding document accepted by Profile import.
-Current choices take precedence; the file supplies missing choices. Binding
-version 1 supports source and authentication references, version 2 adds paths
-and executables, and version 3 adds environment references.
+Current choices take precedence; the file supplies missing choices.
 
 Restore never reuses machine-local path, executable, or secret-environment
 reference values solely because they occurred in an old private snapshot. A live

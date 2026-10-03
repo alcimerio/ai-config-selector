@@ -80,10 +80,9 @@ to use the established read, edit and explicit migration paths.
 
 The envelope, common capabilities and target overlays have independent
 versions. Skills and instructions retain exact `source` plus `relativePath`
-identity; a missing
-or differently spelled source entry is not rebound by display name or cleaned
-path. Unknown common capabilities and unsupported selected overlays fail
-closed. Unknown inactive overlays can be reported by passive inspection but do
+identity. Missing or differently spelled references are not rebound by display
+name or cleaned path. Unknown common capabilities and unsupported selected
+overlays fail closed. Unknown inactive overlays can be reported by passive inspection but do
 not grant authority. Because rewriting their representation could lose unknown
 data, edit, clone and rename refuse them before preview.
 
@@ -243,7 +242,8 @@ destinations that could replace its runtime controls, including `HOME`, `PATH`,
 XDG paths, locale/terminal controls, shell startup hooks, and `ACS_`, `DYLD_`,
 `LD_`, or `LC_` prefixes. Values are freshly resolved for every execution; they
 are excluded from Profiles, authority digests, explanations, exchange/history,
-Session metadata, generated policies, argv, status probes, and diagnostics.
+Session metadata, generated policies, status probes and diagnostics. Only entries
+classified non-secret can supply [typed MCP arguments](../guides/mcp-profiles.md).
 Passive inspection, validation, explanation, export, history, and restore
 preview never read the provider.
 
@@ -319,10 +319,7 @@ prior bytes unchanged. Once a decision may exist, ACS reports `Committed` or
 `Unknown` together with any recovery requirement. Recovery can roll publication
 forward and is not a universal rollback or backup feature.
 
-`profile list`, `profile show` and `profile validate` are passive. They do not
-migrate, canonicalize, discover inactive overlays, inspect target readiness,
-access authentication, allocate a Session or write files. Structural support,
-selected source availability, overlay execution support and native enforcement
-are separate observations. See the [shared Devin/Codex behavior and evidence
-guide](shared-target-conformance.md) for the maintained cross-target contract
-and evidence limits.
+Use [Profile inspection](../guides/profiles.md#inspection) and
+[diagnostics](../guides/diagnostics.md) for passive checks. See
+[shared target conformance](shared-target-conformance.md) for projection differences
+and compatibility evidence.

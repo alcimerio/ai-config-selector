@@ -11,7 +11,7 @@ This procedure applies to macOS 26 on Apple Silicon (`darwin/arm64`), including
 older installs without an updater. Choose a compatible release from
 [GitHub Releases](https://github.com/alcimerio/ai-config-selector/releases).
 For unpublished builds, use the
-[contributor candidate procedure](../../CONTRIBUTING.md#test-a-development-candidate).
+[contributor candidate procedure](../development/releasing.md#test-a-development-candidate).
 An older binary cannot acquire newer recovery capabilities by being selected.
 
 ## Discover the executable you actually use
@@ -321,52 +321,36 @@ interruption tests do not prove arbitrary-volume power-loss safety.
 
 ## Recover a named Codex identity without exposing credentials
 
-Named identities are macOS Keychain records, separate from Profile JSON. A copy
-of `~/.acs` does not export them. They request non-synchronizable,
-when-unlocked-this-device-only storage. Locked/unavailable/ambiguous/corrupt
-state fails closed without a plaintext fallback. Restore normal access through
-supported macOS interfaces; preserve rejected schema/integrity evidence.
-
-Use the [recovery shell](#recover-a-profile-transaction-with-a-compatible-binary)
-and its compatible `source_bin`, even for identity-only recovery:
+Named identities live separately in macOS Keychain; a copy of `~/.acs` does not
+export them. Restore normal Keychain access when locked/unavailable, and keep
+rejected schema or integrity evidence. Use the compatible binary and
+[recovery shell](#recover-a-profile-transaction-with-a-compatible-binary):
 
 ```sh
 "$source_bin" codex auth list
 ```
 
-Listing reads non-secret metadata, which can still be private; it does not clear
-quarantine. `auth status` is an active contained probe that can refresh an
-identity. Login/status require supported Codex and the native sandbox; recovery
-uses stored proof and needs no new login. Once the owner and descendants settle:
+Listing reads non-secret metadata without clearing quarantine. After the owner
+and descendants settle, request proof-gated recovery:
 
 ```sh
 "$source_bin" codex auth recover --name work
 ```
 
-Recovery locks the exact identity, validates its generation/quarantine and proves
-the protected Session inactive. An unlocked lease alone is insufficient;
-`cleanup_pending` also needs valid supervisor cleanup proof. A refresh commits
-only with recorded eligibility and valid same-method/workspace/identity data;
-otherwise the projection is discarded without deleting the last valid identity.
-The protected Session is removed before its marker. An absent marker is
-idempotent success; completed missing-Session cleanup is already discarded.
+Recovery needs no new login. An unlocked lease alone is insufficient; missing
+proof, active ownership or changed/invalid generations keep the identity blocked.
+Preserve the compatible binary, locks, projection, Session, proof and quarantine
+when recovery refuses. Logout cannot bypass quarantine. See
+[Codex recovery](codex.md#quarantine-and-recovery) for refresh eligibility and
+marker ordering; `auth status` is an active probe that can refresh credentials.
 
-Missing proof, an active lease, changed generation or invalid state keeps the
-identity blocked. Cancellation of a lock-handoff wait does not authorize cleanup.
-Preserve the compatible binary, locks, projection, Session, proof, quarantine and
-sanitized error when recovery refuses. Never delete Session directories or clear
-quarantine by hand. Logout refuses quarantined identities and is not a bypass;
-generic abandoned-Session cleanup cannot replace authentication recovery proof.
+For tracked Sessions, use `acs session list`, `acs session inspect ID` and then
+`acs session recover ID` after owners settle. It neither kills a process nor
+accepts a raw path; see [Session operations](session-operations.md).
 
-For tracked Sessions, use `acs session list` and `acs session inspect ID`, then
-`acs session recover ID` after owners settle. It requires the exact current
-proof and neither kills a process nor accepts a raw path. Keep unresolved
-state; see [Session operations](session-operations.md).
-
-Do not copy global `~/.codex/auth.json` or global Codex OS-store credentials into
-ACS. Never dump Keychain secrets, projected authentication, Session contents or
-proof files into terminals or support artifacts. Profile deletion/restoration
-does not delete/restore identities. See [Codex authentication](codex.md).
+Never delete protected state by hand, copy global Codex credentials into ACS or
+publish secrets, projections, Session contents or proof files. Profile deletion
+and restoration do not delete or restore identities.
 
 ## Leave the recovery shell
 
@@ -386,4 +370,4 @@ private temporary homes, paths with spaces, verification failures, shadowing,
 selection/rollback, protected-state preservation and recovery-shell returns.
 They do not establish a real-user upgrade, real-account login, hosted inference
 or sustained daily use. Native gates and optional authenticated observations
-have separate scopes in [CONTRIBUTING](../../CONTRIBUTING.md).
+have separate scopes in [testing](../development/testing.md).

@@ -276,7 +276,7 @@ func (fixture *releaseMigrationFixture) run(script string, extra []string) (stri
 
 func releaseMigrationExamples(t *testing.T) map[string]string {
 	t.Helper()
-	contents, err := os.ReadFile(filepath.Join("..", "CONTRIBUTING.md"))
+	contents, err := os.ReadFile(filepath.Join("..", "docs", "development", "releasing.md"))
 	if err != nil {
 		t.Fatal(err)
 	}

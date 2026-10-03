@@ -232,8 +232,6 @@ never replaces a destination or case alias. Transaction messages preserve
 `not committed`, `committed`, `unknown`, and recovery-required precedence; a
 reporting error after commit never claims that publication did not occur.
 
-An exchange transfers selections and binding requirements. It includes no
-Skill contents, credentials, history or readiness evidence. It provides no
-backup, target conversion, remote synchronization, signatures, encryption,
-downgrade, overwrite or automatic updates. The supported runtime remains
-macOS 26 on Apple Silicon; local Linux tests are supplementary.
+Exchange is not a backup or readiness check. Review the sanitized intent before
+sharing and keep local binding files private; export provides no signatures or
+encryption. Use [Profile history](profile-history.md) for local configuration recovery.

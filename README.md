@@ -15,29 +15,6 @@ AI account. Linux and Intel Macs are not supported runtimes.
 [Get started](docs/guides/getting-started.md) · [Documentation](docs/README.md) ·
 [Security boundaries](docs/reference/security-model.md) · [Contribute](CONTRIBUTING.md)
 
-## What you can do
-
-- Save separate Profiles for read-only review and coding work
-- Give a target access to selected local Skills and tools in a temporary home
-- Inspect effective permissions before launch
-- Use the same common selections with explicit Devin and Codex overlays
-
-## How it works
-
-1. Choose a Profile. It stores references and permissions; credentials and
-   Skill files stay in their separate source locations. New v3 Profiles default
-   to a read-only workspace.
-2. Launch from your project. The current directory becomes the workspace. ACS
-   resolves the selections and creates a private, temporary Session with a
-   synthetic home and a clean environment.
-3. Work inside the sandbox. ACS applies the Seatbelt policy to the process and
-   its descendants. It removes the Session after proving cleanup, or retains
-   it for recovery when cleanup is uncertain.
-
-Target overlays add the fixed Devin or Codex integration. A Devin Profile
-is not automatically a Codex Profile; see the
-[common format](docs/reference/common-profile-format.md) for explicit overlays.
-
 ## Install
 
 Choose a release and copy its tag and installer SHA-256 from the
@@ -87,14 +64,12 @@ Already have ACS? Follow the
 your working binary and verify the replacement before switching. Use the manual
 path when your binary has no updater.
 
-For supported direct installer layouts, `acs update --check` checks stable-release
-metadata without changing files, and `acs update` installs a newer stable release.
-Binary rollback does not downgrade stored data. There are no background update
-checks, package-manager distribution, or uninstaller.
+`acs update --check` and `acs update` support direct installer layouts. Read the
+upgrade guide before replacing a binary: rollback does not downgrade stored data.
 
 ### Build from source
 
-With Go 1.27.1 or later on a supported Mac:
+With the Go toolchain in [go.mod](go.mod) on a supported Mac:
 
 ```sh
 git clone https://github.com/alcimerio/ai-config-selector.git
@@ -107,103 +82,48 @@ export PATH="$PWD/bin:$PATH"
 A source build reports `acs devel` and cannot self-update. See
 [Contributing](CONTRIBUTING.md) for checks and release-evidence requirements.
 
-## Try a credential-free sandbox
+## First run
 
-To try the sandbox without installing Devin or Codex:
+Run from the project you want to inspect. In the builder, choose Create Profile,
+confirm the empty selection and leave Workspace read-only for a minimal run.
+The builder does not start Devin or require an AI account:
 
 ```sh
 acs doctor --target sandbox
 acs devin create-profile --name first-review
-```
-
-The builder command is named `devin create-profile`, but does not start Devin
-or require its credentials. Choose Create Profile and confirm the empty
-selection for a minimal first run. Leave Workspace read-only. Or follow the
-[getting-started guide](docs/guides/getting-started.md) to add your first Skill.
-
-From the project directory you want to inspect:
-
-```sh
-acs profile validate first-review
-acs sandbox --profile first-review --dry-run
 acs sandbox --profile first-review
 ```
 
-The shell is always `/bin/zsh -f`, with a synthetic home and no user startup
-files. Type `exit` to return. A dry-run does not start the requested target;
-its precise checks vary by command, so it is not a promise that a real launch
-will succeed. [Get started](docs/guides/getting-started.md) explains each step and how
-to continue with Devin or Codex.
+The shell runs `/bin/zsh -f` without user startup files. Type `exit` to return.
+Follow [Get started](docs/guides/getting-started.md) to add a Skill, inspect access
+before launch and continue with Devin or Codex. Use `acs help` for your binary's
+command grammar and [target conformance](docs/reference/shared-target-conformance.md)
+for integration differences.
 
-## Everyday commands
+## Security boundaries
 
-Use `acs help` or `acs COMMAND --help` for the exact grammar of your binary.
-These examples assume a saved Profile named `first-review`:
+There is no unsandboxed fallback. New v3 Profiles default to read-only workspace
+access; the private Session is writable. ACS removes it only after proving
+process-tree cleanup, preserving uncertain state for recovery.
 
-```sh
-acs profile list
-acs profile show first-review --json
-acs explain sandbox --profile first-review
-acs profile edit first-review
-acs run --profile first-review -- /usr/bin/git status
-acs session list
-```
+ACS is not an egress firewall: targets can transmit data they can read.
+Selected secrets are shared with the attached process tree, including MCP servers.
+Choose trusted Skills, instructions and programs. Read the
+[security model](docs/reference/security-model.md) before granting access.
 
-- [CLI guide](docs/reference/cli.md): command groups, grammar, diagnostics, and dry-run limits
-- [Profiles](docs/reference/common-profile-format.md): capabilities, overlays, versions, and migration
-- [Devin/Codex conformance](docs/reference/shared-target-conformance.md): common behavior and target differences
-- [Interactive Codex](docs/guides/codex.md#interactive-launch): fixed `codex-cli 0.149.1` and ACS-owned named ChatGPT login
-- [Profile exchange](docs/guides/portable-profile-exchange.md): sharing sanitized intent with explicit local bindings
-- [Recovery](docs/guides/manual-upgrade-recovery.md): interrupted writes, retained Sessions, and rollback
+## Help and development
 
-## Isolation and limitations
+Start with [troubleshooting](docs/guides/troubleshooting.md), then
+[open an issue](https://github.com/alcimerio/ai-config-selector/issues/new) with a
+sanitized reproduction, ACS/macOS versions and architecture. Keep credentials,
+target output, Session contents and private bindings out of reports.
 
-There is no unsandboxed fallback. ACS fails closed if the required native
-sandbox cannot be established. New v3 Profiles make the workspace read-only
-unless you explicitly select coding write; legacy v1/v2 Profiles retain their
-writable-workspace behavior. The Session is writable. Additional selected path,
-executable, and environment grants apply to the contained process tree.
-
-ACS is not an egress firewall. Outbound IP and DNS are permitted; destination
-allowlisting is research, not a shipped feature. A target can send data it is
-allowed to read to an external service. Skills, instructions, MCP programs, and
-workspace content still need your trust. Selected secrets are available to the
-attached process tree, including local MCP servers, rather than isolated per server.
-
-ACS does not manage plugins, hooks, custom agents, remote MCP, or arbitrary
-target settings. Target-owned content inside the selected workspace can still
-be discovered. [The security model](docs/reference/security-model.md) explains these
-boundaries and what to avoid sharing in bug reports.
-
-v0.3.3 is the final release with Linux support. The Linux/Bubblewrap sandbox
-backend has been removed; portable source checks do not imply runtime support.
-Historical Intel assets do not extend current runtime support.
-
-## Contributing and getting help
-
-Bug reports, documentation fixes, and focused pull requests are welcome.
-
-- Start with [Contributing](CONTRIBUTING.md) for setup, development rules, and checks
-- Read the [architecture](docs/development/architecture.md) before changing execution or containment
-- Check [troubleshooting](docs/guides/troubleshooting.md), then [open an issue](https://github.com/alcimerio/ai-config-selector/issues/new)
-  with your ACS version, macOS version, and a minimal sanitized reproduction
-- Discuss changes to permissions or supported targets in an issue before implementing them
-
-Do not post credentials, target output, Session contents, private paths,
-environment values, or generated sandbox policy. See the
-[security model](docs/reference/security-model.md) for reporting guidance.
-
-## Documentation and releases
-
-The [documentation index](docs/README.md) separates user guides, maintainer
-procedures, research, and historical records. Start with the
-[walkthrough](docs/guides/getting-started.md) for Devin or Codex setup.
-
-See [GitHub Releases](https://github.com/alcimerio/ai-config-selector/releases)
-for published artifacts and release notes. Documentation on `main` can describe
-changes that have not shipped; use the documentation at your release tag when
-checking release behavior. Native tests cover their documented scenarios.
-Real-account operation and sustained daily use require separate observations.
+[Contributing](CONTRIBUTING.md) covers setup and PR checks;
+[the documentation index](docs/README.md) lists user, reference and maintainer pages.
+Documentation follows this checkout; use your release tag for installed behavior
+and [GitHub Releases](https://github.com/alcimerio/ai-config-selector/releases)
+for published notes and downloads. v0.3.3 was the final Linux-supported release;
+historical Intel assets do not extend current Apple Silicon support.
 
 ## License
 
