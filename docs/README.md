@@ -3,20 +3,19 @@
 [Project overview and install](../README.md) · [Get started](guides/getting-started.md) ·
 [Contribute](../CONTRIBUTING.md)
 
-These guides describe **v0.5.0 and current source on macOS 26 Apple Silicon**
+These guides describe v0.5.1 and current source on macOS 26 Apple Silicon
 unless a page states otherwise. Check `acs version` before following examples.
 Older installed binaries do not gain features when main-branch docs change.
 
 ## Where to look
 
-- `guides/`: first use and practical tasks, from managing Profiles to recovery
+- `guides/`: installation, Profile management, launches and recovery
 - `reference/`: command, file-format, security and target-compatibility contracts
 - `development/`: architecture and contributor research
 - `releases/`: reviewed, version-specific release-note sources
 
-The task-oriented links below are the navigation hub for all four directories.
-Contributor setup and release procedures stay in the root
-[Contributing guide](../CONTRIBUTING.md).
+Use the links below to find a task or contract. Contributor setup and release
+procedures are in [Contributing](../CONTRIBUTING.md).
 
 ## Start here
 
@@ -28,15 +27,16 @@ Contributor setup and release procedures stay in the root
 
 ### Terms
 
-- **Profile:** saved capability selections and target overlays, with references
-  rather than embedded credentials or copies of Skill files
-- **Skill:** a bundle with a `SKILL.md` entry; selections retain source and relative-path identity
-- **Instruction bundle:** an explicitly selected Markdown file, separate from Skills
-- **Workspace:** the current project directory captured when you launch
-- **Overlay:** the fixed Devin or Codex integration on a common v3 Profile
-- **Session:** private runtime state and a synthetic home for one contained process lifecycle
-- **Authority:** effective access granted to the process tree, including target/runtime additions
-- **Projection:** selected common material written into the target's expected Session layout
+| Term | Meaning |
+| --- | --- |
+| Profile | Saved capability selections and target overlays. Stores references, not credentials or Skill contents. |
+| Skill | Bundle with a `SKILL.md` entry, identified by source and relative path. |
+| Instruction bundle | Explicitly selected Markdown file, separate from Skills. |
+| Workspace | Current project directory captured at launch. |
+| Overlay | Fixed Devin or Codex integration on a common v3 Profile. |
+| Session | Private runtime state and synthetic home for one contained process lifecycle. |
+| Authority | Effective access granted to the process tree, including target and runtime additions. |
+| Projection | Common material copied into the target's expected Session layout. |
 
 ## Profiles and capabilities
 
@@ -70,17 +70,15 @@ version has shipped.
 
 - [Upgrade and recovery](guides/manual-upgrade-recovery.md): installing updates, rollback,
   private data preservation and interrupted-state recovery
-- [v0.5.1 release preparation](releases/v0.5.1.md): upcoming security and maintenance
-  update; these notes do not establish publication
-- [Current release notes](releases/v0.5.0.md): exact v0.5.0 capabilities; this file is
-  also an input to the release tooling
+- [Current release notes](releases/v0.5.1.md): v0.5.1 security and maintenance changes
+- [v0.5.0 release notes](releases/v0.5.0.md): capabilities introduced in the previous release
 - [GitHub Releases](https://github.com/alcimerio/ai-config-selector/releases): published artifacts and version history
 - [Release preparation](../CONTRIBUTING.md#release-preparation): maintainer procedure and required evidence
 
 Historical release documentation remains available at its Git tag. v0.3.3 was
 the final Linux-supported release; historical Intel assets do not extend current
-Apple Silicon support. A candidate, source build or passed CI job is not a
-published release or evidence of real-account daily use.
+Apple Silicon support. Confirm publication in GitHub Releases. Candidate builds
+and CI checks do not establish real-account operation or sustained daily use.
 
 ## Architecture and development
 

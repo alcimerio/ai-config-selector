@@ -81,8 +81,8 @@ readable data; choose the workspace, tools and helpers with that authority in
 mind. Profiles contain no credentials or Keychain records, so deleting one
 never deletes a named identity.
 
-Successful target-authored credential changes use the same same-identity
-validation as status. Failed runs, deleted or invalid projections, changed
+Successful target-authored credential changes use the identity validation
+performed by status. Failed runs, deleted or invalid projections, changed
 identity/workspace/method and unknown schemas cannot replace the last valid
 record. Target success never overrides uncertain cleanup; settlement,
 projection removal, marker deletion and identity release use the recovery
@@ -90,14 +90,14 @@ contract below.
 
 ## Named authentication
 
-Keep three independent states distinct:
+Authentication uses three separate stores:
 
-1. **Global Codex authentication** lives outside ACS, typically in the real
+1. Global Codex authentication lives outside ACS, typically in the real
    `~/.codex/auth.json` or Codex's OS credential-store namespace.
-2. **ACS durable identity** is a validated, versioned record under a name such
+2. ACS durable identity is a validated, versioned record under a name such
    as `work` in macOS Keychain service
    `com.alcimerio.ai-config-selector.codex-auth`.
-3. **Session-local projection** is private `auth.json` owned by one leased
+3. Session-local projection is private `auth.json` owned by one leased
    synthetic home for status or launch, never a shared Codex cache.
 
 ACS never reads, imports, replaces, deletes or falls back to global Codex
@@ -114,7 +114,7 @@ acs codex auth logout --name work
 ```
 
 Login defaults to browser-based ChatGPT login; `--device-auth` selects device
-login. Names contain 1–64 lowercase ASCII letters, numbers, dots, underscores or
+login. Names contain 1 to 64 lowercase ASCII letters, numbers, dots, underscores or
 hyphens and begin with a letter or number. Existing names fail before Codex
 starts; explicitly log out before reusing one. Login requires actual terminal
 stdin/stdout; character devices such as `/dev/null` do not qualify. Any version
@@ -231,9 +231,9 @@ start, proof is durably synced only after zero live target processes are
 established. Proof therefore survives an ACS crash without being forgeable by
 the target; an unlocked Session alone is insufficient.
 
-Recovery makes one idempotent decision: commit only a valid eligible
-same-identity refresh, or discard missing, unchanged, invalid, deleted or
-identity-changing state. It removes the protected Session before the identity
+Recovery makes an idempotent decision. It commits only a valid, eligible
+refresh for the same identity. It discards missing, unchanged, invalid, deleted
+or identity-changing projections. It removes the protected Session before the identity
 marker. Active Sessions or pending markers without proof remain blocked. If
 cleanup already removed the Session, recovery clears the stale marker as an
 already-discarded projection.
@@ -266,16 +266,18 @@ Credential-free native tests use the reviewed, checksum-locked Apple Silicon
 Codex target, disposable Keychain and synthetic home. They cover isolated
 Keychain records, metadata enumeration, duplicate/isolation/size boundaries,
 failed-update preservation and contained status configuration, projection,
-quarantine and redaction. Deterministic tests cover refresh decisions and
-no-UI locked-provider failures. Real interactive login and target-origin refresh
-remain supplemental trusted-host observations; automated success does not
-prove them. See [Contributing](../../CONTRIBUTING.md#native-named-authentication-evidence)
-for the native gate, recovery precautions and authenticated-smoke procedure,
-and [shared target conformance](../reference/shared-target-conformance.md) for cross-target
-behavior and evidence limits.
+quarantine and redaction. Deterministic tests cover refresh decisions and no-UI
+locked-provider failures. Real interactive login and target-origin refresh
+remain supplemental trusted-host observations; automated success does not prove
+them. See
+[Contributing](../../CONTRIBUTING.md#native-named-authentication-evidence) for
+the native gate, recovery precautions and authenticated-smoke procedure, and
+[shared target conformance](../reference/shared-target-conformance.md) for
+cross-target behavior and evidence limits.
 
 Codex's [authentication documentation](https://learn.chatgpt.com/docs/auth)
-describes browser/device login, status/logout, token refresh, `$CODEX_HOME/auth.json`
-and OS-store modes. Its [managed-configuration documentation](https://learn.chatgpt.com/docs/enterprise/managed-configuration)
-defines `/etc/codex/requirements.toml`. ACS uses temporary contained file storage
-and owns its separate durable Keychain namespace.
+describes browser/device login, status/logout, token refresh,
+`$CODEX_HOME/auth.json` and OS-store modes. Its
+[managed-configuration documentation](https://learn.chatgpt.com/docs/enterprise/managed-configuration)
+defines `/etc/codex/requirements.toml`. ACS uses temporary contained file
+storage and owns its separate durable Keychain namespace.

@@ -6,7 +6,7 @@ not supported runtimes or release targets.
 
 ## Local setup
 
-Install Go 1.27.1 or later, clone the repository, and run these checks on a
+Install Go 1.27.1 or later and clone the repository. Run these checks on a
 supported Apple Silicon Mac:
 
 ```sh
@@ -45,8 +45,8 @@ pseudo-versions, so check `go list -m -json github.com/charmbracelet/x/vt@latest
 when reviewing terminal-library updates. The vulnerability scan still includes
 the selected pseudo-version; this exception does not suppress an advisory.
 
-Updates require review and the existing native gates;
-they are not merged automatically. Keep Actions pinned to full commit SHAs.
+Dependency updates require review and the existing native gates. They are not
+merged automatically. Keep Actions pinned to full commit SHAs.
 
 The [Go vulnerability workflow](.github/workflows/vulnerabilities.yml) runs on
 PRs, pushes to `main`, weekly, and manually. The release-tag and promoted-artifact
@@ -55,8 +55,8 @@ installed candidate on the native runner before the shared native tests.
 Attestation and publication require that native job to succeed. These gates do
 not rebuild or substitute the candidate.
 
-All three workflows use [one helper](scripts/check-go-vulnerabilities.sh) with
-an immutable `govulncheck` source pin and the exact Go version in `go.mod`.
+All three workflows use [the vulnerability helper](scripts/check-go-vulnerabilities.sh),
+which pins the `govulncheck` source commit and uses the exact Go version in `go.mod`.
 Review that pin when upgrading Go; Dependabot does not update it. The helper
 installs the scanner for the host in a disposable directory, ignoring inherited
 cross-compilation settings, then scans source as `darwin/arm64`,
@@ -64,10 +64,10 @@ cross-compilation settings, then scans source as `darwin/arm64`,
 Binary mode reads the supplied installed file and verifies its SHA-256 is
 unchanged across the scan; it does not execute or rebuild ACS.
 
-The helper fixes the database to the live public `https://vuln.go.dev` service.
-The scanner is pinned; advisory data is not. The same source or candidate can
-fail later as advisories change. Text/version output records scanner, Go and
-database metadata and keeps findings and scanner/database errors fail-closed.
+The helper uses the live public `https://vuln.go.dev` database. The scanner is
+pinned, but advisory data changes. A later scan of the same source or candidate
+can fail after a new advisory. Text and version output record scanner, Go and
+database metadata. Findings and scanner or database errors block the gate.
 Do not replace it with JSON/SARIF-only output, which can succeed with findings.
 
 Source findings are based on reachable symbols, including test paths. Verbose
@@ -105,8 +105,12 @@ Use [the documentation index](docs/README.md) as the entry point. Put practical
 user tasks in `docs/guides/`, stable contracts in `docs/reference/`, and
 architecture or contributor research in `docs/development/`. Keep release-note
 sources in `docs/releases/` and fixture-specific explanations beside their tests.
-When moving a page, update its relative links, incoming references and tests,
-and keep it linked from the index. Preserve version-tagged historical links.
+When moving a page, update relative links, incoming references and tests, and
+link it from the index. Preserve version-tagged historical links. Review prose
+for direct wording and remove duplication without weakening security or recovery
+contracts. Treat fixture Markdown as test input and published release notes as
+historical records. Change installation versions, URLs and digests together,
+and update the tests that execute those examples.
 
 ### Code
 
@@ -160,7 +164,7 @@ Do not weaken macOS security settings to make a test pass.
 ## Portable source checks
 
 Small OS-specific filesystem and terminal shims keep shared code testable on
-Linux development hosts. They are not a Linux sandbox or support promise:
+Linux development hosts. Runtime support still requires the native sandbox:
 launches on unsupported hosts fail closed, and only the native Apple Silicon
 gates establish runtime behavior.
 
@@ -224,17 +228,18 @@ Codex authentication, weaken Seatbelt, or bypass a native trust failure.
 Record only source commit, artifact and installed-binary digests, target version
 and locked digest, host architecture, command category, and pass/fail or not
 observed. Account identifiers, device codes, browser URLs, target output,
-credentials, token timestamps, Keychain contents, homes, Sessions, private paths,
-environment values and generated policy must not be recorded. A smoke does not
-prove reproducibility, release immutability, deterministic account behavior or
-sustained real-project use. Record the actual duration and scope of any separate
-daily-use observation; never infer it from automated or publication success.
+credentials, token timestamps, Keychain contents, homes, Sessions, private
+paths, environment values and generated policy must not be recorded. A smoke
+does not prove reproducibility, release immutability, deterministic account
+behavior or sustained real-project use. Record the actual duration and scope of
+a separate daily-use observation; never infer it from automated or publication
+success.
 
 ## Research harnesses
 
 Opt-in extension discovery and hook fixtures test target-owned behavior through
-synthetic authentication and local simulators. They do not add ACS-managed
-plugins, hooks or agents, prove hosted inference, or establish detached-child
+synthetic authentication and local simulators. They do not activate ACS-managed
+plugins, hooks or agents, establish hosted inference, or prove detached-child
 cleanup beyond the tested containment contract. Run the portable fixtures with
 `go test ./internal/extensionassessment`. The
 [promoted-artifact workflow](.github/workflows/promoted-artifacts.yml) contains the separate locked-target invocation of
@@ -446,7 +451,8 @@ acs session list
 These checks are passive. A nonzero status is not permission to migrate, delete,
 restore or retry; Session listing does not prove active owners have settled.
 Before a confirmed write, settle operations and make a private quiescent copy of
-Profile bytes. Follow the [migration and recovery steps](docs/guides/manual-upgrade-recovery.md#binary-rollback-is-not-a-data-downgrade)
+Profile bytes. Follow the
+[migration and recovery steps](docs/guides/manual-upgrade-recovery.md#binary-rollback-is-not-a-data-downgrade)
 for explicit Profile migration, preview cancellation and interrupted operations.
 
 To select the retained executable again in the same maintenance shell:

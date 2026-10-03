@@ -2,10 +2,9 @@
 
 [Documentation index](../README.md) · [CLI guide](../reference/cli.md) · [Security model](../reference/security-model.md)
 
-This guide is for v0.5.0 and current source on **macOS 26, Apple Silicon**.
-Start with a credential-free shell so you can see the boundary before adding
-an AI target or account. Allow about ten minutes; native setup or target login
-can take longer. This is a walkthrough, not a recorded daily-use test.
+This guide is for v0.5.1 and current source on macOS 26 Apple Silicon. Start
+with a credential-free shell to inspect workspace access and the temporary home
+before adding an AI target or account.
 
 ## 1. Install and check the host
 
@@ -26,7 +25,7 @@ there is no bypass or unsandboxed fallback.
 
 ## 2. Add an optional first Skill
 
-A **Skill** is a local bundle with a `SKILL.md` entry file. ACS discovers immediate
+A Skill is a local bundle with a `SKILL.md` entry file. ACS discovers immediate
 child directories under `~/.agents/skills` and `~/.config/devin/skills`. It does
 not install or download Skills for you. A loose `SKILL.md` at either root is not
 a catalog entry.
@@ -44,9 +43,10 @@ Review the current changes for correctness and missing behavioral tests.
 SKILL
 ```
 
-If the child directory already exists, the command stops before writing it.
-Use your existing Skill or choose another name. A Skill is material visible to
-the target; selecting it does not itself prove the model will follow it.
+If the child directory already exists, the command stops before writing it. Use
+your existing Skill or choose another name. Selecting a Skill makes its files
+visible to the target. Model behavior still depends on the target and the
+instructions.
 
 ## 3. Save a read-only Profile
 
@@ -60,11 +60,11 @@ Despite its name, this builder does not start Devin or require a Devin account.
 It creates a common v3 Profile with a Devin overlay that also works with the
 sandbox shell and generic commands.
 
-1. Open **Skills**, select `acs-first-review` with Space/Enter, then return
+1. Open Skills, select `acs-first-review` with Space/Enter, then return
    with Left/Esc. `/` searches; Esc while searching clears the filter.
-2. Leave **Workspace** read-only for this first run. Choose **Read and write
-   (coding work)** only when you intend the target to modify the workspace.
-3. Choose **Create Profile**. If you skipped the Skill, confirm the empty
+2. Leave Workspace read-only for this first run. Choose Read and write
+   only when you intend the target to modify the workspace.
+3. Choose Create Profile. If you skipped the Skill, confirm the empty
    selection when prompted. Empty selections still have workspace/runtime/Session
    authority; they do not mean zero access.
 
@@ -78,7 +78,7 @@ Removing or renaming selected source material can make a later launch fail.
 
 ## 4. Inspect and launch from your workspace
 
-Change into the project directory you want to inspect. The **current directory**
+Change into the project directory you want to inspect. The current directory
 is the workspace; the Profile name does not bind it to a particular repository.
 Then run:
 
@@ -94,7 +94,7 @@ acs sandbox --profile first-review
 - `validate` checks structure and selected Skill sources, not complete launch readiness
 - `explain` describes effective authority; native readiness is unchecked unless requested
 - Sandbox dry-run resolves the plan and checks bounded native readiness, without a Session
-- The final command starts `/bin/zsh -f` inside a private **Session**
+- The final command starts `/bin/zsh -f` inside a private Session
 
 Inside the shell, try:
 
@@ -150,7 +150,7 @@ acs codex --profile codex-review
 ```
 
 Select Skills and workspace access in this separate builder. The earlier Devin
-Profile does not have a Codex overlay; do not just substitute its name here.
+Profile needs an explicit Codex overlay before it can launch Codex.
 For one Profile with both overlays, use the
 [common Profile format](../reference/common-profile-format.md) and
 [declarative creation](profiles.md#declarative-creation).
@@ -185,6 +185,6 @@ See [generic commands](generic-run.md) for scripts and runtime dependencies.
 4. Review [troubleshooting](troubleshooting.md) and
    [manual recovery](manual-upgrade-recovery.md) before retrying an uncertain mutation
 
-Next: [edit or clone a Profile](profiles.md#mutations),
-[share sanitized intent](portable-profile-exchange.md), or
-[understand the architecture](../development/architecture.md).
+To reuse this setup, [edit or clone a Profile](profiles.md#mutations). Use
+[portable exchange](portable-profile-exchange.md) to share sanitized selections.
+For implementation details, read the [architecture](../development/architecture.md).

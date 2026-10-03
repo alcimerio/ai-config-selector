@@ -2,14 +2,14 @@
 
 [Documentation index](../README.md)
 
-Choose the question before choosing the command:
+Use the command that answers your question:
 
 - `acs profile show NAME`: inspect [stored structure](profiles.md#inspection).
 - `acs doctor`: check passive host/backend prerequisites and an optional target
   executable's presence.
 - `acs profile validate NAME`: validate structure and resolve selected Skills.
-- `acs explain TARGET --profile NAME`: resolve a semantic authority plan without
-  launching it; optionally check bounded native readiness.
+- `acs explain TARGET --profile NAME`: report planned permissions without
+  launching; optionally check bounded native readiness.
 
 Success applies only to the requested checks. It does not establish credentials,
 executable-version compatibility, materialization or runtime enforcement.
@@ -60,9 +60,9 @@ structural checks only. Validation does not open instruction files, inspect
 grant targets, resolve environment values, start MCP servers or construct a
 launch plan.
 
-Both commands are strictly passive: no subprocesses (including `--version`),
-credential queries, authentication inference from names, login, Session
-allocation/recovery, locks, permission changes, migration or writes. Version,
+Both commands are passive. They start no subprocesses, including `--version`,
+and query no credentials. They do not infer authentication from names, allocate
+or recover Sessions, take locks, change permissions, migrate data or write files. Version,
 authentication and enforcement remain unchecked; validation also leaves
 platform, backend and executable checks unchecked. Normal launch and dry-run
 behavior is unchanged.
@@ -224,5 +224,6 @@ legitimately differ without changing the digest.
 
 JSON check status is `pass`, `fail` or `unchecked`. Exit 0 means a complete
 semantic plan was produced. A failed requested readiness observation or a
-structural/source/overlay/command failure exits 1. Default unchecked evidence
-does not prevent success and must not be read as readiness.
+structural/source/overlay/command failure exits 1. Unchecked properties do not
+prevent success. Check the requested statuses before treating a plan as ready to
+launch.

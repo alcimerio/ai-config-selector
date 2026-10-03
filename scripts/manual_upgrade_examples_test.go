@@ -12,8 +12,8 @@ import (
 	"testing"
 )
 
-func TestPublishedV050FreshInstallerExampleVerifiesBeforeExecution(t *testing.T) {
-	const publishedInstallerSHA256 = "5723249bb5d69b5878e9178e6dc7cb45812d8d6930029d8c174b5acab3a5b38f"
+func TestPublishedV051FreshInstallerExampleVerifiesBeforeExecution(t *testing.T) {
+	const publishedInstallerSHA256 = "d1e899c9cc20e85450572f350986f8e1e68fdd649ee184b497bc05160e02f655"
 	readme := readRepositoryFile(t, "..", "README.md")
 	installer := `#!/bin/sh
 set -eu
@@ -27,7 +27,7 @@ else
 fi
 test ! -e "$destination/acs"
 mkdir -p "$destination"
-printf '#!/bin/sh\nprintf "acs v0.5.0\n"\n' > "$destination/acs"
+printf '#!/bin/sh\nprintf "acs v0.5.1\n"\n' > "$destination/acs"
 chmod 0700 "$destination/acs"
 `
 	for _, example := range []struct {
@@ -38,10 +38,10 @@ chmod 0700 "$destination/acs"
 		{name: "fresh-install", file: "install.sh", installed: ".local/bin/acs"},
 	} {
 		t.Run(example.name, func(t *testing.T) {
-			pattern := regexp.MustCompile("(?s)<!-- published-v050-" + example.name + "-example -->\\n```sh\\n(.*?)\\n```")
+			pattern := regexp.MustCompile("(?s)<!-- published-v051-" + example.name + "-example -->\\n```sh\\n(.*?)\\n```")
 			match := pattern.FindStringSubmatch(readme)
 			if len(match) != 2 {
-				t.Fatalf("README published v0.5.0 %s example is missing or duplicated", example.name)
+				t.Fatalf("README published v0.5.1 %s example is missing or duplicated", example.name)
 			}
 			if !strings.Contains(match[1], publishedInstallerSHA256) {
 				t.Fatal("README installer example lacks the published installer digest")
@@ -68,7 +68,7 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 test "$destination" = "$TEST_INSTALLER_NAME"
-test "$url" = "https://github.com/alcimerio/ai-config-selector/releases/download/v0.5.0/install.sh"
+test "$url" = "https://github.com/alcimerio/ai-config-selector/releases/download/v0.5.1/install.sh"
 case "$TEST_TAMPER_INSTALLER" in
   true) cp "$TEST_TAMPERED_INSTALLER" "$destination" ;;
   *) cp "$TEST_INSTALLER_FIXTURE" "$destination" ;;
@@ -104,7 +104,7 @@ esac
 				t.Fatalf("verified installer example failed: %v\n%s", err, output)
 			}
 			installed := filepath.Join(goodHome, example.installed)
-			if output, err := exec.Command(installed).CombinedOutput(); err != nil || string(output) != "acs v0.5.0\n" {
+			if output, err := exec.Command(installed).CombinedOutput(); err != nil || string(output) != "acs v0.5.1\n" {
 				t.Fatalf("installed identity = %q, %v", output, err)
 			}
 			if downloads := strings.Count(string(mustReadFile(t, log)), "download\n"); downloads != 2 {
@@ -127,10 +127,10 @@ func TestManualUpgradeExamples(t *testing.T) {
 				t.Fatalf("manual upgrade examples: %v\n%s", err, output)
 			}
 			fixture.assertProtectedUnchanged(before)
-			root := filepath.Join(fixture.installer.home, "ACS Maintenance v0.5.0")
+			root := filepath.Join(fixture.installer.home, "ACS Maintenance v0.5.1")
 			for name, expected := range map[string]string{
-				"selected-version.txt": "acs v0.5.0\n",
-				"resolved-version.txt": "acs v0.5.0\n",
+				"selected-version.txt": "acs v0.5.1\n",
+				"resolved-version.txt": "acs v0.5.1\n",
 				"rollback-version.txt": "acs v0.4.0\n",
 			} {
 				got, err := os.ReadFile(filepath.Join(root, name))
@@ -169,9 +169,9 @@ func TestManualUpgradeExamples(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			wantURLs := "https://github.com/alcimerio/ai-config-selector/releases/download/v0.5.0/install.sh\n" +
-				"https://github.com/alcimerio/ai-config-selector/releases/download/v0.5.0/acs_0.5.0_darwin_arm64.tar.gz\n" +
-				"https://github.com/alcimerio/ai-config-selector/releases/download/v0.5.0/SHA256SUMS\n"
+			wantURLs := "https://github.com/alcimerio/ai-config-selector/releases/download/v0.5.1/install.sh\n" +
+				"https://github.com/alcimerio/ai-config-selector/releases/download/v0.5.1/acs_0.5.1_darwin_arm64.tar.gz\n" +
+				"https://github.com/alcimerio/ai-config-selector/releases/download/v0.5.1/SHA256SUMS\n"
 			if string(urls) != wantURLs {
 				t.Fatalf("downloads = %q, want %q", urls, wantURLs)
 			}
@@ -187,7 +187,7 @@ func TestManualUpgradeExamplesRejectUnsupportedArchitecture(t *testing.T) {
 		t.Fatalf("unsupported Intel host was not rejected: %v\n%s", err, output)
 	}
 	fixture.assertProtectedUnchanged(before)
-	root := filepath.Join(fixture.installer.home, "ACS Maintenance v0.5.0")
+	root := filepath.Join(fixture.installer.home, "ACS Maintenance v0.5.1")
 	for _, relative := range []string{"selected/bin/acs", "resolved-version.txt"} {
 		if _, err := os.Lstat(filepath.Join(root, relative)); !os.IsNotExist(err) {
 			t.Fatalf("unsupported host reached installation/selection: %s: %v", relative, err)
@@ -210,7 +210,7 @@ func TestManualUpgradeExamplesStopBeforeUnsafeSelection(t *testing.T) {
 				t.Fatalf("%s did not stop the examples:\n%s", fault, output)
 			}
 			fixture.assertProtectedUnchanged(before)
-			root := filepath.Join(fixture.installer.home, "ACS Maintenance v0.5.0")
+			root := filepath.Join(fixture.installer.home, "ACS Maintenance v0.5.1")
 			if fault == "installer digest" || fault == "binary digest" || fault == "binary version" || fault == "shell function" {
 				if _, err := os.Lstat(filepath.Join(root, "resolved-version.txt")); !os.IsNotExist(err) {
 					t.Fatalf("failed verification reached PATH-selected execution: %v", err)
@@ -373,11 +373,11 @@ func newManualUpgradeFixture(t *testing.T, arch string) *manualUpgradeFixture {
 	blocks := manualExamples(t)
 	fixture := &manualUpgradeFixture{t: t, installer: installer, blocks: blocks, oldBinary: filepath.Join(installer.home, "old bin", "acs")}
 	oldBytes := "#!/bin/sh\ntest \"$#\" -eq 1 && test \"$1\" = version || exit 1\nprintf 'acs v0.4.0\\n'\n"
-	fixture.newBytes = strings.ReplaceAll(oldBytes, "v0.4.0", "v0.5.0")
+	fixture.newBytes = strings.ReplaceAll(oldBytes, "v0.4.0", "v0.5.1")
 	if err := os.WriteFile(fixture.oldBinary, []byte(oldBytes), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	rendered := strings.ReplaceAll(readRepositoryFile(t, ".", "install.sh.tmpl"), "__ACS_RELEASE_VERSION__", "v0.5.0")
+	rendered := strings.ReplaceAll(readRepositoryFile(t, ".", "install.sh.tmpl"), "__ACS_RELEASE_VERSION__", "v0.5.1")
 	if err := os.WriteFile(filepath.Join(installer.releaseDirectory, "install.sh"), []byte(rendered), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -409,11 +409,11 @@ func (fixture *manualUpgradeFixture) run(fault string) (string, error) {
 		newBytes += "# Different bytes with the same version.\n"
 	}
 	if fault == "binary version" {
-		newBytes = strings.ReplaceAll(newBytes, "v0.5.0", "v9.9.9")
+		newBytes = strings.ReplaceAll(newBytes, "v0.5.1", "v9.9.9")
 	}
 	var manifest strings.Builder
 	for _, arch := range []string{"arm64"} {
-		name := "acs_0.5.0_darwin_" + arch + ".tar.gz"
+		name := "acs_0.5.1_darwin_" + arch + ".tar.gz"
 		archivePath := filepath.Join(fixture.installer.releaseDirectory, name)
 		writeInstallerArchive(t, archivePath, newBytes)
 		contents, err := os.ReadFile(archivePath)

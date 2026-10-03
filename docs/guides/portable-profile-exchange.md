@@ -2,8 +2,9 @@
 
 [Documentation index](../README.md)
 
-Development source supports a separately versioned, sanitized Profile exchange
-format. Local Profile JSON is machine persistence and is not an export format.
+Use the separately versioned, sanitized exchange format to share Profile
+selections. Stored local Profile JSON contains machine-specific bindings and
+is not an export format.
 Exchange documents contain only supported version-3 stored intent and explicit
 symbolic requirements; they never contain resolved host paths, Skill assets,
 credentials, tokens, OAuth state, Sessions, repository metadata, generated plans,
@@ -25,9 +26,8 @@ explicit local regular file; stdin and remote URLs are not supported.
 ## Export format and output
 
 Exchange version 3 supports common Skills v1, optional Instructions v1,
-workspace v1, paths v1,
-executables v1, environment v1, reference-only MCP v1, and exact maintained
-Devin v1 and Codex v1 overlays. MCP server IDs, transport, ordered typed argv
+workspace v1, paths v1, executables v1, environment v1, reference-only MCP v1,
+and the supported Devin v1 and Codex v1 overlays. MCP server IDs, transport, ordered typed argv
 references, declared input/environment references, and disabled tool names are
 carried without resolved host values. Local executable, path and secret
 environment references use the explicit bindings described below. Only local
@@ -146,13 +146,14 @@ For the exchange example above, use this separate local binding document
 Each requirement needs exactly one mapping; missing or unused mapping keys
 produce unresolved bindings (`binding_required`, exit 2) and prevent import.
 Source values are exact registered identities, not display names: Skills use
-`devin-config` or `shared-agents`; instruction references use `acs-instructions`.
-Instruction text and its host path are not exported. Authentication values are only canonical
-opaque ACS identity names; validation never queries Keychain or reads credential
-values. Duplicate, case/Unicode-normalized alias, and parent/child Skill
-destinations are rejected both before and after binding. Two symbols mapped to
-one local source therefore cannot evade collision checks, while the same relative
-name under two distinct sources remains correctly namespaced.
+`devin-config` or `shared-agents`; instruction references use
+`acs-instructions`. Instruction text and its host path are not exported.
+Authentication bindings contain only canonical ACS identity names; validation
+never queries Keychain or reads credential values. Duplicate,
+case/Unicode-normalized alias, and parent/child Skill destinations are rejected
+both before and after binding. Two symbols mapped to one local source therefore
+cannot evade collision checks, while the same relative name under two distinct
+sources remains correctly namespaced.
 
 Workspace-relative path references remain portable. Export replaces each
 local-absolute path with a deterministic `path-N` symbol and never emits the
@@ -231,7 +232,8 @@ never replaces a destination or case alias. Transaction messages preserve
 `not committed`, `committed`, `unknown`, and recovery-required precedence; a
 reporting error after commit never claims that publication did not occur.
 
-The exchange does not carry Skill contents or authentication, provide a backup,
-verify readiness, convert targets, synchronize remotely, or provide signatures,
-encryption, history, downgrade, overwrite, or automatic updates. Supported
-runtime remains macOS 26 on Apple Silicon; local Linux tests are supplementary.
+An exchange transfers selections and binding requirements. It includes no
+Skill contents, credentials, history or readiness evidence. It provides no
+backup, target conversion, remote synchronization, signatures, encryption,
+downgrade, overwrite or automatic updates. The supported runtime remains
+macOS 26 on Apple Silicon; local Linux tests are supplementary.
