@@ -67,6 +67,9 @@ func TestDocumentationIndexCoversMaintainedGuides(t *testing.T) {
 		if err != nil {
 			return err
 		}
+		if strings.HasPrefix(filepath.ToSlash(relative), "releases/") {
+			return nil
+		}
 		if !strings.Contains(index, "("+filepath.ToSlash(relative)+")") {
 			t.Errorf("docs/README.md does not link %s", relative)
 		}
@@ -83,6 +86,9 @@ func TestDocumentationIndexCoversMaintainedGuides(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if !strings.Contains(index, "(releases/)") {
+		t.Fatal("documentation index must link the release-note history")
 	}
 	for _, guide := range []string{"docs/guides/getting-started.md", "docs/README.md", "docs/reference/security-model.md", "CONTRIBUTING.md"} {
 		if !strings.Contains(readRepositoryFile(t, "..", "README.md"), "("+guide+")") {

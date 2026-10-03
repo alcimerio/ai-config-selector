@@ -3,9 +3,10 @@
 [Project overview and install](../README.md) · [Get started](guides/getting-started.md) ·
 [Contribute](../CONTRIBUTING.md)
 
-These guides describe v0.5.1 and current source on macOS 26 Apple Silicon
-unless a page states otherwise. Check `acs version` before following examples.
-Older installed binaries do not gain features when main-branch docs change.
+These guides follow the source in this checkout. For an installed release, read
+the documentation at its Git tag and check `acs version` before following
+examples. Main-branch documentation can describe changes that have not shipped.
+ACS supports macOS 26 on Apple Silicon.
 
 ## Where to look
 
@@ -70,9 +71,9 @@ version has shipped.
 
 - [Upgrade and recovery](guides/manual-upgrade-recovery.md): installing updates, rollback,
   private data preservation and interrupted-state recovery
-- [Current release notes](releases/v0.5.1.md): v0.5.1 security and maintenance changes
-- [v0.5.0 release notes](releases/v0.5.0.md): capabilities introduced in the previous release
-- [GitHub Releases](https://github.com/alcimerio/ai-config-selector/releases): published artifacts and version history
+- [Release-note sources](releases/): version-specific records used for publication
+- [Latest stable release](https://github.com/alcimerio/ai-config-selector/releases/latest): published notes and artifacts
+- [GitHub Releases](https://github.com/alcimerio/ai-config-selector/releases): published version history
 - [Release preparation](../CONTRIBUTING.md#release-preparation): maintainer procedure and required evidence
 
 Historical release documentation remains available at its Git tag. v0.3.3 was

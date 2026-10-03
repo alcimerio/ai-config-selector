@@ -12,8 +12,7 @@ import (
 	"testing"
 )
 
-func TestPublishedV051FreshInstallerExampleVerifiesBeforeExecution(t *testing.T) {
-	const publishedInstallerSHA256 = "d1e899c9cc20e85450572f350986f8e1e68fdd649ee184b497bc05160e02f655"
+func TestFreshInstallerExampleVerifiesBeforeExecution(t *testing.T) {
 	readme := readRepositoryFile(t, "..", "README.md")
 	installer := `#!/bin/sh
 set -eu
@@ -38,16 +37,17 @@ chmod 0700 "$destination/acs"
 		{name: "fresh-install", file: "install.sh", installed: ".local/bin/acs"},
 	} {
 		t.Run(example.name, func(t *testing.T) {
-			pattern := regexp.MustCompile("(?s)<!-- published-v051-" + example.name + "-example -->\\n```sh\\n(.*?)\\n```")
+			pattern := regexp.MustCompile("(?s)<!-- " + example.name + "-example -->\\n```sh\\n(.*?)\\n```")
 			match := pattern.FindStringSubmatch(readme)
 			if len(match) != 2 {
-				t.Fatalf("README published v0.5.1 %s example is missing or duplicated", example.name)
+				t.Fatalf("README %s example is missing or duplicated", example.name)
 			}
-			if !strings.Contains(match[1], publishedInstallerSHA256) {
-				t.Fatal("README installer example lacks the published installer digest")
+			if !strings.Contains(match[1], "REVIEWED_INSTALLER_SHA256") {
+				t.Fatal("README installer example lacks the reviewed digest input")
 			}
 			fixtureDigest := fmt.Sprintf("%x", sha256.Sum256([]byte(installer)))
-			script := strings.ReplaceAll(match[1], publishedInstallerSHA256, fixtureDigest)
+			script := strings.ReplaceAll(match[1], "REVIEWED_INSTALLER_SHA256", fixtureDigest)
+			script = strings.ReplaceAll(script, "vMAJOR.MINOR.PATCH", "v0.5.1")
 			root := t.TempDir()
 			tools := filepath.Join(root, "tools")
 			if err := os.MkdirAll(tools, 0o700); err != nil {
@@ -382,8 +382,9 @@ func newManualUpgradeFixture(t *testing.T, arch string) *manualUpgradeFixture {
 		t.Fatal(err)
 	}
 	blocks["prepare"] = strings.ReplaceAll(blocks["prepare"], `old_bin="/absolute/path/to/known-good/acs"`, `old_bin="$TEST_OLD_BINARY"`)
-	blocks["prepare"] = regexp.MustCompile(`'[0-9a-f]{64}'`).ReplaceAllString(blocks["prepare"], fmt.Sprintf("'%x'", sha256.Sum256([]byte(rendered))))
-	blocks["stage"] = regexp.MustCompile(`binary_sha256=[0-9a-f]{64}`).ReplaceAllString(blocks["stage"], fmt.Sprintf("binary_sha256=%x", sha256.Sum256([]byte(fixture.newBytes))))
+	blocks["prepare"] = strings.ReplaceAll(blocks["prepare"], "vMAJOR.MINOR.PATCH", "v0.5.1")
+	blocks["prepare"] = strings.ReplaceAll(blocks["prepare"], "REVIEWED_INSTALLER_SHA256", fmt.Sprintf("%x", sha256.Sum256([]byte(rendered))))
+	blocks["prepare"] = strings.ReplaceAll(blocks["prepare"], "REVIEWED_BINARY_SHA256", fmt.Sprintf("%x", sha256.Sum256([]byte(fixture.newBytes))))
 	return fixture
 }
 

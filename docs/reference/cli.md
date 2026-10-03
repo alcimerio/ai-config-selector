@@ -2,7 +2,7 @@
 
 [Documentation index](../README.md) · [Get started](../guides/getting-started.md)
 
-This guide covers v0.5.1 and current source. For the grammar of your installed
+This guide follows the current source. For the grammar of your installed
 binary, run `acs help`, `acs COMMAND --help`, or
 `acs help COMMAND`. Help is passive and works without a terminal, client,
 credential, Profile directory, or Session.
