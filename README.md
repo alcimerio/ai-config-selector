@@ -7,8 +7,8 @@ command inside a native macOS sandbox. Save your choices of local Skills,
 instruction files, filesystem permissions, environment references and local MCP
 servers in a reusable Profile. Launch it from your project.
 
-ACS supports macOS 26 on Apple Silicon (`darwin/arm64`). The latest published
-release is [v0.5.1](https://github.com/alcimerio/ai-config-selector/releases/tag/v0.5.1).
+ACS supports macOS 26 on Apple Silicon (`darwin/arm64`). Get the
+[latest stable release](https://github.com/alcimerio/ai-config-selector/releases/latest).
 Devin and Codex are installed separately. You can try the sandbox without an
 AI account. Linux and Intel Macs are not supported runtimes.
 
@@ -40,19 +40,24 @@ is not automatically a Codex Profile; see the
 
 ## Install
 
-For a fresh installation, download the release-pinned installer, verify its
-published checksum, inspect it (`q` exits `less`), then run it locally. Use a
-scratch directory that does not already contain `install.sh`:
+Choose a release and copy its tag and installer SHA-256 from the
+[release asset metadata](https://api.github.com/repos/alcimerio/ai-config-selector/releases/latest).
+Use `tag_name` and the hexadecimal part of the `install.sh` asset's `digest`,
+without the `sha256:` prefix. Replace the two input values below with those from
+the same reviewed release.
+Use a scratch directory without `install.sh`. Verify the downloaded installer,
+inspect it (`q` exits `less`), then run it locally:
 
-<!-- published-v051-fresh-install-example -->
+<!-- fresh-install-example -->
 ```sh
 set -eu
-release_version=v0.5.1
+release_version='vMAJOR.MINOR.PATCH'
+installer_sha256='REVIEWED_INSTALLER_SHA256'
 release_url="https://github.com/alcimerio/ai-config-selector/releases/download/$release_version"
 curl --fail --location --proto '=https' --tlsv1.2 \
   --output install.sh "$release_url/install.sh"
 printf '%s  %s\n' \
-  'd1e899c9cc20e85450572f350986f8e1e68fdd649ee184b497bc05160e02f655' install.sh \
+  "$installer_sha256" install.sh \
   | shasum -a 256 -c -
 less install.sh
 sh ./install.sh
@@ -79,10 +84,10 @@ remove quarantine, or weaken sandbox settings to make ACS run. See
 
 Already have ACS? Follow the
 [upgrade and recovery guide](docs/guides/manual-upgrade-recovery.md) to retain
-your working binary and verify the replacement before switching. v0.4.0 has no
-updater; the guide includes that bootstrap path.
+your working binary and verify the replacement before switching. Use the manual
+path when your binary has no updater.
 
-For supported v0.5.x installer layouts, `acs update --check` checks stable-release
+For supported direct installer layouts, `acs update --check` checks stable-release
 metadata without changing files, and `acs update` installs a newer stable release.
 Binary rollback does not downgrade stored data. There are no background update
 checks, package-manager distribution, or uninstaller.
@@ -172,7 +177,7 @@ boundaries and what to avoid sharing in bug reports.
 
 v0.3.3 is the final release with Linux support. The Linux/Bubblewrap sandbox
 backend has been removed; portable source checks do not imply runtime support.
-Historical v0.4.0 Intel assets do not make Intel Macs supported by v0.5.0.
+Historical Intel assets do not extend current runtime support.
 
 ## Contributing and getting help
 

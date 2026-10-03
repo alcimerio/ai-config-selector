@@ -2,8 +2,8 @@
 
 [Documentation index](../README.md) · [Architecture](../development/architecture.md) · [Troubleshooting](../guides/troubleshooting.md)
 
-This guide describes the v0.5.1 and current-source boundary on macOS 26 Apple
-Silicon. It explains the access ACS controls and the trust still required of
+This guide describes the current-source boundary on macOS 26 Apple Silicon. It
+explains the access ACS controls and the trust still required of
 targets, selected material and external services. It does not establish a
 complete security audit.
 
@@ -143,7 +143,8 @@ reachable call. Neither mode establishes that the entire module graph, Actions,
 external target binaries or all security risks are covered. See the
 [check semantics and reproduction steps](../../CONTRIBUTING.md#dependency-maintenance-and-vulnerability-checks).
 
-v0.5.1 is unsigned and unnotarized. Do not remove quarantine, disable
+Published release archives are unsigned and unnotarized. Do not remove
+quarantine, disable
 Gatekeeper, or weaken Seatbelt to work around a failure. Release gates do not
 establish real-account operation or sustained daily use. Those require separate
 observations; see

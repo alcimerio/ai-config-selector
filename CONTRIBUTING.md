@@ -109,8 +109,10 @@ When moving a page, update relative links, incoming references and tests, and
 link it from the index. Preserve version-tagged historical links. Review prose
 for direct wording and remove duplication without weakening security or recovery
 contracts. Treat fixture Markdown as test input and published release notes as
-historical records. Change installation versions, URLs and digests together,
-and update the tests that execute those examples.
+historical records. Keep current guides independent of the latest release
+number; use stable release links and operator-supplied version/digest inputs.
+Exact versions belong in release records, compatibility requirements and test
+fixtures. If an executable example changes, update and run its tests.
 
 ### Code
 

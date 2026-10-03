@@ -2,9 +2,9 @@
 
 [Documentation index](../README.md) · [CLI guide](../reference/cli.md) · [Security model](../reference/security-model.md)
 
-This guide is for v0.5.1 and current source on macOS 26 Apple Silicon. Start
-with a credential-free shell to inspect workspace access and the temporary home
-before adding an AI target or account.
+Start with a credential-free shell on macOS 26 Apple Silicon to inspect
+workspace access and the temporary home before adding an AI target or account.
+For an installed release, use the documentation at its Git tag.
 
 ## 1. Install and check the host
 
