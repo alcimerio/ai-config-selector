@@ -67,11 +67,9 @@ authentication and enforcement remain unchecked; validation also leaves
 platform, backend and executable checks unchecked. Normal launch and dry-run
 behavior is unchanged.
 
-Command words come first; `profile validate` accepts one NAME before or after
-`--json`. Flags occur once. Unknown/duplicate flags, extra operands, `=`, `--`,
-pass-through, backend selection, bypass and active options are rejected. Use
-`acs help doctor` or the command's `--help`. Help exits 0 on stdout; invalid
-syntax exits 1 with contextual stderr usage and no JSON.
+Use `acs help doctor` or `acs help profile validate` for exact
+[grammar](../reference/cli.md#grammar). Help exits 0 on stdout; invalid syntax
+exits 1 with contextual stderr usage and no JSON.
 
 ### Diagnostic JSON format 1
 

@@ -75,12 +75,9 @@ uncertain result.
 
 ## Inspection
 
-`acs profile list [--json]` enumerates direct `.json` entries;
-`acs profile show NAME [--json]` inspects one Profile even if selected Skills
-have disappeared. `show` and `validate` accept exactly one name before or after
-`--json`; `list` accepts none. Flags occur once. Extra operands, unknown options,
-attached values (`=`), `--`, target pass-through and sandbox bypass are rejected.
-Use `acs help profile` or each command's `--help` for contextual usage.
+`acs profile list` enumerates direct `.json` entries; `acs profile show NAME`
+inspects one Profile even if selected Skills disappeared. Both accept `--json`.
+Use `acs help profile` for [command grammar](../reference/cli.md#grammar).
 
 Human output reports counts for stored Skills, instructions, path grants,
 executables, environment entries and MCP servers. Workspace access is shown
@@ -194,14 +191,10 @@ acs profile delete service-review
 acs profile delete service-review --confirm service-review
 ```
 
-After command words, one source `NAME` and separate-token flags may appear in
-either order, for example `acs profile clone --name new old`. Names contain 1 to 64
-ASCII letters, digits, dots, underscores or hyphens and begin with a letter or
-digit. Clone/rename destinations must be absent and differ from the source by
-more than ASCII letter case; case-only renames are refused. Unknown, duplicate,
-missing or attached flags (`--name=new`), extra operands, `--`, `--yes`, force,
-overwrite and pass-through are rejected. Help and malformed requests do not
-inspect HOME, cwd, terminal capabilities, storage or runtime dependencies.
+Names contain 1 to 64 ASCII letters, digits, dots, underscores or hyphens and
+begin with a letter or digit. Clone/rename destinations must be absent and differ
+by more than ASCII letter case. There is no force or overwrite mode. Help and
+malformed requests perform no environment or storage discovery.
 
 ### Editing and selection repair
 

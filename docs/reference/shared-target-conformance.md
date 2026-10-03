@@ -84,7 +84,7 @@ acceptance uses a credential-free Devin behavioral fixture to check placement,
 workspace grants, unrelated-path denial, and cleanup. Separate
 installed-target tests exercise the checksum-locked Devin and Codex artifacts,
 real Seatbelt, PTY behavior, Keychain recovery, and descendants. Follow
-[Contributing](../../CONTRIBUTING.md) for their setup; Linux or Intel results do not
+[testing](../development/testing.md) for their setup; Linux or Intel results do not
 establish supported native behavior.
 
 For a compatibility bug, record the ACS version/commit and artifact SHA-256,

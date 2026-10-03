@@ -134,45 +134,21 @@ Skills and other target-owned workspace content remain Devin's responsibility;
 a selected global Skill catalog is not a complete filter of workspace content.
 See [target conformance](../reference/shared-target-conformance.md).
 
-### Codex
+### Codex or a generic command
 
-ACS supports exactly `codex-cli 0.149.1` for this integration. A newer installed
-Codex is not automatically compatible. Install that target separately, use a
-normal macOS terminal with an available Keychain, and create an ACS-owned named
-ChatGPT identity:
+Follow [interactive Codex](codex.md#interactive-launch) for its supported target
+version, separate Profile overlay and ACS-owned named ChatGPT login. ACS does
+not import or fall back to global Codex authentication.
 
-```sh
-acs doctor --target codex-auth
-acs codex auth login --name work
-acs codex create-profile --name codex-review --auth work
-acs codex --profile codex-review --dry-run
-acs codex --profile codex-review
-```
-
-Select Skills and workspace access in this separate builder. The earlier Devin
-Profile needs an explicit Codex overlay before it can launch Codex.
-For one Profile with both overlays, use the
-[common Profile format](../reference/common-profile-format.md) and
-[declarative creation](profiles.md#declarative-creation).
-
-Credentials live in an ACS-specific macOS Keychain namespace, not the Profile.
-ACS does not import or fall back to your global Codex login. Login/status and
-real launch access the named identity; Codex dry-run does not access Keychain,
-probe the target, or establish authentication readiness. Follow
-[named authentication](codex.md#named-authentication) for device login, status, recovery, and logout.
-
-### A generic command
-
-No AI target or account is required:
+To run without an AI target or account:
 
 ```sh
 acs run --profile first-review -- /usr/bin/git status
 ```
 
-The `--` is required. ACS runs literal arguments without inserting a shell;
-bare names search only `/usr/local/bin:/usr/bin:/bin`, not your host `PATH`.
-This command uses common capabilities and no target credentials or overlay.
-See [generic commands](generic-run.md) for scripts and runtime dependencies.
+See [generic commands](generic-run.md) for literal argv, the required `--`, fixed
+search path and runtime dependencies. This path uses common capabilities without
+a target overlay or copied target credentials.
 
 ## When something fails
 

@@ -1,13 +1,13 @@
 # Contributing
 
 ACS supports macOS 26 on Apple Silicon (`darwin/arm64`) using Seatbelt.
-There is no Linux sandbox backend. Intel Macs, Linux and other platforms are
-not supported runtimes or release targets.
+Unsupported hosts fail closed. Read the [architecture](docs/development/architecture.md)
+before changing execution, capabilities or containment.
 
 ## Local setup
 
-Install Go 1.27.1 or later and clone the repository. Run these checks on a
-supported Apple Silicon Mac:
+Install the Go toolchain specified in [go.mod](go.mod), clone the repository,
+and run these checks on a supported Mac:
 
 ```sh
 go mod download
@@ -17,465 +17,68 @@ go vet ./...
 go build ./cmd/acs
 ```
 
-CI and release workflows select the exact Go version in `go.mod`. Use that
-same version when reproducing their checks or release-candidate artifacts;
-a newer locally installed toolchain can produce different bytes. Keep the
-module version and these setup instructions aligned when updating Go.
-
-Run formatting before committing:
+CI selects the exact version in `go.mod`; newer toolchains can produce different
+release bytes. Format changed Go files before committing:
 
 ```sh
 gofmt -w path/to/changed.go
 ```
 
-Do not commit generated `dist/` content, credentials, Session data, captured
-target output, private paths, environment values, or generated Seatbelt policy.
-
-## Dependency maintenance and vulnerability checks
-
-[Dependabot](.github/dependabot.yml) checks Go modules and GitHub Actions every
-Monday at 07:00 UTC. Minor and patch version updates are grouped per ecosystem;
-major updates remain separate. At most three Go and two Actions version-update
-PRs can be open at once. The sole version exception is the nonexistent
-`github.com/charmbracelet/x/vt` candidate `= v0.1.0`: the parent repository
-tag is not a valid `vt/v0.1.0` submodule tag. The explicit equality is important;
-a bare Go version would exclude a wider range. Review this exception when the
-upstream module gains real tags. Dependabot does not reliably discover newer
-pseudo-versions, so check `go list -m -json github.com/charmbracelet/x/vt@latest`
-when reviewing terminal-library updates. The vulnerability scan still includes
-the selected pseudo-version; this exception does not suppress an advisory.
-
-Dependency updates require review and the existing native gates. They are not
-merged automatically. Keep Actions pinned to full commit SHAs.
-
-The [Go vulnerability workflow](.github/workflows/vulnerabilities.yml) runs on
-PRs, pushes to `main`, weekly, and manually. The release-tag and promoted-artifact
-workflows also run the same source gate before building, and scan the exact
-installed candidate on the native runner before the shared native tests.
-Attestation and publication require that native job to succeed. These gates do
-not rebuild or substitute the candidate.
-
-All three workflows use [the vulnerability helper](scripts/check-go-vulnerabilities.sh),
-which pins the `govulncheck` source commit and uses the exact Go version in `go.mod`.
-Review that pin when upgrading Go; Dependabot does not update it. The helper
-installs the scanner for the host in a disposable directory, ignoring inherited
-cross-compilation settings, then scans source as `darwin/arm64`,
-`CGO_ENABLED=0`, including tests. It loads source without executing ACS or tests.
-Binary mode reads the supplied installed file and verifies its SHA-256 is
-unchanged across the scan; it does not execute or rebuild ACS.
-
-The helper uses the live public `https://vuln.go.dev` database. The scanner is
-pinned, but advisory data changes. A later scan of the same source or candidate
-can fail after a new advisory. Text and version output record scanner, Go and
-database metadata. Findings and scanner or database errors block the gate.
-Do not replace it with JSON/SARIF-only output, which can succeed with findings.
-
-Source findings are based on reachable symbols, including test paths. Verbose
-output also lists vulnerable modules/packages without a reachable call; review
-those separately. Binary analysis is more conservative: it cannot establish
-source call paths and can report unreachable included symbols. When symbols
-cannot be extracted (including stripped artifacts), the scanner falls back to
-module-level advisory matches. Those findings block the binary gate too; they
-are not proof that each vulnerable function is callable. See the
-[scanner's documented limitations](https://pkg.go.dev/golang.org/x/vuln/cmd/govulncheck#hdr-Limitations).
-
-To reproduce either scan using the repository's exact Go toolchain:
-
-```sh
-scripts/check-go-vulnerabilities.sh source
-scripts/check-go-vulnerabilities.sh binary /absolute/path/to/installed/acs
-```
-
-Investigate failures and update the affected dependency or Go toolchain; do not
-bypass findings or add arbitrary exclusions. A passing scan is not a complete
-module-graph audit, coverage of GitHub Actions or external target executables,
-or proof against unknown vulnerabilities. It does not replace native macOS
-containment tests, dependency review, or separate target verification.
-
-Dependabot version updates are distinct from GitHub's Dependabot alerts and
-security updates. This configuration does not enable or prove access to those
-repository-level features. The Go scan uses the public Go vulnerability
-database and reports through Actions without requiring GitHub alert access.
+Run the [focused native shell checks](docs/development/testing.md#testing-the-sandbox-shell)
+from a normal terminal. Do not commit `dist/`, credentials, Session data, target
+output, private paths, environment values or generated Seatbelt policy.
 
 ## Development rules
-
-### Documentation
-
-Use [the documentation index](docs/README.md) as the entry point. Put practical
-user tasks in `docs/guides/`, stable contracts in `docs/reference/`, and
-architecture or contributor research in `docs/development/`. Keep release-note
-sources in `docs/releases/` and fixture-specific explanations beside their tests.
-When moving a page, update relative links, incoming references and tests, and
-link it from the index. Preserve version-tagged historical links. Review prose
-for direct wording and remove duplication without weakening security or recovery
-contracts. Treat fixture Markdown as test input and published release notes as
-historical records. Keep current guides independent of the latest release
-number; use stable release links and operator-supplied version/digest inputs.
-Exact versions belong in release records, compatibility requirements and test
-fixtures. If an executable example changes, update and run its tests.
 
 ### Code
 
 - Add a failing test before changing behavior.
-- Keep public CLI parsing in `internal/cli` and target behavior behind planner
-  and launcher boundaries.
-- Keep common Profile codecs, defaults, authority and materialization in
-  `internal/commonprofile`, and the immutable execution inputs in
-  `internal/authority`. Target adapters may provide only fixed projection and
-  declarative target requirements. The shared executor owns backend selection,
-  executable/runtime verification, Sessions, processes and cleanup. Typed
-  authentication resources remain separate.
+- Keep public parsing in `internal/cli`, common capabilities in
+  `internal/commonprofile`, immutable plans in `internal/authority`, and target
+  projection/declarative requirements in adapters. The shared executor owns
+  backend selection, verification, Sessions, processes and cleanup. Keep typed
+  authentication resources separate.
+- Preserve stable sanitized errors, process-tree cleanup proof and explicit
+  legacy Profile migration. Never delete a Session with possibly live descendants.
 - Do not add a backend selector, sandbox bypass, unsandboxed fallback, arbitrary
-  shell command option, or `$SHELL` lookup.
-- Preserve stable error categories and sanitize private backend detail.
-- Treat cleanup proof as part of correctness. Never delete a Session while its
-  contained process tree may still be alive.
-- Preserve existing version-1 and version-2 Profile behavior unless an explicit
-  migration is designed and documented.
+  shell command option or `$SHELL` lookup.
 
-## Testing the sandbox shell
+### Documentation
 
-The main contract is:
+The [index](docs/README.md) routes readers to a task or contract:
 
-```sh
-acs sandbox --profile PROFILE --dry-run
-acs sandbox --profile PROFILE
-```
+- `guides/` owns user procedures; `reference/` owns schemas and security contracts.
+- `development/` owns architecture, testing and maintainer procedures.
+- `releases/` holds version-specific notes consumed by publication.
+- Fixture explanations stay beside tests; fixture Markdown is deterministic input.
 
-The interactive target must remain exactly `/bin/zsh -f`. Tests should cover:
+Give each detailed topic one owner and link to it. Keep the README focused on
+installation and the first run. Use command help for exhaustive grammar rather
+than repeating flags in every guide. Keep security/recovery prerequisites beside
+the action they govern, with links to their full contracts.
 
-- selected Skills in the synthetic home;
-- absence of the Devin credential and Devin preflights;
-- workspace, Session home, and Session temporary writes;
-- denial of unrelated host reads/writes and symlink escapes;
-- clean environment and descriptor behavior;
-- terminal input/output, resize, signals, and exit status;
-- descendants and Session cleanup after every exit path;
-- stable fail-closed errors before and after Session creation.
-
-Native Seatbelt tests can fail when run inside another restrictive sandbox.
-Run them from a normal macOS terminal when validating production behavior:
-
-```sh
-go test ./internal/launch ./internal/sandboxshell -count=1
-go test -race ./internal/launch ./internal/sandboxshell -count=1
-```
-
-Do not weaken macOS security settings to make a test pass.
-
-## Portable source checks
-
-Small OS-specific filesystem and terminal shims keep shared code testable on
-Linux development hosts. Runtime support still requires the native sandbox:
-launches on unsupported hosts fail closed, and only the native Apple Silicon
-gates establish runtime behavior.
-
-The non-blocking CI observation compiles package tests with `go test -c` and
-builds the command without executing either. It does not install Bubblewrap or
-publish Linux artifacts. Local portable unit tests may supplement, but never
-replace, the macOS checks above. Do not use `go test -run '^$'` as a
-compile-only check: it starts test executables and package initialization.
-
-## Native named-authentication evidence
-
-The promoted-artifact PR workflow fetches the official Apple Silicon
-`codex-cli 0.149.1` archive once, verifies its reviewed SHA-256 lock entry, and
-installs that native target on macOS 26. Its opt-in native
-tests use a disposable Keychain and synthetic home and require the real
-Seatbelt path; they use no account credentials and emit no target, account,
-device, keychain, home, Session, or credential content.
-
-For a local credential-free run, first use
-`scripts/fetch-codex-test-targets.sh` and
-`scripts/install-codex-test-target.sh`, then set
-`ACS_RUN_NATIVE_AUTH_GATE=1` and point `ACS_TEST_CODEX_BINARY` at that verified
-native installation. Also set `ACS_NATIVE_AUTH_RECOVERY_ROOT` to a deterministic
-private path, and run the separate `TestNativeKeychainRecoveryEntrypoint`
-invocation afterward even when the native test invocation fails. The promoted
-workflow's shared `scripts/run-native-candidate-gates.sh` does this in its
-exit/signal cleanup trap on the native Apple Silicon runner. A hard runner
-termination can prevent that trap from running; retain recovery evidence when
-cleanup was not observed.
-Run these focused tests only from a normal macOS terminal. The
-automated gate proves the isolated Keychain contract and contained status
-lifecycle; it does not prove interactive login completion or target-origin
-token refresh. Production Keychain queries prohibit authentication UI, and
-deterministic error-mapping tests cover locked or unavailable providers. Live
-locked-Keychain and direct ACL probes remain supplemental because macOS can
-present access-control UI for those operations.
-
-## Optional authenticated smoke
-
-Authenticated Devin and Codex checks are supplemental observations. They must
-not run in CI, use a shared account, or replace the credential-free native gate.
-Use a trusted macOS 26 Apple Silicon host and a normal terminal, with terminal
-recording, shell tracing, debug logging and output capture disabled. Install the
-exact reviewed candidate as described below; use verified, locked target binaries.
-
-- **Devin:** start with an already authenticated CLI. A normal Profile launch
-  may copy its existing credential into an ephemeral Session. Observe sandbox,
-  Skill and authentication preflight, the interactive lifecycle, return to the
-  terminal, and absence of a leased Session after exit.
-- **Codex:** use a dedicated test account and a clean disposable identity name
-  with no quarantined Session. Run browser or device login, then contained
-  status. Observe target-origin token refresh only if it happens naturally;
-  never force, inject, copy, decode, compare or print tokens. Remove the identity
-  with ACS logout and check that no leased Session or quarantine remains.
-
-If cleanup is uncertain, retain the compatible ACS binary and private evidence
-and use the [recovery guide](docs/guides/manual-upgrade-recovery.md). Do not delete
-Session or Keychain state by hand, use logout to bypass quarantine, copy global
-Codex authentication, weaken Seatbelt, or bypass a native trust failure.
-
-Record only source commit, artifact and installed-binary digests, target version
-and locked digest, host architecture, command category, and pass/fail or not
-observed. Account identifiers, device codes, browser URLs, target output,
-credentials, token timestamps, Keychain contents, homes, Sessions, private
-paths, environment values and generated policy must not be recorded. A smoke
-does not prove reproducibility, release immutability, deterministic account
-behavior or sustained real-project use. Record the actual duration and scope of
-a separate daily-use observation; never infer it from automated or publication
-success.
-
-## Research harnesses
-
-Opt-in extension discovery and hook fixtures test target-owned behavior through
-synthetic authentication and local simulators. They do not activate ACS-managed
-plugins, hooks or agents, establish hosted inference, or prove detached-child
-cleanup beyond the tested containment contract. Run the portable fixtures with
-`go test ./internal/extensionassessment`. The
-[promoted-artifact workflow](.github/workflows/promoted-artifacts.yml) contains the separate locked-target invocation of
-`TestPromotedArtifactNativeDevinSessionStartHook`; do not fold it into the
-mandatory release gate or use account credentials in it.
-
-The [native transport probes](docs/development/native-transport-research.md) run on a
-disposable macOS runner and preserve bounded transport evidence. They do not
-change runtime policy or establish destination-specific network enforcement.
-Keep test fixtures and workflow evidence distinct from production feature claims.
+Current guides should not track the latest release number. Use stable release
+links and reviewed operator-supplied version/digest inputs; preserve exact
+versions in compatibility requirements, fixtures and historical records. Do not
+add rolling checklists, handoff ledgers or a second changelog. When moving content,
+update the index, incoming links and tests. Run example tests when executable
+instructions change.
 
 ## Pull requests
 
 Before opening a PR:
 
-1. Run formatting, vet, normal tests, and race tests on macOS.
-2. Run the native sandbox-shell test from a normal terminal.
-3. Inspect `git diff --check` and the complete diff.
-4. Explain the user-visible contract and the tests that prove it.
-5. Confirm that no release asset, tag, or external state is changed by the PR.
+1. Run formatting, vet, normal/race tests and the focused native shell checks.
+2. Inspect `git diff --check` and the complete diff.
+3. Use [the PR template](.github/pull_request_template.md) to explain the behavior
+   and evidence a reviewer needs; remove unused sections.
+4. Confirm that the PR changes no release asset, tag or external state.
 
-The PR gates install the candidate bytes on macOS 26 Apple Silicon. The native
-job must pass before merge. The portable-source compile observation is explicitly
-nonblocking.
+PR gates install the candidate bytes on macOS 26 Apple Silicon; the native job
+must pass before merge. Portable-source compilation is nonblocking and does not
+replace the native Apple Silicon artifact gate.
 
-## Release preparation
-
-Release tags are immutable and created only after the release-preparation PR is
-merged to protected `main`.
-
-Before preparing a version, merge its release notes at
-`docs/releases/vMAJOR.MINOR.PATCH.md`; the tag validation and publication scripts
-consume that exact file. Keep current notes there, and use immutable GitHub
-Releases and Git history for older release records rather than adding rolling
-checklists or handoff ledgers to the documentation tree.
-
-Verify the exact reviewed source, annotated tag identity, notes and required
-checks. Obtain explicit authorization for the tag push: it starts the automatic
-build, native validation, attestation and immutable publication pipeline with no
-later approval pause.
-
-For a future release (using `v1.2.3` as an example), first merge its release
-notes and preparation changes. From a clean `main` checkout, fetch and confirm
-that `HEAD` is the reviewed `origin/main` commit, then prepare the local tag:
-
-```sh
-git fetch origin main
-scripts/prepare-release-tag.sh v1.2.3
-```
-
-The preparation script requires `main` to match the fetched `origin/main`,
-refuses an existing local or remote tag, runs `scripts/release-candidate.sh`,
-and prints the source commit and annotated tag-object identity. Review those
-identities and obtain authorization before separately running:
-
-```sh
-git push origin refs/tags/v1.2.3
-```
-
-For a standalone local artifact check without creating a tag, run
-`scripts/release-candidate.sh v1.2.3`. It requires a clean worktree and places
-exactly these files in `dist/release-candidate/`:
-
-```text
-acs_1.2.3_darwin_arm64.tar.gz
-SHA256SUMS
-install.sh
-```
-
-The tag workflow validates annotated tag identity and ancestry, builds the
-candidate once after a tagged-source vulnerability scan, installs the exact bytes
-on the native Apple Silicon target, scans that installed binary, runs normal,
-race, and black-box acceptance tests, attests the archive and
-checksum manifest, and publishes through the protected `release` environment.
-
-Never move or delete a release tag. If a candidate fails, fix the source in a
-new commit and prepare a new version. Do not treat a local build or authenticated
-smoke as a replacement for the native Apple Silicon artifact gate.
-
-Verify the published asset hashes against the build-once candidate and verify
-GitHub attestations for the archive and checksum manifest. The installer is
-byte-matched to the artifact set but is not an attestation subject. Record the
-source/tag identities, workflow run and sanitized results in the release PR or
-GitHub Release. Checksums and provenance do not provide Apple signing,
-notarization, malware review or Gatekeeper approval. Never strip quarantine,
-disable Gatekeeper, ad-hoc sign or weaken Seatbelt to make a release run.
-
-## Test a development candidate
-
-A development version string does not identify published release bytes. Obtain
-the exact artifact set and trusted digests from its approved workflow handoff,
-and use the matching clean source checkout. Record the actual CI source and
-merged source separately; equal trees do not change build provenance. An expired
-artifact must be replaced by a newly identified build, not rebuilt under its old
-identity. The validator is a repository maintenance tool, not a release channel.
-
-Start `/bin/bash --noprofile --norc` on a supported Mac. Supply all inputs below:
-the directory must contain only `install.sh`, `SHA256SUMS` and the named Apple
-Silicon archive. Use a new private, absolute, direct maintenance directory outside
-repositories or shared folders. The known-good binary must already be trusted.
-These blocks run in order in that shell; `set -e` stops on a failed check.
-
-<!-- candidate-example: inputs -->
-```sh
-set -eu
-umask 077
-: "${ACS_CANDIDATE_VERSION:?supply the candidate embedded version}"
-: "${ACS_CANDIDATE_DIR:?supply the absolute promoted artifact directory}"
-: "${ACS_CANDIDATE_ARCHIVE_NAME:?supply the exact Apple Silicon archive name}"
-: "${ACS_CANDIDATE_ARCHIVE_SHA256:?supply the verified archive SHA-256}"
-: "${ACS_CANDIDATE_MANIFEST_SHA256:?supply the verified SHA256SUMS SHA-256}"
-: "${ACS_CANDIDATE_INSTALLER_SHA256:?supply the verified installer SHA-256}"
-: "${ACS_CANDIDATE_BINARY_SHA256:?supply the archive-member SHA-256; verify installed bytes below}"
-: "${ACS_KNOWN_GOOD_BIN:?supply the absolute trusted current executable}"
-: "${ACS_MAINTENANCE_ROOT:?supply a new absolute private maintenance directory}"
-
-candidate_version="$ACS_CANDIDATE_VERSION"
-candidate_dir="$ACS_CANDIDATE_DIR"
-candidate_archive_name="$ACS_CANDIDATE_ARCHIVE_NAME"
-candidate_binary_sha256="$ACS_CANDIDATE_BINARY_SHA256"
-known_good_bin="$ACS_KNOWN_GOOD_BIN"
-maintenance_root="$ACS_MAINTENANCE_ROOT"
-candidate_bin="$maintenance_root/candidate/bin"
-rollback_bin="$maintenance_root/known-good/bin"
-path_before_candidate="$PATH"
-
-case "$candidate_dir:$known_good_bin:$maintenance_root" in
-  /*:/*:/*) ;;
-  *) exit 1 ;;
-esac
-test -d "$candidate_dir"
-test ! -L "$candidate_dir"
-case "$candidate_archive_name" in
-  "" | */* | .* | *[!A-Za-z0-9._-]*) exit 1 ;;
-esac
-test -f "$candidate_dir/$candidate_archive_name"
-test ! -L "$candidate_dir/$candidate_archive_name"
-test -f "$candidate_dir/SHA256SUMS"
-test ! -L "$candidate_dir/SHA256SUMS"
-test -f "$candidate_dir/install.sh"
-test ! -L "$candidate_dir/install.sh"
-test -f "$known_good_bin"
-test ! -L "$known_good_bin"
-test -x "$known_good_bin"
-mkdir "$maintenance_root"
-chmod 0700 "$maintenance_root"
-mkdir "$maintenance_root/candidate" "$maintenance_root/known-good"
-mkdir "$rollback_bin"
-printf '%s  %s\n%s  %s\n%s  %s\n' \
-  "$ACS_CANDIDATE_ARCHIVE_SHA256" "$candidate_archive_name" \
-  "$ACS_CANDIDATE_MANIFEST_SHA256" SHA256SUMS \
-  "$ACS_CANDIDATE_INSTALLER_SHA256" install.sh \
-  > "$maintenance_root/candidate/supplied-files.sha256"
-(
-  cd "$candidate_dir"
-  shasum -a 256 -c "$maintenance_root/candidate/supplied-files.sha256"
-)
-cp -p "$known_good_bin" "$rollback_bin/acs"
-cmp "$known_good_bin" "$rollback_bin/acs"
-"$rollback_bin/acs" version > "$maintenance_root/known-good/version.txt"
-(
-  cd "$rollback_bin"
-  shasum -a 256 acs > "$maintenance_root/known-good/SHA256SUMS"
-)
-```
-
-The validator checks the target, exact artifact set, release-specific installer,
-custom/default installation behavior, version and cleanup. Verify the installed
-binary separately: an archive-member digest is only an expected value until the
-host comparison succeeds.
-
-<!-- candidate-example: install -->
-```sh
-scripts/validate-promoted-artifact.sh \
-  "$candidate_version" darwin arm64 "$candidate_dir" "$candidate_bin"
-printf '%s  acs\n' "$candidate_binary_sha256" \
-  > "$maintenance_root/candidate/binary.sha256"
-(
-  cd "$candidate_bin"
-  shasum -a 256 -c "$maintenance_root/candidate/binary.sha256"
-)
-"$candidate_bin/acs" version > "$maintenance_root/candidate/version.txt"
-printf 'acs %s\n' "$candidate_version" \
-  > "$maintenance_root/candidate/expected-version.txt"
-cmp "$maintenance_root/candidate/expected-version.txt" \
-  "$maintenance_root/candidate/version.txt"
-```
-
-Stop on any mismatch and preserve the evidence. Keep the known-good and candidate
-binaries until every stored format and pending operation has a compatible owner.
-Select the candidate only in this shell, then inspect before making changes.
-Replace `backend-review` with an existing name from `profile list`; if the store
-is empty, omit the `profile show` and `profile validate` lines. Do not create a
-Profile just to perform these passive checks.
-
-<!-- candidate-example: compatibility -->
-```sh
-export PATH="$candidate_bin:$path_before_candidate"
-hash -r
-test "$(command -v acs)" = "$candidate_bin/acs"
-acs version
-acs doctor
-acs profile list
-acs profile show backend-review
-acs profile validate backend-review
-acs session list
-```
-
-These checks are passive. A nonzero status is not permission to migrate, delete,
-restore or retry; Session listing does not prove active owners have settled.
-Before a confirmed write, settle operations and make a private quiescent copy of
-Profile bytes. Follow the
-[migration and recovery steps](docs/guides/manual-upgrade-recovery.md#binary-rollback-is-not-a-data-downgrade)
-for explicit Profile migration, preview cancellation and interrupted operations.
-
-To select the retained executable again in the same maintenance shell:
-
-<!-- candidate-example: rollback -->
-```sh
-(
-  cd "$rollback_bin"
-  shasum -a 256 -c "$maintenance_root/known-good/SHA256SUMS"
-)
-export PATH="$rollback_bin:$path_before_candidate"
-hash -r
-test "$(command -v acs)" = "$rollback_bin/acs"
-acs version > "$maintenance_root/rollback-version.txt"
-cmp "$maintenance_root/known-good/version.txt" \
-  "$maintenance_root/rollback-version.txt"
-```
-
-This changes command selection only, not startup files, existing processes or
-stored data. If the strict shell exited, use the retained binary's explicit
-absolute path instead of rerunning the new-directory setup. An older executable
-may not understand newer Profiles, history, Sessions or named identities; keep
-the owning compatible binary for recovery. Never overwrite newer live state with
-an old backup or manually remove locks, journals, Session state or quarantine.
+See [testing and dependency maintenance](docs/development/testing.md) for native,
+portable, research and authenticated checks, and
+[release preparation](docs/development/releasing.md) for tag authorization,
+immutable publication and development-candidate verification.

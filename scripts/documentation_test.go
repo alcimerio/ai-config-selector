@@ -302,8 +302,7 @@ func TestReleaseAndPromotedWorkflowsExecuteOneSharedNativeGate(t *testing.T) {
 
 func TestNamedAuthenticationDocumentationSeparatesAutomatedAndAuthenticatedEvidence(t *testing.T) {
 	for _, document := range []string{
-		"CONTRIBUTING.md",
-		"docs/guides/codex.md",
+		"docs/development/testing.md",
 	} {
 		contents := readRepositoryFile(t, "..", document)
 		normalized := strings.Join(strings.Fields(contents), " ")
@@ -326,7 +325,7 @@ func TestNamedAuthenticationDocumentationSeparatesAutomatedAndAuthenticatedEvide
 	if !strings.Contains(workflow, "live locked-Keychain and ACL probes remain supplemental") {
 		t.Fatal("native workflow summary omits the locked-Keychain evidence boundary")
 	}
-	smoke := strings.Join(strings.Fields(readRepositoryFile(t, "..", "CONTRIBUTING.md")), " ")
+	smoke := strings.Join(strings.Fields(readRepositoryFile(t, "..", "docs/development/testing.md")), " ")
 	if strings.Contains(smoke, "credential-free namespace, size, collision, locked-Keychain") {
 		t.Fatal("authenticated smoke claims live locked-Keychain coverage is automated")
 	}
@@ -378,7 +377,9 @@ func TestSharedTargetConformanceDocumentationAndNativeGateStayExplicit(t *testin
 }
 
 func TestContributorReleaseProcedurePreservesSafetyBoundaries(t *testing.T) {
-	contributing := strings.Join(strings.Fields(readRepositoryFile(t, "..", "CONTRIBUTING.md")), " ")
+	contributing := strings.Join(strings.Fields(
+		readRepositoryFile(t, "..", "docs/development/releasing.md")+
+			readRepositoryFile(t, "..", "docs/development/testing.md")), " ")
 	for _, required := range []string{
 		"docs/releases/vMAJOR.MINOR.PATCH.md",
 		"explicit authorization for the tag push",

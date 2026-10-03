@@ -88,7 +88,7 @@ mandatory. The signal-supervisor handoff is reserved before interactive process
 preparation: a pending termination prevents launch, while a later termination
 is replayed after Start and cannot be replaced by a resize notification.
 `VerifyDevin` uses the same protected preflight path for the opt-in
-[authenticated smoke](../../CONTRIBUTING.md#optional-authenticated-smoke), without exposing a Session
+[authenticated smoke](testing.md#optional-authenticated-smoke), without exposing a Session
 or process to its caller.
 
 ### Interactive Codex and named authentication
@@ -186,16 +186,10 @@ not physical erasure. See
 [Session inspection and recovery](../guides/session-operations.md) for the
 operator-visible states and recovery procedure.
 
-## Fail-closed properties
-
-- No backend selector or unsandboxed fallback exists.
-- Unsupported platforms fail before Session creation.
-- `/usr/bin/sandbox-exec` must be the root-owned, non-writable system binary
-  and pass a fixed capability probe.
-- Generated policy is validated before the target starts.
-- Backend detail is replaced with stable sanitized failure categories.
-- Cleanup failure takes precedence over an ordinary target result.
-- Dry run never creates a Session or starts the requested target.
+The backend requires the root-owned, non-writable system `/usr/bin/sandbox-exec`
+to pass a fixed capability probe and validates generated policy before launch.
+It reports stable sanitized failure categories; there is no backend selector or
+unsandboxed fallback.
 
 ## Persistence and compatibility
 
@@ -258,5 +252,5 @@ configurations. Synchronization errors never become success. See the
 [repository implementation and regression tests](../../internal/profilerepo),
 [Profile commands](../guides/profiles.md), and [manual recovery](../guides/manual-upgrade-recovery.md).
 
-For test commands and native release validation, see
-[Contributing](../../CONTRIBUTING.md).
+For native checks and artifact verification, see [testing](testing.md) and
+[releasing](releasing.md).

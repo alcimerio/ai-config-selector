@@ -1,7 +1,7 @@
 # Assessment definitions and compiler boundary
 
 Fixture documentation for contributors. See
-[research harnesses](../../../CONTRIBUTING.md#research-harnesses) for native
+[research harnesses](../../../docs/development/testing.md#research-harnesses) for native
 test setup and the [security model](../../../docs/reference/security-model.md)
 for the supported production boundary.
 

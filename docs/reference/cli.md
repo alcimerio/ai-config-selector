@@ -1,4 +1,4 @@
-# CLI guide
+# CLI reference
 
 [Documentation index](../README.md) · [Get started](../guides/getting-started.md)
 

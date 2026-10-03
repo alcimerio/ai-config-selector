@@ -1,6 +1,6 @@
 # Native transport research probes
 
-[Documentation index](../README.md) · [Contributor test setup](../../CONTRIBUTING.md#research-harnesses)
+[Documentation index](../README.md) · [Contributor test setup](testing.md#research-harnesses)
 
 These isolated tests measure TCP, UDP and Unix-socket behavior on macOS 26 Apple
 Silicon under a fixed set of policies. They do not change ACS runtime policy,

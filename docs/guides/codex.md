@@ -262,18 +262,11 @@ workspace permissions.
 
 ## Evidence and upstream behavior
 
-Credential-free native tests use the reviewed, checksum-locked Apple Silicon
-Codex target, disposable Keychain and synthetic home. They cover isolated
-Keychain records, metadata enumeration, duplicate/isolation/size boundaries,
-failed-update preservation and contained status configuration, projection,
-quarantine and redaction. Deterministic tests cover refresh decisions and no-UI
-locked-provider failures. Real interactive login and target-origin refresh
-remain supplemental trusted-host observations; automated success does not prove
-them. See
-[Contributing](../../CONTRIBUTING.md#native-named-authentication-evidence) for
-the native gate, recovery precautions and authenticated-smoke procedure, and
-[shared target conformance](../reference/shared-target-conformance.md) for
-cross-target behavior and evidence limits.
+See [testing](../development/testing.md#native-named-authentication-evidence)
+for credential-free native gates, recovery precautions and supplemental
+real-account observations, and [target conformance](../reference/shared-target-conformance.md)
+for cross-target behavior. Automated checks do not prove interactive login,
+target-origin refresh or sustained daily use.
 
 Codex's [authentication documentation](https://learn.chatgpt.com/docs/auth)
 describes browser/device login, status/logout, token refresh,
