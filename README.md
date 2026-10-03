@@ -17,6 +17,26 @@ AI account. Linux and Intel Macs are not supported runtimes.
 
 ## Install
 
+Install the latest stable release:
+
+```sh
+curl -fsSL https://github.com/alcimerio/ai-config-selector/releases/latest/download/install.sh | sh
+```
+
+The installer checks your OS and architecture, verifies the archive checksum,
+and installs in `~/.local/bin`. It refuses to overwrite an existing `acs`,
+needs no `sudo`, and does not edit shell startup files. Add the installed
+directory to this terminal's search path and verify which binary will run:
+
+```sh
+export PATH="$HOME/.local/bin:$PATH"
+command -v acs
+acs version
+```
+
+<details>
+<summary>Inspect the installer or choose a specific release</summary>
+
 Choose a release and copy its tag and installer SHA-256 from the
 [release asset metadata](https://api.github.com/repos/alcimerio/ai-config-selector/releases/latest).
 Use `tag_name` and the hexadecimal part of the `install.sh` asset's `digest`,
@@ -41,15 +61,7 @@ sh ./install.sh
 "$HOME/.local/bin/acs" version
 ```
 
-The installer defaults to `~/.local/bin`, refuses to overwrite an existing
-`acs`, needs no `sudo`, and does not edit shell startup files. Add the installed
-directory to this terminal's search path and verify which binary will run:
-
-```sh
-export PATH="$HOME/.local/bin:$PATH"
-command -v acs
-acs version
-```
+</details>
 
 Release archives are unsigned and unnotarized. SHA-256 checks byte identity
 against a trusted digest; GitHub attestations provide separate origin evidence.
