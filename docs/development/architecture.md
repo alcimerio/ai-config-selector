@@ -10,23 +10,23 @@ Seatbelt backend. Unsupported hosts have no sandbox backend and fail closed.
 
 ## Domain model
 
-- **Profile**: stored capability selections. Version 3 separates independently
+- Profile: stored capability selections. Version 3 separates independently
   versioned common capabilities from explicit target overlays; legacy v1/v2
   Profiles retain their Devin binding and category payloads.
-- **Category**: owns selection schema, discovery, resolution, planning,
+- Category: owns selection schema, discovery, resolution, planning,
   materialization, and optional target verification.
-- **Resolved authority plan**: ordered contributions, runtime grants, and fixed
+- Resolved authority plan: ordered contributions, runtime grants, and fixed
   target requirements resolved before a Session exists.
-- **Session**: a leased root under `~/.acs/sessions` with mode-0700 synthetic
+- Session: a leased root under `~/.acs/sessions` with mode-0700 synthetic
   home and temporary directories, materialized content, and cleanup state.
-- **Process sandbox**: validates platform and paths, prepares containment and a
+- Process sandbox: validates platform and paths, prepares containment and a
   clean environment, and supplies process-tree cleanup proof.
-- **Execution recipe**: registered Devin or Codex, fixed `/bin/zsh -f`, or the
+- Execution recipe: registered Devin or Codex, fixed `/bin/zsh -f`, or the
   literal executable and argv supplied to `acs run`.
 
 See the [common Profile format](../reference/common-profile-format.md) for schemas and
 [effective capability explanation](../guides/diagnostics.md#effective-capability-explanation) for the
-plan's public inspection surface.
+plan's public inspection commands.
 
 ## Module boundaries
 
@@ -46,11 +46,11 @@ plan's public inspection surface.
 | `internal/codexauthresource` | Credential validation, Keychain access, locks, marker generations, and secure projection/readback |
 | `internal/launch` | Platform/path/environment validation, Seatbelt policy, signals, terminal handling, descendant settlement, and sanitized failures |
 
-Adapters supply declarative requirements, not a backend, process handle,
-execution callback, Session lease, or cleanup policy. The authentication
-resource package imports neither executor nor Session/process packages. The
-executor acquires its authority through typed operations and owns all process
-work. Credential projection is separate from generic Profile materialization.
+Adapters declare requirements. The executor selects the backend, manages
+process handles and Session leases, and applies the cleanup policy. The
+authentication resource package imports neither executor nor Session/process
+packages. The executor acquires its authority through typed operations and owns
+all process work. Credential projection is separate from generic Profile materialization.
 
 ## Command flows
 
@@ -58,7 +58,8 @@ work. Credential projection is separate from generic Profile materialization.
 
 Devin and sandbox-shell dry runs resolve selected material without leasing a
 Session or starting the requested target. They may execute the bounded native
-readiness probe; unlike [passive diagnostics](../guides/diagnostics.md#passive-diagnostics), they are
+readiness probe; unlike
+[passive diagnostics](../guides/diagnostics.md#passive-diagnostics), they are
 not strictly process-free.
 
 Devin's plan includes inherited repository-local Skills. The generic shell
@@ -110,8 +111,10 @@ or process to its caller.
 
 Login is Create-only. Status and successful execution can replace only a valid
 changed projection with the same identity metadata; recovery never turns an
-interrupted login into a credential record. See [named Codex authentication](../guides/codex.md#named-authentication)
-and [interactive Codex](../guides/codex.md#interactive-launch) for the operator contract.
+interrupted login into a credential record. See
+[named Codex authentication](../guides/codex.md#named-authentication) and
+[interactive Codex](../guides/codex.md#interactive-launch) for the operator
+contract.
 
 ### Sandbox shell and generic commands
 
@@ -155,7 +158,8 @@ disabled when environment values are selected, avoiding their serialization
 into snapshot files. Unsupported hosts fail closed before Session creation.
 
 Unrelated host paths and Unix sockets remain denied. Directory grants cover
-their descendants; see [path grants and pathname-race limits](../reference/common-profile-format.md#explicit-filesystem-paths).
+their descendants; see
+[path grants and pathname-race limits](../reference/common-profile-format.md#explicit-filesystem-paths).
 ACS is not an egress firewall and does not create independent per-tool,
 per-MCP-server, or per-agent authority boundaries. Selecting a plugin, hook, or
 agent definition as readable data does not activate it as a Profile capability;
@@ -165,8 +169,8 @@ Codex plugins are disabled in the registered production recipe.
 
 Every prepared process is retained by its Session before Start. A failed Start
 is not waited; a successful Start is waited exactly once. Wait returning does
-not prove that descendants have exited. Each probe must settle before its result
-can authorize the next probe or attached target.
+not prove that descendants have exited. Each probe and its descendants must exit
+before its result can authorize the next probe or attached target.
 
 The macOS backend supervises a process group and uses a private protocol for
 signals and authenticated cleanup proof. Normal completion, nonzero exit,
@@ -178,8 +182,9 @@ settlement is proven.
 Startup cleanup respects file-lock leases held by other ACS processes. An
 unlocked lease alone is insufficient to reclaim a previously prepared Session:
 its matching native cleanup proof is also required. Removal is logical cleanup,
-not physical erasure. See [Session inspection and recovery](../guides/session-operations.md)
-for the operator-visible states and recovery procedure.
+not physical erasure. See
+[Session inspection and recovery](../guides/session-operations.md) for the
+operator-visible states and recovery procedure.
 
 ## Fail-closed properties
 
@@ -210,11 +215,11 @@ uses exclusive no-replace creation.
 ## Profile repository transactions
 
 `internal/profilerepo` stores bounded opaque canonical documents; Profile codecs
-remain above that boundary. Revisions bind the exact name, presence, and bytes.
-They detect stale current-content conditions, not historical changes that return
-to the same bytes. Create, clone, and rename require an absent destination;
-replace and delete require the observed source revision. Rename can briefly
-expose both names and is not a two-name atomic snapshot.
+remain above that boundary. Revisions bind the exact name, presence and bytes. A
+mismatch rejects a stale write. Changes that return to the same bytes are not
+detected as historical changes. Create, clone, and rename require an absent
+destination; replace and delete require the observed source revision. Rename can
+briefly expose both names and is not a two-name atomic snapshot.
 
 Mutations and recovery share one stationary file lock. Under that ownership,
 ACS settles any previous transaction before rechecking the new request's
@@ -244,7 +249,7 @@ Outcomes separate `NotCommitted`, `Committed`, or `Unknown` from
 decision can exist requires recovery. A synchronized terminal receipt establishes
 commit even if later cleanup reports an error. Cancellation after the decision
 does not skip settlement. A lost response is not permission for a blind retry,
-and completed cleanup does not provide a historical exactly-once API.
+and completed cleanup does not provide an exactly-once guarantee for later retries.
 
 The durability guarantee is checked file/namespace synchronization and
 process-interruption recovery on the tested filesystem. Successful sync calls
@@ -253,4 +258,5 @@ configurations. Synchronization errors never become success. See the
 [repository implementation and regression tests](../../internal/profilerepo),
 [Profile commands](../guides/profiles.md), and [manual recovery](../guides/manual-upgrade-recovery.md).
 
-For test commands and native release validation, see [Contributing](../../CONTRIBUTING.md).
+For test commands and native release validation, see
+[Contributing](../../CONTRIBUTING.md).

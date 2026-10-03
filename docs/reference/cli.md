@@ -2,8 +2,8 @@
 
 [Documentation index](../README.md) · [Get started](../guides/getting-started.md)
 
-This is a navigation guide for v0.5.0/current source. The exact command grammar
-ships with your binary: run `acs help`, `acs COMMAND --help`, or
+This guide covers v0.5.1 and current source. For the grammar of your installed
+binary, run `acs help`, `acs COMMAND --help`, or
 `acs help COMMAND`. Help is passive and works without a terminal, client,
 credential, Profile directory, or Session.
 
@@ -30,12 +30,13 @@ acs run --profile first-review -- /usr/bin/git diff -- "path with spaces"
 acs explain run --profile first-review --json -- /usr/bin/git status
 ```
 
-`acs update vMAJOR.MINOR.PATCH` is an explicit version operand, not an arbitrary
-argument. `acs help COMMAND` takes the command path, not an invocation's flags.
-Successful help returns exit 0 on stdout. Most command syntax errors return
-exit 1 on stderr, including malformed flags alongside `--help`. Profile
+`acs update vMAJOR.MINOR.PATCH` selects that published stable version.
+`acs help COMMAND` takes the command path, not an invocation's flags. Successful
+help returns exit 0 on stdout. Most command syntax errors return exit 1 on
+stderr, including malformed flags alongside `--help`. Profile
 history/diff/restore use a separate grammar and status contract (syntax errors
-return 2); consult their contextual help and [history reference](../guides/profile-history.md).
+return 2); consult their contextual help and
+[history reference](../guides/profile-history.md).
 
 ## Find the right command
 
@@ -46,21 +47,21 @@ return 2); consult their contextual help and [history reference](../guides/profi
 | List / inspect | `acs profile list`, `acs profile show NAME --json` | [Inspection](../guides/profiles.md#inspection) |
 | Check host / sources | `acs doctor`, `acs profile validate NAME` | [Passive diagnostics](../guides/diagnostics.md#passive-diagnostics) |
 | Explain permissions | `acs explain sandbox --profile NAME` | [Effective capability explanation](../guides/diagnostics.md#effective-capability-explanation) |
-| Edit / clone / rename / delete / migrate | `acs profile edit NAME` | [Profile mutations](../guides/profiles.md#mutations) |
+| Change a Profile | `acs profile edit NAME`, then consult the operation-specific help | [Profile mutations](../guides/profiles.md#mutations) |
 | Transfer sanitized intent | `acs profile export NAME`, `acs profile import validate --file FILE` | [Portable exchange](../guides/portable-profile-exchange.md) |
 | Inspect / restore history | `acs profile history NAME`, `acs profile restore NAME --revision EVENT --dry-run` | [Profile history](../guides/profile-history.md) |
 | Run Devin | `acs devin --profile NAME` | [Target conformance](shared-target-conformance.md) |
 | Run Codex | `acs codex --profile NAME [--auth REF]` | [Interactive Codex](../guides/codex.md#interactive-launch) |
 | Manage named login | `acs codex auth login --name REF` | [Codex authentication](../guides/codex.md#named-authentication) |
-| Inspect a shell | `acs sandbox --profile NAME` | [Get started](../guides/getting-started.md) |
+| Open a sandbox shell | `acs sandbox --profile NAME` | [Get started](../guides/getting-started.md) |
 | Run literal argv | `acs run --profile NAME -- COMMAND [ARG...]` | [Generic run](../guides/generic-run.md) |
 | Inspect / recover a Session | `acs session list`, `acs session inspect ID`, `acs session recover ID` | [Session operations](../guides/session-operations.md) |
 | Check / update ACS | `acs version`, `acs update --check` | [Upgrade and recovery](../guides/manual-upgrade-recovery.md) |
 
 Use `--help` before copying a mutation or recovery command. Remove `--dry-run`
-only when you intend that command's documented change. Not every mutation is
-interactive: declarative creation and import publish when explicitly invoked,
-while deletion/restore/prune have their own confirmation contracts.
+only when you intend that command's documented change. Declarative creation and
+import save without interactive confirmation. Deletion, restore and pruning have
+their own confirmation requirements.
 
 ## What each check proves
 
@@ -88,7 +89,9 @@ their JSON contracts for exact statuses. Ordinary target exits preserve the
 target's exit code. Interrupted interactive creation returns 130; contained
 commands report cancellation only after required cleanup is proven.
 
-A failed or interrupted mutation does not always mean nothing was written.
-Distinguish **committed**, **not committed**, and **unknown / recovery required**
-outcomes before retrying. Follow [transaction recovery](../development/architecture.md#profile-repository-transactions)
-and [Session recovery](../guides/session-operations.md), not manual deletion of internal state.
+A failed or interrupted mutation does not always mean nothing was written. Check
+whether the result is committed, not committed, or unknown, and whether recovery
+is required, before retrying. Follow
+[transaction recovery](../development/architecture.md#profile-repository-transactions)
+and [Session recovery](../guides/session-operations.md), not manual deletion of
+internal state.

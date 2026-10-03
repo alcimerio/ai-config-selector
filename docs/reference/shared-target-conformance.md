@@ -11,8 +11,8 @@ remain adapter-specific.
 A version-3 Profile selects global Skills by exact `source` plus `relativePath`
 identity and declares read-only or explicit read-write workspace access. Both
 targets consume the same resolved common copy under `.acs/common/v1/skills`;
-unselected global bundles are excluded. ACS owns the private writable Session,
-containment policy, and process lifecycle.
+unselected global bundles are excluded. ACS creates the private writable
+Session, applies containment and manages the process lifecycle.
 
 | Behavior | Devin | Codex |
 | --- | --- | --- |
@@ -21,11 +21,12 @@ containment policy, and process lifecycle.
 | Authentication | Copies only `.local/share/devin/credentials.toml` when present; verifies with contained `auth status` | Uses one ACS-owned named identity; no fallback to global Codex authentication |
 | Dry run | Resolves selected material and may run the bounded sandbox-readiness probe | Checks stored structure and authRef syntax without discovery, credentials, target execution, or Session creation |
 
-Read-only workspace access still permits project reads; it does not hide
-project files or target-owned configuration. Common [instruction bundles](common-profile-format.md#instruction-bundles)
-and [local MCP references](../guides/mcp-profiles.md) also have target-specific projections
-and limitations. Tool filtering and agent permissions are target features, not
-separate ACS OS-level isolation.
+Read-only workspace access still permits project reads; it does not hide project
+files or target-owned configuration. Common
+[instruction bundles](common-profile-format.md#instruction-bundles) and
+[local MCP references](../guides/mcp-profiles.md) also have target-specific
+projections and limitations. Tool filtering and agent permissions are target
+features, not separate ACS OS-level isolation.
 
 ## Use a Profile with both targets
 
@@ -89,7 +90,7 @@ establish supported native behavior.
 For a compatibility bug, record the ACS version/commit and artifact SHA-256,
 target version, workspace intent, stable public result, and whether the relevant
 portable and native checks actually ran. Verify normal exit and interruption,
-then inspect [Session state](../guides/session-operations.md) if cleanup was uncertain.
+then inspect [Session state](../guides/session-operations.md) if cleanup is uncertain.
 Use synthetic inputs and omit credentials, account data, target output, private
 paths, environment values, and Session contents. Automated fixtures do not prove
 real-account operation or sustained daily use; report those separately when

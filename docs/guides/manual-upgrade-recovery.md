@@ -7,7 +7,7 @@ checks availability and `acs update [vMAJOR.MINOR.PATCH]` replaces only the
 executable. Neither updates nor manual binary selection back up, migrate or
 recover stored data. Keep the known-good binary and private Profile backups.
 
-This manual procedure pins [v0.5.0](https://github.com/alcimerio/ai-config-selector/releases/tag/v0.5.0)
+This manual procedure pins [v0.5.1](https://github.com/alcimerio/ai-config-selector/releases/tag/v0.5.1)
 for macOS 26 on Apple Silicon (`darwin/arm64`). It also bootstraps v0.4.0, which
 has no updater. For unpublished builds, use the
 [contributor candidate procedure](../../CONTRIBUTING.md#test-a-development-candidate).
@@ -39,7 +39,7 @@ Use one dedicated Bash so options and trial PATH changes remain local:
 /bin/bash --noprofile --norc
 ```
 
-Choose trusted, user-owned directories. If `cd "$HOME"; pwd -P` reveals a symlink,
+Choose trusted directories owned by your user. If `cd "$HOME"; pwd -P` reveals a symlink,
 use the physical absolute path for `maintenance_root`. The installer rejects
 symlink ancestors, relative paths, `.`/`..`, trailing slashes, colons, single
 quotes and non-printable/non-ASCII characters. Spaces are supported. Use a new
@@ -47,17 +47,18 @@ maintenance directory for each attempt; never mix existing evidence.
 
 ## Retain the old binary and inspect the installer
 
-Edit `old_bin` to the inspected path. Run preparation, staging and switching in
-order in the same maintenance shell. `set -e` stops that shell on a failed check
-and returns to its parent's PATH; no startup file changes automatically.
+Edit `old_bin` to the inspected path. Run the preparation, staging and switching
+blocks in order in the same maintenance shell. `set -e` stops that shell on a
+failed check and returns to its parent's PATH; no startup file changes
+automatically.
 
 <!-- example: prepare -->
 ```sh
 set -eu
 umask 077
 old_bin="/absolute/path/to/known-good/acs"
-maintenance_root="$HOME/ACS Maintenance v0.5.0"
-release_version=v0.5.0
+maintenance_root="$HOME/ACS Maintenance v0.5.1"
+release_version=v0.5.1
 release_url="https://github.com/alcimerio/ai-config-selector/releases/download/$release_version"
 path_before_upgrade="$PATH"
 stage_bin="$maintenance_root/selected/bin"
@@ -83,7 +84,7 @@ cd "$maintenance_root/downloads"
 curl --fail --location --proto '=https' --tlsv1.2 \
   --output install.sh "$release_url/install.sh"
 printf '%s  install.sh\n' \
-  '5723249bb5d69b5878e9178e6dc7cb45812d8d6930029d8c174b5acab3a5b38f' \
+  'd1e899c9cc20e85450572f350986f8e1e68fdd649ee184b497bc05160e02f655' \
   > installer.sha256
 shasum -a 256 -c installer.sha256
 less install.sh
@@ -91,11 +92,12 @@ less install.sh
 
 Inspect the whole installer before continuing. Its only option is `--bin-dir`;
 it pins its own release, checks archive structure/checksum and requires exactly
-`acs v0.5.0`. It refuses any existing `acs`, including a dangling symlink. Do not
+`acs v0.5.1`. It refuses any existing `acs`, including a dangling symlink. Do not
 remove the working binary to get past this check.
 
-The [Apple Silicon archive](https://github.com/alcimerio/ai-config-selector/releases/download/v0.5.0/acs_0.5.0_darwin_arm64.tar.gz)
-has SHA-256 `425186a809a8206a9c2fcf97244215752704497ef964bf96b77bbed2e908c261`.
+The
+[Apple Silicon archive](https://github.com/alcimerio/ai-config-selector/releases/download/v0.5.1/acs_0.5.1_darwin_arm64.tar.gz)
+has SHA-256 `751d8945301ddac5054711e1f6b7ac20eecf6e1e76ba4f5859fa86d57e766c9e`.
 The binary digest below identifies its member, not the archive. For another
 release, inspect its metadata, installer and compatibility notes and update all
 versions and digests together; never reuse another build's digests.
@@ -109,7 +111,7 @@ sh ./install.sh --bin-dir "$stage_bin"
 printf 'acs %s\n' "$release_version" > "$maintenance_root/expected-version.txt"
 cmp "$maintenance_root/expected-version.txt" "$maintenance_root/selected-version.txt"
 
-binary_sha256=f077d7bb4624a65e8e270df7ab3259d4289ad5410d6a49b53ebcae4c9f283fa5
+binary_sha256=7b86e64596c892fe97d544c6376b231dd0ee35bce24f962d2dbbfc5a3c65ee2d
 printf '%s  acs\n' "$binary_sha256" > "$maintenance_root/selected-binary.sha256"
 (
   cd "$stage_bin"
@@ -118,12 +120,12 @@ printf '%s  acs\n' "$binary_sha256" > "$maintenance_root/selected-binary.sha256"
 cat "$maintenance_root/selected-version.txt"
 ```
 
-Expect `acs v0.5.0` and a matching checksum. Keep the installer and verification
+Expect `acs v0.5.1` and a matching checksum. Keep the installer and verification
 records privately. `version` and staging do not create Sessions or migrate data.
 The release is unsigned and unnotarized: checksums establish byte identity,
-attestations establish provenance for their subjects, and neither proves Apple
-approval or malware safety. Stop on native trust or sandbox failure. Do not strip
-quarantine, disable Gatekeeper, ad-hoc sign or weaken Seatbelt.
+attestations establish provenance for their subjects, and neither establishes
+Apple approval or a malware review. Stop on native trust or sandbox failure. Do
+not strip quarantine, disable Gatekeeper, ad-hoc sign or weaken Seatbelt.
 
 ## Deliberately switch, and roll back the executable
 
@@ -251,8 +253,9 @@ Start a separate recovery shell, including from the strict maintenance shell:
 
 Initialize `source_bin` in this new shell to the inspected compatible owner.
 Disabling inherited exit-on-error keeps inspection possible after a missing
-Profile, recovered duplicate name or cancelled builder. Read every output and
-status: a nonzero result is not automatically success. Use the explicit
+Profile, recovered duplicate name or cancelled builder. Read each command's
+output and exit status. A nonzero result is not automatically success. Use the
+explicit
 [return step](#leave-the-recovery-shell) when finished.
 
 <!-- example: recovery-inspection -->

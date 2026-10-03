@@ -2,8 +2,8 @@
 
 [Documentation index](../README.md)
 
-New Profiles use envelope version 3. Version 1 and 2
-remain readable and are never changed by inspection or launch.
+New Profiles use envelope version 3. Versions 1 and 2 remain readable;
+inspection and launch leave their stored bytes unchanged.
 
 Noninteractive authoring accepts only this supported v3 representation; see
 [declarative creation](../guides/profiles.md#declarative-creation). Legacy documents continue
@@ -78,8 +78,9 @@ to use the established read, edit and explicit migration paths.
 }
 ```
 
-The envelope, each common capability, and each target overlay are independently
-versioned. Skills and instructions retain exact `source` plus `relativePath` identity; a missing
+The envelope, common capabilities and target overlays have independent
+versions. Skills and instructions retain exact `source` plus `relativePath`
+identity; a missing
 or differently spelled source entry is not rebound by display name or cleaned
 path. Unknown common capabilities and unsupported selected overlays fail
 closed. Unknown inactive overlays can be reported by passive inspection but do
@@ -102,7 +103,7 @@ v2, preserving that authority and placement. It does not silently adopt v3.
 
 `common.instructions` version 1 selects regular UTF-8 Markdown files under
 `~/.acs/instructions`, including nested paths, through the builder's
-**Instructions** category. Selection is explicit, never every file by default.
+Instructions category. Selection is explicit, never every file by default.
 Profiles store only `{source, relativePath}` references with source
 `acs-instructions`; host text is not stored in the Profile. The canonical
 reference array may be empty (`[]`). Omission remains valid for older Profiles;
@@ -171,10 +172,11 @@ captured grants are revalidated before Session creation and before every target
 process preparation.
 
 Seatbelt enforcement is pathname based. ACS detects identity and symlink drift
-at its validation seams, but cannot exclude a cooperating external same-user
-process replacing a pathname after the final check. Directory authority also
-covers every name and hard link reachable inside that directory. These are
-explicit proof limits, not stable-object enforcement claims.
+at its validation boundaries, but cannot exclude a cooperating external
+same-user process replacing a pathname after the final check. Directory
+authority also covers every name and hard link reachable inside that directory.
+The grants authorize paths; they do not bind runtime access to an immutable
+filesystem object.
 
 Older v3 Profiles without `paths` remain readable as an empty compatibility
 default without rewrite. New creation and confirmed mutation emit an explicit
@@ -190,16 +192,16 @@ three references: `fixed-search-name` searches only
 workspace identity; and `local-absolute` is a private binding under the user
 home, a mounted `/Volumes/<name>` filesystem, or ACS's fixed executable roots
 `/usr/local/bin`, `/usr/bin`, and `/bin`. This fixed-root exception applies only
-to executable visibility and does not broaden ordinary data-path grants.
-The supported-root rule applies to the supplied logical local path. An accepted
-logical symlink may resolve to a package-manager target outside that anchor;
-ACS binds, protects, grants, and repeatedly revalidates the canonical target as
-well as the captured logical chain. ACS never consults inherited `PATH` for a
-fixed-search selection. It validates the logical chain, opens the canonical file without
-following another final symlink, records identity and a content digest from the
-same descriptor, and
-revalidates the original search choice, logical symlink chain, workspace anchor,
-identity, executable mode, and bytes at Check and every process Prepare.
+to executable visibility and does not broaden ordinary data-path grants. The
+supported-root rule applies to the supplied logical local path. An accepted
+logical symlink may resolve to a package-manager target outside that anchor; ACS
+binds, protects, grants, and repeatedly revalidates the canonical target as well
+as the captured logical chain. ACS never consults inherited `PATH` for a
+fixed-search selection. It validates the logical chain, opens the canonical file
+without following a final symlink, and records identity and a content digest
+from that descriptor. It revalidates the original search choice, logical symlink
+chain, workspace anchor, identity, executable mode, and bytes at Check and every
+process Prepare.
 
 Visibility does not select or invoke a command and is deliberately
 non-exclusive: the native runtime already exposes bounded system files and
@@ -298,9 +300,9 @@ projection does not reread the original host bundle. A supported inactive
 overlay is preserved by mutation; an unknown inactive overlay remains inert,
 but rewrite commands refuse it when lossless preservation cannot be proven.
 
-Whole-workspace read includes project-local files. “Selected only” describes
-ACS-managed global materials: it does not claim to hide project-local Skills or
-files inside the explicitly granted workspace or writable Session.
+Workspace read access includes project-local files. "Selected only" refers
+to ACS-managed global material. Project-local Skills and other files in the
+granted workspace or writable Session remain readable.
 
 ## Explicit migration and outcomes
 
@@ -312,10 +314,10 @@ repository Replace transaction; it adds no lock, journal or persistence engine.
 
 The default migration preserves legacy workspace write explicitly. A later
 editor change to read-only is a separately visible authority reduction.
-Cancellation, refusal, revision conflict and other `NotCommitted` outcomes
-leave prior bytes unchanged. Once a decision may exist, ACS continues to report
-`Committed` or `Unknown` and any recovery requirement truthfully. Recovery can
-roll publication forward and is not a universal rollback or backup feature.
+Cancellation, refusal, revision conflict and other `NotCommitted` outcomes leave
+prior bytes unchanged. Once a decision may exist, ACS reports `Committed` or
+`Unknown` together with any recovery requirement. Recovery can roll publication
+forward and is not a universal rollback or backup feature.
 
 `profile list`, `profile show` and `profile validate` are passive. They do not
 migrate, canonicalize, discover inactive overlays, inspect target readiness,

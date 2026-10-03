@@ -3,10 +3,10 @@
 [Documentation index](../README.md)
 
 ACS records sanitized lifecycle information for every contained shell, Devin,
-Codex, Codex authentication, and explicit command Session. The record is an
-operator view, not deletion authority: recovery additionally requires the
-inactive Session lease, its exact private process generation, and the native
-supervisor cleanup proof for that generation.
+Codex, Codex authentication, and explicit command Session. Use the record to
+inspect lifecycle state. Recovery also requires an inactive Session lease, its
+exact private process generation and the matching native supervisor cleanup
+proof.
 
 ```sh
 acs session list
@@ -30,7 +30,7 @@ recovery action. It never includes a filesystem path or root name, PID, argv,
 environment, policy, output, authentication reference, identity, marker,
 challenge, credential, or private binding token. A list may report only the
 count of safely observed unindexed roots; those roots receive no synthetic ID
-or recovery route. A paginated list may additionally include `nextAfter`, an
+or recovery route. A paginated list may include `nextAfter`, an
 opaque Session ID to use with the next `--after` request.
 
 Without `--limit`, listing remains complete or fails as a whole if the public
@@ -58,15 +58,14 @@ force/proof override.
 
 Only successful physical removal followed by durable publication reports
 `removed`. Removed metadata is retained for 720 hours; a maintenance pass
-examines at most 256 record candidates during a later Session allocation and
-may delete expired
-removed metadata, but only after private capability and root-binding
-finalization is complete. A durable advisory cursor advances across allocations
-and wraps so retained candidates do not permanently block later records. The
-cursor never authorizes deletion. Nonexpired metadata and recoverable evidence
-are never deleted by maintenance. Pending or unverifiable finalization evidence
-is retained for recovery regardless of age. `unproven`, `unknown`, and `corrupt`
-evidence has no automatic destructive expiry. Never
+examines at most 256 record candidates during a later Session allocation and may
+delete expired removed metadata, but only after private capability and
+root-binding finalization is complete. A durable advisory cursor advances across
+allocations and wraps so retained candidates do not permanently block later
+records. The cursor never authorizes deletion. Nonexpired metadata and
+recoverable evidence are never deleted by maintenance. Pending or unverifiable
+finalization evidence is retained for recovery regardless of age. `unproven`,
+`unknown`, and `corrupt` evidence has no automatic destructive expiry. Never
 delete Session roots, lease files, protection, capabilities, proofs, or Codex
 markers by hand.
 
@@ -77,16 +76,16 @@ remaining private evidence. A visible `removed` record by itself is not a
 cleanup override: it must carry the exact private root and challenge binding
 published by the successful cleanup sequence.
 
-Each record and private capability is limited to 16 KiB. A list emits at most
-1 MiB of public JSON; exceeding that limit fails the whole operation without a
-partial list or partial count. Page selection and maintenance keep candidate
-and record memory bounded, while streaming the complete directory-name set is
-still O(N) work. Counting roots uses direct bindings where available; legacy
-or incomplete bindings require another complete record scan per 256-root batch.
-These operations bound memory, not total runtime. There is no 4096-entry
-registry ceiling. Recovery lookups stream
-to the end of the relevant directory so a later conflicting match still makes
-the evidence ambiguous; they never treat the first page as complete proof.
+Each record and private capability is limited to 16 KiB. A list emits at most 1
+MiB of public JSON; exceeding that limit fails the whole operation without a
+partial list or partial count. Page selection and maintenance keep candidate and
+record memory bounded, while streaming the complete directory-name set is still
+O(N) work. Counting roots uses direct bindings where available; legacy or
+incomplete bindings require another complete record scan per 256-root batch.
+These operations bound memory, not total runtime. There is no 4,096-entry
+registry ceiling. Recovery lookups stream to the end of the relevant directory
+so a later conflicting match still makes the evidence ambiguous; they never
+treat the first page as complete proof.
 
 Each passive row is individually consistent, but a list or sequence of pages
 is not a globally locked snapshot. Concurrent removals are omitted, and records

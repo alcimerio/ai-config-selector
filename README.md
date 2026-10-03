@@ -1,14 +1,14 @@
 # AI Config Selector
 
-Choose what your AI coding session can access.
+Run coding tools with explicit access to your project and selected local resources.
 
 AI Config Selector (`acs`) is a Go CLI that runs Devin, Codex, a shell, or a
-command inside a native macOS sandbox. Save reusable **Profiles** of local
-Skills, instructions, file permissions, environment references, and local MCP
-servers, then launch them from the project you want to work on.
+command inside a native macOS sandbox. Save your choices of local Skills,
+instruction files, filesystem permissions, environment references and local MCP
+servers in a reusable Profile. Launch it from your project.
 
-**Supported runtime:** macOS 26 on Apple Silicon (`darwin/arm64`).
-**Latest published release:** [v0.5.0](https://github.com/alcimerio/ai-config-selector/releases/tag/v0.5.0).
+ACS supports macOS 26 on Apple Silicon (`darwin/arm64`). The latest published
+release is [v0.5.1](https://github.com/alcimerio/ai-config-selector/releases/tag/v0.5.1).
 Devin and Codex are installed separately. You can try the sandbox without an
 AI account. Linux and Intel Macs are not supported runtimes.
 
@@ -17,41 +17,42 @@ AI account. Linux and Intel Macs are not supported runtimes.
 
 ## What you can do
 
-- Keep separate Profiles for read-only review and coding work
-- Expose selected local Skills and tools through a temporary, synthetic home
-- Inspect effective permissions before launching a target
-- Reuse common capabilities across targets with explicit target overlays
+- Save separate Profiles for read-only review and coding work
+- Give a target access to selected local Skills and tools in a temporary home
+- Inspect effective permissions before launch
+- Use the same common selections with explicit Devin and Codex overlays
 
 ## How it works
 
-1. **Choose a Profile.** A Profile saves references and permissions, not copies
-   of credentials or Skill files. New v3 Profiles default to a read-only workspace.
-2. **Launch from your project.** Your current directory becomes the workspace.
-   ACS resolves the selected material and creates a private, temporary Session
-   with a synthetic home and a clean environment.
-3. **Work inside the sandbox.** ACS applies the required Seatbelt policy to the
-   process and its descendants, then waits for cleanup proof before removing
-   the Session. Uncertain cleanup is retained for conservative recovery.
+1. Choose a Profile. It stores references and permissions; credentials and
+   Skill files stay in their separate source locations. New v3 Profiles default
+   to a read-only workspace.
+2. Launch from your project. The current directory becomes the workspace. ACS
+   resolves the selections and creates a private, temporary Session with a
+   synthetic home and a clean environment.
+3. Work inside the sandbox. ACS applies the Seatbelt policy to the process and
+   its descendants. It removes the Session after proving cleanup, or retains
+   it for recovery when cleanup is uncertain.
 
-Target **overlays** add the fixed Devin or Codex integration. A Devin Profile
+Target overlays add the fixed Devin or Codex integration. A Devin Profile
 is not automatically a Codex Profile; see the
 [common format](docs/reference/common-profile-format.md) for explicit overlays.
 
 ## Install
 
-For a **fresh installation**, download the release-pinned installer, verify its
+For a fresh installation, download the release-pinned installer, verify its
 published checksum, inspect it (`q` exits `less`), then run it locally. Use a
 scratch directory that does not already contain `install.sh`:
 
-<!-- published-v050-fresh-install-example -->
+<!-- published-v051-fresh-install-example -->
 ```sh
 set -eu
-release_version=v0.5.0
+release_version=v0.5.1
 release_url="https://github.com/alcimerio/ai-config-selector/releases/download/$release_version"
 curl --fail --location --proto '=https' --tlsv1.2 \
   --output install.sh "$release_url/install.sh"
 printf '%s  %s\n' \
-  '5723249bb5d69b5878e9178e6dc7cb45812d8d6930029d8c174b5acab3a5b38f' install.sh \
+  'd1e899c9cc20e85450572f350986f8e1e68fdd649ee184b497bc05160e02f655' install.sh \
   | shasum -a 256 -c -
 less install.sh
 sh ./install.sh
@@ -68,7 +69,7 @@ command -v acs
 acs version
 ```
 
-Release archives are **unsigned and unnotarized**. SHA-256 checks byte identity
+Release archives are unsigned and unnotarized. SHA-256 checks byte identity
 against a trusted digest; GitHub attestations provide separate origin evidence.
 Neither is Apple approval or a malware review. Do not disable Gatekeeper,
 remove quarantine, or weaken sandbox settings to make ACS run. See
@@ -76,11 +77,12 @@ remove quarantine, or weaken sandbox settings to make ACS run. See
 
 ### Upgrading
 
-Already have ACS? Follow the [upgrade and recovery guide](docs/guides/manual-upgrade-recovery.md)
-to retain your working binary and verify the replacement before switching.
-v0.4.0 has no updater; the guide includes that bootstrap path.
+Already have ACS? Follow the
+[upgrade and recovery guide](docs/guides/manual-upgrade-recovery.md) to retain
+your working binary and verify the replacement before switching. v0.4.0 has no
+updater; the guide includes that bootstrap path.
 
-For supported v0.5.0 installer layouts, `acs update --check` checks stable-release
+For supported v0.5.x installer layouts, `acs update --check` checks stable-release
 metadata without changing files, and `acs update` installs a newer stable release.
 Binary rollback does not downgrade stored data. There are no background update
 checks, package-manager distribution, or uninstaller.
@@ -100,9 +102,9 @@ export PATH="$PWD/bin:$PATH"
 A source build reports `acs devel` and cannot self-update. See
 [Contributing](CONTRIBUTING.md) for checks and release-evidence requirements.
 
-## Quickstart: try a credential-free sandbox
+## Try a credential-free sandbox
 
-No Devin or Codex installation is needed for this path:
+To try the sandbox without installing Devin or Codex:
 
 ```sh
 acs doctor --target sandbox
@@ -110,8 +112,8 @@ acs devin create-profile --name first-review
 ```
 
 The builder command is named `devin create-profile`, but does not start Devin
-or require its credentials. Choose **Create Profile** and confirm the empty
-selection for a minimal first run; leave Workspace read-only. Or follow the
+or require its credentials. Choose Create Profile and confirm the empty
+selection for a minimal first run. Leave Workspace read-only. Or follow the
 [getting-started guide](docs/guides/getting-started.md) to add your first Skill.
 
 From the project directory you want to inspect:
@@ -157,7 +159,7 @@ unless you explicitly select coding write; legacy v1/v2 Profiles retain their
 writable-workspace behavior. The Session is writable. Additional selected path,
 executable, and environment grants apply to the contained process tree.
 
-**ACS is not an egress firewall.** Outbound IP and DNS are permitted; destination
+ACS is not an egress firewall. Outbound IP and DNS are permitted; destination
 allowlisting is research, not a shipped feature. A target can send data it is
 allowed to read to an external service. Skills, instructions, MCP programs, and
 workspace content still need your trust. Selected secrets are available to the
@@ -195,8 +197,8 @@ procedures, research, and historical records. Start with the
 See [GitHub Releases](https://github.com/alcimerio/ai-config-selector/releases)
 for published artifacts and release notes. Documentation on `main` can describe
 changes that have not shipped; use the documentation at your release tag when
-checking release behavior. Native tests do not replace real-account or sustained
-daily-use observations.
+checking release behavior. Native tests cover their documented scenarios.
+Real-account operation and sustained daily use require separate observations.
 
 ## License
 

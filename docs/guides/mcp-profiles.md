@@ -2,7 +2,7 @@
 
 [Documentation index](../README.md)
 
-Development-source version-3 Profiles may select local MCP servers under
+Version-3 Profiles can select local MCP servers under
 `common.mcp`. The category has version 1 and a `selection.servers` array. ACS
 stores references to already selected executables, filesystem paths, and
 environment entries; it does not store command text, arbitrary argument
@@ -14,7 +14,7 @@ values, endpoint URLs, headers, or resolved environment values.
   "name": "review-with-local-tools",
   "common": {
     "skills": {"version": 1, "selection": []},
-    "workspace": {"version": 1, "selection": {"access": "read-write"}},
+    "workspace": {"version": 1, "selection": {"access": "read-only"}},
     "executables": {
       "version": 1,
       "selection": {
@@ -87,7 +87,7 @@ values, endpoint URLs, headers, or resolved environment values.
 }
 ```
 
-Each server ID is unique, 1–64 lowercase ASCII characters, starts with a letter,
+Each server ID is unique, has 1 to 64 lowercase ASCII characters, starts with a letter,
 and contains only letters, digits, `.`, `_`, or `-`. At most 64 servers are
 accepted. `transport` currently accepts only `stdio`. `executableRef` must
 identify a selected executable grant. `arguments` is an ordered list of up to
@@ -105,41 +105,41 @@ value. Path arguments resolve from the same validated filesystem grants as
 other Profile paths. Up to 64 `inputRefs` declare the selected path IDs eligible
 for path arguments; listing an input does not add an argv item by itself.
 
-`environmentRefs` may contain up to 128 selected entries. `disabledTools` is
-an optional sorted set of up to 256 ASCII target tool names (maximum 128
-characters each; letters, digits, `.`, `_`, `:`, `/`, and `-`, starting with a
-letter or digit). If supplied, it must be an array; `null` is rejected. The
-complete selection is limited to 4,096 aggregate list items and 1 MiB. The
-adapters project disabled names using the target's configuration field, but
-filtering is a target feature rather than an ACS
-containment boundary. Native proof of filtering and server invocation is still
-required before this development feature is accepted. Unknown keys, duplicate
-or aliased JSON keys, malformed references, null required lists, unsupported
+`environmentRefs` may contain up to 128 selected entries. `disabledTools` is an
+optional sorted set of up to 256 ASCII target tool names (maximum 128 characters
+each; letters, digits, `.`, `_`, `:`, `/`, and `-`, starting with a letter or
+digit). If supplied, it must be an array; `null` is rejected. The complete
+selection is limited to 4,096 aggregate list items and 1 MiB. The adapters
+project disabled names using the target's configuration field, but filtering is
+a target feature rather than an ACS containment boundary. Configuration
+projection alone does not prove actual server invocation or tool filtering.
+Those behaviors require native target observations. Unknown keys, duplicate or
+aliased JSON keys, malformed references, null required lists, unsupported
 transports, secret argv references, and unbound IDs reject the whole selection
 rather than being discarded.
 
 At launch, ACS compiles the selected server into a bounded Session recipe and
 projects the local stdio command into Devin or Codex configuration. ACS's
 launcher revalidates the selected executable and path identities, resolves the
-typed argv references using the already selected child environment and execs
-the server in place. The recipe contains references and identities, not
-resolved environment values. Secret values remain available in the attached
-process tree, however: ACS does not isolate environment variables per MCP
+typed argv references using the already selected child environment and execs the
+server in place. The recipe stores references and identities, not resolved
+environment values. At runtime, selected secrets are available throughout the
+attached process tree. ACS does not isolate environment variables per MCP
 server. The target and its server processes can read selected values and their
 descendants inherit that environment.
 
-In this delivery remote MCP is unsupported. Profiles with URL, HTTP, SSE,
+Remote MCP is unsupported. Profiles with URL, HTTP, SSE,
 header or OAuth transport settings are rejected; these fields are not accepted
 as inert placeholders. The selected executable visibility category remains
 non-exclusive, and normal outbound-network authority still applies to a stdio
 server. MCP selection does not create destination-specific network filtering.
 
-Codex's generated MCP table is composed with the target's existing isolated
-HOME and untrusted-project configuration; an empty table does not erase other
-loaded entries. Devin's dedicated selected HOME config is combined with its
-project/local config read restriction and import switches below. These
-configuration probes inform composition but do not replace native public ACS
-tests for actual target discovery, invocation, filtering, and cleanup.
+Codex's generated MCP table is composed with the target's existing isolated HOME
+and untrusted-project configuration; an empty table does not erase other loaded
+entries. Devin's dedicated selected HOME config is combined with its
+project/local config read restriction and import switches below. Configuration
+probes describe how settings combine. Native public ACS tests are still needed
+to verify target discovery, invocation, filtering and cleanup.
 
 ## Authoring and lifecycle
 
@@ -151,12 +151,13 @@ capability is refused before Profile bytes or revision change. Generic
 `acs run` preserves MCP intent and explains its applicability, but it does not
 start a server or write target-native MCP configuration.
 
-`acs explain devin|codex --profile NAME` reports the selected reference-only
-MCP intent and target projection applicability. Requested facts describe what
-the Profile selects; the target-added fact names the registered projection
-the selected recipe would compile. It does not report MCP as effective runtime
-enforcement or prove that a target started a server or applied tool filtering.
-Explanation does not resolve environment values or start a target.
+`acs explain devin --profile NAME` or `acs explain codex --profile NAME` reports
+the selected reference-only MCP intent and target projection applicability.
+Requested facts describe what the Profile selects; the target-added fact names
+the registered projection the selected recipe would compile. It does not report
+MCP as effective runtime enforcement or prove that a target started a server or
+applied tool filtering. Explanation does not resolve environment values or start
+a target.
 
 Portable Profile exchange includes MCP references and ordered argv without
 embedding local filesystem values or environment values. Local executable,

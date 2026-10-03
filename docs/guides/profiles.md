@@ -4,8 +4,8 @@
 
 Profiles are machine-local JSON documents in `~/.acs/profiles`. Use the
 interactive builder for guided selection, or an explicit JSON file for
-noninteractive creation. These are alternative creation methods; each new name
-must be absent:
+noninteractive creation. Choose one creation method and a name that does not
+already exist:
 
 ```sh
 acs devin create-profile --name backend-review
@@ -22,10 +22,11 @@ acs profile show backend-review --json
 acs profile validate backend-review
 ```
 
-The [common format](../reference/common-profile-format.md) defines schema versions, grants,
-and migration. Inspection reports stored structure; [validation and
-explanation](diagnostics.md) report selected-source availability and effective
-authority separately. None of these observations alone proves launch readiness.
+The [common format](../reference/common-profile-format.md) defines schema
+versions, grants, and migration. Inspection reports stored structure;
+[validation and explanation](diagnostics.md) report selected-source availability
+and effective authority separately. None of these observations alone proves
+launch readiness.
 
 ## Declarative creation
 
@@ -40,11 +41,12 @@ keys, unknown fields or capabilities, unsupported overlays, invalid references,
 and representations that cannot be preserved losslessly are rejected.
 
 The input must be a regular file no larger than 1 MiB. ACS opens it nonblocking,
-validates the opened descriptor and reads it once. FIFOs, devices and directories
-are rejected without waiting; symlinks to regular files are supported. Replacing
-the pathname after open does not change the captured candidate. The descriptor
-pins identity, not an atomic snapshot against in-place writes; candidate bytes
-become immutable after the read completes. ACS never changes input bytes or mode.
+validates the opened descriptor and reads it once. FIFOs, devices and
+directories are rejected without waiting; symlinks to regular files are
+supported. Replacing the pathname after open does not change the captured
+candidate. The descriptor holds the opened file identity. Another process can
+still modify its contents during the read. Candidate bytes become immutable
+after the read completes. ACS never changes input bytes or mode.
 
 Creation validates logical environment bindings without reading provider values,
 and [instruction references](../reference/common-profile-format.md#instruction-bundles)
@@ -61,14 +63,15 @@ unchecked availability/runtime properties. It passively checks destination
 absence but creates no directory, lock, journal, Session, credential or other
 durable file.
 
-Without `--dry-run`, invocation authorizes publication without terminal
+Without `--dry-run`, the command saves the Profile without terminal
 confirmation. ACS recovers under the repository transaction lock and uses the
 builder's conditional no-overwrite creation transaction, with the captured bytes
 rather than rereading the input. An occupied destination, concurrent winner,
 invalid input or cancellation observed before the transaction decision cannot
 replace a Profile. Cancellation after the decision begins does not undo a
-committed creation. See [outcomes and recovery](#uncertain-outcomes-and-recovery)
-before retrying an uncertain result.
+committed creation. See
+[outcomes and recovery](#uncertain-outcomes-and-recovery) before retrying an
+uncertain result.
 
 ## Inspection
 
@@ -79,18 +82,18 @@ have disappeared. `show` and `validate` accept exactly one name before or after
 attached values (`=`), `--`, target pass-through and sandbox bypass are rejected.
 Use `acs help profile` or each command's `--help` for contextual usage.
 
-Human output reports the number of stored Skills, Instructions, path grants,
-executables, environment entries and MCP servers. Workspace access is a scalar
-setting, shown as configured with its access mode above. Counts do not resolve
+Human output reports counts for stored Skills, instructions, path grants,
+executables, environment entries and MCP servers. Workspace access is shown
+as a configured mode rather than a selection count. Counts do not resolve
 references or establish runtime access; use
 [`acs explain`](diagnostics.md#effective-capability-explanation) for effective
 capabilities. Private path, executable, environment and MCP selection details
 remain omitted from inspection output.
 
-Inspection reads persisted structure only. It does not check source existence,
-authentication, installed targets or runtime readiness; resolve references;
-normalize or migrate files; create directories or Sessions; recover quarantine;
-change permissions; or access a terminal. Use `acs profile validate NAME` for
+Inspection reads stored structure only. It leaves source availability,
+authentication, target compatibility and runtime readiness unchecked. It does
+not resolve references, normalize or migrate files, recover quarantine, access
+a terminal or change stored state. Use `acs profile validate NAME` for
 selected Skill resolution and `acs doctor` for passive host prerequisites.
 
 A missing store is an empty successful list. Entries are filename-ordered;
@@ -192,7 +195,7 @@ acs profile delete service-review --confirm service-review
 ```
 
 After command words, one source `NAME` and separate-token flags may appear in
-either order, for example `acs profile clone --name new old`. Names contain 1–64
+either order, for example `acs profile clone --name new old`. Names contain 1 to 64
 ASCII letters, digits, dots, underscores or hyphens and begin with a letter or
 digit. Clone/rename destinations must be absent and differ from the source by
 more than ASCII letter case; case-only renames are refused. Unknown, duplicate,
@@ -212,7 +215,7 @@ focused Skills. Failed discovery offers retry, back or `E` to edit saved
 selections. Selections survive navigation, filtering, resize, failed discovery
 and refresh. Dirty drafts require confirmation before discard.
 
-Rows combine saved and discovered choices by exact **source plus relative path**,
+Rows combine saved and discovered choices by exact source plus relative path,
 never display name. Missing or ambiguous saved identities stay visible and
 selected until explicitly removed. Replace one by deselecting it and selecting
 the intended identity. Missing roots/manifests can establish absence; failed
@@ -228,7 +231,7 @@ selections and exact canonical JSON. Retained unresolved selections need a
 separate `A` warning acknowledgement before Y/Enter commits. Saving them does
 not install Skills or establish authentication/runtime readiness.
 
-Preview discloses v1 → v2 conversion (`skillReferences` to schema-1
+Preview shows v1-to-v2 conversion (`skillReferences` to schema-1
 `categories.skills`), missing defaults, sorting, field order, indentation and
 final newline, or supported v2 canonicalization. Even unchanged legacy
 selections require preview. Ordinary legacy mutations remain canonical v2 with
@@ -238,11 +241,12 @@ adopts v3 through the same revision-bound Replace transaction and previews
 retained/reduced authority and common/Devin projection paths.
 
 Eligibility comes from bounded exact bytes captured with their revision and
-filename identity, not permissive codec normalization. Unknown fields or inactive
-v3 overlays, future content, unsupported targets/categories/sources, duplicate
-keys, ambiguous structure, unsafe references and identity mismatch refuse
-rewriting without changing bytes, modes or the Profile tree. Commit owns exactly
-the previewed bytes and expected revisions, not later mutable editor state.
+filename identity, not permissive codec normalization. Unknown fields or
+inactive v3 overlays, future content, unsupported targets/categories/sources,
+duplicate keys, ambiguous structure, unsafe references and identity mismatch
+refuse rewriting without changing bytes, modes or the Profile tree. The commit
+uses exactly the previewed bytes and expected revisions. Later editor changes
+cannot alter that commit.
 
 ### Conflicts and cancellation
 
@@ -277,10 +281,10 @@ automatic undo.
 
 ## Uncertain outcomes and recovery
 
-Creation and mutations use the [revisioned repository](../development/architecture.md#profile-repository-transactions).
-Apply owns recovery under the same stationary lock after authorization;
-preparation and cancellation create no locks or journals. There is no second
-publication or recovery engine.
+Creation and mutations use the
+[revisioned repository](../development/architecture.md#profile-repository-transactions).
+After authorization, apply recovers pending transactions under the same
+repository lock. Preparation and cancellation create no locks or journals.
 
 A committed-with-error result exits nonzero and reports that publication
 committed but cleanup or reporting failed. If the transaction settled and only
@@ -297,7 +301,8 @@ for example:
 acs devin create-profile --name backend-review
 ```
 
-That entry point recovers before its duplicate check. Cancel the builder if it
+This command recovers pending Profile transactions before checking for a
+duplicate name. Cancel the builder if it
 opens, then inspect with `acs profile list` and `acs profile show NAME` before
 deciding what to do. Recovery can finish the earlier operation; it is not
 rollback. Do not delete transaction artifacts or bypass a live lock. The

@@ -2,7 +2,10 @@
 
 [Documentation index](../README.md)
 
-Current development source records private local history for every committed Profile create, edit, clone, rename, delete, import, migration, and restore. History is recovery state, not a portable backup or export format.
+ACS records private local history for each committed Profile creation, edit,
+clone, rename, deletion, import, migration and restore. Use it to recover
+supported configuration state. Use [portable exchange](portable-profile-exchange.md)
+to transfer selections; history is not a portable backup.
 
 ## Commands
 
@@ -26,37 +29,56 @@ acs profile restore backend-review \
 Use the actual `eventId` and `lineageId` from `history --json` in these examples;
 the displayed IDs and `hg_DIGEST_FROM_PREVIEW` are placeholders.
 
-Exactly one live `NAME` or opaque `--lineage ID` selects history. Event IDs use fixed lowercase `ev_` plus 32 hexadecimal digits; lineage IDs use `ln_` plus 32 hexadecimal digits. They are identifiers, never paths or repository content hashes. A live name resolves only its current lineage. Rename preserves a lineage; deletion leaves a selectable tombstone addressable by lineage ID. Reusing a deleted name creates a new lineage.
+Select history with either a live `NAME` or an opaque `--lineage ID`. Event IDs
+use `ev_` plus 32 lowercase hexadecimal digits; lineage IDs use `ln_` plus 32
+lowercase hexadecimal digits. These are identifiers, not paths or content hashes.
 
-An existing Profile is adopted only on its first successful mutation. Passive history, diff, restore dry-run, and prune dry-run never create or repair storage, take a repository lock, access a provider or Keychain, probe an executable, create a Session, or start a target. History for an unadopted live Profile is empty.
+A lineage tracks one Profile through mutations. Rename preserves it. Deletion
+leaves a tombstone that you can select by lineage ID. Reusing a deleted name
+creates a new lineage, and a live name resolves only its current lineage.
+
+An existing Profile enters history on its first successful mutation. Until
+then, its history is empty. History, diff, restore dry-run and prune dry-run
+are passive. They do not create or repair storage, take a repository lock,
+access a provider or Keychain, probe executables, create Sessions or start targets.
 
 ## Restore
 
-A history event advertises the state produced by its successful operation, and selecting a live event restores that advertised supported state. First adoption records a protected predecessor so the bytes displaced by the first mutation remain selectable. A deletion tombstone selects its last live snapshot for recovery while reporting its resulting state as deleted.
+Each event records the state produced by a successful operation. Restore
+selects that supported state. First adoption also records a protected
+predecessor, retaining the bytes displaced by the first mutation. A deletion
+tombstone selects the last live snapshot for recovery and reports its resulting
+state as deleted.
 
-Restore decodes the selected snapshot through the current Profile codec, changes only the destination logical name, canonicalizes it, and preserves current machine-local binding choices where a valid live destination supplies them. If the destination is absent, or its current intent cannot supply every selected binding decision, pass `--bindings FILE` using the same bounded local binding document accepted by Profile import. Version 1 remains compatible for source/authentication-only intent; path or executable bindings require version 2; environment-reference bindings require version 3. Current choices still take precedence when only missing choices need the file. A corrupt or unsupported current destination is rejected; it is never treated as absent and never contributes guessed bindings.
+Restore decodes the selected snapshot with the current Profile codec, changes
+the destination logical name and canonicalizes the document. It preserves
+current machine-local bindings from a valid live destination. A corrupt or
+unsupported destination is rejected, rather than treated as absent.
+
+If the destination is absent or cannot supply every required binding, pass
+`--bindings FILE` with the local binding document accepted by Profile import.
+Current choices take precedence; the file supplies missing choices. Binding
+version 1 supports source and authentication references, version 2 adds paths
+and executables, and version 3 adds environment references.
 
 Restore never reuses machine-local path, executable, or secret-environment
-reference values solely because they
-occurred in an old private snapshot. A live destination supplies a local
-executable binding only when entry ID and reference kind still match; otherwise
-an explicit current exchange binding is required. A secret environment
-reference is preserved only from a live destination whose entry ID,
-destination, scope, required/classification fields, source kind, and provider
-still match. Non-secret host names remain portable logical intent. It never
-restores credential
-values, Keychain items, external Skill files, target authentication state,
-Sessions, provider state, or generated policies. Unsupported or corrupt old
-schemas and unresolved, invalid or conflicting binding decisions fail before
-mutation. Reading and validating `--bindings` is local and provider-free;
-dry-run still does not access a provider or Keychain.
+reference values solely because they occurred in an old private snapshot. A live
+destination supplies a local executable binding only when entry ID and reference
+kind still match; otherwise an explicit current exchange binding is required. A
+secret environment reference is preserved only from a live destination whose
+entry ID, destination, scope, required/classification fields, source kind, and
+provider still match. Non-secret host names remain portable logical intent. It
+never restores credential values, Keychain items, external Skill files, target
+authentication state, Sessions, provider state, or generated policies.
+Unsupported or corrupt old schemas and unresolved, invalid or conflicting
+binding decisions fail before mutation. Reading and validating `--bindings` is
+local and provider-free; dry-run still does not access a provider or Keychain.
 
 A binding file uses the existing strict Profile-import shape. Version 1 remains
-compatible when only source/authentication bindings are required; version 2
-adds path and executable binding maps; version 3 adds the environment binding
-map. Its exact required
-keys depend on the selected supported intent; omitted, extra, duplicate, unsafe,
-or unsupported choices fail closed:
+compatible when only source/authentication bindings are required; version 2 adds
+path and executable binding maps; version 3 adds the environment binding map.
+The required keys depend on the selected supported intent; omitted, extra,
+duplicate, unsafe, or unsupported choices fail closed:
 
 ```json
 {
@@ -69,9 +91,22 @@ or unsupported choices fail closed:
 }
 ```
 
-Dry-run reports the destination condition, the actual sanitized semantic change from current destination state to the final canonical candidate, and an `hg_` digest. Profile name changes are explicit semantic facts, and repeated Skill selections remain exact sorted set additions/removals rather than being collapsed to one value. The digest binds the lineage/event, destination name, current repository revision or absence, canonical intended document, and exact validated binding decision; it excludes time and the future random event ID. Apply rereads the binding file when present, requires the same digest and `--confirm NAME`, recompiles and rechecks under the repository mutation boundary, and never force-overwrites another lineage.
+Dry-run reports the destination condition, sanitized changes from its current
+state to the canonical candidate, and an `hg_` digest. Name changes are explicit
+facts. Skill changes remain sorted set additions and removals.
 
-`--as NAME` is a no-clobber destination. For a deleted lineage it appends the restore to that lineage under the new live name. For a renamed lineage whose current Profile remains live elsewhere, it preserves that live Profile and performs the restore as a conditional clone: the destination receives a distinct derived lineage whose immutable restore event records the selected lineage as its source relationship. Preview binds the live source revision, and apply revalidates both that source and the absent destination under the repository lock.
+The digest binds the lineage, event, destination name, current repository
+revision or absence, intended document and validated bindings. It excludes time
+and the future random event ID. Apply rereads any binding file, requires the
+same digest and `--confirm NAME`, and rechecks under the repository mutation
+lock. It never force-overwrites another lineage.
+
+`--as NAME` requires an absent destination. For a deleted lineage, restore
+continues that lineage under the new live name. For a renamed lineage whose
+Profile remains live elsewhere, restore preserves the live Profile and creates
+a conditional clone. The destination gets a distinct derived lineage, with
+the selected lineage recorded as its source. Preview binds the live source
+revision; apply revalidates the source and absent destination under the lock.
 
 A derived restore preserves the source name-to-lineage binding; deleting the
 source later appends its tombstone to that original lineage. Recovery preserves
@@ -89,14 +124,38 @@ acs profile history prune --lineage ln_ID --keep 50 \
   --expect hg_DIGEST_FROM_PREVIEW --confirm ln_ID
 ```
 
-ACS retains the latest 100 ordinary unpinned events plus pinned and recovery-protected entries. A lineage has a hard limit of 256 committed events and 32 MiB of logical snapshot bytes; each snapshot remains subject to the 1 MiB Profile document limit. Admission fails before the Profile decision when protected data leaves no safe capacity.
+ACS retains the latest 100 ordinary unpinned events plus pinned and
+recovery-protected entries. Each lineage is limited to 256 committed events
+and 32 MiB of logical snapshot bytes. Each snapshot has the 1 MiB Profile
+document limit. If protected data leaves no safe capacity, admission fails
+before the Profile transaction decision.
 
-Prune keeps 1 through 100 ordinary events (default 100). Preview lists only a sanitized candidate count and digest. Apply requires the digest and exact lineage confirmation. Candidate IDs and keep count are digest-bound. Mutable pin and prune metadata has its own versioned, locked recovery: interruption is completed on repository recovery and repeated recovery is idempotent. Pins and the last recoverable predecessor are not candidates.
+Prune keeps 1 through 100 ordinary events, with a default of 100. Preview
+reports a sanitized candidate count and digest. Apply requires that digest
+and exact lineage confirmation; candidate IDs and keep count are digest-bound.
+Pins and the last recoverable predecessor are retained.
+
+Pin and prune metadata use versioned, locked recovery. Repository recovery
+completes interrupted maintenance, and repeated recovery is idempotent.
 
 ## Privacy, corruption, and outcomes
 
-History lives in the mode-0700 `profiles/history` child. Lineage directories are mode 0700; immutable event records, full snapshots, name bindings, and maintenance journals are owned mode-0600 regular single-link files opened with descriptor-relative no-follow operations. Snapshot bytes can retain old local logical references and are private. Text and JSON expose only bounded semantic descriptors and redacted binding status, never stored bytes, credentials, private filesystem paths, external asset contents, argv, or generated sandbox policy.
+History lives under `profiles/history` in mode-0700 directories. Event
+records, snapshots, name bindings and maintenance journals are owned,
+mode-0600, regular single-link files opened through descriptor-relative
+no-follow operations. Snapshots can retain old local references and must
+remain private.
 
-JSON emits one schema-version-1 object and history lists use an `events` array that is empty rather than null. Public output is capped at 1 MiB. Grammar errors exit 2; operational conflict, missing, corrupt, quota, and recovery-required results exit 1; success exits 0.
+Text and JSON expose bounded semantic descriptors and redacted binding status.
+They omit stored bytes, credentials, private paths, external asset contents,
+argv and generated sandbox policy.
 
-Corruption blocks the affected lineage. A corrupt lineage or maintenance witness does not disable mutation of an unrelated Profile. Do not edit private history files or delete recovery journals manually; use the ordinary repository recovery path and preserve evidence when recovery reports an unsafe or unknown outcome.
+JSON emits one schema-version-1 object. History lists use an `events` array,
+which is empty rather than null when no events exist. Public output is capped
+at 1 MiB. Grammar errors exit 2; conflicts, missing or corrupt state, quota
+failures and recovery-required results exit 1; success exits 0.
+
+Corruption blocks the affected lineage without disabling mutations of unrelated
+Profiles. Use ordinary repository recovery rather than editing private history
+files or deleting journals. Preserve evidence when recovery reports an unsafe
+or unknown outcome.
