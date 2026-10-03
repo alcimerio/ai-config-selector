@@ -1,6 +1,6 @@
 # Recoverable local Profile history
 
-[Documentation index](README.md)
+[Documentation index](../README.md)
 
 Current development source records private local history for every committed Profile create, edit, clone, rename, delete, import, migration, and restore. History is recovery state, not a portable backup or export format.
 

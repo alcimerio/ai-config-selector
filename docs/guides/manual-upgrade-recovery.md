@@ -1,5 +1,7 @@
 # Manual binary upgrades, rollback and data recovery
 
+[Documentation index](../README.md)
+
 For supported direct user-owned Apple Silicon installs, `acs update --check`
 checks availability and `acs update [vMAJOR.MINOR.PATCH]` replaces only the
 executable. Neither updates nor manual binary selection back up, migrate or
@@ -8,7 +10,7 @@ recover stored data. Keep the known-good binary and private Profile backups.
 This manual procedure pins [v0.5.0](https://github.com/alcimerio/ai-config-selector/releases/tag/v0.5.0)
 for macOS 26 on Apple Silicon (`darwin/arm64`). It also bootstraps v0.4.0, which
 has no updater. For unpublished builds, use the
-[contributor candidate procedure](../CONTRIBUTING.md#test-a-development-candidate).
+[contributor candidate procedure](../../CONTRIBUTING.md#test-a-development-candidate).
 An older binary cannot acquire newer recovery capabilities by being selected.
 
 ## Discover the executable you actually use
@@ -305,7 +307,7 @@ operation, including a stopped live process, still owns it. Wait for its owner,
 then retry supported recovery. Never delete, replace, rename or reclaim locks or
 `.profile-transaction-*` artifacts. Copying a journal does not preserve inode/link
 proof or authorize replay elsewhere. See the
-[transaction contract](architecture.md#profile-repository-transactions) for filesystem limits;
+[transaction contract](../development/architecture.md#profile-repository-transactions) for filesystem limits;
 interruption tests do not prove arbitrary-volume power-loss safety.
 
 ## Recover a named Codex identity without exposing credentials
@@ -375,4 +377,4 @@ private temporary homes, paths with spaces, verification failures, shadowing,
 selection/rollback, protected-state preservation and recovery-shell returns.
 They do not establish a real-user upgrade, real-account login, hosted inference
 or sustained daily use. Native gates and optional authenticated observations
-have separate scopes in [CONTRIBUTING](../CONTRIBUTING.md).
+have separate scopes in [CONTRIBUTING](../../CONTRIBUTING.md).

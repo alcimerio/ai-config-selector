@@ -12,8 +12,8 @@ servers, then launch them from the project you want to work on.
 Devin and Codex are installed separately. You can try the sandbox without an
 AI account. Linux and Intel Macs are not supported runtimes.
 
-[Get started](docs/getting-started.md) · [Documentation](docs/README.md) ·
-[Security boundaries](docs/security-model.md) · [Contribute](CONTRIBUTING.md)
+[Get started](docs/guides/getting-started.md) · [Documentation](docs/README.md) ·
+[Security boundaries](docs/reference/security-model.md) · [Contribute](CONTRIBUTING.md)
 
 ## What you can do
 
@@ -35,7 +35,7 @@ AI account. Linux and Intel Macs are not supported runtimes.
 
 Target **overlays** add the fixed Devin or Codex integration. A Devin Profile
 is not automatically a Codex Profile; see the
-[common format](docs/common-profile-format.md) for explicit overlays.
+[common format](docs/reference/common-profile-format.md) for explicit overlays.
 
 ## Install
 
@@ -72,11 +72,11 @@ Release archives are **unsigned and unnotarized**. SHA-256 checks byte identity
 against a trusted digest; GitHub attestations provide separate origin evidence.
 Neither is Apple approval or a malware review. Do not disable Gatekeeper,
 remove quarantine, or weaken sandbox settings to make ACS run. See
-[installation and recovery](docs/manual-upgrade-recovery.md).
+[installation and recovery](docs/guides/manual-upgrade-recovery.md).
 
 ### Upgrading
 
-Already have ACS? Follow the [upgrade and recovery guide](docs/manual-upgrade-recovery.md)
+Already have ACS? Follow the [upgrade and recovery guide](docs/guides/manual-upgrade-recovery.md)
 to retain your working binary and verify the replacement before switching.
 v0.4.0 has no updater; the guide includes that bootstrap path.
 
@@ -112,7 +112,7 @@ acs devin create-profile --name first-review
 The builder command is named `devin create-profile`, but does not start Devin
 or require its credentials. Choose **Create Profile** and confirm the empty
 selection for a minimal first run; leave Workspace read-only. Or follow the
-[getting-started guide](docs/getting-started.md) to add your first Skill.
+[getting-started guide](docs/guides/getting-started.md) to add your first Skill.
 
 From the project directory you want to inspect:
 
@@ -125,7 +125,7 @@ acs sandbox --profile first-review
 The shell is always `/bin/zsh -f`, with a synthetic home and no user startup
 files. Type `exit` to return. A dry-run does not start the requested target;
 its precise checks vary by command, so it is not a promise that a real launch
-will succeed. [Get started](docs/getting-started.md) explains each step and how
+will succeed. [Get started](docs/guides/getting-started.md) explains each step and how
 to continue with Devin or Codex.
 
 ## Everyday commands
@@ -142,12 +142,12 @@ acs run --profile first-review -- /usr/bin/git status
 acs session list
 ```
 
-- [CLI guide](docs/cli.md): command groups, grammar, diagnostics, and dry-run limits
-- [Profiles](docs/common-profile-format.md): capabilities, overlays, versions, and migration
-- [Devin/Codex conformance](docs/shared-target-conformance.md): common behavior and target differences
-- [Interactive Codex](docs/codex.md#interactive-launch): fixed `codex-cli 0.149.1` and ACS-owned named ChatGPT login
-- [Profile exchange](docs/portable-profile-exchange.md): sharing sanitized intent with explicit local bindings
-- [Recovery](docs/manual-upgrade-recovery.md): interrupted writes, retained Sessions, and rollback
+- [CLI guide](docs/reference/cli.md): command groups, grammar, diagnostics, and dry-run limits
+- [Profiles](docs/reference/common-profile-format.md): capabilities, overlays, versions, and migration
+- [Devin/Codex conformance](docs/reference/shared-target-conformance.md): common behavior and target differences
+- [Interactive Codex](docs/guides/codex.md#interactive-launch): fixed `codex-cli 0.149.1` and ACS-owned named ChatGPT login
+- [Profile exchange](docs/guides/portable-profile-exchange.md): sharing sanitized intent with explicit local bindings
+- [Recovery](docs/guides/manual-upgrade-recovery.md): interrupted writes, retained Sessions, and rollback
 
 ## Isolation and limitations
 
@@ -165,7 +165,7 @@ attached process tree, including local MCP servers, rather than isolated per ser
 
 ACS does not manage plugins, hooks, custom agents, remote MCP, or arbitrary
 target settings. Target-owned content inside the selected workspace can still
-be discovered. [The security model](docs/security-model.md) explains these
+be discovered. [The security model](docs/reference/security-model.md) explains these
 boundaries and what to avoid sharing in bug reports.
 
 v0.3.3 is the final release with Linux support. The Linux/Bubblewrap sandbox
@@ -177,20 +177,20 @@ Historical v0.4.0 Intel assets do not make Intel Macs supported by v0.5.0.
 Bug reports, documentation fixes, and focused pull requests are welcome.
 
 - Start with [Contributing](CONTRIBUTING.md) for setup, development rules, and checks
-- Read the [architecture](docs/architecture.md) before changing execution or containment
-- Check [troubleshooting](docs/troubleshooting.md), then [open an issue](https://github.com/alcimerio/ai-config-selector/issues/new)
+- Read the [architecture](docs/development/architecture.md) before changing execution or containment
+- Check [troubleshooting](docs/guides/troubleshooting.md), then [open an issue](https://github.com/alcimerio/ai-config-selector/issues/new)
   with your ACS version, macOS version, and a minimal sanitized reproduction
 - Discuss changes to permissions or supported targets in an issue before implementing them
 
 Do not post credentials, target output, Session contents, private paths,
 environment values, or generated sandbox policy. See the
-[security model](docs/security-model.md) for reporting guidance.
+[security model](docs/reference/security-model.md) for reporting guidance.
 
 ## Documentation and releases
 
 The [documentation index](docs/README.md) separates user guides, maintainer
 procedures, research, and historical records. Start with the
-[walkthrough](docs/getting-started.md) for Devin or Codex setup.
+[walkthrough](docs/guides/getting-started.md) for Devin or Codex setup.
 
 See [GitHub Releases](https://github.com/alcimerio/ai-config-selector/releases)
 for published artifacts and release notes. Documentation on `main` can describe

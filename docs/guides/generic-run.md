@@ -1,6 +1,6 @@
 # Run a generic command
 
-[Documentation index](README.md) · [Common Profile grants](common-profile-format.md)
+[Documentation index](../README.md) · [Common Profile grants](../reference/common-profile-format.md)
 
 ACS supports one explicit command through the same
 ACS-owned Session, common Profile authority, native sandbox, attachment, and

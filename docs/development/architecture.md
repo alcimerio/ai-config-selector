@@ -1,6 +1,6 @@
 # Architecture
 
-[Documentation index](README.md) · [Security model](security-model.md)
+[Documentation index](../README.md) · [Security model](../reference/security-model.md)
 
 ACS resolves a persisted Profile into an immutable authority plan, materializes
 selected content in an ephemeral Session, and runs a registered target or an
@@ -24,8 +24,8 @@ Seatbelt backend. Unsupported hosts have no sandbox backend and fail closed.
 - **Execution recipe**: registered Devin or Codex, fixed `/bin/zsh -f`, or the
   literal executable and argv supplied to `acs run`.
 
-See the [common Profile format](common-profile-format.md) for schemas and
-[effective capability explanation](diagnostics.md#effective-capability-explanation) for the
+See the [common Profile format](../reference/common-profile-format.md) for schemas and
+[effective capability explanation](../guides/diagnostics.md#effective-capability-explanation) for the
 plan's public inspection surface.
 
 ## Module boundaries
@@ -58,7 +58,7 @@ work. Credential projection is separate from generic Profile materialization.
 
 Devin and sandbox-shell dry runs resolve selected material without leasing a
 Session or starting the requested target. They may execute the bounded native
-readiness probe; unlike [passive diagnostics](diagnostics.md#passive-diagnostics), they are
+readiness probe; unlike [passive diagnostics](../guides/diagnostics.md#passive-diagnostics), they are
 not strictly process-free.
 
 Devin's plan includes inherited repository-local Skills. The generic shell
@@ -87,7 +87,7 @@ mandatory. The signal-supervisor handoff is reserved before interactive process
 preparation: a pending termination prevents launch, while a later termination
 is replayed after Start and cannot be replaced by a resize notification.
 `VerifyDevin` uses the same protected preflight path for the opt-in
-[authenticated smoke](../CONTRIBUTING.md#optional-authenticated-smoke), without exposing a Session
+[authenticated smoke](../../CONTRIBUTING.md#optional-authenticated-smoke), without exposing a Session
 or process to its caller.
 
 ### Interactive Codex and named authentication
@@ -110,8 +110,8 @@ or process to its caller.
 
 Login is Create-only. Status and successful execution can replace only a valid
 changed projection with the same identity metadata; recovery never turns an
-interrupted login into a credential record. See [named Codex authentication](codex.md#named-authentication)
-and [interactive Codex](codex.md#interactive-launch) for the operator contract.
+interrupted login into a credential record. See [named Codex authentication](../guides/codex.md#named-authentication)
+and [interactive Codex](../guides/codex.md#interactive-launch) for the operator contract.
 
 ### Sandbox shell and generic commands
 
@@ -124,7 +124,7 @@ The shell always runs `/bin/zsh -f`, ignoring `$SHELL` and startup files.
 `RunCommand` accepts only a resolved literal executable and argv plus the
 common authority plan. It revalidates executable identity after materialization
 and immediately before native preparation; it adds no inferred authority.
-See [generic commands](generic-run.md) for usage and argv semantics.
+See [generic commands](../guides/generic-run.md) for usage and argv semantics.
 
 ## Filesystem and environment policy
 
@@ -155,7 +155,7 @@ disabled when environment values are selected, avoiding their serialization
 into snapshot files. Unsupported hosts fail closed before Session creation.
 
 Unrelated host paths and Unix sockets remain denied. Directory grants cover
-their descendants; see [path grants and pathname-race limits](common-profile-format.md#explicit-filesystem-paths).
+their descendants; see [path grants and pathname-race limits](../reference/common-profile-format.md#explicit-filesystem-paths).
 ACS is not an egress firewall and does not create independent per-tool,
 per-MCP-server, or per-agent authority boundaries. Selecting a plugin, hook, or
 agent definition as readable data does not activate it as a Profile capability;
@@ -178,7 +178,7 @@ settlement is proven.
 Startup cleanup respects file-lock leases held by other ACS processes. An
 unlocked lease alone is insufficient to reclaim a previously prepared Session:
 its matching native cleanup proof is also required. Removal is logical cleanup,
-not physical erasure. See [Session inspection and recovery](session-operations.md)
+not physical erasure. See [Session inspection and recovery](../guides/session-operations.md)
 for the operator-visible states and recovery procedure.
 
 ## Fail-closed properties
@@ -199,7 +199,7 @@ Creation is atomic and refuses replacement. Legacy v1 Profiles are normalized
 in memory without rewriting their files; migration to v3 is explicit. Capability
 schemas evolve independently, and unsupported selected schemas fail resolution.
 
-[Portable exchange](portable-profile-exchange.md) is a separate versioned codec.
+[Portable exchange](../guides/portable-profile-exchange.md) is a separate versioned codec.
 It exports stored v3 intent with symbolic machine-local source, authentication,
 path, executable, and secret-environment bindings, never a resolved authority
 plan or raw local JSON. Passive validation does not discover sources, access
@@ -236,7 +236,7 @@ The recoverable transaction has three boundaries:
 Before a decision, recovery aborts private preparation. History snapshots and
 lineage are part of the decided transaction, not a later best-effort append.
 Explicit history restore is a new conditional mutation. Clone creates a new
-lineage; rename preserves it. See [Profile history](profile-history.md) for
+lineage; rename preserves it. See [Profile history](../guides/profile-history.md) for
 retention, pins, and restore behavior.
 
 Outcomes separate `NotCommitted`, `Committed`, or `Unknown` from
@@ -250,7 +250,7 @@ The durability guarantee is checked file/namespace synchronization and
 process-interruption recovery on the tested filesystem. Successful sync calls
 and process-kill tests do not prove hardware power-loss behavior or all volume
 configurations. Synchronization errors never become success. See the
-[repository implementation and regression tests](../internal/profilerepo),
-[Profile commands](profiles.md), and [manual recovery](manual-upgrade-recovery.md).
+[repository implementation and regression tests](../../internal/profilerepo),
+[Profile commands](../guides/profiles.md), and [manual recovery](../guides/manual-upgrade-recovery.md).
 
-For test commands and native release validation, see [Contributing](../CONTRIBUTING.md).
+For test commands and native release validation, see [Contributing](../../CONTRIBUTING.md).

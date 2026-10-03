@@ -1,6 +1,6 @@
 # Shared Devin and Codex behavior
 
-[Documentation index](README.md) · [Common Profile format](common-profile-format.md)
+[Documentation index](../README.md) · [Common Profile format](common-profile-format.md)
 
 ACS supports common Profile capabilities across its Devin and Codex adapters on
 macOS 26 Apple Silicon. Target configuration, discovery, and authentication
@@ -23,7 +23,7 @@ containment policy, and process lifecycle.
 
 Read-only workspace access still permits project reads; it does not hide
 project files or target-owned configuration. Common [instruction bundles](common-profile-format.md#instruction-bundles)
-and [local MCP references](mcp-profiles.md) also have target-specific projections
+and [local MCP references](../guides/mcp-profiles.md) also have target-specific projections
 and limitations. Tool filtering and agent permissions are target features, not
 separate ACS OS-level isolation.
 
@@ -31,10 +31,10 @@ separate ACS OS-level isolation.
 
 Each interactive builder creates its own target overlay. To share one stored
 Profile, explicitly include both supported version-1 overlays using
-[declarative Profile creation](profiles.md#declarative-creation) and the
+[declarative Profile creation](../guides/profiles.md#declarative-creation) and the
 [common-format example](common-profile-format.md). Alternatively, create separate
 Profiles with the same common selections using the
-[getting-started guide](getting-started.md).
+[getting-started guide](../guides/getting-started.md).
 
 A Codex overlay stores only an opaque named authRef. `--auth` changes the
 reference for one run without rewriting it or adding a missing Codex overlay.
@@ -50,7 +50,7 @@ acs codex --profile review --dry-run
 ```
 
 Codex dry-run does not check whether the identity exists or works. Follow
-[named authentication](codex.md#named-authentication) to create or inspect it, and never publish
+[named authentication](../guides/codex.md#named-authentication) to create or inspect it, and never publish
 credential or account output.
 
 Legacy v1/v2 Profiles remain Devin-bound with writable workspace authority and
@@ -69,7 +69,7 @@ capabilities, projections, or execution:
 go test ./internal/adapter ./internal/executor ./internal/codexauth ./internal/codexauthresource
 ```
 
-The [adapter conformance tests](../internal/adapter/conformance_test.go) exercise
+The [adapter conformance tests](../../internal/adapter/conformance_test.go) exercise
 both registries through resolution, planning, and materialization. They check
 common identities, workspace intent, selected/unselected bytes, target
 projections, repository inheritance, and legacy/unsupported-overlay behavior.
@@ -77,19 +77,19 @@ Executor and authentication tests cover preflight ordering, credential ownership
 Start/Wait behavior, signal forwarding, refresh eligibility, and cleanup recovery.
 Portable fixtures do not establish real target discovery or native containment.
 
-On macOS, the [native candidate gates](../scripts/run-native-candidate-gates.sh)
+On macOS, the [native candidate gates](../../scripts/run-native-candidate-gates.sh)
 exercise the supplied ACS candidate without rebuilding it. Shared-target
 acceptance uses a credential-free Devin behavioral fixture to check placement,
 workspace grants, unrelated-path denial, and cleanup. Separate
 installed-target tests exercise the checksum-locked Devin and Codex artifacts,
 real Seatbelt, PTY behavior, Keychain recovery, and descendants. Follow
-[Contributing](../CONTRIBUTING.md) for their setup; Linux or Intel results do not
+[Contributing](../../CONTRIBUTING.md) for their setup; Linux or Intel results do not
 establish supported native behavior.
 
 For a compatibility bug, record the ACS version/commit and artifact SHA-256,
 target version, workspace intent, stable public result, and whether the relevant
 portable and native checks actually ran. Verify normal exit and interruption,
-then inspect [Session state](session-operations.md) if cleanup was uncertain.
+then inspect [Session state](../guides/session-operations.md) if cleanup was uncertain.
 Use synthetic inputs and omit credentials, account data, target output, private
 paths, environment values, and Session contents. Automated fixtures do not prove
 real-account operation or sustained daily use; report those separately when

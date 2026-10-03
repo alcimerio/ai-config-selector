@@ -390,7 +390,7 @@ func newManualUpgradeFixture(t *testing.T, arch string) *manualUpgradeFixture {
 func manualExamples(t *testing.T) map[string]string {
 	t.Helper()
 	blocks := make(map[string]string)
-	document := readRepositoryFile(t, "..", "docs/manual-upgrade-recovery.md")
+	document := readRepositoryFile(t, "..", "docs/guides/manual-upgrade-recovery.md")
 	pattern := regexp.MustCompile("(?s)<!-- example: ([a-z-]+) -->\n```sh\n(.*?)\n```")
 	for _, match := range pattern.FindAllStringSubmatch(document, -1) {
 		if _, duplicate := blocks[match[1]]; duplicate {

@@ -12,8 +12,8 @@ func TestCurrentDocumentationDefinesTheMacOSSandboxShellContract(t *testing.T) {
 	for _, document := range []string{
 		"README.md",
 		"CONTRIBUTING.md",
-		"docs/architecture.md",
-		"docs/manual-upgrade-recovery.md",
+		"docs/development/architecture.md",
+		"docs/guides/manual-upgrade-recovery.md",
 	} {
 		contents := readRepositoryFile(t, repository, document)
 		if len(strings.TrimSpace(contents)) == 0 {
@@ -207,7 +207,7 @@ func TestPromotedArtifactAcceptanceCoversSandboxShell(t *testing.T) {
 }
 
 func TestGenericRunDocumentationAndCandidateGateStayBoundToLiteralContainment(t *testing.T) {
-	document := readRepositoryFile(t, "..", filepath.Join("docs", "generic-run.md"))
+	document := readRepositoryFile(t, "..", filepath.Join("docs", "guides", "generic-run.md"))
 	for _, required := range []string{
 		"acs run --profile backend-review -- /usr/bin/git status",
 		"/usr/local/bin:/usr/bin:/bin",
@@ -303,7 +303,7 @@ func TestReleaseAndPromotedWorkflowsExecuteOneSharedNativeGate(t *testing.T) {
 func TestNamedAuthenticationDocumentationSeparatesAutomatedAndAuthenticatedEvidence(t *testing.T) {
 	for _, document := range []string{
 		"CONTRIBUTING.md",
-		"docs/codex.md",
+		"docs/guides/codex.md",
 	} {
 		contents := readRepositoryFile(t, "..", document)
 		normalized := strings.Join(strings.Fields(contents), " ")
@@ -338,7 +338,7 @@ func TestNamedAuthenticationDocumentationSeparatesAutomatedAndAuthenticatedEvide
 }
 
 func TestSharedTargetConformanceDocumentationAndNativeGateStayExplicit(t *testing.T) {
-	guide := readRepositoryFile(t, "..", "docs/shared-target-conformance.md")
+	guide := readRepositoryFile(t, "..", "docs/reference/shared-target-conformance.md")
 	normalizedGuide := strings.Join(strings.Fields(guide), " ")
 	for _, required := range []string{
 		"source` plus `relativePath",
@@ -356,7 +356,7 @@ func TestSharedTargetConformanceDocumentationAndNativeGateStayExplicit(t *testin
 			t.Errorf("shared target guide omits %q", required)
 		}
 	}
-	for _, document := range []string{"README.md", "docs/common-profile-format.md", "docs/codex.md"} {
+	for _, document := range []string{"README.md", "docs/reference/common-profile-format.md", "docs/guides/codex.md"} {
 		if !strings.Contains(readRepositoryFile(t, "..", document), "shared-target-conformance.md") {
 			t.Errorf("%s does not link the shared target guide", document)
 		}

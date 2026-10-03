@@ -1,6 +1,6 @@
 # Get started with ACS
 
-[Documentation index](README.md) · [CLI guide](cli.md) · [Security model](security-model.md)
+[Documentation index](../README.md) · [CLI guide](../reference/cli.md) · [Security model](../reference/security-model.md)
 
 This guide is for v0.5.0 and current source on **macOS 26, Apple Silicon**.
 Start with a credential-free shell so you can see the boundary before adding
@@ -9,8 +9,8 @@ can take longer. This is a walkthrough, not a recorded daily-use test.
 
 ## 1. Install and check the host
 
-Follow the [release installation](../README.md#install) or
-[source build](../README.md#build-from-source) instructions. In the same terminal:
+Follow the [release installation](../../README.md#install) or
+[source build](../../README.md#build-from-source) instructions. In the same terminal:
 
 ```sh
 command -v acs
@@ -112,7 +112,7 @@ only after its contained process tree is proven settled.
 
 The workspace is read-only for this new Profile, but the private Session is
 writable and outbound network access is permitted. Read the
-[security boundaries](security-model.md) before using sensitive projects.
+[security boundaries](../reference/security-model.md) before using sensitive projects.
 
 ## 5. Choose a target
 
@@ -132,7 +132,7 @@ acs devin --profile first-review
 Selected common instructions become ACS-managed Devin rules. Repository-local
 Skills and other target-owned workspace content remain Devin's responsibility;
 a selected global Skill catalog is not a complete filter of workspace content.
-See [target conformance](shared-target-conformance.md).
+See [target conformance](../reference/shared-target-conformance.md).
 
 ### Codex
 
@@ -152,7 +152,7 @@ acs codex --profile codex-review
 Select Skills and workspace access in this separate builder. The earlier Devin
 Profile does not have a Codex overlay; do not just substitute its name here.
 For one Profile with both overlays, use the
-[common Profile format](common-profile-format.md) and
+[common Profile format](../reference/common-profile-format.md) and
 [declarative creation](profiles.md#declarative-creation).
 
 Credentials live in an ACS-specific macOS Keychain namespace, not the Profile.
@@ -187,4 +187,4 @@ See [generic commands](generic-run.md) for scripts and runtime dependencies.
 
 Next: [edit or clone a Profile](profiles.md#mutations),
 [share sanitized intent](portable-profile-exchange.md), or
-[understand the architecture](architecture.md).
+[understand the architecture](../development/architecture.md).

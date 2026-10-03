@@ -1,6 +1,6 @@
 # Exchange portable Profile intent
 
-[Documentation index](README.md)
+[Documentation index](../README.md)
 
 Development source supports a separately versioned, sanitized Profile exchange
 format. Local Profile JSON is machine persistence and is not an export format.

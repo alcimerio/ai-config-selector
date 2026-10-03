@@ -1,6 +1,6 @@
 # Diagnose and explain a launch
 
-[Documentation index](README.md)
+[Documentation index](../README.md)
 
 Choose the question before choosing the command:
 

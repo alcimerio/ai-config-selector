@@ -1,6 +1,6 @@
 # Durable Session inspection and recovery
 
-[Documentation index](README.md)
+[Documentation index](../README.md)
 
 ACS records sanitized lifecycle information for every contained shell, Devin,
 Codex, Codex authentication, and explicit command Session. The record is an
