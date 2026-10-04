@@ -49,7 +49,6 @@ func ParseCredentialRef(value string) (CredentialRef, error) {
 
 type CodexAuthConfig struct {
 	BinaryPath        string
-	SupportedVersion  string
 	RuntimeInputs     []string
 	ACSHome           string
 	SessionsDirectory string
@@ -103,9 +102,6 @@ func NewCodexAuth(config CodexAuthConfig) (*CodexAuthService, error) {
 	if config.BinaryPath == "" {
 		return nil, errors.New("create Codex authentication registry: binary path is required")
 	}
-	if config.SupportedVersion == "" {
-		config.SupportedVersion = SupportedCodexVersion
-	}
 	for label, path := range map[string]string{
 		"ACS home": config.ACSHome, "Sessions directory": config.SessionsDirectory,
 		"working directory": config.WorkingDirectory,
@@ -146,20 +142,17 @@ func NewCodexAuth(config CodexAuthConfig) (*CodexAuthService, error) {
 	service := &CodexAuthService{
 		resources: productionAuthResources{store: resources},
 		login: newCodexLoginRunner(codexLoginConfig{
-			BinaryPath: config.BinaryPath, SupportedVersion: config.SupportedVersion,
-			RuntimeInputs: config.RuntimeInputs, SessionsDirectory: config.SessionsDirectory,
+			BinaryPath: config.BinaryPath, RuntimeInputs: config.RuntimeInputs, SessionsDirectory: config.SessionsDirectory,
 			WorkingDirectory: config.WorkingDirectory, PrivateRoot: acsHome,
 		}, sandbox),
 		verifyCleanup: launch.VerifySessionCleanupProof, environmentLookup: hostEnvironmentLookup,
 	}
 	service.status = newCodexStatusRunner(codexLoginConfig{
-		BinaryPath: config.BinaryPath, SupportedVersion: config.SupportedVersion,
-		RuntimeInputs: config.RuntimeInputs, SessionsDirectory: config.SessionsDirectory,
+		BinaryPath: config.BinaryPath, RuntimeInputs: config.RuntimeInputs, SessionsDirectory: config.SessionsDirectory,
 		WorkingDirectory: config.WorkingDirectory, PrivateRoot: acsHome,
 	}, sandbox)
 	service.execution = newCodexExecutionRunner(codexLoginConfig{
-		BinaryPath: config.BinaryPath, SupportedVersion: config.SupportedVersion,
-		RuntimeInputs: config.RuntimeInputs, SessionsDirectory: config.SessionsDirectory,
+		BinaryPath: config.BinaryPath, RuntimeInputs: config.RuntimeInputs, SessionsDirectory: config.SessionsDirectory,
 		WorkingDirectory: config.WorkingDirectory, PrivateRoot: acsHome,
 	}, sandbox)
 	service.sessionsDirectory = config.SessionsDirectory

@@ -13,6 +13,7 @@ import (
 	"github.com/alcimerio/ai-config-selector/internal/builder"
 	"github.com/alcimerio/ai-config-selector/internal/category"
 	"github.com/alcimerio/ai-config-selector/internal/codexauth"
+	"github.com/alcimerio/ai-config-selector/internal/codexcompat"
 	"github.com/alcimerio/ai-config-selector/internal/commonprofile"
 	"github.com/alcimerio/ai-config-selector/internal/executor"
 	"github.com/alcimerio/ai-config-selector/internal/instructions"
@@ -76,7 +77,7 @@ func New(config Config) (*Adapter, error) {
 	}
 	a.mcp = bindings.MCP
 	a.categories, err = category.NewRegistryWithRequirements("codex", authority.TargetRequirements{
-		Recipe: authority.RecipeCodex, Executable: config.BinaryPath, ExecutableRequirementID: "codex-cli-0.149.1",
+		Recipe: authority.RecipeCodex, Executable: config.BinaryPath, ExecutableRequirementID: codexcompat.ExecutableRequirementID,
 		RuntimeInputs: append([]string(nil), config.RuntimeInputs...), RuntimeInputIDs: append([]string(nil), config.RuntimeInputIDs...),
 		ProtectedPaths:   []string{filepath.Join(a.home, ".acs"), filepath.Join(a.home, ".codex"), filepath.Join(a.home, ".local", "share", "devin", "credentials.toml")},
 		ProtectedPathIDs: []string{"acs-private", "codex-private", "devin-credential"}, Semantics: authority.CodexSemantics(),

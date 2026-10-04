@@ -63,7 +63,7 @@ jobs:
           retention-days: 1
 
   native:
-    name: Native ${{ matrix.target }}
+    name: Native ${{ matrix.target }} target ${{ matrix.codex_version }}
     needs: candidate
     strategy:
       fail-fast: false
@@ -74,6 +74,13 @@ jobs:
             os: darwin
             arch: arm64
             sandbox_backend: available
+            codex_version: "0.149.1"
+          - target: darwin/arm64
+            runner: macos-26
+            os: darwin
+            arch: arm64
+            sandbox_backend: available
+            codex_version: "0.156.0"
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 20
 
@@ -132,13 +139,14 @@ jobs:
       - name: Install verified matching authentication target
         shell: bash
         run: |
-          target_root="${RUNNER_TEMP}/codex-target-${{ matrix.os }}-${{ matrix.arch }}"
+          target_root="${RUNNER_TEMP}/codex-target-${{ matrix.os }}-${{ matrix.arch }}-${{ matrix.codex_version }}"
           mkdir -p "$target_root/bin"
           scripts/install-codex-test-target.sh \
             scripts/codex-test-targets.lock \
             dist/codex-test-targets \
             "${{ matrix.arch }}" \
-            "$target_root/bin/codex"
+            "$target_root/bin/codex" \
+            "${{ matrix.codex_version }}"
 
       - name: Install checksum locked Devin rules target
         shell: bash
@@ -158,20 +166,21 @@ jobs:
           scripts/run-native-candidate-gates.sh \
             "$ACS_CANDIDATE_VERSION" \
             "${RUNNER_TEMP}/acs-promoted-${{ matrix.os }}-${{ matrix.arch }}/bin/acs" \
-            "${RUNNER_TEMP}/codex-target-${{ matrix.os }}-${{ matrix.arch }}/bin/codex" \
-            "${GITHUB_WORKSPACE}/dist/codex-test-targets/codex_0.149.1_${{ matrix.os }}_${{ matrix.arch }}.tar.gz" \
-            "${RUNNER_TEMP}/acs-native-auth-recovery" \
+            "${RUNNER_TEMP}/codex-target-${{ matrix.os }}-${{ matrix.arch }}-${{ matrix.codex_version }}/bin/codex" \
+            "${GITHUB_WORKSPACE}/dist/codex-test-targets/codex_${{ matrix.codex_version }}_${{ matrix.os }}_${{ matrix.arch }}.tar.gz" \
+            "${RUNNER_TEMP}/acs-native-auth-recovery-${{ matrix.codex_version }}" \
             "${{ matrix.sandbox_backend }}"
 
+      # Extension/plugin discovery is a separate experiment pinned to the old target.
       - name: Run opt-in installed extension discovery assessment
-        if: ${{ !cancelled() && steps.baseline.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.baseline.outcome == 'success' && matrix.codex_version == '0.149.1' }}
         env:
           ACS_RUN_NATIVE_EXTENSION_DISCOVERY: "1"
           ACS_PROMOTED_VERSION: ${{ env.ACS_CANDIDATE_VERSION }}
           ACS_PROMOTED_BINARY: ${{ runner.temp }}/acs-promoted-${{ matrix.os }}-${{ matrix.arch }}/bin/acs
           ACS_PROMOTED_SANDBOX_BACKEND: ${{ matrix.sandbox_backend }}
-          ACS_TEST_CODEX_BINARY: ${{ runner.temp }}/codex-target-${{ matrix.os }}-${{ matrix.arch }}/bin/codex
-          ACS_TEST_CODEX_ARCHIVE: ${{ github.workspace }}/dist/codex-test-targets/codex_0.149.1_${{ matrix.os }}_${{ matrix.arch }}.tar.gz
+          ACS_TEST_CODEX_BINARY: ${{ runner.temp }}/codex-target-${{ matrix.os }}-${{ matrix.arch }}-${{ matrix.codex_version }}/bin/codex
+          ACS_TEST_CODEX_ARCHIVE: ${{ github.workspace }}/dist/codex-test-targets/codex_${{ matrix.codex_version }}_${{ matrix.os }}_${{ matrix.arch }}.tar.gz
           ACS_TEST_DEVIN_BINARY: ${{ runner.temp }}/devin-target-${{ matrix.os }}-${{ matrix.arch }}/bin/devin
           ACS_TEST_DEVIN_ARCHIVE: ${{ runner.temp }}/devin-target-${{ matrix.os }}-${{ matrix.arch }}/devin-3000.10.21-darwin-arm64.tar.gz
         shell: bash
@@ -193,9 +202,9 @@ jobs:
           ACS_PROMOTED_VERSION: ${{ env.ACS_CANDIDATE_VERSION }}
           ACS_PROMOTED_BINARY: ${{ runner.temp }}/acs-promoted-${{ matrix.os }}-${{ matrix.arch }}/bin/acs
           ACS_PROMOTED_SANDBOX_BACKEND: ${{ matrix.sandbox_backend }}
-          ACS_NATIVE_AUTH_RECOVERY_ROOT: ${{ runner.temp }}/acs-native-auth-recovery
-          ACS_TEST_CODEX_BINARY: ${{ runner.temp }}/codex-target-${{ matrix.os }}-${{ matrix.arch }}/bin/codex
-          ACS_TEST_CODEX_ARCHIVE: ${{ github.workspace }}/dist/codex-test-targets/codex_0.149.1_${{ matrix.os }}_${{ matrix.arch }}.tar.gz
+          ACS_NATIVE_AUTH_RECOVERY_ROOT: ${{ runner.temp }}/acs-native-auth-recovery-${{ matrix.codex_version }}
+          ACS_TEST_CODEX_BINARY: ${{ runner.temp }}/codex-target-${{ matrix.os }}-${{ matrix.arch }}-${{ matrix.codex_version }}/bin/codex
+          ACS_TEST_CODEX_ARCHIVE: ${{ github.workspace }}/dist/codex-test-targets/codex_${{ matrix.codex_version }}_${{ matrix.os }}_${{ matrix.arch }}.tar.gz
         shell: bash
         run: |
           set -euo pipefail
@@ -287,3 +296,24 @@ jobs:
             printf '%s\n' '- The candidate itself is never rebuilt in this job.'
             printf '%s\n' '- No credentials, account data, target output, Session contents, private paths, generated policy, environment values, or control characters are recorded.'
           } >>"$GITHUB_STEP_SUMMARY"
+
+  native-required:
+    name: Native darwin/arm64
+    needs: [candidate, native]
+    # Keep the required context stable while each reviewed target runs separately.
+    # Inspect unsuccessful dependencies instead of skipping this required check.
+    if: ${{ always() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+
+    steps:
+      - name: Require candidate and all native targets to succeed
+        env:
+          CANDIDATE_RESULT: ${{ needs.candidate.result }}
+          NATIVE_RESULT: ${{ needs.native.result }}
+        shell: bash
+        run: |
+          if [[ "$CANDIDATE_RESULT" != "success" || "$NATIVE_RESULT" != "success" ]]; then
+            printf 'Required native validation failed: candidate=%s native=%s\n' "$CANDIDATE_RESULT" "$NATIVE_RESULT"
+            exit 1
+          fi

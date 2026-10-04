@@ -96,13 +96,13 @@ A source build reports `acs devel` and cannot self-update. See
 
 ## First run
 
-Run from the project you want to inspect. In the builder, choose Create Profile,
-confirm the empty selection and leave Workspace read-only for a minimal run.
-The builder does not start Devin or require an AI account:
+Run from the project you want to inspect. Keep the Review preset, continue
+without target overlays, and choose Create Profile for a minimal read-only run.
+Confirm the empty selection. The builder requires no client or account:
 
 ```sh
 acs doctor --target sandbox
-acs devin create-profile --name first-review
+acs profile create --name first-review
 acs sandbox --profile first-review
 ```
 

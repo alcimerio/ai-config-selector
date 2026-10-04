@@ -26,6 +26,7 @@ The supported runtime is macOS 26 Apple Silicon.
 
 ## Launch and recover
 
+- [Target compatibility](reference/target-compatibility.md): exact reviewed versions and native target locks.
 - [Target conformance](reference/shared-target-conformance.md): Devin/Codex projections and compatibility
 - [Codex](guides/codex.md): interactive launch, named Keychain identities, refresh and quarantine
 - [Generic commands](guides/generic-run.md): literal argv, search paths, descriptors and exits

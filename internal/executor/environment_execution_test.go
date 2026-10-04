@@ -233,7 +233,7 @@ func environmentCodexRegistry(t *testing.T, sandbox launch.ProcessSandbox) (*Cod
 	if err := os.WriteFile(binary, []byte("#!/bin/sh\nexit 0\n"), 0o500); err != nil {
 		t.Fatal(err)
 	}
-	registry.execution = newCodexExecutionRunner(codexLoginConfig{BinaryPath: binary, SupportedVersion: SupportedCodexVersion, SessionsDirectory: sessions, WorkingDirectory: registry.workingDirectory}, sandbox)
+	registry.execution = newCodexExecutionRunner(codexLoginConfig{BinaryPath: binary, SessionsDirectory: sessions, WorkingDirectory: registry.workingDirectory}, sandbox)
 	return registry, sessions, binary
 }
 

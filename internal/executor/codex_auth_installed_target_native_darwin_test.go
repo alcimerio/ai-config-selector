@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/alcimerio/ai-config-selector/internal/authority"
+	"github.com/alcimerio/ai-config-selector/internal/codexcompat"
 	"github.com/alcimerio/ai-config-selector/internal/launch"
 	"github.com/creack/pty"
 )
@@ -27,7 +28,7 @@ func TestNativeInstalledTargetContainedStatusWithoutCredentials(t *testing.T) {
 	if binary == "" || !filepath.IsAbs(binary) {
 		t.Fatal("ACS_TEST_CODEX_BINARY must name the absolute locked target")
 	}
-	if output, err := runInstalledTargetVersion(binary); err != nil || output != "codex-cli "+SupportedCodexVersion {
+	if output, err := runInstalledTargetVersion(binary); err != nil || !codexcompat.AcceptsOutput(output) {
 		t.Fatal("installed target did not report the supported version")
 	}
 
@@ -78,8 +79,7 @@ func TestNativeInstalledTargetContainedStatusWithoutCredentials(t *testing.T) {
 	registry.workingDirectory = workspace
 	registryTestResources(registry).quarantine = newFileBindingQuarantine(filepath.Join(privateRoot, "quarantine"))
 	registry.status = newCodexStatusRunner(codexLoginConfig{
-		BinaryPath: binary, SupportedVersion: SupportedCodexVersion,
-		SessionsDirectory: registry.sessionsDirectory, WorkingDirectory: workspace, PrivateRoot: privateRoot,
+		BinaryPath: binary, SessionsDirectory: registry.sessionsDirectory, WorkingDirectory: workspace, PrivateRoot: privateRoot,
 	}, launch.NewProcessSandbox())
 
 	status, err := registry.Status(context.Background(), string(name))
@@ -117,7 +117,7 @@ func TestNativeDirectInstalledTargetInteractiveLifecycle(t *testing.T) {
 	if binary == "" || !filepath.IsAbs(binary) {
 		t.Fatal("ACS_TEST_CODEX_BINARY must name the absolute locked target")
 	}
-	if output, err := runInstalledTargetVersion(binary); err != nil || output != "codex-cli "+SupportedCodexVersion {
+	if output, err := runInstalledTargetVersion(binary); err != nil || !codexcompat.AcceptsOutput(output) {
 		t.Fatal("installed target did not report the supported version")
 	}
 
@@ -145,8 +145,7 @@ func TestNativeDirectInstalledTargetInteractiveLifecycle(t *testing.T) {
 	registry.workingDirectory = workspace
 	registryTestResources(registry).quarantine = newFileBindingQuarantine(filepath.Join(privateRoot, "quarantine"))
 	registry.execution = newCodexExecutionRunner(codexLoginConfig{
-		BinaryPath: binary, SupportedVersion: SupportedCodexVersion,
-		SessionsDirectory: registry.sessionsDirectory, WorkingDirectory: workspace, PrivateRoot: privateRoot,
+		BinaryPath: binary, SessionsDirectory: registry.sessionsDirectory, WorkingDirectory: workspace, PrivateRoot: privateRoot,
 	}, launch.NewProcessSandbox())
 	plan := authority.New(nil, launch.WorkspaceAccessReadOnly, 3, "codex", authority.TargetRequirements{
 		Recipe: authority.RecipeCodex, Executable: binary,
