@@ -180,7 +180,7 @@ func TestInteractiveCodexTerminationAfterVersionCannotStartAttachedTarget(t *tes
 		}
 		time.Sleep(50 * time.Millisecond)
 	}}}
-	registry.execution = newCodexExecutionRunner(codexLoginConfig{BinaryPath: binary, SupportedVersion: SupportedCodexVersion, SessionsDirectory: sessionsDirectory, WorkingDirectory: registry.workingDirectory}, sandbox)
+	registry.execution = newCodexExecutionRunner(codexLoginConfig{BinaryPath: binary, SessionsDirectory: sessionsDirectory, WorkingDirectory: registry.workingDirectory}, sandbox)
 	plan := authority.New(nil, launch.WorkspaceAccessReadOnly, 3, "codex", authority.TargetRequirements{Recipe: authority.RecipeCodex, Executable: binary}).WithAuthRef("work")
 	if code, err := registry.ExecuteCodex(context.Background(), CodexRequest{ResolvedPlan: &plan}); code != 1 || !errors.Is(err, ErrCodexFailed) {
 		t.Fatalf("canceled execution = (%d, %v)", code, err)
@@ -215,7 +215,7 @@ func TestInteractiveCodexReplaysTerminationAcceptedDuringAttachedPreparation(t *
 		}
 		time.Sleep(50 * time.Millisecond)
 	}}}
-	registry.execution = newCodexExecutionRunner(codexLoginConfig{BinaryPath: binary, SupportedVersion: SupportedCodexVersion, SessionsDirectory: sessionsDirectory, WorkingDirectory: registry.workingDirectory}, sandbox)
+	registry.execution = newCodexExecutionRunner(codexLoginConfig{BinaryPath: binary, SessionsDirectory: sessionsDirectory, WorkingDirectory: registry.workingDirectory}, sandbox)
 	plan := authority.New(nil, launch.WorkspaceAccessReadOnly, 3, "codex", authority.TargetRequirements{Recipe: authority.RecipeCodex, Executable: binary}).WithAuthRef("work")
 	if code, err := registry.ExecuteCodex(context.Background(), CodexRequest{ResolvedPlan: &plan}); code != 0 || err != nil {
 		t.Fatalf("signaled attached execution = (%d, %v)", code, err)
@@ -254,7 +254,7 @@ func TestInteractiveCodexResizeDuringStartCannotDisplaceTermination(t *testing.T
 			time.Sleep(50 * time.Millisecond)
 		}
 	}}}
-	registry.execution = newCodexExecutionRunner(codexLoginConfig{BinaryPath: binary, SupportedVersion: SupportedCodexVersion, SessionsDirectory: sessionsDirectory, WorkingDirectory: registry.workingDirectory}, sandbox)
+	registry.execution = newCodexExecutionRunner(codexLoginConfig{BinaryPath: binary, SessionsDirectory: sessionsDirectory, WorkingDirectory: registry.workingDirectory}, sandbox)
 	plan := authority.New(nil, launch.WorkspaceAccessReadOnly, 3, "codex", authority.TargetRequirements{Recipe: authority.RecipeCodex, Executable: binary}).WithAuthRef("work")
 	if code, err := registry.ExecuteCodex(context.Background(), CodexRequest{ResolvedPlan: &plan}); code != 0 || err != nil {
 		t.Fatalf("signaled Start execution = (%d, %v)", code, err)
@@ -338,7 +338,7 @@ func TestInteractiveCodexProjectsExclusiveAuthBeforeSelectedSkills(t *testing.T)
 		entries, _ := filepath.Glob(filepath.Join(sessionsDirectory, "session-*", "home", ".codex", "skills", "shared-agents", "proof", "SKILL.md"))
 		observedSkill = len(entries) == 1
 	}}}
-	registry.execution = newCodexExecutionRunner(codexLoginConfig{BinaryPath: binary, SupportedVersion: SupportedCodexVersion, SessionsDirectory: sessionsDirectory, WorkingDirectory: registry.workingDirectory}, sandbox)
+	registry.execution = newCodexExecutionRunner(codexLoginConfig{BinaryPath: binary, SessionsDirectory: sessionsDirectory, WorkingDirectory: registry.workingDirectory}, sandbox)
 	plan := authority.New([]authority.Contribution{{ID: "strict-codex-skill", Value: strictCodexSkillMaterializer{observedAuth: &observedAuth}}}, launch.WorkspaceAccessReadOnly, 3, "codex", authority.TargetRequirements{Recipe: authority.RecipeCodex, Executable: binary}).WithAuthRef("work")
 	if code, err := registry.ExecuteCodex(context.Background(), CodexRequest{ResolvedPlan: &plan}); code != 0 || err != nil {
 		t.Fatalf("execution = (%d, %v)", code, err)
@@ -359,7 +359,7 @@ func TestInteractiveCodexMaterializationFailureCleansProjectedAuthBeforeRelease(
 	}
 	observedAuth := false
 	sandbox := &executionSandbox{version: SupportedCodexVersion}
-	registry.execution = newCodexExecutionRunner(codexLoginConfig{BinaryPath: binary, SupportedVersion: SupportedCodexVersion, SessionsDirectory: sessionsDirectory, WorkingDirectory: registry.workingDirectory}, sandbox)
+	registry.execution = newCodexExecutionRunner(codexLoginConfig{BinaryPath: binary, SessionsDirectory: sessionsDirectory, WorkingDirectory: registry.workingDirectory}, sandbox)
 	plan := authority.New([]authority.Contribution{{ID: "failing-codex-skill", Value: strictCodexSkillMaterializer{observedAuth: &observedAuth, failure: errors.New("materialization failure")}}}, launch.WorkspaceAccessReadOnly, 3, "codex", authority.TargetRequirements{Recipe: authority.RecipeCodex, Executable: binary}).WithAuthRef("work")
 	if code, err := registry.ExecuteCodex(context.Background(), CodexRequest{ResolvedPlan: &plan}); code != 1 || !errors.Is(err, ErrCodexFailed) {
 		t.Fatalf("execution = (%d, %v)", code, err)
@@ -400,57 +400,62 @@ func (materializer projectedVerificationMaterializer) Verify(_ context.Context, 
 }
 
 func TestInteractiveCodexBindsOneIdentityBeforeSessionAndUsesFixedRecipe(t *testing.T) {
-	auth := testChatGPTAuthJSON(t, "user", "workspace")
-	registry, provider, _, sessionsDirectory := newBindingTestRegistry(t, "work", auth)
-	root := filepath.Dir(sessionsDirectory)
-	binary := filepath.Join(root, "codex")
-	if err := os.WriteFile(binary, []byte("#!/bin/sh\nexit 0\n"), 0o500); err != nil {
-		t.Fatal(err)
-	}
-	var projectedConfig string
-	sandbox := &fakeLoginSandbox{version: SupportedCodexVersion, prepareHook: func(request launch.ProcessRequest) {
-		contents, err := os.ReadFile(filepath.Join(request.SessionHome, ".codex", "config.toml"))
-		if err != nil {
-			t.Fatal(err)
-		}
-		projectedConfig = string(contents)
-	}}
-	config := codexLoginConfig{BinaryPath: binary, SupportedVersion: SupportedCodexVersion, SessionsDirectory: sessionsDirectory, WorkingDirectory: registry.workingDirectory, PrivateRoot: filepath.Join(root, "private")}
-	if err := os.MkdirAll(config.PrivateRoot, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	registry.execution = newCodexExecutionRunner(config, sandbox)
-	plan := authority.New([]authority.Contribution{{ID: "test", Value: executionMaterializer{}}}, launch.WorkspaceAccessReadOnly, 3, "codex", authority.TargetRequirements{Recipe: authority.RecipeCodex, Executable: binary}).WithAuthRef("work")
-	exitCode, err := registry.ExecuteCodex(context.Background(), CodexRequest{ResolvedPlan: &plan})
-	if err != nil || exitCode != 0 {
-		t.Fatalf("execution = (%d, %v)", exitCode, err)
-	}
-	if len(sandbox.requests) != 2 {
-		t.Fatalf("prepared processes = %d, want version plus interactive", len(sandbox.requests))
-	}
-	for _, request := range sandbox.requests {
-		if request.WorkspaceAccess != launch.WorkspaceAccessReadOnly {
-			t.Fatalf("workspace access = %q", request.WorkspaceAccess)
-		}
-		joined := strings.Join(request.Arguments, " ")
-		if strings.Contains(joined, "features.shell_snapshot=false") {
-			t.Fatal("Codex without selected environment unexpectedly disabled shell snapshots")
-		}
-		for _, required := range []string{`cli_auth_credentials_store="file"`, `forced_login_method="chatgpt"`, `forced_chatgpt_workspace_id="workspace"`, `model_provider="openai"`, `chatgpt_base_url="https://chatgpt.com/backend-api/"`, `sandbox_mode="danger-full-access"`, `approval_policy="never"`, `trust_level="untrusted"`, `features.plugins=false`, `features.apps=false`, `mcp_servers={}`} {
-			if !strings.Contains(joined, required) {
-				t.Fatalf("arguments omit %q: %#v", required, request.Arguments)
+	for _, version := range []string{"0.149.1", "0.156.0"} {
+		t.Run(version, func(t *testing.T) {
+			auth := testChatGPTAuthJSON(t, "user", "workspace")
+			registry, provider, _, sessionsDirectory := newBindingTestRegistry(t, "work", auth)
+			root := filepath.Dir(sessionsDirectory)
+			binary := filepath.Join(root, "codex")
+			if err := os.WriteFile(binary, []byte("#!/bin/sh\nexit 0\n"), 0o500); err != nil {
+				t.Fatal(err)
 			}
-		}
+			var projectedConfig string
+			sandbox := &fakeLoginSandbox{version: version, prepareHook: func(request launch.ProcessRequest) {
+				contents, err := os.ReadFile(filepath.Join(request.SessionHome, ".codex", "config.toml"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				projectedConfig = string(contents)
+			}}
+			config := codexLoginConfig{BinaryPath: binary, SessionsDirectory: sessionsDirectory, WorkingDirectory: registry.workingDirectory, PrivateRoot: filepath.Join(root, "private")}
+			if err := os.MkdirAll(config.PrivateRoot, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			registry.execution = newCodexExecutionRunner(config, sandbox)
+			plan := authority.New([]authority.Contribution{{ID: "test", Value: executionMaterializer{}}}, launch.WorkspaceAccessReadOnly, 3, "codex", authority.TargetRequirements{Recipe: authority.RecipeCodex, Executable: binary}).WithAuthRef("work")
+			exitCode, err := registry.ExecuteCodex(context.Background(), CodexRequest{ResolvedPlan: &plan})
+			if err != nil || exitCode != 0 {
+				t.Fatalf("execution = (%d, %v)", exitCode, err)
+			}
+			if len(sandbox.requests) != 2 {
+				t.Fatalf("prepared processes = %d, want version plus interactive", len(sandbox.requests))
+			}
+			for _, request := range sandbox.requests {
+				if request.WorkspaceAccess != launch.WorkspaceAccessReadOnly {
+					t.Fatalf("workspace access = %q", request.WorkspaceAccess)
+				}
+				joined := strings.Join(request.Arguments, " ")
+				if strings.Contains(joined, "features.shell_snapshot=false") {
+					t.Fatal("Codex without selected environment unexpectedly disabled shell snapshots")
+				}
+				for _, required := range []string{`cli_auth_credentials_store="file"`, `forced_login_method="chatgpt"`, `forced_chatgpt_workspace_id="workspace"`, `model_provider="openai"`, `chatgpt_base_url="https://chatgpt.com/backend-api/"`, `sandbox_mode="danger-full-access"`, `approval_policy="never"`, `trust_level="untrusted"`, `features.plugins=false`, `features.apps=false`, `mcp_servers={}`} {
+					if !strings.Contains(joined, required) {
+						t.Fatalf("arguments omit %q: %#v", required, request.Arguments)
+					}
+				}
+			}
+			for _, required := range []string{`chatgpt_base_url = "https://chatgpt.com/backend-api/"`, `sandbox_mode = "danger-full-access"`, `approval_policy = "never"`, `mcp_servers = {}`, `[features]`, `plugins = false`, `apps = false`, `[projects."` + filepath.Clean(registry.workingDirectory) + `"]`, `trust_level = "untrusted"`} {
+				if !strings.Contains(projectedConfig, required) {
+					t.Fatalf("Session config omits %q: %s", required, projectedConfig)
+				}
+			}
+			if got := provider.records["work"].Auth; !reflect.DeepEqual(got, auth) || provider.replaceCalls != 0 {
+				t.Fatalf("unchanged target replaced identity: replacements=%d auth=%q", provider.replaceCalls, got)
+			}
+			assertNoSessionDirectories(t, sessionsDirectory)
+
+		})
 	}
-	for _, required := range []string{`chatgpt_base_url = "https://chatgpt.com/backend-api/"`, `sandbox_mode = "danger-full-access"`, `approval_policy = "never"`, `mcp_servers = {}`, `[features]`, `plugins = false`, `apps = false`, `[projects."` + filepath.Clean(registry.workingDirectory) + `"]`, `trust_level = "untrusted"`} {
-		if !strings.Contains(projectedConfig, required) {
-			t.Fatalf("Session config omits %q: %s", required, projectedConfig)
-		}
-	}
-	if got := provider.records["work"].Auth; !reflect.DeepEqual(got, auth) || provider.replaceCalls != 0 {
-		t.Fatalf("unchanged target replaced identity: replacements=%d auth=%q", provider.replaceCalls, got)
-	}
-	assertNoSessionDirectories(t, sessionsDirectory)
 }
 
 func TestInteractiveCodexFailsBeforeExecutableAndSessionForMissingIdentity(t *testing.T) {
@@ -459,7 +464,7 @@ func TestInteractiveCodexFailsBeforeExecutableAndSessionForMissingIdentity(t *te
 	if err := provider.Delete(context.Background(), "work"); err != nil {
 		t.Fatal(err)
 	}
-	registry.execution = newCodexExecutionRunner(codexLoginConfig{BinaryPath: "/missing/codex", SupportedVersion: SupportedCodexVersion, SessionsDirectory: sessionsDirectory, WorkingDirectory: registry.workingDirectory}, &fakeLoginSandbox{})
+	registry.execution = newCodexExecutionRunner(codexLoginConfig{BinaryPath: "/missing/codex", SessionsDirectory: sessionsDirectory, WorkingDirectory: registry.workingDirectory}, &fakeLoginSandbox{})
 	home, err := os.UserHomeDir()
 	if err != nil {
 		t.Fatal(err)
@@ -497,7 +502,7 @@ func TestInteractiveCodexUsesResolvedAuthorityInsteadOfRunnerScalarInputs(t *tes
 		}
 		observedExecutableContents = append(observedExecutableContents, string(contents))
 	}}
-	registry.execution = newCodexExecutionRunner(codexLoginConfig{BinaryPath: "/stale/scalar/codex", RuntimeInputs: []string{"/stale/scalar/runtime"}, SupportedVersion: SupportedCodexVersion, SessionsDirectory: sessionsDirectory, WorkingDirectory: registry.workingDirectory}, sandbox)
+	registry.execution = newCodexExecutionRunner(codexLoginConfig{BinaryPath: "/stale/scalar/codex", RuntimeInputs: []string{"/stale/scalar/runtime"}, SessionsDirectory: sessionsDirectory, WorkingDirectory: registry.workingDirectory}, sandbox)
 	root := filepath.Dir(sessionsDirectory)
 	binary := filepath.Join(root, "resolved-codex")
 	if err := os.WriteFile(binary, []byte("target"), 0o500); err != nil {
@@ -579,8 +584,7 @@ func TestInteractiveCodexResolvesBareExecutableBeforeProtectingWritableGrants(t 
 				preparedExecutables = append(preparedExecutables, request.Executable)
 			}}
 			registry.execution = newCodexExecutionRunner(codexLoginConfig{
-				BinaryPath: "stale-runner-value", SupportedVersion: SupportedCodexVersion,
-				SessionsDirectory: sessionsDirectory, WorkingDirectory: registry.workingDirectory,
+				BinaryPath: "stale-runner-value", SessionsDirectory: sessionsDirectory, WorkingDirectory: registry.workingDirectory,
 			}, sandbox)
 			materializer := executionPathGrantMaterializer{intents: []launch.PathGrantIntent{{
 				ID: "selected", Access: launch.PathAccessReadWrite, Type: test.pathType,
@@ -633,7 +637,7 @@ func TestInteractiveCodexResolvesBareExecutableBeforeProtectingWritableGrants(t 
 		registry, _, _, sessionsDirectory := newBindingTestRegistry(t, "work", testChatGPTAuthJSON(t, "user", "workspace"))
 		sandbox := &fakeLoginSandbox{version: SupportedCodexVersion}
 		runner := newCodexExecutionRunner(codexLoginConfig{
-			SupportedVersion: SupportedCodexVersion, SessionsDirectory: sessionsDirectory, WorkingDirectory: registry.workingDirectory,
+			SessionsDirectory: sessionsDirectory, WorkingDirectory: registry.workingDirectory,
 		}, sandbox)
 		runner.beforeSnapshotHook = func() {
 			if err := os.Remove(targetA); err != nil {
@@ -664,7 +668,7 @@ func TestInteractiveCodexResolvesBareExecutableBeforeProtectingWritableGrants(t 
 
 	registry, _, _, sessionsDirectory := newBindingTestRegistry(t, "work", testChatGPTAuthJSON(t, "user", "workspace"))
 	sandbox := &fakeLoginSandbox{version: SupportedCodexVersion}
-	registry.execution = newCodexExecutionRunner(codexLoginConfig{SupportedVersion: SupportedCodexVersion, SessionsDirectory: sessionsDirectory, WorkingDirectory: registry.workingDirectory}, sandbox)
+	registry.execution = newCodexExecutionRunner(codexLoginConfig{SessionsDirectory: sessionsDirectory, WorkingDirectory: registry.workingDirectory}, sandbox)
 	materializer := executionPathGrantMaterializer{intents: []launch.PathGrantIntent{{
 		ID: "selected", Access: launch.PathAccessReadWrite, Type: launch.PathTypeFile,
 		ReferenceKind: launch.PathReferenceLocalAbsolute, Path: filepath.Join(root, "selected"),
@@ -693,7 +697,7 @@ func TestInteractiveCodexCarriesExecutableGrantThroughVersionAndAttachedGenerati
 		t.Fatal(err)
 	}
 	sandbox := &fakeLoginSandbox{version: SupportedCodexVersion}
-	registry.execution = newCodexExecutionRunner(codexLoginConfig{BinaryPath: binary, SupportedVersion: SupportedCodexVersion, SessionsDirectory: sessionsDirectory, WorkingDirectory: registry.workingDirectory}, sandbox)
+	registry.execution = newCodexExecutionRunner(codexLoginConfig{BinaryPath: binary, SessionsDirectory: sessionsDirectory, WorkingDirectory: registry.workingDirectory}, sandbox)
 	contribution := authorityTestExecutableContribution{intents: []launch.ExecutableGrantIntent{{ID: "helper", ReferenceKind: launch.ExecutableReferenceWorkspaceRelative, Path: "bin/helper"}}}
 	plan := authority.New([]authority.Contribution{{ID: "executables", Value: contribution}}, launch.WorkspaceAccessReadOnly, 3, "codex", authority.TargetRequirements{Recipe: authority.RecipeCodex, Executable: binary, Semantics: authority.CodexSemantics()}).WithAuthRef("work")
 	if code, err := registry.ExecuteCodex(context.Background(), CodexRequest{ResolvedPlan: &plan}); err != nil || code != 0 {
@@ -719,7 +723,7 @@ func TestInteractiveCodexRunsRegisteredVerificationBeforeAnyTargetProcess(t *tes
 		t.Fatal(err)
 	}
 	sandbox := &executionSandbox{version: SupportedCodexVersion}
-	registry.execution = newCodexExecutionRunner(codexLoginConfig{BinaryPath: binary, SupportedVersion: SupportedCodexVersion, SessionsDirectory: sessionsDirectory, WorkingDirectory: registry.workingDirectory}, sandbox)
+	registry.execution = newCodexExecutionRunner(codexLoginConfig{BinaryPath: binary, SessionsDirectory: sessionsDirectory, WorkingDirectory: registry.workingDirectory}, sandbox)
 	verified := false
 	plan := authority.New([]authority.Contribution{{ID: "rejecting", Value: projectedVerificationMaterializer{verified: &verified}}}, launch.WorkspaceAccessReadOnly, 3, "codex", authority.TargetRequirements{Recipe: authority.RecipeCodex, Executable: binary}).WithAuthRef("work")
 	if code, err := registry.ExecuteCodex(context.Background(), CodexRequest{ResolvedPlan: &plan}); code != 1 || !errors.Is(err, ErrCodexFailed) {
@@ -753,7 +757,7 @@ func TestInteractiveCodexCommitsOnlySuccessfulSameIdentityRefresh(t *testing.T) 
 	sandbox := &executionSandbox{version: SupportedCodexVersion, mutate: func(home string) error {
 		return os.WriteFile(filepath.Join(home, ".codex", "auth.json"), refreshed, 0o600)
 	}}
-	registry.execution = newCodexExecutionRunner(codexLoginConfig{BinaryPath: binary, SupportedVersion: SupportedCodexVersion, SessionsDirectory: sessionsDirectory, WorkingDirectory: registry.workingDirectory}, sandbox)
+	registry.execution = newCodexExecutionRunner(codexLoginConfig{BinaryPath: binary, SessionsDirectory: sessionsDirectory, WorkingDirectory: registry.workingDirectory}, sandbox)
 	plan := authority.New(nil, launch.WorkspaceAccessReadWrite, 3, "codex", authority.TargetRequirements{Recipe: authority.RecipeCodex, Executable: binary}).WithAuthRef("work")
 	if code, err := registry.ExecuteCodex(context.Background(), CodexRequest{ResolvedPlan: &plan}); err != nil || code != 0 {
 		t.Fatalf("execution = (%d, %v)", code, err)
@@ -788,7 +792,7 @@ func TestInteractiveCodexFailedRunCannotReplaceIdentityAndFailedStartIsNotWaited
 			sandbox := &executionSandbox{version: SupportedCodexVersion, starts: []error{nil, test.startErr}, waits: []error{nil, test.waitErr}, mutate: func(home string) error {
 				return os.WriteFile(filepath.Join(home, ".codex", "auth.json"), changed, 0o600)
 			}}
-			registry.execution = newCodexExecutionRunner(codexLoginConfig{BinaryPath: binary, SupportedVersion: SupportedCodexVersion, SessionsDirectory: sessionsDirectory, WorkingDirectory: registry.workingDirectory}, sandbox)
+			registry.execution = newCodexExecutionRunner(codexLoginConfig{BinaryPath: binary, SessionsDirectory: sessionsDirectory, WorkingDirectory: registry.workingDirectory}, sandbox)
 			plan := authority.New(nil, launch.WorkspaceAccessReadWrite, 3, "codex", authority.TargetRequirements{Recipe: authority.RecipeCodex, Executable: binary}).WithAuthRef("work")
 			if code, err := registry.ExecuteCodex(context.Background(), CodexRequest{ResolvedPlan: &plan}); err == nil || code == 0 {
 				t.Fatalf("failed execution = (%d, %v)", code, err)
@@ -812,7 +816,7 @@ func TestInteractiveCodexRejectsOverflowingVersionBeforeInteractiveProcess(t *te
 		t.Fatal(err)
 	}
 	sandbox := &executionSandbox{version: strings.Repeat("x", maximumVersionOutputSize+1)}
-	registry.execution = newCodexExecutionRunner(codexLoginConfig{BinaryPath: binary, SupportedVersion: SupportedCodexVersion, SessionsDirectory: sessionsDirectory, WorkingDirectory: registry.workingDirectory}, sandbox)
+	registry.execution = newCodexExecutionRunner(codexLoginConfig{BinaryPath: binary, SessionsDirectory: sessionsDirectory, WorkingDirectory: registry.workingDirectory}, sandbox)
 	plan := authority.New(nil, launch.WorkspaceAccessReadOnly, 3, "codex", authority.TargetRequirements{Recipe: authority.RecipeCodex, Executable: binary}).WithAuthRef("work")
 	if code, err := registry.ExecuteCodex(context.Background(), CodexRequest{ResolvedPlan: &plan}); code != 1 || !errors.Is(err, ErrUnsupportedVersion) {
 		t.Fatalf("execution = (%d, %v)", code, err)

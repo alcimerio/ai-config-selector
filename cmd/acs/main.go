@@ -182,7 +182,6 @@ func main() {
 	sessionsDirectory := filepath.Join(acsHome, "sessions")
 	codexAuth, err := codexauth.New(codexauth.Config{
 		BinaryPath:        "codex",
-		SupportedVersion:  codexauth.SupportedCodexVersion,
 		ACSHome:           acsHome,
 		SessionsDirectory: sessionsDirectory,
 		WorkingDirectory:  workingDirectory,

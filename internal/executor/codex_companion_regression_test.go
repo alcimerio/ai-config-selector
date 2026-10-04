@@ -261,7 +261,7 @@ func TestCodexCompanionPreparedAuthorityUsesOnlyPrivateSibling(t *testing.T) {
 					t.Fatalf("process runtime authority=%q want=%q", request.RuntimeInputs, expected)
 				}
 			}}
-			registry.execution = newCodexExecutionRunner(codexLoginConfig{BinaryPath: cli, SupportedVersion: SupportedCodexVersion, SessionsDirectory: sessions, WorkingDirectory: registry.workingDirectory}, sandbox)
+			registry.execution = newCodexExecutionRunner(codexLoginConfig{BinaryPath: cli, SessionsDirectory: sessions, WorkingDirectory: registry.workingDirectory}, sandbox)
 			inputs := []string{supplied}
 			plan := authority.New(nil, launch.WorkspaceAccessReadOnly, 3, "codex", authority.TargetRequirements{Recipe: authority.RecipeCodex, Executable: cli, RuntimeInputs: inputs}).WithAuthRef("work")
 			code, err := registry.ExecuteCodex(context.Background(), CodexRequest{ResolvedPlan: &plan})

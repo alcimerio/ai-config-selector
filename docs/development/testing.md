@@ -32,9 +32,10 @@ native checks; they establish neither Linux runtime support nor containment.
 
 ## Native named-authentication evidence
 
-The promoted-artifact workflow fetches the official `codex-cli 0.149.1` Apple
-Silicon archive once, verifies its reviewed SHA-256 lock and installs it on
-macOS 26. Credential-free native tests use real Seatbelt, a disposable Keychain
+The promoted-artifact workflow fetches both [reviewed target pairs](../reference/target-compatibility.md)
+once, verifies their SHA-256 locks and installs each CLI with its matching sibling
+on macOS 26. The native matrix tests each exact version against the same supplied
+ACS candidate. Credential-free native tests use real Seatbelt, a disposable Keychain
 and synthetic home, without account credentials or captured private content.
 
 For a local run:

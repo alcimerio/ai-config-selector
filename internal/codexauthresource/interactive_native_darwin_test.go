@@ -7,12 +7,21 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
+	"math/big"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -32,6 +41,7 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/alcimerio/ai-config-selector/internal/codexauthresource"
+	"github.com/alcimerio/ai-config-selector/internal/codexcompat"
 	"github.com/creack/pty"
 )
 
@@ -62,7 +72,7 @@ func runNativeInstalledACSLockedCodexFixtureWithAgent(t *testing.T, agentPresent
 	assertLockedCodexIdentity(t, archive, target)
 	// The separately locked companion is a sibling in the official installation.
 	hostTarget := filepath.Join(filepath.Dir(target), "codex-code-mode-host")
-	hostArchive := filepath.Join(filepath.Dir(archive), "codex_code_mode_host_0.149.1_darwin_arm64.tar.gz")
+	hostArchive := filepath.Join(filepath.Dir(archive), strings.Replace(filepath.Base(archive), "codex_", "codex_code_mode_host_", 1))
 	assertLockedCodexHostIdentity(t, hostArchive, hostTarget)
 	defer assertLockedCodexHostIdentity(t, hostArchive, hostTarget)
 	codexauthresource.UseIsolatedTestKeychainForComposition(t)
@@ -159,7 +169,7 @@ func runNativeInstalledACSLockedCodexFixtureWithAgent(t *testing.T, agentPresent
 		fixture.descendantReady = pathFixture.descendantReady
 		defer fixture.server.Close()
 		trampoline := filepath.Join(tools, "codex")
-		buildFixedCodexTrampoline(t, grantedTarget, fixture.server.URL+"/backend-api", trampoline)
+		fixture.buildTrampoline(t, grantedTarget, trampoline)
 		t.Logf("path-grant harness executable sha256=%s; locked target member sha256=%s", fileSHA256(t, trampoline), fileSHA256(t, grantedTarget))
 		runInstalledCodexPTY(t, candidate, home, tools, workspace, "path-grants", fixture, false)
 		descendantPID := fixture.assert(t, true)
@@ -179,7 +189,7 @@ func runNativeInstalledACSLockedCodexFixtureWithAgent(t *testing.T, agentPresent
 			interactiveReady:   filepath.Join(workspace, ".acs-codex-interactive-ready"),
 			interactiveRelease: filepath.Join(workspace, ".acs-codex-interactive-release"),
 		}
-		buildFixedCodexTrampoline(t, grantedTarget, fixture.server.URL+"/backend-api", filepath.Join(tools, "codex"), coordination)
+		fixture.buildTrampoline(t, grantedTarget, filepath.Join(tools, "codex"), coordination)
 		fixture.coordination = &coordination
 		runInstalledCodexPTY(t, candidate, home, tools, workspace, "coding", fixture, false)
 		fixture.assert(t, false)
@@ -211,7 +221,7 @@ func runNativeInstalledACSLockedCodexFixtureWithAgent(t *testing.T, agentPresent
 			expectEnvironment:  true,
 		}
 		defer fixture.server.Close()
-		buildFixedCodexTrampoline(t, grantedTarget, fixture.server.URL+"/backend-api", filepath.Join(tools, "codex"), *fixture.coordination)
+		fixture.buildTrampoline(t, grantedTarget, filepath.Join(tools, "codex"), *fixture.coordination)
 		runInstalledCodexPTY(t, candidate, home, tools, workspace, "environment", fixture, false)
 		fixture.assert(t, false)
 		if contents, err := os.ReadFile(parentMarker); err != nil || string(contents) != "ok" {
@@ -279,7 +289,7 @@ func runNativeInstalledACSLockedCodexFixtureWithAgent(t *testing.T, agentPresent
 			fixture.descendantReady = test.descendantReady
 			defer fixture.server.Close()
 			trampoline := filepath.Join(tools, "codex")
-			buildFixedCodexTrampoline(t, grantedTarget, fixture.server.URL+"/backend-api", trampoline)
+			fixture.buildTrampoline(t, grantedTarget, trampoline)
 			t.Logf("harness executable sha256=%s; locked target member sha256=%s", fileSHA256(t, trampoline), fileSHA256(t, grantedTarget))
 			runInstalledCodexPTY(t, candidate, home, tools, workspace, test.profile, fixture, false)
 			descendantPID := fixture.assert(t, test.wantDescendant)
@@ -301,7 +311,7 @@ func runNativeInstalledACSLockedCodexFixtureWithAgent(t *testing.T, agentPresent
 		fixture := newNativeResponsesFixture(t, "printf codex-native-tool-output"+isolationProbe+nativeControlledDescendantCommand(recoveryDescendantReady), home)
 		fixture.descendantReady = recoveryDescendantReady
 		defer fixture.server.Close()
-		buildFixedCodexTrampoline(t, grantedTarget, fixture.server.URL+"/backend-api", filepath.Join(tools, "codex"))
+		fixture.buildTrampoline(t, grantedTarget, filepath.Join(tools, "codex"))
 		runInstalledCodexPTY(t, candidate, home, tools, workspace, "recovery", fixture, true)
 		descendantPID := fixture.assert(t, true)
 		assertNativeProcessRemoved(t, descendantPID, "Codex tool descendant survived abrupt ACS settlement")
@@ -315,7 +325,7 @@ func runNativeInstalledACSLockedCodexFixtureWithAgent(t *testing.T, agentPresent
 		assertNoNativeSessions(t, filepath.Join(home, ".acs", "sessions"))
 		reuseFixture := newNativeResponsesFixture(t, "printf codex-native-tool-output"+isolationProbe, home)
 		defer reuseFixture.server.Close()
-		buildFixedCodexTrampoline(t, grantedTarget, reuseFixture.server.URL+"/backend-api", filepath.Join(tools, "codex"))
+		reuseFixture.buildTrampoline(t, grantedTarget, filepath.Join(tools, "codex"))
 		runInstalledCodexPTY(t, candidate, home, tools, workspace, "recovery", reuseFixture, false)
 		reuseFixture.assert(t, false)
 		assertNoNativeSessions(t, filepath.Join(home, ".acs", "sessions"))
@@ -343,9 +353,8 @@ func assertNativeCodexPathGrantOutput(t *testing.T, fixture *nativeResponsesFixt
 		fixture.mu.Unlock()
 		t.Fatal("path-grant fixture did not retain the matching tool-result request")
 	}
-	body := fixture.bodies[1]
+	toolOutput, err := fixture.toolOutputLocked()
 	fixture.mu.Unlock()
-	toolOutput, err := nativeFunctionCallOutput(body, "acs-call-1")
 	if err != nil {
 		t.Fatalf("path-grant function-call output: %v", err)
 	}
@@ -618,7 +627,44 @@ func runInstalledCodexPTY(t *testing.T, candidate, home, tools, workspace, profi
 		t.Fatalf("installed ACS or locked target exited before interactive input: %v; terminal-diagnostic=%q", err, terminalDiagnostic)
 	case <-time.After(1500 * time.Millisecond):
 	}
-	if !waitNativeCaptureContainsAfter(&output, 0, "\x1b[1;40r", 10*time.Second) {
+	var restrictedConfigPath string
+	var restrictedConfig []byte
+	if strings.Contains(filepath.Base(os.Getenv("ACS_TEST_CODEX_ARCHIVE")), "0.156.0") {
+		if !waitNativeCaptureContainsAfter(&output, 0, "Open restricted", 30*time.Second) {
+			t.Fatalf("reviewed target did not disclose restricted folder access; loopback=%s; terminal=%q", fixture.summary(), output.BoundedString(16<<10))
+		}
+		if strings.Contains(output.String(), "Trust and continue") {
+			t.Fatal("restricted fixture unexpectedly offered persisted trust")
+		}
+		for _, sessionHome := range nativeSessionHomes(home) {
+			if _, existed := fixture.preexistingHomes[sessionHome]; !existed {
+				if restrictedConfigPath != "" {
+					t.Fatal("restricted fixture has multiple new Session homes")
+				}
+				restrictedConfigPath = filepath.Join(sessionHome, ".codex", "config.toml")
+			}
+		}
+		restrictedConfig, err = os.ReadFile(restrictedConfigPath)
+		if err != nil || !bytes.Contains(restrictedConfig, []byte("untrusted")) {
+			t.Fatal("restricted fixture lacks forced untrusted projection")
+		}
+		// Tagged restricted onboarding never persists trust. Explicit option 1
+		// selects Open restricted; the guard above rejects a trusted alternative.
+		if !waitNativeCaptureStable(&output, 2*time.Second) {
+			t.Fatal("restricted disclosure did not finish its protected activation frame")
+		}
+		if _, err := master.Write([]byte("1")); err != nil {
+			t.Fatal(err)
+		}
+		if !waitNativeCaptureStable(&output, 2*time.Second) {
+			t.Fatal("restricted selection did not settle before confirmation")
+		}
+		if _, err := master.Write([]byte("\x1b[13u")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	initialGeometry, resizedGeometry := "\x1b[1;40r", "\x1b[1;43r"
+	if !waitNativeCaptureContainsAfter(&output, 0, initialGeometry, 10*time.Second) {
 		t.Fatalf("real Codex TUI did not render the initial 40-row terminal geometry; terminal=%q", output.String())
 	}
 	if !waitNativeCaptureStable(&output, 2*time.Second) {
@@ -632,8 +678,8 @@ func runInstalledCodexPTY(t *testing.T, candidate, home, tools, workspace, profi
 	if err != nil || size.Rows != 43 || size.Cols != 117 {
 		t.Fatalf("resized outer PTY geometry=%v err=%v", size, err)
 	}
-	if !waitNativeCaptureContainsAfter(&output, resizeOffset, "\x1b[1;43r", 10*time.Second) {
-		t.Fatalf("real Codex TUI did not render the resized 43-row terminal geometry; terminal=%q", output.String())
+	if !waitNativeCaptureContainsAfter(&output, resizeOffset, resizedGeometry, 10*time.Second) {
+		t.Fatalf("real Codex TUI did not render the resized 43-row terminal geometry; loopback=%s; terminal=%q", fixture.summary(), output.String())
 	}
 	// Emulate a real terminal paste and let Codex's 120ms paste-burst window
 	// settle before sending the separately encoded enhanced Enter key.
@@ -654,14 +700,20 @@ func runInstalledCodexPTY(t *testing.T, candidate, home, tools, workspace, profi
 	case <-time.After(30 * time.Second):
 		diagnostic := fixture.targetMCPDiagnostics(output.String())
 		_ = command.Process.Kill()
-		t.Fatalf("real Codex did not complete the bounded fixture protocol; loopback=%s; target-mcp-diagnostics=%q", fixture.summary(), diagnostic)
+		t.Fatalf("real Codex did not complete the bounded fixture protocol; loopback=%s; target-mcp-diagnostics=%q; terminal-tail=%q", fixture.summary(), diagnostic, output.BoundedString(16<<10))
+	}
+	if restrictedConfigPath != "" {
+		current, err := os.ReadFile(restrictedConfigPath)
+		if err != nil || !bytes.Equal(current, restrictedConfig) {
+			t.Fatal("restricted onboarding changed forced Session configuration or saved trust")
+		}
 	}
 	// A normal exit proves the target rendered the completed assistant turn.
 	// The abrupt-settlement case instead stops ACS immediately after the real
 	// tool exchange and live-descendant proof; waiting for an otherwise
 	// irrelevant repaint makes the kill timing depend on Rosetta throughput.
 	if !crashAfterTool && (!waitNativeCaptureContainsAfter(&output, 0, "fixture-complete", 5*time.Second) || !waitNativeCaptureStable(&output, 5*time.Second)) {
-		t.Fatalf("real Codex did not finish rendering the completed turn; terminal=%q", output.String())
+		t.Fatalf("real Codex did not finish rendering the completed turn; loopback=%s; terminal=%q", fixture.summary(), output.String())
 	}
 	if !crashAfterTool && len(fixture.privateSentinels) > 0 {
 		observationErr := observeNativeSessionProjection(home, fixture.preexistingHomes, fixture.privateSentinels)
@@ -670,6 +722,12 @@ func runInstalledCodexPTY(t *testing.T, candidate, home, tools, workspace, profi
 		fixture.mu.Unlock()
 	}
 	fixture.assertLiveDescendant(t)
+	fixture.mu.Lock()
+	foregroundPID := fixture.liveForegroundPID
+	fixture.mu.Unlock()
+	if foregroundPID != 0 {
+		defer assertNativeProcessRemoved(t, foregroundPID, "running foreground helper survived ACS teardown")
+	}
 	if crashAfterTool {
 		if err := command.Process.Kill(); err != nil {
 			t.Fatalf("abruptly terminate installed ACS after real tool work: %v", err)
@@ -943,6 +1001,7 @@ func (capture *nativeSafeCapture) BoundedString(limit int) string {
 
 type nativeResponsesFixture struct {
 	server                     *httptest.Server
+	caDER                      []byte
 	completed                  chan struct{}
 	mu                         sync.Mutex
 	requests                   int
@@ -958,7 +1017,17 @@ type nativeResponsesFixture struct {
 	preexistingHomes           map[string]struct{}
 	launcherHome               string
 	descendantReady            string
+	shellCodeMode              bool
+	shellCodeSource            string
+	firstResponseThread        string
+	firstResponseTurn          string
+	mainResponseModel          string
+	titleResponseThread        string
+	titleResponseTurn          string
+	titleResponseModel         string
+	modelPOSTs                 int
 	liveDescendantPID          int
+	liveForegroundPID          int
 	coordination               *nativeCodexPhaseCoordination
 	privateSentinels           []string
 	mcpScenario                *nativeMCPResponsesScenario
@@ -985,6 +1054,7 @@ type nativeCodexPhaseCoordination struct {
 	versionCapability                                                  *nativeCodexCapability
 	expectEnvironment                                                  bool
 	requireMCPStartup                                                  bool
+	caPath                                                             string
 }
 
 type nativeCodexCapability struct {
@@ -1086,7 +1156,7 @@ func newNativeResponsesFixture(t *testing.T, shellCommand, launcherHome string) 
 	for _, home := range nativeSessionHomes(launcherHome) {
 		fixture.preexistingHomes[home] = struct{}{}
 	}
-	fixture.server = httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+	fixture.server = httptest.NewUnstartedServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		fixture.mu.Lock()
 		fixture.observations = append(fixture.observations, nativeRequestObservation{
 			method: request.Method, path: request.URL.Path,
@@ -1098,6 +1168,23 @@ func newNativeResponsesFixture(t *testing.T, shellCommand, launcherHome string) 
 		}
 		fixture.mu.Unlock()
 		switch request.URL.Path {
+		case "/backend-api/wham/config/bundle", "/backend-api/wham/accounts/check":
+			t.Logf("workspace bootstrap method=%s path=%s selected-auth=%t selected-account=%t", request.Method, request.URL.Path, request.Header.Get("Authorization") == "Bearer synthetic-access", request.Header.Get("ChatGPT-Account-ID") == "synthetic-workspace")
+			if request.Method != http.MethodGet {
+				fixture.rejectProtocol(response, "workspace bootstrap endpoint used a non-GET method")
+				return
+			}
+			if request.Header.Get("Authorization") != "Bearer synthetic-access" || request.Header.Get("ChatGPT-Account-ID") != "synthetic-workspace" {
+				fixture.rejectProtocol(response, "workspace bootstrap did not retain the exact selected identity")
+				return
+			}
+			response.Header().Set("Content-Type", "application/json")
+			if request.URL.Path == "/backend-api/wham/config/bundle" {
+				_, _ = io.WriteString(response, `{}`) // Official absent requirements shape; no managed constraints.
+			} else {
+				_ = json.NewEncoder(response).Encode(map[string]any{"accounts": []any{map[string]any{"id": "synthetic-workspace", "workspace_backend_origin": fixture.server.URL, "account_routing_override": "NO_CONSTRAINT"}}, "default_account_id": "synthetic-workspace"})
+			}
+			return
 		case "/backend-api/codex/models":
 			if request.Method != http.MethodGet {
 				fixture.rejectProtocol(response, "models endpoint used a non-GET method")
@@ -1122,6 +1209,14 @@ func newNativeResponsesFixture(t *testing.T, shellCommand, launcherHome string) 
 				fixture.rejectProtocol(response, "Responses endpoint used neither WebSocket upgrade nor POST")
 				return
 			}
+		case "/backend-api/accounts/verified_access":
+			if request.Method != http.MethodGet || request.Header.Get("Authorization") != "Bearer synthetic-access" || request.Header.Get("ChatGPT-Account-ID") != "synthetic-workspace" {
+				fixture.rejectProtocol(response, "verified-access request identity or method mismatch")
+				return
+			}
+			response.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(response, `{"programs":[]}`)
+			return
 		case "/backend-api/wham/rate-limit-reset-credits", "/backend-api/wham/usage", "/backend-api/wham/settings/user":
 			if request.Method != http.MethodGet {
 				fixture.rejectProtocol(response, "usage endpoint used a non-GET method")
@@ -1146,6 +1241,69 @@ func newNativeResponsesFixture(t *testing.T, shellCommand, launcherHome string) 
 			fixture.rejectProtocol(response, err.Error())
 			return
 		}
+		if strings.Contains(filepath.Base(os.Getenv("ACS_TEST_CODEX_ARCHIVE")), "0.156.0") {
+			var requestBody map[string]any
+			if json.Unmarshal([]byte(body), &requestBody) != nil {
+				fixture.rejectProtocol(response, "invalid reviewed request JSON")
+				return
+			}
+			metadata, _ := requestBody["client_metadata"].(map[string]any)
+			var turnMetadata map[string]any
+			encodedMetadata, _ := metadata["x-codex-turn-metadata"].(string)
+			if json.Unmarshal([]byte(encodedMetadata), &turnMetadata) != nil || turnMetadata["request_kind"] != "turn" {
+				fixture.rejectProtocol(response, "unexpected reviewed request purpose")
+				return
+			}
+			thread, _ := metadata["thread_id"].(string)
+			turn, _ := metadata["turn_id"].(string)
+			model, _ := requestBody["model"].(string)
+			if thread == "" || turn == "" || model == "" || !strings.Contains(body, "Use the shell tool exactly once as requested by the fixture.") {
+				fixture.rejectProtocol(response, "reviewed request identity or synthetic input missing")
+				return
+			}
+			fixture.mu.Lock()
+			fixture.modelPOSTs++
+			bounded := fixture.modelPOSTs <= fixture.wantRequestsLocked()+1
+			fixture.mu.Unlock()
+			if !bounded {
+				fixture.rejectProtocol(response, "reviewed total model request limit exceeded")
+				return
+			}
+			if turnMetadata["thread_source"] == "thread_title" {
+				if err := nativeThreadTitleSchema(requestBody); err != nil {
+					fixture.rejectProtocol(response, err.Error())
+					return
+				}
+				fixture.mu.Lock()
+				valid := fixture.titleResponseThread == "" && thread != fixture.firstResponseThread && turn != fixture.firstResponseTurn && (fixture.mainResponseModel == "" || model == fixture.mainResponseModel || model == "gpt-5.6-luna")
+				if valid {
+					fixture.titleResponseThread, fixture.titleResponseTurn, fixture.titleResponseModel = thread, turn, model
+				}
+				fixture.mu.Unlock()
+				if !valid {
+					fixture.rejectProtocol(response, "ambiguous reviewed ancillary title request")
+					return
+				}
+				t.Log("reviewed ancillary title request: exact purpose/schema/input; distinct thread and turn")
+				writeSSE(response, map[string]any{"type": "response.output_item.done", "item": map[string]any{"type": "message", "role": "assistant", "id": "msg-title", "content": []map[string]string{{"type": "output_text", "text": `{"title":"Run fixture tool"}`}}}}, completedEvent("resp-title"))
+				return
+			}
+			if turnMetadata["thread_source"] != "user" {
+				fixture.rejectProtocol(response, "unknown reviewed model thread source")
+				return
+			}
+			fixture.mu.Lock()
+			if fixture.firstResponseThread == "" {
+				fixture.firstResponseThread, fixture.firstResponseTurn, fixture.mainResponseModel = thread, turn, model
+			}
+			valid := thread == fixture.firstResponseThread && turn == fixture.firstResponseTurn && model == fixture.mainResponseModel && thread != fixture.titleResponseThread && turn != fixture.titleResponseTurn && (fixture.titleResponseModel == "" || fixture.titleResponseModel == model || fixture.titleResponseModel == "gpt-5.6-luna")
+			fixture.mu.Unlock()
+			if !valid {
+				fixture.rejectProtocol(response, "reviewed main thread tuple changed")
+				return
+			}
+		}
+
 		fixture.mu.Lock()
 		fixture.requests++
 		index := fixture.requests
@@ -1175,8 +1333,30 @@ func newNativeResponsesFixture(t *testing.T, shellCommand, launcherHome string) 
 			functionArguments := ""
 			namespace := ""
 			if fixture.mcpScenario == nil {
-				arguments, _ := json.Marshal(map[string]any{"command": shellCommand, "timeout_ms": 5000})
-				functionArguments = string(arguments)
+				arguments := map[string]any{"command": shellCommand, "timeout_ms": 5000}
+				if strings.Contains(filepath.Base(os.Getenv("ACS_TEST_CODEX_ARCHIVE")), "0.156.0") {
+					if err := nativeShellCodeModeInventory(body); err != nil {
+						t.Logf("reviewed shell inventory rejected: %s; structure=%s", err, nativeMCPInventoryStructure(body, "fixture", "allowed"))
+						fixture.rejectProtocol(response, err.Error())
+						return
+					}
+					actualCommand, yield := shellCommand, 10000
+					if fixture.descendantReady != "" {
+						actualCommand += "; printf '%s' \"$$\" > " + nativeShellArgument(fixture.descendantReady+".foreground") + "; printf 'foreground-pid:%s\\n' \"$$\"; exec /bin/sleep 30"
+						yield = 1000
+					}
+					encoded, _ := json.Marshal(map[string]any{"cmd": actualCommand, "yield_time_ms": yield, "max_output_tokens": 4000})
+					source := "// @exec: {\"yield_time_ms\": 10000}\ntext(JSON.stringify(await tools.exec_command(" + string(encoded) + ")));"
+					fixture.mu.Lock()
+					fixture.shellCodeMode, fixture.shellCodeSource = true, source
+					fixture.mu.Unlock()
+					t.Log("reviewed real code-mode shell: exact exec grammar and wait declared")
+					writeSSE(response, map[string]any{"type": "response.created", "response": map[string]any{"id": "resp-1"}},
+						map[string]any{"type": "response.output_item.done", "item": map[string]any{"type": "custom_tool_call", "namespace": "functions", "name": "exec", "call_id": "acs-call-1", "input": source}}, completedEvent("resp-1"))
+					return
+				}
+				encoded, _ := json.Marshal(arguments)
+				functionArguments = string(encoded)
 			} else {
 				scenario := fixture.mcpScenario
 				blockedPresent, err := nativeMCPInventoryContains(body, scenario.serverID, scenario.disabledTool)
@@ -1243,6 +1423,20 @@ func newNativeResponsesFixture(t *testing.T, shellCommand, launcherHome string) 
 				completedEvent("resp-1"),
 			)
 			return
+		}
+		fixture.mu.Lock()
+		shellCodeMode, shellCodeSource := fixture.shellCodeMode, fixture.shellCodeSource
+		fixture.mu.Unlock()
+		if shellCodeMode && index == 2 {
+			if err := nativeMCPRequireInvocation(body, "acs-call-1", shellCodeSource); err != nil {
+				t.Logf("code-mode correlation rejected: %s; %s", err, nativeShellCorrelationStructure(body))
+				fixture.rejectProtocol(response, err.Error())
+				return
+			}
+			if _, err := nativeShellCodeModeOutput(body, fixture.descendantReady != ""); err != nil {
+				fixture.rejectProtocol(response, err.Error())
+				return
+			}
 		}
 		if fixture.mcpScenario != nil && fixture.mcpScenario.codeMode && index == 2 {
 			if _, err := nativeMCPRequireCustomCall(body, fixture.mcpScenario.customDiscoveryCallID); err != nil {
@@ -1317,7 +1511,50 @@ func newNativeResponsesFixture(t *testing.T, shellCommand, launcherHome string) 
 			close(fixture.completed)
 		}
 	}))
+	certificate, caDER := nativeLoopbackCertificate(t)
+	fixture.caDER = caDER
+	fixture.server.TLS = &tls.Config{Certificates: []tls.Certificate{certificate}, MinVersion: tls.VersionTLS12}
+	fixture.server.StartTLS()
 	return fixture
+}
+
+// Rustls rejects a CA used as the server leaf. Keep a proper CA and a
+// separately signed loopback leaf; both private keys remain in fixture memory.
+func nativeLoopbackCertificate(t *testing.T) (tls.Certificate, []byte) {
+	t.Helper()
+	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	ca := &x509.Certificate{SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "ACS synthetic loopback CA"}, NotBefore: now.Add(-time.Hour), NotAfter: now.Add(time.Hour), IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign}
+	caDER, err := x509.CreateCertificate(rand.Reader, ca, ca, &caKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leafKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leaf := &x509.Certificate{SerialNumber: big.NewInt(2), Subject: pkix.Name{CommonName: "ACS synthetic loopback server"}, NotBefore: now.Add(-time.Hour), NotAfter: now.Add(time.Hour), BasicConstraintsValid: true, KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}, IPAddresses: []net.IP{net.ParseIP("127.0.0.1")}}
+	leafDER, err := x509.CreateCertificate(rand.Reader, leaf, ca, &leafKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsedCA, err := x509.ParseCertificate(caDER)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsedLeaf, err := x509.ParseCertificate(leafDER)
+	if err != nil {
+		t.Fatal(err)
+	}
+	roots := x509.NewCertPool()
+	roots.AddCert(parsedCA)
+	if _, err := parsedLeaf.Verify(x509.VerifyOptions{Roots: roots, DNSName: "127.0.0.1"}); err != nil {
+		t.Fatal(err)
+	}
+	return tls.Certificate{Certificate: [][]byte{leafDER, caDER}, PrivateKey: leafKey}, caDER
 }
 
 func TestNativeResponsesFixtureSeparatesModelDiscoveryAndWebSocketFallback(t *testing.T) {
@@ -1329,6 +1566,8 @@ func TestNativeResponsesFixtureSeparatesModelDiscoveryAndWebSocketFallback(t *te
 		wantBody            string
 	}{
 		{name: "model discovery", path: "/backend-api/codex/models", wantStatus: http.StatusOK, wantBody: `{"models":[]}`},
+		{name: "absent workspace requirements", path: "/backend-api/wham/config/bundle", wantStatus: http.StatusOK, wantBody: `{}`},
+		{name: "selected workspace routing", path: "/backend-api/wham/accounts/check", wantStatus: http.StatusOK, wantBody: fmt.Sprintf("{\"accounts\":[{\"account_routing_override\":\"NO_CONSTRAINT\",\"id\":\"synthetic-workspace\",\"workspace_backend_origin\":%q}],\"default_account_id\":\"synthetic-workspace\"}\n", fixture.server.URL)},
 		{name: "Responses WebSocket fallback", path: "/backend-api/codex/responses", upgrade: "websocket", wantStatus: http.StatusUpgradeRequired},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -1363,16 +1602,70 @@ func TestNativeResponsesFixtureSeparatesModelDiscoveryAndWebSocketFallback(t *te
 	}
 }
 
+func TestNativeResponsesFixtureRejectsUnselectedWorkspaceBootstrap(t *testing.T) {
+	for _, endpoint := range []string{"/backend-api/wham/config/bundle", "/backend-api/wham/accounts/check"} {
+		for _, method := range []string{http.MethodGet, http.MethodPost} {
+			t.Run(endpoint+method, func(t *testing.T) {
+				fixture := newNativeResponsesFixture(t, "", t.TempDir())
+				defer fixture.server.Close()
+				request, err := http.NewRequest(method, fixture.server.URL+endpoint, nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				request.Header.Set("Authorization", "Bearer synthetic-access")
+				request.Header.Set("ChatGPT-Account-ID", "unselected-workspace")
+				if method == http.MethodPost {
+					request.Header.Set("ChatGPT-Account-ID", "synthetic-workspace")
+				}
+				response, err := fixture.server.Client().Do(request)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer response.Body.Close()
+				if response.StatusCode == http.StatusOK {
+					t.Fatal("unselected workspace bootstrap accepted")
+				}
+			})
+		}
+	}
+}
+
 // This exercises the actual HTTP handler with pinned wire shapes. It launches
 // no target; physical and descendant evidence remains in the installed test.
 func TestNativeResponsesFixtureCodeModeExchange(t *testing.T) {
-	for _, namespace := range []string{"fixture", "mcp__fixture"} {
-		t.Run(namespace, func(t *testing.T) {
+	for _, test := range []struct {
+		namespace string
+		reviewed  bool
+	}{{"fixture", false}, {"mcp__fixture", false}, {"fixture", true}, {"mcp__fixture", true}} {
+		namespace := test.namespace
+		t.Run(fmt.Sprintf("%s-reviewed=%t", namespace, test.reviewed), func(t *testing.T) {
+			archive := ""
+			if test.reviewed {
+				archive = "codex_0.156.0_darwin_arm64.tar.gz"
+			}
+			t.Setenv("ACS_TEST_CODEX_ARCHIVE", archive)
 			fixture := newNativeResponsesFixture(t, "", t.TempDir())
 			defer fixture.server.Close()
 			fixture.mcpScenario = &nativeMCPResponsesScenario{serverID: "fixture", allowedTool: "allowed", disabledTool: "blocked", callArguments: `{"value":"v","input":"i"}`}
 			post := func(body string, wantStatus int) string {
 				t.Helper()
+				if test.reviewed {
+					var requestBody map[string]any
+					if err := json.Unmarshal([]byte(body), &requestBody); err != nil {
+						t.Fatal(err)
+					}
+					source, thread, turn := "user", "main", "main-turn"
+					if requestBody["text"] != nil {
+						source, thread, turn = "thread_title", "title", "title-turn"
+					}
+					purpose, _ := json.Marshal(map[string]string{"request_kind": "turn", "thread_source": source})
+					requestBody["model"] = "fixture-model"
+					requestBody["client_metadata"] = map[string]string{"thread_id": thread, "turn_id": turn, "x-codex-turn-metadata": string(purpose)}
+					input, _ := requestBody["input"].([]any)
+					requestBody["input"] = append(input, map[string]any{"type": "message", "role": "user", "content": "Use the shell tool exactly once as requested by the fixture."})
+					encoded, _ := json.Marshal(requestBody)
+					body = string(encoded)
+				}
 				request, err := http.NewRequest(http.MethodPost, fixture.server.URL+"/backend-api/codex/responses", strings.NewReader(body))
 				if err != nil {
 					t.Fatal(err)
@@ -1427,6 +1720,9 @@ func TestNativeResponsesFixtureCodeModeExchange(t *testing.T) {
 			if discovery["input"] != nativeMCPDiscoverySource() {
 				t.Fatal("handler emitted unexpected discovery source")
 			}
+			if test.reviewed {
+				post(`{"input":[],"text":{"format":{"type":"json_schema","strict":true,"schema":{"type":"object","properties":{"title":{"type":"string","minLength":1,"maxLength":36}},"required":["title"],"additionalProperties":false}}}}`, http.StatusOK)
+			}
 			counts := map[string]int{"fixture__allowed": 0, "mcp__fixture__allowed": 0, "fixture__blocked": 0, "mcp__fixture__blocked": 0}
 			counts[namespace+"__allowed"] = 1
 			payload, _ := json.Marshal(counts)
@@ -1480,6 +1776,9 @@ func (fixture *nativeResponsesFixture) toolOutputLocked() (string, error) {
 	if fixture.mcpScenario != nil && fixture.mcpScenario.codeMode {
 		return nativeMCPCustomMCPResult(body, fixture.mcpScenario.customInvocationCallID)
 	}
+	if fixture.shellCodeMode {
+		return nativeShellCodeModeOutput(body, fixture.descendantReady != "")
+	}
 	return nativeFunctionCallOutput(body, "acs-call-1")
 }
 
@@ -1494,8 +1793,12 @@ func (fixture *nativeResponsesFixture) assert(t *testing.T, wantDescendant bool)
 	if fixture.requests != wantRequests || len(fixture.bodies) != wantRequests {
 		t.Fatalf("responses requests=%d; loopback=%s", fixture.requests, fixture.summaryLocked())
 	}
-	if fixture.websocketFallbacks != 1 {
-		t.Fatalf("Responses WebSocket fallbacks=%d, want one; loopback=%s", fixture.websocketFallbacks, fixture.summaryLocked())
+	wantFallbacks := 1
+	if fixture.titleResponseThread != "" {
+		wantFallbacks++
+	}
+	if fixture.websocketFallbacks != wantFallbacks {
+		t.Fatalf("Responses WebSocket fallbacks=%d, want %d for validated response threads; loopback=%s", fixture.websocketFallbacks, wantFallbacks, fixture.summaryLocked())
 	}
 	if fixture.modelRequests < 1 {
 		t.Fatalf("authenticated model requests=%d, want at least one; loopback=%s", fixture.modelRequests, fixture.summaryLocked())
@@ -1562,6 +1865,7 @@ func (fixture *nativeResponsesFixture) assertLiveDescendant(t *testing.T) {
 		t.Fatal("cannot verify controlled descendant before the completed tool exchange")
 	}
 	toolOutput, err := fixture.toolOutputLocked()
+	shellCodeMode := fixture.shellCodeMode
 	fixture.mu.Unlock()
 	if err != nil {
 		t.Fatalf("controlled descendant output: %v", err)
@@ -1584,6 +1888,24 @@ func (fixture *nativeResponsesFixture) assertLiveDescendant(t *testing.T) {
 	command, err := exec.Command("/bin/ps", "-p", strconv.Itoa(pid), "-o", "comm=").Output()
 	if err != nil || filepath.Base(strings.TrimSpace(string(command))) != "sleep" {
 		t.Fatalf("controlled descendant pid %d identity=%q err=%v, want sleep", pid, command, err)
+	}
+	if shellCodeMode {
+		foreground := regexp.MustCompile(`foreground-pid:([0-9]+)`).FindStringSubmatch(toolOutput)
+		if len(foreground) != 2 {
+			t.Fatal("running shell lacks foreground process receipt")
+		}
+		foregroundPID, err := strconv.Atoi(foreground[1])
+		ready, readErr := os.ReadFile(fixture.descendantReady + ".foreground")
+		if err != nil || foregroundPID < 2 || foregroundPID == pid || readErr != nil || string(ready) != strconv.Itoa(foregroundPID) || syscall.Kill(foregroundPID, 0) != nil {
+			t.Fatal("running foreground identity/readiness does not match live process")
+		}
+		command, err := exec.Command("/bin/ps", "-p", strconv.Itoa(foregroundPID), "-o", "comm=").Output()
+		if err != nil || filepath.Base(strings.TrimSpace(string(command))) != "sleep" {
+			t.Fatal("running foreground helper identity differs")
+		}
+		fixture.mu.Lock()
+		fixture.liveForegroundPID = foregroundPID
+		fixture.mu.Unlock()
 	}
 	fixture.mu.Lock()
 	fixture.liveDescendantPID = pid
@@ -2088,6 +2410,24 @@ func writeSSE(writer io.Writer, events ...map[string]any) {
 	}
 }
 
+// buildTrampoline trusts only this loopback fixture's certificate through the
+// target's reviewed custom-CA contract. The PEM stays in the already granted
+// synthetic workspace; certificate verification remains enabled.
+func (fixture *nativeResponsesFixture) buildTrampoline(t *testing.T, target, destination string, coordination ...nativeCodexPhaseCoordination) {
+	t.Helper()
+	caPath := filepath.Join(filepath.Dir(target), "native-loopback-ca.pem")
+	certificate := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: fixture.caDER})
+	if err := os.WriteFile(caPath, certificate, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	phase := nativeCodexPhaseCoordination{}
+	if len(coordination) > 0 {
+		phase = coordination[0]
+	}
+	phase.caPath = caPath
+	buildFixedCodexTrampoline(t, target, fixture.server.URL+"/backend-api", destination, phase)
+}
+
 func buildFixedCodexTrampoline(t *testing.T, target, baseURL, destination string, coordination ...nativeCodexPhaseCoordination) {
 	t.Helper()
 	source := filepath.Join(filepath.Dir(destination), "codex-trampoline.c")
@@ -2095,8 +2435,12 @@ func buildFixedCodexTrampoline(t *testing.T, target, baseURL, destination string
 	chatGPTOverride := fmt.Sprintf("chatgpt_base_url=%q", baseURL)
 	var versionReady, versionRelease, interactiveReady, interactiveRelease string
 	environmentCheck := ""
+	caEnvironment := ""
 	mcpStartupOverride := ""
 	if len(coordination) > 0 {
+		if coordination[0].caPath != "" {
+			caEnvironment = fmt.Sprintf("if (setenv(\"CODEX_CA_CERTIFICATE\", %s, 1) != 0) return 129;", strconv.Quote(coordination[0].caPath))
+		}
 		versionReady, versionRelease = coordination[0].versionReady, coordination[0].versionRelease
 		interactiveReady, interactiveRelease = coordination[0].interactiveReady, coordination[0].interactiveRelease
 		if coordination[0].expectEnvironment {
@@ -2160,6 +2504,7 @@ int main(int argc, char **argv) {
 		if (strcmp(argv[i], "--version") == 0) version = 1;
 	}
 	%s
+	%s
 	if (!version) {
 		next[argc] = "-c";
     next[argc + 1] = %s;
@@ -2173,7 +2518,7 @@ int main(int argc, char **argv) {
   execv(next[0], next);
   return 121;
 }
-`, strconv.Quote(target), environmentCheck, strconv.Quote(openAIOverride), strconv.Quote(chatGPTOverride), mcpStartupOverride, strconv.Quote(versionReady), strconv.Quote(interactiveReady), strconv.Quote(versionRelease), strconv.Quote(interactiveRelease))
+`, strconv.Quote(target), environmentCheck, caEnvironment, strconv.Quote(openAIOverride), strconv.Quote(chatGPTOverride), mcpStartupOverride, strconv.Quote(versionReady), strconv.Quote(interactiveReady), strconv.Quote(versionRelease), strconv.Quote(interactiveRelease))
 	if err := os.WriteFile(source, []byte(program), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -2440,9 +2785,130 @@ func restoreDeletedNativeCodexProfile(t *testing.T, candidate, home, tools, work
 	return profileName
 }
 
+// The code-mode grammar is independently pinned in nativeMCPHasExec; this
+// additionally requires its exact advertised continuation identity.
+func nativeShellCodeModeInventory(body string) error {
+	ok, err := nativeMCPHasExec(body)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return errors.New("reviewed code-mode exec is absent")
+	}
+	var request map[string]any
+	if err := json.Unmarshal([]byte(body), &request); err != nil {
+		return errors.New("invalid shell inventory JSON")
+	}
+	tools, _ := request["tools"].([]any)
+	input, _ := request["input"].([]any)
+	for _, raw := range input {
+		item, _ := raw.(map[string]any)
+		if item["type"] == "additional_tools" {
+			tools, _ = item["tools"].([]any)
+		}
+	}
+	count := 0
+	for _, raw := range tools {
+		ns, _ := raw.(map[string]any)
+		if ns["type"] != "namespace" || ns["name"] != "functions" {
+			continue
+		}
+		members, _ := ns["tools"].([]any)
+		for _, raw := range members {
+			tool, _ := raw.(map[string]any)
+			if tool["name"] != "wait" {
+				continue
+			}
+			params, _ := tool["parameters"].(map[string]any)
+			props, _ := params["properties"].(map[string]any)
+			cell, _ := props["cell_id"].(map[string]any)
+			if tool["type"] != "function" || cell["type"] != "string" {
+				return errors.New("reviewed code-mode wait schema differs")
+			}
+			count++
+		}
+	}
+	if count != 1 {
+		return errors.New("reviewed code-mode wait missing or duplicated")
+	}
+	return nil
+}
+
+func nativeThreadTitleSchema(request map[string]any) error {
+	text, _ := request["text"].(map[string]any)
+	format, _ := text["format"].(map[string]any)
+	var want any
+	_ = json.Unmarshal([]byte(`{"type":"object","properties":{"title":{"type":"string","minLength":1,"maxLength":36}},"required":["title"],"additionalProperties":false}`), &want)
+	if format["type"] != "json_schema" || format["strict"] != true || !reflect.DeepEqual(format["schema"], want) {
+		return errors.New("reviewed title schema differs")
+	}
+	return nil
+}
+
+func nativeShellCorrelationStructure(body string) string {
+	var request map[string]any
+	if json.Unmarshal([]byte(body), &request) != nil {
+		return "invalid-json"
+	}
+	counts := map[string]int{}
+	correlated := 0
+	input, _ := request["input"].([]any)
+	for _, raw := range input {
+		item, _ := raw.(map[string]any)
+		kind, _ := item["type"].(string)
+		switch kind {
+		case "message", "additional_tools", "function_call", "function_call_output", "custom_tool_call", "custom_tool_call_output", "reasoning":
+		default:
+			kind = "other"
+		}
+		counts[kind]++
+		if item["call_id"] == "acs-call-1" {
+			correlated++
+		}
+	}
+	encoded, _ := json.Marshal(counts)
+	_, priorPresent := request["previous_response_id"]
+	return fmt.Sprintf("input-counts=%s correlated=%d prior-present=%t prior-matches=%t", encoded, correlated, priorPresent, request["previous_response_id"] == "resp-1")
+}
+
+func nativeShellCodeModeOutput(body string, running bool) (string, error) {
+	payload, err := nativeMCPRequireCustomOutputText(body, "acs-call-1")
+	if err != nil {
+		return "", err
+	}
+	value, err := nativeMCPUniqueJSON(payload)
+	if err != nil {
+		return "", err
+	}
+	result, ok := value.(map[string]any)
+	if !ok {
+		return "", errors.New("real shell result is not an object")
+	}
+	output, ok := result["output"].(string)
+	if !ok {
+		return "", errors.New("real shell output is not text")
+	}
+	if running {
+		session, ok := result["session_id"].(json.Number)
+		id, err := strconv.Atoi(string(session))
+		_, exitPresent := result["exit_code"]
+		if !ok || err != nil || id < 1 || strconv.Itoa(id) != string(session) || exitPresent {
+			return "", errors.New("real running shell lacks canonical session or omitted exit state")
+		}
+	} else if result["exit_code"] != json.Number("0") || result["session_id"] != nil {
+		return "", errors.New("real shell did not settle with exact exit zero and no resumable session")
+	}
+	return output, nil
+}
+
 func assertLockedCodexIdentity(t *testing.T, archivePath, installedPath string) {
 	t.Helper()
-	const want = "ed60f475c6dda6044c2c00fd7f33273cc3f3f98900ccd1204bfdf2fe935f3405"
+	want := "ed60f475c6dda6044c2c00fd7f33273cc3f3f98900ccd1204bfdf2fe935f3405"
+	version := codexcompat.LegacyVersion
+	if strings.Contains(filepath.Base(archivePath), "0.156.0") {
+		want = "30dae0e553768a7bc564cf9c42d6e619d24e89565ebe6d1bc589e858ca202ac3"
+		version = codexcompat.CurrentVersion
+	}
 	if runtime.GOARCH != "arm64" || fileSHA256(t, archivePath) != want {
 		t.Fatal("Codex release archive does not match the reviewed architecture lock")
 	}
@@ -2472,15 +2938,21 @@ func assertLockedCodexIdentity(t *testing.T, archivePath, installedPath string) 
 	if err != nil || !bytes.Equal(member, installed) {
 		t.Fatal("installed Codex bytes differ from the independently extracted locked member")
 	}
-	if output, err := exec.Command(installedPath, "--version").Output(); err != nil || strings.TrimSpace(string(output)) != "codex-cli 0.149.1" {
+	if output, err := exec.Command(installedPath, "--version").Output(); err != nil || strings.TrimSpace(string(output)) != "codex-cli "+version {
 		t.Fatal("installed Codex member reports an unsupported version")
 	}
 }
 
 func assertLockedCodexHostIdentity(t *testing.T, archivePath, installedPath string) {
 	t.Helper()
-	const archiveDigest = "aae1c0c9459700a2e897adadd647351140ae7933ad73bd8d3af6505c69a4f3fd"
-	const memberDigest = "c9340c2cc50c86193cc670aa9130980d6982059a0965aeae41bf4e85952fc43e"
+	archiveDigest := "aae1c0c9459700a2e897adadd647351140ae7933ad73bd8d3af6505c69a4f3fd"
+	memberDigest := "c9340c2cc50c86193cc670aa9130980d6982059a0965aeae41bf4e85952fc43e"
+	memberSize := int64(57149920)
+	if strings.Contains(filepath.Base(archivePath), "0.156.0") {
+		archiveDigest = "77e47e9f00820566b2d6e25bfcc1890c1a6eb10a8a0b0a178dcc0b37127739ee"
+		memberDigest = "5be43a1e34665382fa2526803bece18e8d6c42c299d9b4b025b43304203e7b2f"
+		memberSize = 62802848
+	}
 	for _, path := range []string{archivePath, installedPath} {
 		info, err := os.Lstat(path)
 		if err != nil || !info.Mode().IsRegular() {
@@ -2502,7 +2974,7 @@ func assertLockedCodexHostIdentity(t *testing.T, archivePath, installedPath stri
 	defer compressed.Close()
 	reader := tar.NewReader(compressed)
 	header, err := reader.Next()
-	if err != nil || header.Typeflag != tar.TypeReg || header.Name != "codex-code-mode-host-aarch64-apple-darwin" || header.Size != 57149920 {
+	if err != nil || header.Typeflag != tar.TypeReg || header.Name != "codex-code-mode-host-aarch64-apple-darwin" || header.Size != memberSize {
 		t.Fatal("locked code-mode host member is invalid")
 	}
 	digest := sha256.New()
@@ -2559,5 +3031,110 @@ func assertNoNativeSessions(t *testing.T, directory string) {
 		if strings.HasPrefix(entry.Name(), "session-") {
 			t.Fatalf("interactive launch retained Session %q", entry.Name())
 		}
+	}
+}
+
+func TestReviewedShellCodeModeResultRequiresExactLifecycleState(t *testing.T) {
+	for _, test := range []struct {
+		name, payload     string
+		running, accepted bool
+	}{
+		{"running", `{"output":"receipt","session_id":123}`, true, true},
+		{"settled", `{"output":"receipt","exit_code":0}`, false, true},
+		{"null exit is not omitted", `{"output":"receipt","session_id":123,"exit_code":null}`, true, false},
+		{"string session", `{"output":"receipt","session_id":"123"}`, true, false},
+		{"fractional session", `{"output":"receipt","session_id":123.0}`, true, false},
+		{"zero session", `{"output":"receipt","session_id":0}`, true, false},
+		{"duplicate session", `{"output":"receipt","session_id":123,"session_id":124}`, true, false},
+		{"settled still resumable", `{"output":"receipt","exit_code":0,"session_id":123}`, false, false},
+		{"failed exit", `{"output":"receipt","exit_code":1}`, false, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			body, err := json.Marshal(map[string]any{"input": []any{map[string]any{"type": "custom_tool_call_output", "call_id": "acs-call-1", "output": "Script completed\nWall time 0.1 seconds\nOutput:\n" + test.payload}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			output, err := nativeShellCodeModeOutput(string(body), test.running)
+			if (err == nil) != test.accepted || test.accepted && output != "receipt" {
+				t.Fatalf("accepted=%t, want %t; error=%v", err == nil, test.accepted, err)
+			}
+		})
+	}
+}
+
+func TestReviewedThreadTitleRequiresExactBoundedSchema(t *testing.T) {
+	const schema = `{"type":"object","properties":{"title":{"type":"string","minLength":1,"maxLength":36}},"required":["title"],"additionalProperties":false}`
+	for _, test := range []struct {
+		name, schema     string
+		strict, accepted bool
+	}{
+		{"exact", schema, true, true},
+		{"non-strict", schema, false, false},
+		{"extra properties", strings.Replace(schema, `"additionalProperties":false`, `"additionalProperties":true`, 1), true, false},
+		{"unbounded title", strings.Replace(schema, `,"maxLength":36`, "", 1), true, false},
+		{"optional title", strings.Replace(schema, `"required":["title"]`, `"required":[]`, 1), true, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var value any
+			if err := json.Unmarshal([]byte(test.schema), &value); err != nil {
+				t.Fatal(err)
+			}
+			err := nativeThreadTitleSchema(map[string]any{"text": map[string]any{"format": map[string]any{"type": "json_schema", "strict": test.strict, "schema": value}}})
+			if (err == nil) != test.accepted {
+				t.Fatalf("accepted=%t, want %t", err == nil, test.accepted)
+			}
+		})
+	}
+}
+
+func TestReviewedResponsesFixtureBindsMainAndTitleInEitherOrder(t *testing.T) {
+	t.Setenv("ACS_TEST_CODEX_ARCHIVE", "codex_0.156.0_darwin_arm64.tar.gz")
+	for _, titleFirst := range []bool{false, true} {
+		t.Run(fmt.Sprintf("title-first=%t", titleFirst), func(t *testing.T) {
+			fixture := newNativeResponsesFixture(t, "printf receipt", t.TempDir())
+			defer fixture.server.Close()
+			var main map[string]any
+			if err := json.Unmarshal([]byte(nativeMCPTestExecInventory("functions", "custom", "lark", nativeMCPExecGrammar, 1, true)), &main); err != nil {
+				t.Fatal(err)
+			}
+			input := main["input"].([]any)
+			members := input[0].(map[string]any)["tools"].([]any)[0].(map[string]any)["tools"].([]any)
+			input[0].(map[string]any)["tools"].([]any)[0].(map[string]any)["tools"] = append(members, map[string]any{"type": "function", "name": "wait", "parameters": map[string]any{"type": "object", "properties": map[string]any{"cell_id": map[string]any{"type": "string"}}}})
+			main["input"] = append(input, map[string]any{"type": "message", "role": "user", "content": "Use the shell tool exactly once as requested by the fixture."})
+			var title map[string]any
+			if err := json.Unmarshal([]byte(`{"input":[{"type":"message","role":"user","content":"Use the shell tool exactly once as requested by the fixture."}],"text":{"format":{"type":"json_schema","strict":true,"schema":{"type":"object","properties":{"title":{"type":"string","minLength":1,"maxLength":36}},"required":["title"],"additionalProperties":false}}}}`), &title); err != nil {
+				t.Fatal(err)
+			}
+			post := func(body map[string]any, source, thread, turn string, want int) {
+				t.Helper()
+				purpose, _ := json.Marshal(map[string]string{"request_kind": "turn", "thread_source": source})
+				body["model"] = "fixture-model"
+				body["client_metadata"] = map[string]string{"thread_id": thread, "turn_id": turn, "x-codex-turn-metadata": string(purpose)}
+				encoded, _ := json.Marshal(body)
+				request, err := http.NewRequest(http.MethodPost, fixture.server.URL+"/backend-api/codex/responses", bytes.NewReader(encoded))
+				if err != nil {
+					t.Fatal(err)
+				}
+				request.Header.Set("Authorization", "Bearer synthetic-access")
+				request.Header.Set("ChatGPT-Account-ID", "synthetic-workspace")
+				response, err := fixture.server.Client().Do(request)
+				if err != nil {
+					t.Fatal(err)
+				}
+				_, _ = io.Copy(io.Discard, response.Body)
+				_ = response.Body.Close()
+				if response.StatusCode != want {
+					t.Fatalf("status=%d, want %d; fixture=%s", response.StatusCode, want, fixture.summary())
+				}
+			}
+			if titleFirst {
+				post(title, "thread_title", "title", "title-turn", http.StatusOK)
+			}
+			post(main, "user", "main", "main-turn", http.StatusOK)
+			if !titleFirst {
+				post(title, "thread_title", "title", "title-turn", http.StatusOK)
+			}
+			post(main, "user", "unknown", "unknown-turn", http.StatusBadRequest)
+		})
 	}
 }

@@ -59,8 +59,7 @@ func TestRegistryLoginPreservesRecoveryForInvalidPreparedProcess(t *testing.T) {
 			sessions := configureRegistryTestLifecycle(t, registry)
 			sandbox := &invalidPreparedProcessSandbox{typedNil: test.typedNil}
 			registry.login = newCodexLoginRunner(codexLoginConfig{
-				BinaryPath: "/usr/bin/true", SupportedVersion: SupportedCodexVersion,
-				SessionsDirectory: sessions, WorkingDirectory: registry.workingDirectory,
+				BinaryPath: "/usr/bin/true", SessionsDirectory: sessions, WorkingDirectory: registry.workingDirectory,
 			}, sandbox)
 
 			if _, err := registry.Login(context.Background(), CodexLoginRequest{Name: "work"}); !errors.Is(err, ErrLoginCleanupUncertain) {

@@ -9,7 +9,6 @@ import (
 
 type Config struct {
 	BinaryPath        string
-	SupportedVersion  string
 	RuntimeInputs     []string
 	ACSHome           string
 	SessionsDirectory string
@@ -29,8 +28,7 @@ type Registry struct{ service *executor.CodexAuthService }
 
 func New(config Config) (*Registry, error) {
 	service, err := executor.NewCodexAuth(executor.CodexAuthConfig{
-		BinaryPath: config.BinaryPath, SupportedVersion: config.SupportedVersion,
-		RuntimeInputs: config.RuntimeInputs, ACSHome: config.ACSHome,
+		BinaryPath: config.BinaryPath, RuntimeInputs: config.RuntimeInputs, ACSHome: config.ACSHome,
 		SessionsDirectory: config.SessionsDirectory, WorkingDirectory: config.WorkingDirectory,
 	})
 	if err != nil {

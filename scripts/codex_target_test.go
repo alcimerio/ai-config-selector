@@ -74,6 +74,8 @@ func TestCodexTargetFetcherAcceptsCommittedLockWithoutNetwork(t *testing.T) {
 	for _, archive := range []string{
 		"codex_0.149.1_darwin_arm64.tar.gz",
 		"codex_code_mode_host_0.149.1_darwin_arm64.tar.gz",
+		"codex_0.156.0_darwin_arm64.tar.gz",
+		"codex_code_mode_host_0.156.0_darwin_arm64.tar.gz",
 	} {
 		contents, err := os.ReadFile(filepath.Join(output, archive))
 		if err != nil {
@@ -196,9 +198,10 @@ while [ "$#" -gt 0 ]; do
     *) shift ;;
   esac
 done
+version="$(printf '%s' "$url" | sed 's|.*/rust-v\([^/]*\)/.*|\1|')"
 case "$url" in
-  *codex-code-mode-host-aarch64-apple-darwin.tar.gz) archive="codex_code_mode_host_0.149.1_darwin_arm64.tar.gz" ;;
-  *) archive="codex_0.149.1_darwin_arm64.tar.gz" ;;
+  *codex-code-mode-host-aarch64-apple-darwin.tar.gz) archive="codex_code_mode_host_${version}_darwin_arm64.tar.gz" ;;
+  *) archive="codex_${version}_darwin_arm64.tar.gz" ;;
 esac
 printf '%s\n' "$url" >>"$ACS_FETCH_CALLS"
 printf '%s\n' "$archive" >"$output"
@@ -208,6 +211,8 @@ set -eu
 file=
 for argument do file="$argument"; done
 case "$file" in
+ *codex_code_mode_host_0.156.0_darwin_arm64.tar.gz) digest=77e47e9f00820566b2d6e25bfcc1890c1a6eb10a8a0b0a178dcc0b37127739ee ;;
+ *codex_0.156.0_darwin_arm64.tar.gz) digest=30dae0e553768a7bc564cf9c42d6e619d24e89565ebe6d1bc589e858ca202ac3 ;;
   *codex_code_mode_host_0.149.1_darwin_arm64.tar.gz) digest=aae1c0c9459700a2e897adadd647351140ae7933ad73bd8d3af6505c69a4f3fd ;;
   *arm64.tar.gz) digest=ed60f475c6dda6044c2c00fd7f33273cc3f3f98900ccd1204bfdf2fe935f3405 ;;
   *) exit 1 ;;
@@ -387,6 +392,76 @@ func TestCodexFetcherRequiresOneOfEachAsset(t *testing.T) {
 		_, calls, _, err := runCodexTargetFetcherFailure(t, bad)
 		if err == nil || len(calls) != 0 {
 			t.Fatal("missing/duplicate host lock downloaded assets")
+		}
+	}
+}
+
+func TestCodexFetcherRejectsUnreviewedAndMismatchedVersions(t *testing.T) {
+	valid := readCodexTargetLock(t)
+	for _, bad := range []string{strings.ReplaceAll(valid, "0.156.0", "0.156.1"), strings.Replace(valid, "rust-v0.156.0", "rust-v0.149.1", 1), valid + strings.Split(strings.TrimSpace(valid), "\n")[1] + "\n"} {
+		_, calls, _, err := runCodexTargetFetcherFailure(t, bad)
+		if err == nil || len(calls) != 0 {
+			t.Fatal("invalid version lock reached downloads")
+		}
+	}
+}
+
+func TestCodexInstallerSupportsBothReviewedVersions(t *testing.T) {
+	for _, version := range []string{"0.149.1", "0.156.0"} {
+		t.Run(version, func(t *testing.T) {
+			bundle := t.TempDir()
+			archive := filepath.Join(bundle, "codex_0.149.1_darwin_arm64.tar.gz")
+			writeCodexTargetArchive(t, archive, "codex-aarch64-apple-darwin", "#!/bin/sh\nprintf 'codex-cli "+version+"\\n'\n", tar.TypeReg)
+			lock := writeCodexTargetLock(t, "arm64", archive)
+			if version != "0.149.1" {
+				contents, _ := os.ReadFile(lock)
+				if err := os.WriteFile(lock, []byte(strings.ReplaceAll(string(contents), "0.149.1", version)), 0600); err != nil {
+					t.Fatal(err)
+				}
+				for _, stem := range []string{"codex_", "codex_code_mode_host_"} {
+					if err := os.Rename(filepath.Join(bundle, stem+"0.149.1_darwin_arm64.tar.gz"), filepath.Join(bundle, stem+version+"_darwin_arm64.tar.gz")); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			fakeBin := t.TempDir()
+			writeFakeExecutable(t, filepath.Join(fakeBin, "uname"), "#!/bin/sh\ncase \"$1\" in -s) echo Darwin;; -m) echo arm64;; esac\n")
+			output := filepath.Join(t.TempDir(), "codex")
+			cmd := exec.Command("sh", "install-codex-test-target.sh", lock, bundle, "arm64", output, version)
+			cmd.Env = append(os.Environ(), "PATH="+fakeBin+":"+os.Getenv("PATH"))
+			if out, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("reviewed install failed: %v %s", err, out)
+			}
+			if out, err := exec.Command(output, "--version").Output(); err != nil || strings.TrimSpace(string(out)) != "codex-cli "+version {
+				t.Fatalf("wrong installed version: %s %v", out, err)
+			}
+			bad := exec.Command("sh", "install-codex-test-target.sh", lock, bundle, "arm64", filepath.Join(t.TempDir(), "codex"), "0.156.1")
+			bad.Env = cmd.Env
+			if out, err := bad.CombinedOutput(); err == nil || !strings.Contains(string(out), "not reviewed") {
+				t.Fatalf("unreviewed install result: %s %v", out, err)
+			}
+		})
+	}
+}
+
+func TestReviewedNativeWorkflowMatrixAndLock(t *testing.T) {
+	lock := readCodexTargetLock(t)
+	rows := strings.Split(strings.TrimSpace(lock), "\n")
+	if len(rows) != 5 {
+		t.Fatalf("production lock has %d rows, want header and four assets", len(rows))
+	}
+	for _, version := range []string{"0.149.1", "0.156.0"} {
+		if strings.Count(lock, version+"|darwin|arm64|") != 2 {
+			t.Fatalf("production lock lacks one pair for %s", version)
+		}
+		for _, filename := range []string{"promoted-artifacts.yml", "release.yml"} {
+			data, err := os.ReadFile(filepath.Join("..", ".github", "workflows", filename))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(string(data), "codex_version: \""+version+"\"") || !strings.Contains(string(data), "codex_${{ matrix.codex_version }}_") || !strings.Contains(string(data), "acs-native-auth-recovery-${{ matrix.codex_version }}") {
+				t.Fatalf("%s omits version-specific native coverage", filename)
+			}
 		}
 	}
 }
