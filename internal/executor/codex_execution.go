@@ -9,11 +9,11 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"syscall"
 
 	"github.com/alcimerio/ai-config-selector/internal/authority"
 	"github.com/alcimerio/ai-config-selector/internal/codexauthresource"
+	"github.com/alcimerio/ai-config-selector/internal/codexcompat"
 	"github.com/alcimerio/ai-config-selector/internal/environmentresource"
 	"github.com/alcimerio/ai-config-selector/internal/launch"
 	"github.com/alcimerio/ai-config-selector/internal/session"
@@ -396,7 +396,7 @@ func (service *CodexAuthService) ExecuteCodex(ctx context.Context, request Codex
 	version := service.execution.run(preflightContext, preparation.config, created, metadata, access, challenge, binding, []string{"--version"}, launch.Terminal{Output: &versionOutput, ErrorOutput: io.Discard}, nil, requirements.Semantics, runtimeAuthority, filesystemGrants, executableGrants, protections, nil)
 	if preflightContext.Err() != nil && version.cleanupProven {
 		version.err = ErrCodexFailed
-	} else if version.err == nil && (versionOutput.overflow || strings.TrimSpace(versionOutput.String()) != "codex-cli "+service.execution.config.SupportedVersion) {
+	} else if version.err == nil && (versionOutput.overflow || !codexcompat.AcceptsOutput(versionOutput.String())) {
 		version.err = ErrUnsupportedVersion
 	}
 	run := version

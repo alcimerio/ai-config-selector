@@ -103,7 +103,7 @@ or process to its caller.
 4. Force the registered identity/workspace, provider, endpoint, project-trust,
    and plugin restrictions. Codex uses externally sandboxed no-prompt mode;
    ACS enforces the resolved workspace and other OS grants.
-5. Verify exact `codex-cli 0.149.1`, then attach interactive Codex through the
+5. Verify exact reviewed CLI version, then attach interactive Codex through the
    shared process executor.
 6. Prove cleanup, validate eligible same-identity refreshes, and remove the
    Session before marker deletion and identity release. Uncertain cleanup

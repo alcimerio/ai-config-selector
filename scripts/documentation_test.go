@@ -69,8 +69,8 @@ func TestReleaseArtifactContractIsExactlyOneAppleSiliconTarget(t *testing.T) {
 				t.Errorf("%s omits native row %q", workflow, row)
 			}
 		}
-		if strings.Count(text, "sandbox_backend: available") != 1 {
-			t.Errorf("%s does not declare exactly one native target", workflow)
+		if strings.Count(text, "sandbox_backend: available") != 2 || strings.Count(text, "target: darwin/arm64") != 2 {
+			t.Errorf("%s must declare two reviewed version rows for the same native target", workflow)
 		}
 		for _, forbidden := range []string{"target: darwin/amd64", "macos-26-intel", "target: linux/", "ubuntu-24.04-arm", "Install and verify Ubuntu Bubblewrap", "bwrap-userns-restrict"} {
 			if strings.Contains(text, forbidden) {
@@ -308,7 +308,7 @@ func TestNamedAuthenticationDocumentationSeparatesAutomatedAndAuthenticatedEvide
 		normalized := strings.Join(strings.Fields(contents), " ")
 		for _, required := range []string{
 			"credential-free",
-			"0.149.1",
+			"reviewed",
 			"prohibit authentication UI",
 			"supplemental",
 		} {

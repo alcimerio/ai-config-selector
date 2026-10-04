@@ -4,8 +4,8 @@ import (
 	"context"
 	"errors"
 	"io"
-	"strings"
 
+	"github.com/alcimerio/ai-config-selector/internal/codexcompat"
 	"github.com/alcimerio/ai-config-selector/internal/launch"
 	"github.com/alcimerio/ai-config-selector/internal/session"
 )
@@ -88,7 +88,7 @@ func (runner *codexStatusRunner) runOperation(
 	if result.err != nil || !result.cleanupProven {
 		return result
 	}
-	if versionOutput.overflow || strings.TrimSpace(versionOutput.String()) != "codex-cli "+runner.config.SupportedVersion {
+	if versionOutput.overflow || !codexcompat.AcceptsOutput(versionOutput.String()) {
 		return statusRunResult{err: ErrUnsupportedVersion, cleanupProven: true}
 	}
 	return runner.run(ctx, config, created, workspace, proofChallenge, binding, []string{"login", "status"}, launch.Terminal{
