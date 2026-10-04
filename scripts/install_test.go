@@ -426,11 +426,17 @@ func TestInstallerPreservesExistingDestinations(t *testing.T) {
 			if err == nil || !strings.Contains(output, "installation destination already exists") {
 				t.Fatalf("existing destination was not rejected: err=%v output=%q", err, output)
 			}
+			if !strings.Contains(output, "run 'acs update'") {
+				t.Fatalf("existing destination diagnostic omits update guidance: %q", output)
+			}
+			if urls, readErr := os.ReadFile(fixture.urlLog); !os.IsNotExist(readErr) {
+				t.Fatalf("existing destination attempted downloads: urls=%q err=%v", urls, readErr)
+			}
 			after, err := os.Lstat(path)
 			if err != nil {
 				t.Fatalf("existing destination was removed: %v", err)
 			}
-			if before.Mode() != after.Mode() || before.Size() != after.Size() {
+			if !os.SameFile(before, after) || before.Mode() != after.Mode() || before.Size() != after.Size() {
 				t.Fatalf("existing destination changed: before=%v after=%v", before, after)
 			}
 			fixture.assertNoTemporaryOutput()

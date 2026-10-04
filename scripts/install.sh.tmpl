@@ -95,7 +95,7 @@ fi
 
 destination="$bin_directory/acs"
 if [ -e "$destination" ] || [ -L "$destination" ]; then
-  fail "installation destination already exists"
+  fail "installation destination already exists; to update an existing ACS installation, run 'acs update'"
 fi
 
 for prerequisite in awk chmod cp ln mkdir mktemp rm tar; do
@@ -212,14 +212,14 @@ mkdir -p "$bin_directory" || fail "installation directory could not be created"
 check_directory_path "$bin_directory"
 [ -w "$bin_directory" ] && [ -x "$bin_directory" ] || fail "installation directory is not writable"
 if [ -e "$destination" ] || [ -L "$destination" ]; then
-  fail "installation destination already exists"
+  fail "installation destination already exists; to update an existing ACS installation, run 'acs update'"
 fi
 
 cd "$bin_directory" || fail "installation directory could not be opened"
 placement_directory="$(pwd -P)" || fail "installation directory could not be resolved"
 [ "$placement_directory" = "$bin_directory" ] || fail "installation directory resolved through an unsafe path"
 if [ -e acs ] || [ -L acs ]; then
-  fail "installation destination already exists"
+  fail "installation destination already exists; to update an existing ACS installation, run 'acs update'"
 fi
 
 placement_temporary="$(mktemp ".acs.install.XXXXXX")" || fail "installation temporary file could not be created"
