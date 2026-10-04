@@ -298,7 +298,7 @@ func (app App) mutationError(name, action string, err error) int {
 		if transaction.Outcome.State == profilerepo.NotCommitted {
 			state = "Requested mutation not committed; preceding transaction or cleanup needs recovery."
 		}
-		return app.fail("%s %s\nRecover interactively with: acs devin create-profile --name %s\nCancel the builder if it opens, then inspect stored Profiles before deciding what to do. Do not delete transaction artifacts.", action, state, name)
+		return app.fail("%s %s\nRecover with: acs profile recover\nThen inspect stored Profiles before deciding what to do. Do not delete transaction artifacts.", action, state)
 	}
 	if errors.Is(err, profilerepo.ErrConflict) {
 		return app.fail("storage changed; mutation not committed. Inspect and explicitly reload before making a new preview")

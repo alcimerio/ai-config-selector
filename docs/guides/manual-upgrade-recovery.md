@@ -286,17 +286,17 @@ a pending rename can expose both names.
 - Unknown or recovery required: publication or cleanup may remain. Recover before
   considering a new mutation.
 
-For the last case, use the valid Profile name from the error in a real terminal:
+For the last case, use a compatible executable that supports explicit Profile
+recovery:
 
 <!-- example: profile-recovery -->
 ```sh
-"$source_bin" devin create-profile --name backend-review
+"$source_bin" profile recover
 ```
 
-This recovers the prior transaction before checking for an existing name. A
-published name then returns a duplicate error. If the Builder opens, cancel
-without saving; exit 130 does not undo completed recovery. Inspect again,
-including both names after a rename:
+Follow [Profile transaction recovery](profiles.md#uncertain-outcomes-and-recovery)
+for exact outcomes and observation limits. Inspect again, including both names
+after a rename:
 
 <!-- example: recovery-follow-up -->
 ```sh

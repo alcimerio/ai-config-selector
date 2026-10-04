@@ -196,7 +196,6 @@ case "$*" in
   version) printf 'acs v1.2.3\n' ;;
   'profile validate backend-review') [ "${TEST_FAIL_VALIDATE:-0}" != 1 ] ;;
   'profile migrate backend-review') exit 130 ;;
-  'devin create-profile --name backend-review') exit 130 ;;
   'profile show backend-review') [ "${TEST_FAIL_SHOW:-0}" != 1 ] ;;
   'profile export backend-review --file backend-review.acs-profile.json')
     [ ! -e backend-review.acs-profile.json ] || exit 1

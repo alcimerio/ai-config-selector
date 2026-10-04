@@ -116,11 +116,11 @@ func (app App) profileCreateError(name, action string, err error) int {
 		case transaction.Outcome.State == profilerepo.Committed && !transaction.Outcome.RecoveryRequired:
 			return app.fail("%s: Profile transaction committed; reporting failed. Inspect the stored Profile before deciding what to do", action)
 		case transaction.Outcome.State == profilerepo.Committed:
-			return app.fail("%s: Profile transaction committed; cleanup requires recovery. Do not retry.\nRecover interactively with: acs devin create-profile --name %s\nCancel the builder if it opens, then inspect the stored Profile. Do not delete transaction artifacts", action, name)
+			return app.fail("%s: Profile transaction committed; cleanup requires recovery. Do not retry.\nRecover with: acs profile recover\nThen inspect the stored Profile. Do not delete transaction artifacts", action)
 		case transaction.Outcome.State == profilerepo.Unknown:
-			return app.fail("%s: Profile transaction outcome unknown; publication may have occurred. Do not retry.\nRecover interactively with: acs devin create-profile --name %s\nCancel the builder if it opens, then inspect the stored Profile. Do not delete transaction artifacts", action, name)
+			return app.fail("%s: Profile transaction outcome unknown; publication may have occurred. Do not retry.\nRecover with: acs profile recover\nThen inspect the stored Profile. Do not delete transaction artifacts", action)
 		case transaction.Outcome.RecoveryRequired:
-			return app.fail("%s: requested Profile transaction not committed; a preceding repository operation requires recovery.\nRecover interactively with: acs devin create-profile --name %s\nCancel the builder if it opens, then inspect stored Profiles. Do not delete transaction artifacts", action, name)
+			return app.fail("%s: requested Profile transaction not committed; a preceding repository operation requires recovery.\nRecover with: acs profile recover\nThen inspect stored Profiles. Do not delete transaction artifacts", action)
 		case transaction.Outcome.State == profilerepo.NotCommitted && errors.Is(err, profile.ErrProfileExists):
 			return app.fail("Profile transaction not committed: destination Profile is occupied; nothing was overwritten")
 		case transaction.Outcome.State == profilerepo.NotCommitted && errors.Is(err, context.Canceled):
