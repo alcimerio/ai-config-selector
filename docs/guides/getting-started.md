@@ -53,14 +53,16 @@ instructions.
 Run from a real interactive terminal:
 
 ```sh
-acs devin create-profile --name first-review
+acs profile create --name first-review
 ```
 
-Despite its name, this builder does not start Devin or require a Devin account.
-It creates a common v3 Profile with a Devin overlay that also works with the
-sandbox shell and generic commands.
+The builder creates a common v3 Profile without starting a client or requiring
+an account. Select the Devin overlay if you plan to follow the Devin launch
+steps below, the Codex overlay for Codex, or both for shared common selections.
 
-1. Open Skills, select `acs-first-review` with Space/Enter, then return
+1. Keep the Review preset (workspace read-only), select any target overlays you
+   intend to use, and choose Continue. A sandbox-only Profile needs no overlay.
+   Open Skills, select `acs-first-review` with Space/Enter, then return
    with Left/Esc. `/` searches; Esc while searching clears the filter.
 2. Leave Workspace read-only for this first run. Choose Read and write
    only when you intend the target to modify the workspace.

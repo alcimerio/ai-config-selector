@@ -12,6 +12,7 @@ import (
 	"github.com/alcimerio/ai-config-selector/internal/builder"
 	"github.com/alcimerio/ai-config-selector/internal/category"
 	"github.com/alcimerio/ai-config-selector/internal/instructions"
+	"github.com/alcimerio/ai-config-selector/internal/launch"
 	"github.com/alcimerio/ai-config-selector/internal/skills"
 )
 
@@ -181,5 +182,21 @@ func (a *Adapter) MutateProfile(ctx context.Context, name string, draft category
 	if err != nil {
 		return builder.Outcome{}, err
 	}
+	return builder.Run(ctx, model, input, output)
+}
+
+// BuildUnifiedProfile reuses the common editor bindings without runtime assembly.
+func (a *Adapter) BuildUnifiedProfile(ctx context.Context, name string, draft category.Draft, save builder.CreationSaveFunc, input io.Reader, output io.Writer) (builder.Outcome, error) {
+	model, err := builder.NewModel(name, draft, a.editors)
+	if err != nil {
+		return builder.Outcome{}, err
+	}
+	model = model.WithCreation(save, func(draft *category.Draft, development bool) error {
+		access := launch.WorkspaceAccessReadOnly
+		if development {
+			access = launch.WorkspaceAccessReadWrite
+		}
+		return category.SetSelection(draft, a.workspaceCategory, access)
+	})
 	return builder.Run(ctx, model, input, output)
 }
