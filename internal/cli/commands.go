@@ -18,6 +18,7 @@ type commandSpec struct {
 	path, syntax, description, example string
 	valueFlag, boolFlag                string
 	secondBoolFlag                     string
+	thirdBoolFlag                      string
 	auxValueFlag                       string
 	thirdValueFlag                     string
 	group                              bool
@@ -29,6 +30,7 @@ type commandSpec struct {
 
 var commands = []commandSpec{
 	{path: "", syntax: "acs <command> [flags]", description: "Create capability Profiles and use the required native sandbox.", example: "acs devin create-profile --name backend-review", group: true},
+	{path: "check", syntax: "acs check --profile NAME --target TARGET [--json] [--check-native-readiness] [--check-authentication --auth NAME]", description: "Combine passive Profile, selected source/overlay, host, backend and executable facts. TARGET is devin, codex or sandbox.\nEvery fact is pass, fail or unchecked; success covers only requested facts, never full launch readiness.\nDefault checks execute no processes, query no credentials and change no files.\n--check-native-readiness opts into the bounded native backend process probe.\n--check-authentication requires target codex and explicit --auth NAME; it runs contained version and authentication status with credential projection, Session cleanup and eligible same-identity refresh. No login or recovery occurs.\nThere is no credential-free target version probe. Unknown or unrequested facts remain unchecked.", example: "acs check --profile backend-review --target sandbox\n  acs check --profile backend-review --target codex --json\n  acs check --profile backend-review --target codex --check-authentication --auth work", valueFlag: "--profile", auxValueFlag: "--target", thirdValueFlag: "--auth", optionalThirdValue: true, boolFlag: "--json", secondBoolFlag: "--check-native-readiness", thirdBoolFlag: "--check-authentication"},
 	{path: "profile", syntax: "acs profile <command> [flags]", description: "Create, inspect, validate, exchange, edit, clone, rename or delete Profiles.", example: "acs profile create --file profile.json\n  acs profile show backend-review", group: true},
 	{path: "profile list", syntax: "acs profile list [--json]", description: "List direct stored Profiles, including per-entry structural errors. Missing storage is empty.\nNo sources, targets, credentials or Sessions are accessed. No files are changed.", example: "acs profile list\n  acs profile list --json", boolFlag: "--json"},
 	{path: "profile show", syntax: "acs profile show NAME [--json]", description: "Show persisted Profile versions and selections, even with missing Skill sources.\nSupported structure does not imply launch readiness. No files are changed.", example: "acs profile show backend-review\n  acs profile show --json backend-review", boolFlag: "--json", nameOperand: true},
@@ -76,14 +78,14 @@ var commands = []commandSpec{
 }
 
 type invocation struct {
-	command                      commandSpec
-	value                        string
-	auxValue                     string
-	thirdValue                   string
-	operand                      string
-	enabled, secondEnabled, help bool
-	arguments                    []string
-	sessionListLimit             int
+	command                                    commandSpec
+	value                                      string
+	auxValue                                   string
+	thirdValue                                 string
+	operand                                    string
+	enabled, secondEnabled, thirdEnabled, help bool
+	arguments                                  []string
+	sessionListLimit                           int
 }
 
 func parseCommand(args []string) (inv invocation, problem string) {
@@ -140,7 +142,7 @@ func parseCommand(args []string) (inv invocation, problem string) {
 			return inv, "unsupported positional argument"
 		}
 		flag, _, hasEquals := strings.Cut(arg, "=")
-		if helpCommand || (flag != "--help" && flag != inv.command.valueFlag && flag != inv.command.auxValueFlag && flag != inv.command.thirdValueFlag && flag != inv.command.boolFlag && flag != inv.command.secondBoolFlag) {
+		if helpCommand || (flag != "--help" && flag != inv.command.valueFlag && flag != inv.command.auxValueFlag && flag != inv.command.thirdValueFlag && flag != inv.command.boolFlag && flag != inv.command.secondBoolFlag && flag != inv.command.thirdBoolFlag) {
 			return inv, "unsupported flag " + publicToken(flag)
 		}
 		if hasEquals {
@@ -175,6 +177,8 @@ func parseCommand(args []string) (inv invocation, problem string) {
 			inv.enabled = true
 		case inv.command.secondBoolFlag:
 			inv.secondEnabled = true
+		case inv.command.thirdBoolFlag:
+			inv.thirdEnabled = true
 		}
 	}
 	if inv.command.path == "doctor" && inv.value != "" && inv.value != "devin" && inv.value != "sandbox" && inv.value != "codex-auth" {
@@ -205,6 +209,26 @@ func parseCommand(args []string) (inv invocation, problem string) {
 	if inv.help {
 		return inv, ""
 	}
+	if inv.command.path == "check" {
+		if profile.ValidateName(inv.value) != nil {
+			return inv, "invalid Profile name"
+		}
+		if inv.auxValue != "devin" && inv.auxValue != "codex" && inv.auxValue != "sandbox" {
+			return inv, "target must be devin, codex or sandbox"
+		}
+		if inv.thirdEnabled && (inv.auxValue != "codex" || inv.thirdValue == "") {
+			return inv, "--check-authentication requires target codex and explicit --auth NAME"
+		}
+		if inv.thirdValue != "" {
+			if !inv.thirdEnabled {
+				return inv, "--auth requires --check-authentication"
+			}
+			if _, err := codexauth.ParseCredentialRef(inv.thirdValue); err != nil {
+				return inv, "invalid Codex authentication reference"
+			}
+		}
+	}
+
 	if inv.command.path == "profile create" && strings.IndexByte(inv.value, 0) >= 0 {
 		return inv, "invalid file argument"
 	}

@@ -82,31 +82,33 @@ type ExchangePublisher interface {
 }
 
 type App struct {
-	Repository        ProfileRepository
-	MutationBuilder   ProfileMutationBuilder
-	Inspector         ProfileInspector
-	Version           string
-	Categories        *category.Registry
-	Builder           ProfileBuilder
-	DraftEditor       ProfileDraftEditor
-	Planner           LaunchPlanner
-	Launcher          ProfileLauncher
-	SandboxPlanner    LaunchPlanner
-	SandboxLauncher   ProfileLauncher
-	CodexAuth         CodexAuthRegistry
-	CodexTarget       CodexTarget
-	GenericTarget     GenericTarget
-	NativeReadiness   NativeReadiness
-	CodexCategories   *category.Registry
-	CodexBuilder      ProfileBuilder
-	CodexProfiles     ProfileStore
-	Profiles          ProfileStore
-	SessionsDirectory string
-	WorkingDirectory  string
-	Input             io.Reader
-	Output            io.Writer
-	ErrorOutput       io.Writer
-	Interactive       func(io.Reader, io.Writer) bool
+	Repository      ProfileRepository
+	MutationBuilder ProfileMutationBuilder
+	Inspector       ProfileInspector
+	Version         string
+	Categories      *category.Registry
+	Builder         ProfileBuilder
+	DraftEditor     ProfileDraftEditor
+	Planner         LaunchPlanner
+	Launcher        ProfileLauncher
+	SandboxPlanner  LaunchPlanner
+	SandboxLauncher ProfileLauncher
+	CodexAuth       CodexAuthRegistry
+	CodexTarget     CodexTarget
+	GenericTarget   GenericTarget
+	NativeReadiness NativeReadiness
+	// CheckAuthentication is constructed lazily only after passive prerequisites pass.
+	CheckAuthentication func(context.Context, string) (codexauth.IdentityStatus, error)
+	CodexCategories     *category.Registry
+	CodexBuilder        ProfileBuilder
+	CodexProfiles       ProfileStore
+	Profiles            ProfileStore
+	SessionsDirectory   string
+	WorkingDirectory    string
+	Input               io.Reader
+	Output              io.Writer
+	ErrorOutput         io.Writer
+	Interactive         func(io.Reader, io.Writer) bool
 	// ReadProfileDocument is a test seam. Production uses the descriptor-backed
 	// bounded regular-file reader when this is nil.
 	ReadProfileDocument func(string) ([]byte, error)
@@ -126,6 +128,9 @@ func StandardStreamsInteractive(input io.Reader, output io.Writer) bool {
 }
 
 func (app App) Run(ctx context.Context, args []string) int {
+	if handled, code := app.RunCheck(ctx, args, os.UserHomeDir); handled {
+		return code
+	}
 	if handled, code := app.RunProfileHistory(ctx, args, os.UserHomeDir); handled {
 		return code
 	}

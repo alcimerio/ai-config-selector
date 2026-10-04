@@ -18,7 +18,7 @@ The supported runtime is macOS 26 Apple Silicon.
 | Task | Page |
 | --- | --- |
 | Create, inspect, edit, clone, rename, delete or migrate | [Profiles](guides/profiles.md) |
-| Check prerequisites or explain effective authority | [Diagnostics](guides/diagnostics.md) |
+| Check launch prerequisites or explain effective authority | [Diagnostics](guides/diagnostics.md) |
 | Understand schemas, grants and overlays | [Common Profile format](reference/common-profile-format.md) |
 | Restore, compare, pin or prune local revisions | [Profile history](guides/profile-history.md) |
 | Share sanitized intent and bind local resources | [Portable exchange](guides/portable-profile-exchange.md) |
