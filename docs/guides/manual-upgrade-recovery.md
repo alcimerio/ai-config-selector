@@ -259,7 +259,7 @@ Start a separate recovery shell, including from the strict maintenance shell:
 
 Initialize `source_bin` in this new shell to the inspected compatible owner.
 Disabling inherited exit-on-error keeps inspection possible after a missing
-Profile, recovered duplicate name or cancelled builder. Read each command's
+Profile or failed or cancelled recovery. Read each command's
 output and exit status. A nonzero result is not automatically success. Use the
 explicit
 [return step](#leave-the-recovery-shell) when finished.
