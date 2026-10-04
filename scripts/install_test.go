@@ -54,16 +54,21 @@ func TestInstallerDownloadsPinnedArchiveAndInstallsToCustomDirectory(t *testing.
 
 func TestInstallerSelectsOnlySupportedReleaseTargets(t *testing.T) {
 	tests := []struct {
-		name        string
-		hostOS      string
-		hostArch    string
-		archiveName string
+		name         string
+		hostOS       string
+		hostArch     string
+		macOSVersion string
+		archiveName  string
 	}{
-		{name: "Darwin arm64", hostOS: "Darwin", hostArch: "arm64", archiveName: "acs_0.2.0_darwin_arm64.tar.gz"},
+		{name: "macOS 26", hostOS: "Darwin", hostArch: "arm64", macOSVersion: "26", archiveName: "acs_0.2.0_darwin_arm64.tar.gz"},
+		{name: "macOS 26.0", hostOS: "Darwin", hostArch: "arm64", macOSVersion: "26.0", archiveName: "acs_0.2.0_darwin_arm64.tar.gz"},
+		{name: "macOS 26.1", hostOS: "Darwin", hostArch: "arm64", macOSVersion: "26.1", archiveName: "acs_0.2.0_darwin_arm64.tar.gz"},
+		{name: "macOS 26.5.2", hostOS: "Darwin", hostArch: "arm64", macOSVersion: "26.5.2", archiveName: "acs_0.2.0_darwin_arm64.tar.gz"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			fixture := newInstallerFixture(t, test.hostOS, test.hostArch)
+			fixture.extraEnvironment = append(fixture.extraEnvironment, "FAKE_MACOS_VERSION="+test.macOSVersion)
 			destination := filepath.Join(realTemporaryDirectory(t), "bin")
 			if err := os.Mkdir(destination, 0o700); err != nil {
 				t.Fatal(err)
@@ -78,6 +83,34 @@ func TestInstallerSelectsOnlySupportedReleaseTargets(t *testing.T) {
 			}
 			if !strings.Contains(string(urls), "/"+test.archiveName+"\n") {
 				t.Fatalf("archive URL does not select %s: %q", test.archiveName, urls)
+			}
+		})
+	}
+}
+
+func TestInstallerRejectsUnsupportedMacOSBeforeDownloading(t *testing.T) {
+	for _, version := range []string{"15.7", "25.9", "27.0", "", "unknown", "26.beta", "26..1", "26."} {
+		t.Run("version="+version, func(t *testing.T) {
+			fixture := newInstallerFixture(t, "Darwin", "arm64")
+			fixture.extraEnvironment = append(fixture.extraEnvironment, "FAKE_MACOS_VERSION="+version)
+			destination := filepath.Join(fixture.home, "bin")
+			output, err := fixture.run("--bin-dir", destination)
+			if err == nil {
+				t.Fatalf("unsupported macOS version accepted:\n%s", output)
+			}
+			want := "could not determine macOS version"
+			if version == "15.7" || version == "25.9" || version == "27.0" {
+				want = "ACS supports macOS 26 only"
+			}
+			if !strings.Contains(output, want) {
+				t.Fatalf("output = %q, want substring %q", output, want)
+			}
+			if _, statErr := os.Stat(destination); !os.IsNotExist(statErr) {
+				t.Fatalf("preflight failure created installation directory: %v", statErr)
+			}
+			fixture.assertNoTemporaryOutput()
+			if urls, readErr := os.ReadFile(fixture.urlLog); !os.IsNotExist(readErr) {
+				t.Fatalf("preflight failure attempted downloads: urls=%q err=%v", urls, readErr)
 			}
 		})
 	}
@@ -159,6 +192,10 @@ func TestInstallerRejectsUnsupportedInputsBeforeDownloading(t *testing.T) {
 			}
 			return []string{"--bin-dir", destination}
 		}, want: "installation destination already exists"},
+		{name: "missing macOS version tool", hostOS: "Darwin", hostArch: "arm64", mutate: func(t *testing.T, fixture *installerFixture) { fixture.removeTool(t, "sw_vers") }, want: "required tool is unavailable: sw_vers"},
+		{name: "failed macOS version tool", hostOS: "Darwin", hostArch: "arm64", mutate: func(t *testing.T, fixture *installerFixture) {
+			fixture.replaceTool(t, "sw_vers", "#!/bin/sh\nprintf '26.0\\n'\nexit 1\n")
+		}, want: "could not determine macOS version"},
 		{name: "missing tar", hostOS: "Darwin", hostArch: "arm64", mutate: func(t *testing.T, fixture *installerFixture) { fixture.removeTool(t, "tar") }, want: "required tool is unavailable: tar"},
 		{name: "missing download tool", hostOS: "Darwin", hostArch: "arm64", mutate: func(t *testing.T, fixture *installerFixture) { fixture.removeTool(t, "curl") }, want: "required download tool is unavailable"},
 		{name: "missing checksum tool", hostOS: "Darwin", hostArch: "arm64", mutate: func(t *testing.T, fixture *installerFixture) {
@@ -523,6 +560,10 @@ case "$1" in
   *) exit 1 ;;
 esac
 `, hostOS, hostArch))
+	fixture.writeTool("sw_vers", `#!/bin/sh
+[ "$#" -eq 1 ] && [ "$1" = "-productVersion" ] || exit 1
+printf '%s\n' "${FAKE_MACOS_VERSION-26.0}"
+`)
 	fixture.writeTool("curl", `#!/bin/sh
 output=""
 url=""
