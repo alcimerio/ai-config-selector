@@ -17,7 +17,7 @@ func TestPassiveEntryPointsHaveNoActiveOperations(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	files = append(files, "../adapter/devin/catalog.go", "../cli/diagnostics.go")
+	files = append(files, "../adapter/devin/catalog.go", "../skillcatalog/catalog.go", "../cli/diagnostics.go")
 	forbidden := map[string]bool{"CurrentPlatform": true, "Readiness": true, "Check": true, "PlanLaunch": true, "Plan": true, "Launch": true, "Login": true, "Recover": true, "Chmod": true, "Mkdir": true, "MkdirAll": true, "WriteFile": true, "Create": true, "Start": true, "Command": true, "CommandContext": true, "IsTerminal": true}
 	for _, path := range files {
 		if strings.HasSuffix(path, "_test.go") {

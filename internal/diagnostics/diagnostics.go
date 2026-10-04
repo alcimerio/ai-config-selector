@@ -7,10 +7,10 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/alcimerio/ai-config-selector/internal/adapter/devin"
 	"github.com/alcimerio/ai-config-selector/internal/launch"
 	"github.com/alcimerio/ai-config-selector/internal/profile"
 	"github.com/alcimerio/ai-config-selector/internal/profileinspect"
+	"github.com/alcimerio/ai-config-selector/internal/skillcatalog"
 	"github.com/alcimerio/ai-config-selector/internal/skills"
 )
 
@@ -120,6 +120,10 @@ func executableAvailable(name string) bool {
 }
 
 func Validate(name string, home func() (string, error)) Result {
+	r, _, _ := validateEntry(context.Background(), name, home)
+	return r
+}
+func validateEntry(ctx context.Context, name string, home func() (string, error)) (Result, profileinspect.Entry, string) {
 	r := result("profile.validate", "")
 	inspected := profileinspect.Unavailable("show")
 	directory := ""
@@ -143,7 +147,7 @@ func Validate(name string, home func() (string, error)) Result {
 		}
 		r.set("profile.structure", "fail", code, "Use acs profile list and acs profile show NAME to inspect supported structure; restore or create a valid Profile.")
 		r.set("profile.sources", "unchecked", "structure_required", "Correct the Profile structure before resolving selected Skill sources.")
-		return r
+		return r, profileinspect.Entry{}, directory
 	}
 	r.set("profile.structure", "pass", "valid_structure", "Supported stored Profile structure; no migration or persistence write occurred.")
 	entry := inspected.Entries[0]
@@ -167,12 +171,12 @@ func Validate(name string, home func() (string, error)) Result {
 	for _, category := range entry.Categories {
 		references = append(references, category.Selection...)
 	}
-	catalog, err := devin.DiscoverSelectedSkillCatalog(context.Background(), directory, references)
+	catalog, err := skillcatalog.DiscoverSelected(ctx, directory, references)
 	if err != nil {
 		r.set("profile.sources", "fail", "sources_unavailable", "Restore access to the selected global Skill sources and validate again.")
-		return r
+		return r, entry, directory
 	}
-	return resolveSources(r, references, catalog)
+	return resolveSources(r, references, catalog), entry, directory
 }
 func resolveSources(r Result, references []skills.SkillReference, catalog []skills.SkillBundle) Result {
 	if _, err := skills.ResolveReferences(references, catalog); err != nil {
