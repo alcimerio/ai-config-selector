@@ -61,8 +61,10 @@ func main() {
 			os.Exit(1)
 		}
 		acsHome := filepath.Join(existingHome, ".acs")
-		application := cli.App{Categories: editor.Categories(), Profiles: profile.NewStore(acsHome, editor.Categories()), Input: os.Stdin, Output: os.Stdout, ErrorOutput: os.Stderr}
-		os.Exit(application.Run(context.Background(), os.Args[1:]))
+		application := cli.App{Categories: editor.Categories(), Profiles: profile.NewStore(acsHome, editor.Categories()), Input: os.Stdin, Output: os.Stdout, ErrorOutput: os.Stderr, UnifiedBuilder: editor, Interactive: cli.StandardStreamsInteractive}
+		creationContext, stopCreation := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer stopCreation()
+		os.Exit(application.Run(creationContext, os.Args[1:]))
 	}
 	if cli.ProfileExchangeRequested(os.Args[1:]) {
 		if handled, code := informational.RunProfileExchange(context.Background(), os.Args[1:], os.UserHomeDir); handled {

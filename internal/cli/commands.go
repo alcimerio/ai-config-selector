@@ -28,11 +28,11 @@ type commandSpec struct {
 }
 
 var commands = []commandSpec{
-	{path: "", syntax: "acs <command> [flags]", description: "Create capability Profiles and use the required native sandbox.", example: "acs devin create-profile --name backend-review", group: true},
+	{path: "", syntax: "acs <command> [flags]", description: "Create capability Profiles and use the required native sandbox.", example: "acs profile create --name backend-review", group: true},
 	{path: "profile", syntax: "acs profile <command> [flags]", description: "Create, inspect, validate, exchange, edit, clone, rename or delete Profiles.", example: "acs profile create --file profile.json\n  acs profile show backend-review", group: true},
 	{path: "profile list", syntax: "acs profile list [--json]", description: "List direct stored Profiles, including per-entry structural errors. Missing storage is empty.\nNo sources, targets, credentials or Sessions are accessed. No files are changed.", example: "acs profile list\n  acs profile list --json", boolFlag: "--json"},
 	{path: "profile show", syntax: "acs profile show NAME [--json]", description: "Show persisted Profile versions and selections, even with missing Skill sources.\nSupported structure does not imply launch readiness. No files are changed.", example: "acs profile show backend-review\n  acs profile show --json backend-review", boolFlag: "--json", nameOperand: true},
-	{path: "profile create", syntax: "acs profile create --file FILE [--dry-run]", description: "Create one machine-local Profile from a strict version-3 JSON document. The document supplies its validated name.\nMissing Skill material and named authentication remain unchecked. Existing Profiles are never overwritten.", example: "acs profile create --file profile.json\n  acs profile create --file profile.json --dry-run", valueFlag: "--file", boolFlag: "--dry-run"},
+	{path: "profile create", syntax: "acs profile create --name NAME\n       acs profile create --file FILE [--dry-run]", description: "Create a common version-3 Profile interactively with --name, or from a strict JSON document with --file. The builder offers explicit target overlays and review/development workspace presets.\nMissing Skill material and named authentication remain unchecked. Existing Profiles are never overwritten.", example: "acs profile create --name backend-review\n  acs profile create --file profile.json --dry-run", valueFlag: "--file", optionalValue: true, auxValueFlag: "--name", optionalAuxValue: true, boolFlag: "--dry-run"},
 	{path: "profile edit", syntax: "acs profile edit NAME", description: "Edit stored selections interactively in the Profile Builder. Preview exact canonical bytes before saving.\nUnavailable selections remain selected until explicitly removed. No client, credentials or Session is needed.", example: "acs profile edit backend-review", nameOperand: true},
 	{path: "profile clone", syntax: "acs profile clone NAME --name NEW", description: "Open a seeded Profile Builder under a new name. Preview and confirm before publication.\nThe source must remain unchanged and the destination must remain absent.", example: "acs profile clone backend-review --name frontend-review", nameOperand: true, valueFlag: "--name"},
 	{path: "profile rename", syntax: "acs profile rename NAME --name NEW", description: "Preview and confirm coordinated filename and embedded-name changes interactively.\nAn occupied destination is never overwritten. Legacy conversion requires a canonical representation preview.", example: "acs profile rename backend-review --name service-review", nameOperand: true, valueFlag: "--name"},
@@ -205,6 +205,14 @@ func parseCommand(args []string) (inv invocation, problem string) {
 	if inv.help {
 		return inv, ""
 	}
+	if inv.command.path == "profile create" {
+		if (inv.value == "") == (inv.auxValue == "") {
+			return inv, "supply exactly one of --name or --file"
+		}
+		if inv.auxValue != "" && (profile.ValidateName(inv.auxValue) != nil || inv.enabled) {
+			return inv, "--name requires a valid Profile name and cannot use --dry-run"
+		}
+	}
 	if inv.command.path == "profile create" && strings.IndexByte(inv.value, 0) >= 0 {
 		return inv, "invalid file argument"
 	}
@@ -310,7 +318,7 @@ func CodexDryRunRequested(args []string) bool {
 	return problem == "" && !inv.help && inv.command.path == "codex" && inv.enabled
 }
 
-// ProfileCreateRequested identifies the syntax-validated declarative creation
+// ProfileCreateRequested identifies either syntax-validated creation mode
 // path so the executable can avoid assembling targets, credentials or runtime.
 func ProfileCreateRequested(args []string) bool {
 	inv, problem := parseCommand(args)
