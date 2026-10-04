@@ -61,7 +61,7 @@ func ValidateName(name string) error {
 // Profile. Legacy envelopes retain their original omission rules.
 func (p Profile) MarshalJSON() ([]byte, error) {
 	type stored Profile
-	if p.Version != CurrentVersion || p.Overlays == nil {
+	if p.Version != CurrentVersion || p.Overlays == nil || len(p.Overlays) != 0 {
 		return json.Marshal(stored(p))
 	}
 	overlays := p.Overlays
