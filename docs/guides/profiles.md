@@ -8,7 +8,7 @@ noninteractive creation. Choose one creation method and a name that does not
 already exist:
 
 ```sh
-acs devin create-profile --name backend-review
+acs profile create --name backend-review
 acs codex create-profile --name codex-review --auth work
 acs profile create --file profile.json --dry-run
 acs profile create --file profile.json
@@ -27,6 +27,18 @@ versions, grants, and migration. Inspection reports stored structure;
 [validation and explanation](diagnostics.md) report selected-source availability
 and effective authority separately. None of these observations alone proves
 launch readiness.
+
+## Interactive creation
+
+`acs profile create --name NAME` opens the unified common v3 builder. Choose
+neither target for sandbox/run, one supported target, or both. All selected
+overlays share the same common capabilities. Review starts with read-only
+workspace access; Development explicitly selects read-write. The common editors
+can adjust that selection before creation. No account, login, target executable,
+or authentication lookup is required. A Codex overlay created here has no
+`authRef`; supply an opaque named reference with `--auth` at launch. The existing
+target-specific builders remain available, including `--auth` on Codex creation.
+Existing Profiles are never overwritten or silently migrated.
 
 ## Declarative creation
 

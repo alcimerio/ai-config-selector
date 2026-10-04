@@ -41,6 +41,10 @@ type Outcome struct {
 // Profile Draft, modal state, and the one child category editor.
 type Model struct {
 	name                string
+	creation            *CreationOptions
+	creationSave        CreationSaveFunc
+	creationPreset      func(*category.Draft, bool) error
+	creationCursor      int
 	draft               category.Draft
 	initialDraft        category.Draft
 	initialValid        bool
@@ -95,6 +99,7 @@ type screen int
 
 const (
 	overviewScreen screen = iota
+	creationScreen
 	categoryScreen
 	confirmScreen
 	loadingScreen
@@ -169,6 +174,11 @@ func (m Model) update(message tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	if m.terminalError != nil {
 		return m, tea.Quit
+	}
+	if m.screen == creationScreen {
+		if keyMessage, ok := message.(tea.KeyPressMsg); ok {
+			return m.updateCreation(keyMessage)
+		}
 	}
 	switch message := message.(type) {
 	case callbackPanicMsg:
@@ -624,6 +634,8 @@ func (m Model) view() tea.View {
 	}
 	var content strings.Builder
 	switch m.screen {
+	case creationScreen:
+		content.WriteString(m.creationView())
 	case overviewScreen:
 		label := "Create"
 		if m.mutation != nil {
@@ -632,6 +644,9 @@ func (m Model) view() tea.View {
 		content.WriteString(label + " Profile \"")
 		content.WriteString(m.name)
 		content.WriteString("\"\n\n")
+		if m.creation != nil {
+			content.WriteString(m.creationSummary() + "\n\n")
+		}
 		categories := m.categories()
 		rows := make([]string, 0, len(categories)+2)
 		for _, summary := range categories {

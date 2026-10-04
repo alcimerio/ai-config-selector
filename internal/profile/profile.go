@@ -56,3 +56,20 @@ func ValidateName(name string) error {
 	}
 	return nil
 }
+
+// MarshalJSON preserves the required v3 overlays object even for a common-only
+// Profile. Legacy envelopes retain their original omission rules.
+func (p Profile) MarshalJSON() ([]byte, error) {
+	type stored Profile
+	if p.Version != CurrentVersion {
+		return json.Marshal(stored(p))
+	}
+	overlays := p.Overlays
+	if overlays == nil {
+		overlays = map[string]OverlayPayload{}
+	}
+	return json.Marshal(struct {
+		stored
+		Overlays map[string]OverlayPayload `json:"overlays"`
+	}{stored: stored(p), Overlays: overlays})
+}
