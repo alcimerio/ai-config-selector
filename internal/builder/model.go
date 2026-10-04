@@ -659,7 +659,7 @@ func (m Model) view() tea.View {
 		if m.confirmFailed {
 			content.WriteString("Confirm: These categories failed to load: " + strings.Join(m.failedCategoryNames(), ", ") + ". Create Profile anyway?\n\nY/Enter create  N/Esc/Left return\nCtrl+C cancel")
 		} else {
-			content.WriteString("Confirm: Create an empty Profile?\n\nThis Profile will not select any capabilities.\n\nY/Enter create  N/Esc/Left return\nCtrl+C cancel")
+			content.WriteString("Confirm: Create an empty Profile?\n\nNo optional capabilities are selected.\nWorkspace and runtime access still apply.\n\nY/Enter create  N/Esc/Left return\nCtrl+C cancel")
 		}
 	case loadingScreen:
 		content.WriteString("Loading " + categoryName(m.editors[m.activeCategory].registration.id) + "...\n\nCtrl+C cancel")
