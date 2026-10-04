@@ -296,3 +296,24 @@ jobs:
             printf '%s\n' '- The candidate itself is never rebuilt in this job.'
             printf '%s\n' '- No credentials, account data, target output, Session contents, private paths, generated policy, environment values, or control characters are recorded.'
           } >>"$GITHUB_STEP_SUMMARY"
+
+  native-required:
+    name: Native darwin/arm64
+    needs: [candidate, native]
+    # Keep the required context stable while each reviewed target runs separately.
+    # Inspect unsuccessful dependencies instead of skipping this required check.
+    if: ${{ always() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+
+    steps:
+      - name: Require candidate and all native targets to succeed
+        env:
+          CANDIDATE_RESULT: ${{ needs.candidate.result }}
+          NATIVE_RESULT: ${{ needs.native.result }}
+        shell: bash
+        run: |
+          if [[ "$CANDIDATE_RESULT" != "success" || "$NATIVE_RESULT" != "success" ]]; then
+            printf 'Required native validation failed: candidate=%s native=%s\n' "$CANDIDATE_RESULT" "$NATIVE_RESULT"
+            exit 1
+          fi
