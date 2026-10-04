@@ -42,6 +42,16 @@ case "$(uname -m)" in
   *) fail "unsupported architecture; ACS supports Apple Silicon (arm64) only" ;;
 esac
 
+command -v sw_vers >/dev/null 2>&1 || fail "required tool is unavailable: sw_vers"
+macos_version="$(sw_vers -productVersion 2>/dev/null)" || fail "could not determine macOS version"
+case "$macos_version" in
+  "" | *[!0-9.]* | .* | *. | *..*) fail "could not determine macOS version" ;;
+esac
+case "${macos_version%%.*}" in
+  26) ;;
+  *) fail "unsupported macOS version $macos_version; ACS supports macOS 26 only" ;;
+esac
+
 case "$bin_directory" in
   "" | / | /*/ | *[!\ -~]* | *:* | *"'"* | *//* | */./* | */../* | */. | */..)
     fail "installation directory is malformed"
