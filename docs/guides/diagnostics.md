@@ -97,7 +97,7 @@ both named authentication and interactive launch. It does not inspect a Profile
 or select a sandbox backend. Only absolute PATH entries are searched; empty and
 relative entries are ignored. Candidates must resolve to readable, executable
 regular files; symlinks follow runtime lookup semantics. Presence does not prove
-version compatibility, including the exact `codex-cli 0.149.1` requirement.
+version compatibility, including the exact reviewed CLI version requirement.
 
 The backend check examines only `/usr/bin/sandbox-exec`: a regular, non-symlink,
 root-owned file with execute bits, no group/world writes, and read/execute

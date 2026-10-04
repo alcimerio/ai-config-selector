@@ -103,6 +103,10 @@ func TestModelRequiresConfirmationBeforeCreatingEmptyProfile(t *testing.T) {
 	if model.Outcome().Create {
 		t.Fatal("empty Profile creation bypassed confirmation")
 	}
+	confirmation := model.View().Content
+	if !strings.Contains(confirmation, "Workspace and runtime access still apply.") {
+		t.Fatalf("empty Profile confirmation omits remaining access: %s", confirmation)
+	}
 	model = update(t, model, tea.KeyPressMsg(tea.Key{Code: 'y', Text: "y"}))
 	if !model.Outcome().Create {
 		t.Fatal("confirmed empty Profile did not create")

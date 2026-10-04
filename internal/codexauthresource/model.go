@@ -5,10 +5,14 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+
+	"github.com/alcimerio/ai-config-selector/internal/codexcompat"
 )
 
 const (
-	SupportedCodexVersion = "0.149.1"
+	// SupportedCodexVersion retains the original version constant for existing callers.
+	// Admission uses codexcompat rather than this compatibility alias.
+	SupportedCodexVersion = codexcompat.LegacyVersion
 	RecordVersion         = 1
 	recordVersion         = RecordVersion
 )

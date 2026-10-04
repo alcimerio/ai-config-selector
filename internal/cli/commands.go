@@ -29,12 +29,12 @@ type commandSpec struct {
 }
 
 var commands = []commandSpec{
-	{path: "", syntax: "acs <command> [flags]", description: "Create capability Profiles and use the required native sandbox.", example: "acs devin create-profile --name backend-review", group: true},
+	{path: "", syntax: "acs <command> [flags]", description: "Create capability Profiles and use the required native sandbox.", example: "acs profile create --name backend-review", group: true},
 	{path: "check", syntax: "acs check --profile NAME --target TARGET [--json] [--check-native-readiness] [--check-authentication --auth NAME]", description: "Combine passive Profile, selected source/overlay, host, backend and executable facts. TARGET is devin, codex or sandbox.\nEvery fact is pass, fail or unchecked; success covers only requested facts, never full launch readiness.\nDefault checks execute no processes, query no credentials and change no files.\n--check-native-readiness opts into the bounded native backend process probe.\n--check-authentication requires target codex and explicit --auth NAME; it runs contained version and authentication status with credential projection, Session cleanup and eligible same-identity refresh. No login or recovery occurs.\nThere is no credential-free target version probe. Unknown or unrequested facts remain unchecked.", example: "acs check --profile backend-review --target sandbox\n  acs check --profile backend-review --target codex --json\n  acs check --profile backend-review --target codex --check-authentication --auth work", valueFlag: "--profile", auxValueFlag: "--target", thirdValueFlag: "--auth", optionalThirdValue: true, boolFlag: "--json", secondBoolFlag: "--check-native-readiness", thirdBoolFlag: "--check-authentication"},
 	{path: "profile", syntax: "acs profile <command> [flags]", description: "Create, inspect, validate, exchange, edit, clone, rename or delete Profiles.", example: "acs profile create --file profile.json\n  acs profile show backend-review", group: true},
 	{path: "profile list", syntax: "acs profile list [--json]", description: "List direct stored Profiles, including per-entry structural errors. Missing storage is empty.\nNo sources, targets, credentials or Sessions are accessed. No files are changed.", example: "acs profile list\n  acs profile list --json", boolFlag: "--json"},
 	{path: "profile show", syntax: "acs profile show NAME [--json]", description: "Show persisted Profile versions and selections, even with missing Skill sources.\nSupported structure does not imply launch readiness. No files are changed.", example: "acs profile show backend-review\n  acs profile show --json backend-review", boolFlag: "--json", nameOperand: true},
-	{path: "profile create", syntax: "acs profile create --file FILE [--dry-run]", description: "Create one machine-local Profile from a strict version-3 JSON document. The document supplies its validated name.\nMissing Skill material and named authentication remain unchecked. Existing Profiles are never overwritten.", example: "acs profile create --file profile.json\n  acs profile create --file profile.json --dry-run", valueFlag: "--file", boolFlag: "--dry-run"},
+	{path: "profile create", syntax: "acs profile create --name NAME\n       acs profile create --file FILE [--dry-run]", description: "Create a common version-3 Profile interactively with --name, or from a strict JSON document with --file. The builder offers explicit target overlays and review/development workspace presets.\nMissing Skill material and named authentication remain unchecked. Existing Profiles are never overwritten.", example: "acs profile create --name backend-review\n  acs profile create --file profile.json --dry-run", valueFlag: "--file", optionalValue: true, auxValueFlag: "--name", optionalAuxValue: true, boolFlag: "--dry-run"},
 	{path: "profile edit", syntax: "acs profile edit NAME", description: "Edit stored selections interactively in the Profile Builder. Preview exact canonical bytes before saving.\nUnavailable selections remain selected until explicitly removed. No client, credentials or Session is needed.", example: "acs profile edit backend-review", nameOperand: true},
 	{path: "profile clone", syntax: "acs profile clone NAME --name NEW", description: "Open a seeded Profile Builder under a new name. Preview and confirm before publication.\nThe source must remain unchanged and the destination must remain absent.", example: "acs profile clone backend-review --name frontend-review", nameOperand: true, valueFlag: "--name"},
 	{path: "profile rename", syntax: "acs profile rename NAME --name NEW", description: "Preview and confirm coordinated filename and embedded-name changes interactively.\nAn occupied destination is never overwritten. Legacy conversion requires a canonical representation preview.", example: "acs profile rename backend-review --name service-review", nameOperand: true, valueFlag: "--name"},
@@ -67,10 +67,10 @@ var commands = []commandSpec{
 	{path: "sandbox", syntax: "acs sandbox --profile <name> [--dry-run] [--expect-authority-digest DIGEST]", description: "Open /bin/zsh -f in the Profile sandbox without Devin credentials.\n--dry-run inspects the plan without creating a Session or starting a shell.", example: "acs sandbox --dry-run --profile backend-review\n  acs sandbox --profile backend-review", valueFlag: "--profile", boolFlag: "--dry-run", thirdValueFlag: "--expect-authority-digest", optionalThirdValue: true},
 	{path: "codex", syntax: "acs codex --profile <name> [--auth <ref>] [--dry-run] [--expect-authority-digest DIGEST]", description: "Launch interactive Codex with a common Profile and one ACS-owned named ChatGPT identity.\n--auth overrides the Profile authRef for this run. --dry-run validates syntax only and reports authentication unchecked.", example: "acs codex --profile backend-review --auth work --dry-run\n  acs codex --profile backend-review", valueFlag: "--profile", auxValueFlag: "--auth", optionalAuxValue: true, boolFlag: "--dry-run", thirdValueFlag: "--expect-authority-digest", optionalThirdValue: true},
 	{path: "codex create-profile", syntax: "acs codex create-profile --name <name> [--auth <ref>]", description: "Create a common Profile with a supported Codex overlay through the interactive Profile Builder.\nWhen supplied, only the opaque named authentication reference is stored; credentials are never stored in a Profile.\nA Profile without authRef requires --auth on every real launch.", example: "acs codex create-profile --name backend-review --auth work", valueFlag: "--name", auxValueFlag: "--auth", optionalAuxValue: true},
-	{path: "codex auth", syntax: "acs codex auth <command> [flags]", description: "Manage ACS-owned ChatGPT identities in the macOS Keychain.\nLogin and status require codex-cli 0.149.1 and the required sandbox.\nThese commands do not launch interactive Codex or use the global Codex login.", example: "acs codex auth login --name work\n  acs codex auth status --name work", group: true},
-	{path: "codex auth login", syntax: "acs codex auth login --name <name> [--device-auth]", description: "Create a named ChatGPT identity; requires interactive stdin/stdout and codex-cli 0.149.1.\n--device-auth selects the device login flow. Existing names are never replaced.", example: "acs codex auth login --device-auth --name work", valueFlag: "--name", boolFlag: "--device-auth"},
+	{path: "codex auth", syntax: "acs codex auth <command> [flags]", description: "Manage ACS-owned ChatGPT identities in the macOS Keychain.\nLogin and status require a reviewed Codex CLI version and the required sandbox.\nThese commands do not launch interactive Codex or use the global Codex login.", example: "acs codex auth login --name work\n  acs codex auth status --name work", group: true},
+	{path: "codex auth login", syntax: "acs codex auth login --name <name> [--device-auth]", description: "Create a named ChatGPT identity; requires interactive stdin/stdout and a reviewed Codex CLI version.\n--device-auth selects the device login flow. Existing names are never replaced.", example: "acs codex auth login --device-auth --name work", valueFlag: "--name", boolFlag: "--device-auth"},
 	{path: "codex auth list", syntax: "acs codex auth list", description: "List non-secret metadata for ACS-owned identities in the macOS Keychain.", example: "acs codex auth list"},
-	{path: "codex auth status", syntax: "acs codex auth status --name <name>", description: "Verify one named identity in a contained status Session using codex-cli 0.149.1.", example: "acs codex auth status --name work", valueFlag: "--name"},
+	{path: "codex auth status", syntax: "acs codex auth status --name <name>", description: "Verify one named identity in a contained status Session using a reviewed Codex CLI version.", example: "acs codex auth status --name work", valueFlag: "--name"},
 	{path: "codex auth recover", syntax: "acs codex auth recover --name <name>", description: "Recover a quarantined identity after proving its protected Session is inactive.", example: "acs codex auth recover --name work", valueFlag: "--name"},
 	{path: "codex auth logout", syntax: "acs codex auth logout --name <name>", description: "Remove an ACS-owned identity. An absent valid name succeeds; global Codex login is untouched.", example: "acs codex auth logout --name work", valueFlag: "--name"},
 	{path: "version", syntax: "acs version", description: "Print the ACS build version.", example: "acs version"},
@@ -229,6 +229,14 @@ func parseCommand(args []string) (inv invocation, problem string) {
 		}
 	}
 
+	if inv.command.path == "profile create" {
+		if (inv.value == "") == (inv.auxValue == "") {
+			return inv, "supply exactly one of --name or --file"
+		}
+		if inv.auxValue != "" && (profile.ValidateName(inv.auxValue) != nil || inv.enabled) {
+			return inv, "--name requires a valid Profile name and cannot use --dry-run"
+		}
+	}
 	if inv.command.path == "profile create" && strings.IndexByte(inv.value, 0) >= 0 {
 		return inv, "invalid file argument"
 	}
@@ -334,7 +342,7 @@ func CodexDryRunRequested(args []string) bool {
 	return problem == "" && !inv.help && inv.command.path == "codex" && inv.enabled
 }
 
-// ProfileCreateRequested identifies the syntax-validated declarative creation
+// ProfileCreateRequested identifies either syntax-validated creation mode
 // path so the executable can avoid assembling targets, credentials or runtime.
 func ProfileCreateRequested(args []string) bool {
 	inv, problem := parseCommand(args)

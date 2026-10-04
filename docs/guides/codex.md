@@ -3,7 +3,8 @@
 [Documentation index](../README.md)
 
 ACS supports interactive Codex on macOS 26 Apple Silicon with the exact target
-version `codex-cli 0.149.1`. The adapter uses ChatGPT authentication and a named
+versions listed in [target compatibility](../reference/target-compatibility.md).
+The adapter uses ChatGPT authentication and a named
 ACS identity; API keys, credential import and noninteractive token injection
 are unsupported.
 
@@ -118,7 +119,7 @@ login. Names contain 1 to 64 lowercase ASCII letters, numbers, dots, underscores
 hyphens and begin with a letter or number. Existing names fail before Codex
 starts; explicitly log out before reusing one. Login requires actual terminal
 stdin/stdout; character devices such as `/dev/null` do not qualify. Any version
-output other than exact `codex-cli 0.149.1` is a compatibility error.
+output outside the exact reviewed set is a compatibility error.
 
 ### Contained login and executable identity
 

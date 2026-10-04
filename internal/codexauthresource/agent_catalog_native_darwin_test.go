@@ -59,7 +59,7 @@ func runNativeCodexMCPAgentCase(t *testing.T, candidate, home, tools, workspace,
 		fixture.coordination = &coordination
 		fixture.agentCatalog = present
 	}
-	buildFixedCodexTrampoline(t, grantedTarget, fixture.server.URL+"/backend-api", filepath.Join(tools, "codex"), coordination)
+	fixture.buildTrampoline(t, grantedTarget, filepath.Join(tools, "codex"), coordination)
 	runInstalledCodexPTY(t, candidate, home, tools, workspace, "mcp", fixture, false)
 	descendantPID := fixture.assert(t, true)
 	if receipt := readNativeMCPStartupReceipt(fixture.mcpStartupReceipt); receipt != "server-entered,initialize-received,initialize-replied,tools-list-received,tools-list-replied" {

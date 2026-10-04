@@ -88,6 +88,7 @@ type App struct {
 	Version         string
 	Categories      *category.Registry
 	Builder         ProfileBuilder
+	UnifiedBuilder  UnifiedProfileBuilder
 	DraftEditor     ProfileDraftEditor
 	Planner         LaunchPlanner
 	Launcher        ProfileLauncher
@@ -155,6 +156,9 @@ func (app App) Run(ctx context.Context, args []string) int {
 	inv, _ := parseCommand(args)
 	switch inv.command.path {
 	case "profile create":
+		if inv.auxValue != "" {
+			return app.createUnifiedProfile(ctx, inv.auxValue)
+		}
 		return app.createProfileFromDocument(ctx, inv.value, inv.enabled)
 	case "profile list", "profile show":
 		return app.inspectProfiles(inv)

@@ -8,15 +8,14 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
-	"strings"
 
+	"github.com/alcimerio/ai-config-selector/internal/codexcompat"
 	"github.com/alcimerio/ai-config-selector/internal/launch"
 	"github.com/alcimerio/ai-config-selector/internal/session"
 )
 
 type codexLoginConfig struct {
 	BinaryPath        string
-	SupportedVersion  string
 	RuntimeInputs     []string
 	RuntimeProbePaths []string
 	SessionsDirectory string
@@ -151,7 +150,7 @@ func (runner *codexLoginRunner) runOperation(
 			containedRunResult: versionRun,
 		}
 	}
-	if versionOutput.overflow || strings.TrimSpace(versionOutput.String()) != "codex-cli "+runner.config.SupportedVersion {
+	if versionOutput.overflow || !codexcompat.AcceptsOutput(versionOutput.String()) {
 		return loginRunResult{containedRunResult: containedRunResult{err: ErrUnsupportedVersion, cleanupProven: true}}
 	}
 
