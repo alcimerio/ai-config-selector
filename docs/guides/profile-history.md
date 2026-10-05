@@ -111,6 +111,11 @@ source later appends its tombstone to that original lineage. Recovery preserves
 this distinction. A committed restore reports resulting `eventId` and
 `lineageId` separately from `selectedEventId` and `sourceLineageId`; the source
 and result lineage IDs differ for a renamed-live `--as` restore.
+If acknowledgment output fails or is incomplete after commitment, restore exits
+1 and reports the committed outcome on stderr. Inspect the stored Profile before
+another mutation; this reporting failure alone requires no repository recovery.
+An Apply that returns `committed` with an error and no recovery requirement uses
+the JSON diagnostic `committed_reporting_failed` rather than `recovery_required`.
 
 ## Pins, retention, and pruning
 
