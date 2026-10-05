@@ -129,6 +129,9 @@ func StandardStreamsInteractive(input io.Reader, output io.Writer) bool {
 }
 
 func (app App) Run(ctx context.Context, args []string) int {
+	if handled, code := app.RunProfileRecovery(ctx, args, os.UserHomeDir); handled {
+		return code
+	}
 	if handled, code := app.RunCheck(ctx, args, os.UserHomeDir); handled {
 		return code
 	}

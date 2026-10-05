@@ -35,6 +35,9 @@ func main() {
 		return
 	}
 	informational := cli.App{Version: buildVersion(releaseVersion, debug.ReadBuildInfo), Input: os.Stdin, Output: os.Stdout, ErrorOutput: os.Stderr, Interactive: cli.StandardStreamsInteractive}
+	if handled, code := runProfileRecovery(informational, os.Args[1:], os.UserHomeDir); handled {
+		os.Exit(code)
+	}
 	if handled, code := informational.RunProfileHistory(context.Background(), os.Args[1:], os.UserHomeDir); handled {
 		os.Exit(code)
 	}
@@ -246,6 +249,16 @@ func main() {
 		Interactive:       cli.StandardStreamsInteractive,
 	}
 	os.Exit(application.Run(context.Background(), os.Args[1:]))
+}
+
+// Recovery owns termination signals only for its narrow pre-runtime dispatch.
+func runProfileRecovery(app cli.App, args []string, home func() (string, error)) (bool, int) {
+	if !cli.ProfileRecoveryRequested(args) {
+		return false, 0
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	return app.RunProfileRecovery(ctx, args, home)
 }
 
 func buildVersion(builderVersion string, readBuildInfo func() (*debug.BuildInfo, bool)) string {

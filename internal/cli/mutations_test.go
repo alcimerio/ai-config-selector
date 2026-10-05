@@ -618,7 +618,7 @@ func TestMutationTruthfulTerminalOutcomes(t *testing.T) {
 				t.Fatalf("exit=%d calls=%d", code, injected.calls)
 			}
 			message := output.String()
-			if strings.Contains(message, "cancelled") || !strings.Contains(message, "acs devin create-profile --name old") || !strings.Contains(message, "Cancel the builder if it opens") {
+			if strings.Contains(message, "cancelled") || !strings.Contains(message, "acs profile recover") || strings.Contains(message, "Cancel the builder") {
 				t.Fatalf("false cancellation/missing guidance: %s", message)
 			}
 			if state == profilerepo.Committed && !strings.Contains(message, "mutation committed") {

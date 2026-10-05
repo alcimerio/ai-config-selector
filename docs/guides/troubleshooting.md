@@ -23,7 +23,7 @@ Use `acs COMMAND --help` for that binary's grammar.
 | Installer refuses existing `acs` | Existing direct file at destination | Stage in a new empty user-owned directory; follow the [manual upgrade guide](manual-upgrade-recovery.md) |
 | `acs update` refuses layout / development binary | `command -v acs`, `acs version`, direct-file vs symlink/package-manager layout | Use the supported release installer; the updater does not adopt arbitrary layouts |
 | Session remains after interruption | `acs session list`, then `acs session inspect ID --json` | Follow `acs session recover ID` and [proof-gated recovery](session-operations.md); no force-delete |
-| Profile write reports unknown / recovery required | Exact outcome and printed guidance | Preserve evidence, run the supported recovery entry point, cancel the builder if it opens, then inspect before retrying |
+| Profile write reports unknown / recovery required | Exact outcome and printed guidance | Preserve evidence, run `acs profile recover`, then inspect before another mutation; follow [Profile recovery](profiles.md#uncertain-outcomes-and-recovery) |
 
 ## Dry-run passed, but launch failed
 

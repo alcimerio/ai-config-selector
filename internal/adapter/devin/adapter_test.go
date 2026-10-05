@@ -2,8 +2,11 @@ package devin
 
 import (
 	"context"
+	"fmt"
 	"github.com/alcimerio/ai-config-selector/internal/launch"
 	"github.com/alcimerio/ai-config-selector/internal/skills"
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -146,12 +149,127 @@ func TestSandboxAssemblyHasNoCrossPackageBypass(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			for _, bypass := range []string{"go:" + "linkname", strconv.Quote("un" + "safe")} {
-				if strings.Contains(string(source), bypass) {
-					t.Fatalf("sandbox assembly bypass %q found in %s", bypass, path)
-				}
+			if err := sandboxAssemblySourceBypass(path, source); err != nil {
+				t.Fatal(err)
 			}
 		}
+	}
+}
+
+func sandboxAssemblySourceBypass(path string, source []byte) error {
+	// Parse the full file so malformed declarations cannot hide a bypass.
+	file, err := parser.ParseFile(token.NewFileSet(), path, source, parser.ParseComments)
+	if err != nil {
+		return fmt.Errorf("parse sandbox assembly source %s: %w", path, err)
+	}
+	for _, spec := range file.Imports {
+		importPath, err := strconv.Unquote(spec.Path.Value)
+		if err != nil {
+			return fmt.Errorf("parse sandbox assembly import in %s: %w", path, err)
+		}
+		if importPath == "unsafe" {
+			return fmt.Errorf("sandbox assembly unsafe import found in %s", path)
+		}
+	}
+	for _, group := range file.Comments {
+		for _, comment := range group.List {
+			fields := strings.Fields(comment.Text)
+			if len(fields) > 0 && (fields[0] == "//go:linkname" || fields[0] == "//go:linknamestd") {
+				return fmt.Errorf("sandbox assembly linkname directive found in %s", path)
+			}
+		}
+	}
+	return nil
+}
+
+func TestSandboxAssemblySourceScan(t *testing.T) {
+	for _, fixture := range []struct {
+		name         string
+		source       string
+		wantRejected bool
+	}{
+		{
+			name:   "recovery diagnostic category",
+			source: "package cli\nfunc diagnostic() string { category := \"unsafe\"; return category }\n",
+		},
+		{
+			name:   "linkname string literal",
+			source: "package cli\nconst message = \"//go:linkname local remote\"\n",
+		},
+		{
+			name:   "ordinary comment mentions",
+			source: "package cli\n// Reject imports of \"unsafe\" and go:linkname directives.\n",
+		},
+		{
+			name:   "block comment directive text",
+			source: "package cli\n/*go:linkname local remote*/\n",
+		},
+		{
+			name:   "ordinary import",
+			source: "package cli\nimport \"fmt\"\nvar _ = fmt.Sprint\n",
+		},
+		{
+			name:         "unsafe import",
+			source:       "package cli\nimport \"unsafe\"\n",
+			wantRejected: true,
+		},
+		{
+			name:         "aliased unsafe import",
+			source:       "package cli\nimport alias \"unsafe\"\n",
+			wantRejected: true,
+		},
+		{
+			name:         "blank unsafe import",
+			source:       "package cli\nimport _ \"unsafe\"\n",
+			wantRejected: true,
+		},
+		{
+			name:         "dot unsafe import",
+			source:       "package cli\nimport . \"unsafe\"\n",
+			wantRejected: true,
+		},
+		{
+			name:         "grouped raw unsafe import",
+			source:       "package cli\nimport (\n\"fmt\"\nalias `unsafe`\n)\n",
+			wantRejected: true,
+		},
+		{
+			name:         "escaped unsafe import",
+			source:       "package cli\nimport \"\\x75nsafe\"\n",
+			wantRejected: true,
+		},
+		{
+			name:         "linkname directive without unsafe import",
+			source:       "package cli\n//go:linkname local remote\nfunc local()\n",
+			wantRejected: true,
+		},
+		{
+			name:         "one argument linkname directive",
+			source:       "package cli\n//go:linkname local\nfunc local()\n",
+			wantRejected: true,
+		},
+		{
+			name:         "linknamestd directive",
+			source:       "package cli\n//go:linknamestd local remote\nfunc local()\n",
+			wantRejected: true,
+		},
+		{
+			name:         "malformed source fails closed",
+			source:       "package cli\nfunc broken(\n",
+			wantRejected: true,
+		},
+		{
+			name:         "malformed source after valid declaration fails closed",
+			source:       "package cli\nconst message = \"safe\"\n/* unterminated\n",
+			wantRejected: true,
+		},
+	} {
+		t.Run(fixture.name, func(t *testing.T) {
+			err := sandboxAssemblySourceBypass("fixture.go", []byte(fixture.source))
+			if (err != nil) != fixture.wantRejected {
+				t.Fatalf("source rejection = %v, want rejected = %t", err, fixture.wantRejected)
+			}
+		})
 	}
 }
 

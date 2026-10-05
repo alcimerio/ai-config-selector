@@ -152,6 +152,7 @@ func TestNativeCandidateGatesPropagateFailureRecoverAndProtectIdentity(t *testin
 		for _, required := range []string{
 			"go test -v ./...",
 			"TestPromotedArtifactSharedTargetConformance",
+			"TestPromotedProfileRecoveryNeedsNoLaunchDependencies",
 			"generic_literal_command_uses_candidate_containment",
 			"effective_explanation_is_linked_and_narrowly_observed",
 			"go test -race ./...",
@@ -238,6 +239,7 @@ for argument do
   if [ "$previous" = -list ]; then
     case "$ACS_TEST_MODE:$argument" in
       missing-recovery:'^TestNativeKeychainRecoveryEntrypoint$') ;;
+      missing-profile-recovery:'^TestPromotedProfileRecoveryNeedsNoLaunchDependencies$') ;;
  missing-real-devin-mcp:'^TestPromotedArtifactNativeRealDevinMCP$') ;;
       missing-mcp-protection:'^TestPromotedArtifactNativeProductionMCPProtection$') ;;
       *) printf '%s\n' "$argument" | tr -d '^$' ;;
@@ -246,6 +248,7 @@ for argument do
   previous="$argument"
 done
 case "$ACS_TEST_MODE:$*" in
+  fail-profile-recovery:*"-run ^TestPromotedProfileRecoveryNeedsNoLaunchDependencies$"*) exit 39 ;;
  fail-real-devin-mcp:*"-run ^TestPromotedArtifactNativeRealDevinMCP$"*) exit 37 ;;
   fail-mcp-protection:*"-run ^TestPromotedArtifactNativeProductionMCPProtection$"*) exit 31 ;;
   fail-primary*:*"-run ^TestNativeInstalledACSExecutesLockedCodexToolThroughNamedIdentity$"*) printf '%s\n' 'primary gate failed' >&2; exit 23 ;;
@@ -513,4 +516,39 @@ func TestNativeCandidateRequiredRealDevinMCPGate(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestNativeCandidateRequiresProfileRecoveryAcceptance(t *testing.T) {
+	const name = "TestPromotedProfileRecoveryNeedsNoLaunchDependencies"
+	t.Run("supplied candidate and verbose invocation", func(t *testing.T) {
+		fixture := newNativeGateFixture(t)
+		fixture.run(t, "success", true, "")
+		calls := fixture.calls(t)
+		execution := "auth= promoted=" + fixture.candidate + " version=v0.4.0 backend=available recovery= go test ./acceptance -run ^" + name + "$ -count=1 -v"
+		if !strings.Contains(calls, "go test ./acceptance -list ^"+name+"$") || !strings.Contains(calls, execution) {
+			t.Fatalf("missing supplied-artifact recovery gate: %s", calls)
+		}
+	})
+	t.Run("missing declaration refuses", func(t *testing.T) {
+		fixture := newNativeGateFixture(t)
+		fixture.run(t, "missing-profile-recovery", false, "required test "+name+" is unavailable")
+		calls := fixture.calls(t)
+		if strings.Contains(calls, "-run ^"+name+"$") || strings.Contains(calls, "-run ^TestNativeVolumeAliasPolicy$") {
+			t.Fatalf("continued after missing recovery acceptance: %s", calls)
+		}
+		if !strings.Contains(calls, "-run ^TestNativeKeychainRecoveryEntrypoint$") {
+			t.Fatal("native authentication cleanup omitted")
+		}
+	})
+	t.Run("failure preserves status", func(t *testing.T) {
+		fixture := newNativeGateFixture(t)
+		output, err := fixture.command("fail-profile-recovery").CombinedOutput()
+		exit, ok := err.(*exec.ExitError)
+		if !ok || exit.ExitCode() != 39 {
+			t.Fatalf("failure discarded: %v %s", err, output)
+		}
+		if !strings.Contains(fixture.calls(t), "-run ^TestNativeKeychainRecoveryEntrypoint$") {
+			t.Fatal("native authentication cleanup omitted")
+		}
+	})
 }

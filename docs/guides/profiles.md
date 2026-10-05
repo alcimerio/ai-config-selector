@@ -299,17 +299,36 @@ commitment. `Unknown` means publication may have occurred: do not blindly retry.
 Neither uncertainty nor a known commit becomes ordinary cancellation after
 Ctrl+C or terminal failure.
 
-For recovery-required or Unknown results, follow the printed recovery command,
-for example:
+For recovery-required or Unknown results, complete the previously authorized
+transaction explicitly:
 
 ```sh
-acs devin create-profile --name backend-review
+acs profile recover
+acs profile recover --json
 ```
 
-This command recovers pending Profile transactions before checking for a
-duplicate name. Cancel the builder if it
-opens, then inspect with `acs profile list` and `acs profile show NAME` before
-deciding what to do. Recovery can finish the earlier operation; it is not
-rollback. Do not delete transaction artifacts or bypass a live lock. The
-repository contract describes revisions, writer limits, two-name rename
-visibility and native filesystem durability.
+Recovery uses the same stationary lock as mutations. Before a decision it aborts
+recognized private preparation; after a decision it rolls forward. It reports
+`not_committed`, `committed` or `unknown` independently of `recoveryRequired`,
+including when an error occurs. A committed outcome with an error remains
+committed. JSON includes only the exact returned transaction's history identity,
+when available, and sanitized diagnostic categories.
+
+A busy, unsafe or cancelled attempt can return the initial `not_committed`
+state before inspection. That does not prove the pending transaction was
+uncommitted or absent. Even a clean result does not establish what a lost
+response to an earlier operation meant. Inspect with `acs profile list` and
+`acs profile show NAME` before deciding on another mutation.
+
+Missing storage remains absent. Recovery needs no Builder, target installation,
+account, credentials or Session. It can publish the earlier transaction's Profile
+and history event; it does not authorize another mutation.
+It handles Profile transactions only. Use the separate
+[Session recovery](session-operations.md) and
+[named-authentication recovery](codex.md#named-authentication) procedures for
+those resources. Passive reads never recover automatically.
+
+Do not delete transaction artifacts or bypass a live lock. The
+[repository contract](../development/architecture.md#profile-repository-transactions)
+describes revisions, writer limits, two-name rename visibility and native
+filesystem durability.

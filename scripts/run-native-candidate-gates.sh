@@ -176,6 +176,9 @@ run_acceptance_test ./acceptance -run '^TestPromotedArtifactNativeContainmentCon
 
 go test -race ./...
 
+require_test ./acceptance TestPromotedProfileRecoveryNeedsNoLaunchDependencies
+run_acceptance_test ./acceptance -run '^TestPromotedProfileRecoveryNeedsNoLaunchDependencies$' -count=1 -v
+
 require_test ./internal/profilerepo TestNativeVolumeAliasPolicy
 require_test ./internal/profilerepo TestIndependentWritersAndLiveKernelOwnership
 require_test ./internal/profilerepo TestRestrictedIdentityPermissionDenial

@@ -233,8 +233,8 @@ func TestManualRecoveryExamplesRetainShellForInspection(t *testing.T) {
 		recoveryStatus string
 	}{
 		{name: "missing Profile", showStatus: "1"},
-		{name: "recovered duplicate", showStatus: "0", recoveryStatus: "1"},
-		{name: "cancelled builder", showStatus: "1", recoveryStatus: "130"},
+		{name: "blocked recovery", showStatus: "0", recoveryStatus: "1"},
+		{name: "cancelled recovery", showStatus: "1", recoveryStatus: "130"},
 	} {
 		t.Run(scenario.name, func(t *testing.T) {
 			root := realTemporaryDirectory(t)
@@ -246,7 +246,7 @@ case "$*" in
   version) printf 'acs devel\n' ;;
   'profile list') exit 0 ;;
   'profile show backend-review') exit "$TEST_SHOW_STATUS" ;;
-  'devin create-profile --name backend-review') exit "$TEST_RECOVERY_STATUS" ;;
+  'profile recover') exit "$TEST_RECOVERY_STATUS" ;;
   *) exit 99 ;;
 esac
 `
@@ -285,7 +285,7 @@ esac
 			}
 			want := "version\nprofile list\nprofile show backend-review\n"
 			if scenario.recoveryStatus != "" {
-				want += "devin create-profile --name backend-review\n"
+				want += "profile recover\n"
 			}
 			want += "profile list\nprofile show backend-review\n"
 			if string(commands) != want {
