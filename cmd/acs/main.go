@@ -83,6 +83,31 @@ func main() {
 	if handled, code := informational.RunDiagnostics(os.Args[1:], os.UserHomeDir); handled {
 		os.Exit(code)
 	}
+	if requested, native, authentication := cli.CheckProbeOptions(os.Args[1:]); requested {
+		checkContext, stopCheck := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		if native {
+			informational.NativeReadiness = executor.New()
+		}
+		if authentication {
+			informational.CheckAuthentication = func(ctx context.Context, name string) (codexauth.IdentityStatus, error) {
+				home, homeErr := os.UserHomeDir()
+				workspace, workspaceErr := os.Getwd()
+				if homeErr != nil || workspaceErr != nil {
+					return codexauth.IdentityStatus{}, codexauth.ErrProviderUnavailable
+				}
+				owner, err := codexauth.New(codexauth.Config{BinaryPath: "codex", ACSHome: filepath.Join(home, ".acs"), SessionsDirectory: filepath.Join(home, ".acs", "sessions"), WorkingDirectory: workspace})
+				if err != nil {
+					return codexauth.IdentityStatus{}, codexauth.ErrProviderUnavailable
+				}
+				return owner.Status(ctx, name)
+			}
+		}
+
+		_, code := informational.RunCheck(checkContext, os.Args[1:], os.UserHomeDir)
+		stopCheck()
+		os.Exit(code)
+	}
+
 	if handled, code := informational.RunProfileMutations(context.Background(), os.Args[1:], os.UserHomeDir); handled {
 		os.Exit(code)
 	}

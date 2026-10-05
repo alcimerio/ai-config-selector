@@ -5,14 +5,75 @@
 Use the command that answers your question:
 
 - `acs profile show NAME`: inspect [stored structure](profiles.md#inspection).
+- `acs check --profile NAME --target TARGET`: combine passive prerequisites and selected target compatibility, with explicit runtime probes.
 - `acs doctor`: check passive host/backend prerequisites and an optional target
   executable's presence.
 - `acs profile validate NAME`: validate structure and resolve selected Skills.
 - `acs explain TARGET --profile NAME`: report planned permissions without
   launching; optionally check bounded native readiness.
 
-Success applies only to the requested checks. It does not establish credentials,
-executable-version compatibility, materialization or runtime enforcement.
+Success applies only to the requested checks. Unrequested authentication status,
+executable-version compatibility, materialization and runtime enforcement
+remain unchecked.
+
+## Unified launch check
+
+```sh
+acs check --profile backend-review --target sandbox
+acs check --profile backend-review --target codex --json
+acs check --profile backend-review --target sandbox --check-native-readiness
+acs check --profile backend-review --target codex --check-authentication --auth work
+```
+
+The default check reads stored structure, resolves selected Skill metadata and
+selected instruction files, admits the requested overlay, and combines passive
+host, backend-file and executable-presence facts. It starts no process, accesses
+no credentials, allocates or recovers no Session, and changes no Profile or file.
+It does not assemble a launch plan or resolve secret environment values.
+Sandbox uses common capabilities without an account or target client. Legacy
+v1/v2 Profiles retain their implicit Devin overlay and cannot select Codex.
+Sandbox can consume their common capabilities with legacy workspace write. Version-3
+Devin/Codex checks require the selected supported overlay; unknown inactive
+overlays do not authorize that target or prevent common sandbox checks.
+
+`--check-native-readiness` requests the existing bounded native backend probe.
+It runs only after passive host and backend-file prerequisites pass. The `native.readiness` pass
+establishes the fixed backend observation. `runtime.enforcement` remains
+unchecked, as do generated policy, target materialization and preflights.
+
+`--check-authentication` is supported only for Codex and requires an explicit
+`--auth NAME`. ACS never infers an identity from the Profile name or stored
+reference. After passive prerequisites and any requested native check pass,
+it delegates to the existing [named authentication status
+operation](codex.md#named-authentication). This accesses the named credential
+resource, snapshots the target, projects credentials into a private Session,
+runs contained version and login-status processes, and proves cleanup.
+Successful status may commit an eligible same-identity refresh. Failed or
+uncertain cleanup follows the existing preservation/quarantine contract.
+No login or recovery is attempted. The probe context has a 30-second deadline;
+cleanup remains owned by the existing runtime and can outlast cancellation.
+
+There is no standalone credential-free version probe. A successful explicit
+status operation establishes both supported version and authentication. A
+rejected version reports version failure and authentication unchecked. Other
+status failures leave version unchecked because the owner does not expose
+completed phase evidence. See the centralized [compatibility
+contract](codex.md#named-authentication) for supported versions.
+
+Help owns the full grammar: `acs check --help`. Invalid syntax produces
+contextual stderr usage and no JSON. Valid JSON output uses diagnostic format 1
+with `operation: "check"`, the requested target (`devin`, `codex`, `sandbox`),
+and the same ordered check fields listed below, followed by `native.readiness`
+and `operation.completion`. The completion fact reports cancellation or completed
+requested observations; it does not establish launch readiness. Existing doctor/validation
+formats remain unchanged. Fixed facts and guidance omit private paths, source
+contents, target output, identity metadata, authentication references and raw
+errors. Observations can change before launch.
+
+Exit 0 means all requested checks passed. Unrequested or unsupported facts
+remain `unchecked`, so exit 0 never claims complete launch readiness. A failed
+passive prerequisite prevents active status work. Requested cancellation,
+failed runtime probes and failed passive facts exit 1.
 
 ## Passive diagnostics
 
