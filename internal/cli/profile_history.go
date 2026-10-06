@@ -846,6 +846,43 @@ func preserveCurrentRestoreBindings(candidate *profile.Profile, current profile.
 		candidate.Common[commonprofile.PathsCapabilityID] = selectedPayload
 	}
 
+	// Exclusion local bindings use the same identity/type compatibility rule.
+	// Retaining historical denial intent must never silently lose its machine binding.
+	if payload, ok := candidate.Common[commonprofile.ExclusionsCapabilityID]; ok {
+		selected, err := commonprofile.DecodeExclusionSelection(payload.Selection)
+		if err != nil {
+			return false, err
+		}
+		currentByID := map[string]commonprofile.ExclusionEntry{}
+		if currentPayload, ok := current.Common[commonprofile.ExclusionsCapabilityID]; ok {
+			currentSelection, err := commonprofile.DecodeExclusionSelection(currentPayload.Selection)
+			if err != nil {
+				return false, err
+			}
+			for _, entry := range currentSelection.Entries {
+				currentByID[entry.ID] = entry
+			}
+		}
+		for index := range selected.Entries {
+			entry := &selected.Entries[index]
+			if entry.Reference.Kind != "local-absolute" {
+				continue
+			}
+			bound, ok := currentByID[entry.ID]
+			if !ok || bound.Type != entry.Type || bound.Reference.Kind != entry.Reference.Kind {
+				needs = true
+				continue
+			}
+			entry.Reference.Path = bound.Reference.Path
+		}
+		encoded, err := commonprofile.EncodeExclusionSelection(selected)
+		if err != nil {
+			return false, err
+		}
+		payload.Selection = encoded
+		candidate.Common[commonprofile.ExclusionsCapabilityID] = payload
+	}
+
 	// Executable local-absolute references follow the same conservative
 	// current-binding rule. Historical machine paths are never reactivated.
 	if selectedPayload, ok := candidate.Common[commonprofile.ExecutablesCapabilityID]; ok {

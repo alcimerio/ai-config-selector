@@ -26,6 +26,7 @@ func NewSkillsProfile(name string, references []skills.SkillReference) profile.P
 	workspace, _ := json.Marshal(struct {
 		Access launch.WorkspaceAccess `json:"access"`
 	}{launch.WorkspaceAccessReadOnly})
+	exclusions, _ := commonprofile.EncodeExclusionSelection(commonprofile.ExclusionSelection{})
 	paths, _ := json.Marshal(commonprofile.PathSelection{Entries: []commonprofile.PathEntry{}})
 	executables, _ := commonprofile.EncodeExecutableSelection(commonprofile.ExecutableSelection{Entries: []commonprofile.ExecutableEntry{}})
 	environment, _ := commonprofile.EncodeEnvironmentSelection(commonprofile.EnvironmentSelection{Entries: []commonprofile.EnvironmentEntry{}})
@@ -33,6 +34,7 @@ func NewSkillsProfile(name string, references []skills.SkillReference) profile.P
 		Common: map[string]profile.CommonPayload{
 			commonprofile.SkillsCapabilityID:      {Version: commonprofile.SkillsCapabilityVersion, Selection: selection},
 			commonprofile.WorkspaceCapabilityID:   {Version: commonprofile.WorkspaceCapabilityVersion, Selection: workspace},
+			commonprofile.ExclusionsCapabilityID:  {Version: 1, Selection: exclusions},
 			commonprofile.PathsCapabilityID:       {Version: commonprofile.PathsCapabilityVersion, Selection: paths},
 			commonprofile.ExecutablesCapabilityID: {Version: commonprofile.ExecutablesCapabilityVersion, Selection: executables},
 			commonprofile.EnvironmentCapabilityID: {Version: commonprofile.EnvironmentCapabilityVersion, Selection: environment},
@@ -156,6 +158,7 @@ func newCategoryRegistry(adapter *Adapter) (*category.Registry, commonprofile.Sk
 		return nil, commonprofile.SkillsBinding{}, commonprofile.InstructionsBinding{}, commonprofile.WorkspaceBinding{}, commonprofile.PathsBinding{}, commonprofile.ExecutablesBinding{}, commonprofile.EnvironmentBinding{}, err
 	}
 	adapter.mcpCategory = bindings.MCP
+	adapter.exclusionsCategory = bindings.Exclusions
 	registry, err := category.NewRegistryWithRequirements("devin", authority.TargetRequirements{
 		Recipe:                  authority.RecipeDevin,
 		Executable:              adapter.binaryPath,

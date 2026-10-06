@@ -727,6 +727,9 @@ func fitWidth(content string, width int) string {
 func plural(count int, suffix string) string { return strconv.Itoa(count) + " " + suffix }
 
 func categoryName(id string) string {
+	if id == "exclusions" {
+		return "Excluded paths"
+	}
 	words := strings.FieldsFunc(id, func(character rune) bool { return character == '-' || character == '_' })
 	for index, word := range words {
 		if word != "" {

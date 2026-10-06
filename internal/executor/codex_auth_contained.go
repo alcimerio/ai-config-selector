@@ -106,7 +106,7 @@ func prepareContainedOperationWithAccessAndGrantsUsingExecutable(
 	if err := sandbox.Check(ctx, launch.SandboxCheck{
 		Workspace: config.WorkingDirectory, WorkspaceAccess: workspaceAccess, SessionsDirectory: config.SessionsDirectory,
 		Executable: executable, RuntimeInputs: preparedConfig.RuntimeInputs,
-		RuntimeProbePaths: config.RuntimeProbePaths, RuntimeAuthority: runtimeAuthority, FilesystemGrants: filesystemGrants, ExecutableGrants: executableGrants,
+		RuntimeProbePaths: config.RuntimeProbePaths, RuntimeAuthority: runtimeAuthority, FilesystemGrants: filesystemGrants, FilesystemExclusions: config.filesystemExclusions, ExecutableGrants: executableGrants,
 		RequiresEnvironment: requiresEnvironment,
 	}); err != nil {
 		preparation.Close()
@@ -163,7 +163,7 @@ func runContainedCodex(
 		Workspace: created.WorkingDirectory(), SessionsDirectory: created.SessionsDirectory(),
 		SessionDirectory: created.RootDirectory(), SessionHome: created.HomeDirectory(),
 		TemporaryDirectory: created.TemporaryDirectory(), Executable: config.BinaryPath,
-		RuntimeInputs: config.RuntimeInputs, RuntimeProbePaths: config.RuntimeProbePaths,
+		RuntimeInputs: config.RuntimeInputs, RuntimeProbePaths: config.RuntimeProbePaths, FilesystemExclusions: config.filesystemExclusions,
 		RecoveryProofChallenge: challenge,
 		Arguments:              codexAuthRuntimeArguments(workspace, arguments...), Terminal: terminal,
 	})

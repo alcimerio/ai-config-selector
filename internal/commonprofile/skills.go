@@ -252,3 +252,12 @@ func ValidateCommonDestinations(selected []skills.SkillBundle) error {
 	}
 	return nil
 }
+
+// MaterialOrigins are private launch inputs, never public semantic facts.
+func (c SkillsContribution) MaterialOrigins() []string {
+	result := make([]string, 0, len(c.selected))
+	for _, bundle := range c.selected {
+		result = append(result, bundle.BundlePath)
+	}
+	return result
+}

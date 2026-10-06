@@ -67,6 +67,7 @@ type DevinRequest struct {
 	ResolvedPlan          *authority.Plan
 	RuntimeAuthority      launch.RuntimeAuthority
 	FilesystemGrants      []launch.FilesystemGrant
+	FilesystemExclusions  []launch.FilesystemExclusion
 	ExecutableGrants      []launch.ExecutableGrant
 	sessionProtections    []launch.SessionProtection
 	selectedMCPConfig     string
@@ -245,11 +246,16 @@ func (e *Executor) runAttached(ctx context.Context, recipe attachedRecipe) (resu
 		}
 	}
 	var filesystemGrants []launch.FilesystemGrant
+	var filesystemExclusions []launch.FilesystemExclusion
 	var executableGrants []launch.ExecutableGrant
 	requiresEnvironment := false
 	if recipe.resolvedPlan != nil {
 		requiresEnvironment = len(recipe.resolvedPlan.EnvironmentIntents()) != 0
 		var err error
+		filesystemExclusions, err = recipe.resolvedPlan.ResolveFilesystemExclusions(recipe.workingDirectory, recipe.sessionsDirectory)
+		if err != nil {
+			return err, false
+		}
 		filesystemGrants, err = recipe.resolvedPlan.ResolveFilesystemGrantsForExecutable(recipe.workingDirectory, recipe.sessionsDirectory, executable)
 		if err != nil {
 			return &launch.SandboxError{Category: launch.SandboxUnsafePath}, false
@@ -261,7 +267,7 @@ func (e *Executor) runAttached(ctx context.Context, recipe attachedRecipe) (resu
 	}
 	if err := e.sandbox.Check(ctx, launch.SandboxCheck{Workspace: recipe.workingDirectory,
 		WorkspaceAccess: recipe.workspaceAccess, SessionsDirectory: recipe.sessionsDirectory,
-		Executable: executable, RuntimeAuthority: recipe.runtimeAuthority, FilesystemGrants: filesystemGrants, ExecutableGrants: executableGrants, RequiresEnvironment: requiresEnvironment}); err != nil {
+		Executable: executable, RuntimeAuthority: recipe.runtimeAuthority, FilesystemExclusions: filesystemExclusions, FilesystemGrants: filesystemGrants, ExecutableGrants: executableGrants, RequiresEnvironment: requiresEnvironment}); err != nil {
 		return err, false
 	}
 	environment, err := resolvePlanEnvironment(recipe.resolvedPlan, e.environmentLookup)
@@ -299,7 +305,7 @@ func (e *Executor) runAttached(ctx context.Context, recipe attachedRecipe) (resu
 		SessionsDirectory: created.SessionsDirectory(), SessionDirectory: created.RootDirectory(),
 		SessionHome: created.HomeDirectory(), TemporaryDirectory: created.TemporaryDirectory(),
 		Executable: executable, Arguments: arguments, Terminal: recipe.terminal, RuntimeAuthority: recipe.runtimeAuthority,
-		FilesystemGrants: filesystemGrants,
+		FilesystemExclusions: filesystemExclusions, FilesystemGrants: filesystemGrants,
 		ExecutableGrants: executableGrants,
 		Environment:      environment,
 	})
@@ -372,6 +378,10 @@ func (e *Executor) RunDevin(ctx context.Context, request DevinRequest) (exitCode
 	if request.ResolvedPlan != nil {
 		request.RuntimeAuthority = request.ResolvedPlan.RuntimeAuthority()
 		var err error
+		request.FilesystemExclusions, err = request.ResolvedPlan.ResolveFilesystemExclusions(request.WorkingDirectory, request.SessionsDirectory)
+		if err != nil {
+			return 1, err
+		}
 		request.FilesystemGrants, err = request.ResolvedPlan.ResolveFilesystemGrantsForPreflight(request.WorkingDirectory, request.SessionsDirectory)
 		if err == nil {
 			request.ExecutableGrants, err = request.ResolvedPlan.ResolveExecutableGrants(request.WorkingDirectory, request.SessionsDirectory)
@@ -391,7 +401,7 @@ func (e *Executor) RunDevin(ctx context.Context, request DevinRequest) (exitCode
 	supervisor := newDevinSignalSupervisor(cancelPreflight)
 	defer supervisor.stop()
 	requiresEnvironment := request.ResolvedPlan != nil && len(request.ResolvedPlan.EnvironmentIntents()) != 0
-	if err := e.sandbox.Check(preflightContext, launch.SandboxCheck{Workspace: request.WorkingDirectory, WorkspaceAccess: request.WorkspaceAccess, SessionsDirectory: request.SessionsDirectory, Executable: request.Executable, RuntimeInputs: request.RuntimeInputs, RuntimeAuthority: request.RuntimeAuthority, FilesystemGrants: request.FilesystemGrants, ExecutableGrants: request.ExecutableGrants, RequiresEnvironment: requiresEnvironment}); err != nil {
+	if err := e.sandbox.Check(preflightContext, launch.SandboxCheck{Workspace: request.WorkingDirectory, WorkspaceAccess: request.WorkspaceAccess, SessionsDirectory: request.SessionsDirectory, Executable: request.Executable, RuntimeInputs: request.RuntimeInputs, RuntimeAuthority: request.RuntimeAuthority, FilesystemExclusions: request.FilesystemExclusions, FilesystemGrants: request.FilesystemGrants, ExecutableGrants: request.ExecutableGrants, RequiresEnvironment: requiresEnvironment}); err != nil {
 		return 1, err
 	}
 	environment, err := resolvePlanEnvironment(request.ResolvedPlan, e.environmentLookup)
@@ -511,6 +521,10 @@ func (e *Executor) VerifyDevin(ctx context.Context, request DevinRequest) (resul
 	if request.ResolvedPlan != nil {
 		request.RuntimeAuthority = request.ResolvedPlan.RuntimeAuthority()
 		var err error
+		request.FilesystemExclusions, err = request.ResolvedPlan.ResolveFilesystemExclusions(request.WorkingDirectory, request.SessionsDirectory)
+		if err != nil {
+			return err
+		}
 		request.FilesystemGrants, err = request.ResolvedPlan.ResolveFilesystemGrantsForPreflight(request.WorkingDirectory, request.SessionsDirectory)
 		if err == nil {
 			request.ExecutableGrants, err = request.ResolvedPlan.ResolveExecutableGrants(request.WorkingDirectory, request.SessionsDirectory)
@@ -525,7 +539,7 @@ func (e *Executor) VerifyDevin(ctx context.Context, request DevinRequest) (resul
 			return &launch.SandboxError{Category: launch.SandboxUnsafePath}
 		}
 	}
-	if err := e.sandbox.Check(ctx, launch.SandboxCheck{Workspace: request.WorkingDirectory, WorkspaceAccess: request.WorkspaceAccess, SessionsDirectory: request.SessionsDirectory, Executable: request.Executable, RuntimeInputs: request.RuntimeInputs, RuntimeAuthority: request.RuntimeAuthority, FilesystemGrants: request.FilesystemGrants, ExecutableGrants: request.ExecutableGrants}); err != nil {
+	if err := e.sandbox.Check(ctx, launch.SandboxCheck{Workspace: request.WorkingDirectory, WorkspaceAccess: request.WorkspaceAccess, SessionsDirectory: request.SessionsDirectory, Executable: request.Executable, RuntimeInputs: request.RuntimeInputs, RuntimeAuthority: request.RuntimeAuthority, FilesystemExclusions: request.FilesystemExclusions, FilesystemGrants: request.FilesystemGrants, ExecutableGrants: request.ExecutableGrants}); err != nil {
 		return err
 	}
 	// Verify runs value-free target preflights, but a required selected source
@@ -995,7 +1009,7 @@ func (e *Executor) prepareDevin(ctx context.Context, created *session.Session, r
 	if len(selected) != 0 {
 		environment = selected[0]
 	}
-	return e.prepareRetainedProcess(ctx, created, launch.ProcessRequest{Workspace: created.WorkingDirectory(), WorkspaceAccess: request.WorkspaceAccess, SessionsDirectory: created.SessionsDirectory(), SessionDirectory: created.RootDirectory(), SessionHome: created.HomeDirectory(), TemporaryDirectory: created.TemporaryDirectory(), Executable: request.Executable, RuntimeInputs: request.RuntimeInputs, Arguments: arguments, Terminal: terminal, RuntimeAuthority: request.RuntimeAuthority, FilesystemGrants: request.FilesystemGrants, ExecutableGrants: request.ExecutableGrants, SessionProtections: request.sessionProtections, SelectedMCPConfig: request.selectedMCPConfig, ReserveMCPConfigNames: request.reserveMCPConfigNames, Environment: environment})
+	return e.prepareRetainedProcess(ctx, created, launch.ProcessRequest{Workspace: created.WorkingDirectory(), WorkspaceAccess: request.WorkspaceAccess, SessionsDirectory: created.SessionsDirectory(), SessionDirectory: created.RootDirectory(), SessionHome: created.HomeDirectory(), TemporaryDirectory: created.TemporaryDirectory(), Executable: request.Executable, RuntimeInputs: request.RuntimeInputs, Arguments: arguments, Terminal: terminal, RuntimeAuthority: request.RuntimeAuthority, FilesystemExclusions: request.FilesystemExclusions, FilesystemGrants: request.FilesystemGrants, ExecutableGrants: request.ExecutableGrants, SessionProtections: request.sessionProtections, SelectedMCPConfig: request.selectedMCPConfig, ReserveMCPConfigNames: request.reserveMCPConfigNames, Environment: environment})
 }
 
 // prepareDevinInteractive commits the handoff before a process reference can

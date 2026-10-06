@@ -188,8 +188,15 @@ func (e *SandboxError) Error() string {
 	return string(e.Category) + ": " + message
 }
 
-func sandboxError(category SandboxErrorCategory, _ error) error {
-	return &SandboxError{Category: category}
+func sandboxError(category SandboxErrorCategory, cause error) error {
+	result := &SandboxError{Category: category}
+	// Only exclusion errors contain prevalidated entry-level, source-free text.
+	// Arbitrary causes still never enter public diagnostics.
+	var exclusion *exclusionError
+	if errors.As(cause, &exclusion) {
+		result.remediation = exclusion.Error()
+	}
+	return result
 }
 
 // Platform identifies the host properties relevant to the supported sandbox
@@ -253,16 +260,17 @@ func CurrentPlatform() (Platform, error) {
 // leasing a Session. RuntimeProbePaths are exact optional file paths; unlike
 // RuntimeInputs, they need not exist.
 type SandboxCheck struct {
-	Workspace           string
-	WorkspaceAccess     WorkspaceAccess
-	SessionsDirectory   string
-	Executable          string
-	RuntimeInputs       []string
-	RuntimeProbePaths   []string
-	RuntimeAuthority    RuntimeAuthority
-	FilesystemGrants    []FilesystemGrant
-	ExecutableGrants    []ExecutableGrant
-	RequiresEnvironment bool
+	Workspace            string
+	WorkspaceAccess      WorkspaceAccess
+	SessionsDirectory    string
+	Executable           string
+	RuntimeInputs        []string
+	RuntimeProbePaths    []string
+	RuntimeAuthority     RuntimeAuthority
+	FilesystemGrants     []FilesystemGrant
+	FilesystemExclusions []FilesystemExclusion
+	ExecutableGrants     []ExecutableGrant
+	RequiresEnvironment  bool
 }
 
 // ProcessRequest describes one command that must run through the selected
@@ -279,6 +287,7 @@ type ProcessRequest struct {
 	RuntimeProbePaths      []string
 	RuntimeAuthority       RuntimeAuthority
 	FilesystemGrants       []FilesystemGrant
+	FilesystemExclusions   []FilesystemExclusion
 	ExecutableGrants       []ExecutableGrant
 	SessionProtections     []SessionProtection
 	SelectedMCPConfig      string
@@ -581,7 +590,7 @@ type sanitizedProcess struct {
 }
 
 func (process sanitizedProcess) Start() error {
-	if process.startValidation != nil && len(process.validated.sessionProtections) != 0 {
+	if process.startValidation != nil && (len(process.validated.sessionProtections) != 0 || len(process.validated.filesystemExclusions) != 0) {
 		if err := process.startValidation(process.validated); err != nil {
 			if aborter, ok := process.process.(interface{ AbortPrepared() error }); ok {
 				if abortErr := aborter.AbortPrepared(); abortErr != nil {
@@ -631,6 +640,7 @@ type validatedSandboxCheck struct {
 	runtimeProbeTraversalPaths []string
 	runtimeAuthority           RuntimeAuthority
 	filesystemGrants           []FilesystemGrant
+	filesystemExclusions       []FilesystemExclusion
 	executableGrants           []ExecutableGrant
 	requiresEnvironment        bool
 }
@@ -686,12 +696,32 @@ func validateSandboxCheck(request SandboxCheck) (validatedSandboxCheck, error) {
 	if err != nil {
 		return validatedSandboxCheck{}, sandboxError(SandboxUnsafePath, err)
 	}
+	exclusions, err := revalidateFilesystemExclusions(request.FilesystemExclusions, request.Workspace, sessionsDirectory)
+	if err != nil {
+		return validatedSandboxCheck{}, sandboxError(SandboxUnsafePath, err)
+	}
+	required := append([]string{executable, sessionsDirectory, privateSessionOperations}, runtimeInputs...)
+	supervisor, err := os.Executable()
+	if err != nil {
+		return validatedSandboxCheck{}, sandboxError(SandboxUnsafePath, err)
+	}
+	supervisor, err = filepath.EvalSymlinks(supervisor)
+	if err != nil {
+		return validatedSandboxCheck{}, sandboxError(SandboxUnsafePath, err)
+	}
+	required = append(required, supervisor)
+
+	required = append(required, runtimeProbePaths...)
+	if err := validateExclusionRequirements(exclusions, filesystemGrants, executableGrants, required); err != nil {
+		return validatedSandboxCheck{}, sandboxError(SandboxUnsafePath, err)
+	}
 	return validatedSandboxCheck{
 		workspace: workspace, workspaceAccess: workspaceAccess, sessionsDirectory: sessionsDirectory, executable: executable,
 		runtimeInputs: runtimeInputs, runtimeProbePaths: runtimeProbePaths,
 		runtimeProbeTraversalPaths: runtimeProbeTraversalPaths,
 		runtimeAuthority:           runtimeAuthority,
 		filesystemGrants:           filesystemGrants,
+		filesystemExclusions:       exclusions,
 		executableGrants:           executableGrants,
 		requiresEnvironment:        request.RequiresEnvironment,
 	}, nil
@@ -716,6 +746,7 @@ func SessionOperationsDirectory(sessionsDirectory string) string {
 }
 
 type validatedProcessRequest struct {
+	exclusionWorkspace         string
 	workspace                  string
 	workspaceAccess            WorkspaceAccess
 	sessionsDirectory          string
@@ -728,6 +759,7 @@ type validatedProcessRequest struct {
 	runtimeProbeTraversalPaths []string
 	runtimeAuthority           RuntimeAuthority
 	filesystemGrants           []FilesystemGrant
+	filesystemExclusions       []FilesystemExclusion
 	executableGrants           []ExecutableGrant
 	sessionProtections         []validatedSessionProtection
 	selectedMCPConfig          string
@@ -754,11 +786,12 @@ func validateProcessRequest(request ProcessRequest) (validatedProcessRequest, er
 	checked, err := validateSandboxCheck(SandboxCheck{
 		Workspace: request.Workspace, WorkspaceAccess: request.WorkspaceAccess, SessionsDirectory: request.SessionsDirectory,
 		Executable: request.Executable, RuntimeInputs: request.RuntimeInputs,
-		RuntimeProbePaths:   request.RuntimeProbePaths,
-		RuntimeAuthority:    request.RuntimeAuthority,
-		FilesystemGrants:    request.FilesystemGrants,
-		ExecutableGrants:    request.ExecutableGrants,
-		RequiresEnvironment: request.Environment != nil && !request.Environment.Empty(),
+		RuntimeProbePaths:    request.RuntimeProbePaths,
+		RuntimeAuthority:     request.RuntimeAuthority,
+		FilesystemGrants:     request.FilesystemGrants,
+		FilesystemExclusions: request.FilesystemExclusions,
+		ExecutableGrants:     request.ExecutableGrants,
+		RequiresEnvironment:  request.Environment != nil && !request.Environment.Empty(),
 	})
 	if err != nil {
 		return validatedProcessRequest{}, err
@@ -819,13 +852,14 @@ func validateProcessRequest(request ProcessRequest) (validatedProcessRequest, er
 		}
 	}
 	return validatedProcessRequest{
-		workspace: checked.workspace, workspaceAccess: checked.workspaceAccess, sessionsDirectory: checked.sessionsDirectory,
+		exclusionWorkspace: request.Workspace, workspace: checked.workspace, workspaceAccess: checked.workspaceAccess, sessionsDirectory: checked.sessionsDirectory,
 		sessionDirectory: sessionDirectory, sessionHome: sessionHome,
 		temporaryDirectory: temporaryDirectory, executable: checked.executable,
 		runtimeInputs: checked.runtimeInputs, runtimeProbePaths: checked.runtimeProbePaths,
 		runtimeProbeTraversalPaths: checked.runtimeProbeTraversalPaths,
 		runtimeAuthority:           checked.runtimeAuthority,
 		filesystemGrants:           checked.filesystemGrants,
+		filesystemExclusions:       checked.filesystemExclusions,
 		executableGrants:           checked.executableGrants,
 		sessionProtections:         protections,
 		selectedMCPConfig:          selectedMCPConfig,
@@ -842,6 +876,9 @@ func validateProcessRequest(request ProcessRequest) (validatedProcessRequest, er
 }
 
 func revalidateSessionProtections(request validatedProcessRequest) error {
+	if _, err := revalidateFilesystemExclusions(request.filesystemExclusions, request.exclusionWorkspace, request.sessionsDirectory); err != nil {
+		return err
+	}
 	for _, root := range []struct {
 		path     string
 		witness  []pathIdentity

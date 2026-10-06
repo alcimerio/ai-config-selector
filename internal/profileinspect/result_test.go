@@ -16,7 +16,7 @@ func TestSelectionCountsPreserveScalarAndEmptyCapabilities(t *testing.T) {
 		case 2:
 			body = `{"version":2,"name":"example","target":"devin","categories":{"skills":{"schemaVersion":1,"selection":[]}}}`
 		case 3:
-			body = `{"version":3,"name":"example","common":{"skills":{"version":1,"selection":[]},"workspace":{"version":1,"selection":{"access":"read-only"}},"paths":{"version":1,"selection":{"entries":[]}},"executables":{"version":1,"selection":{"entries":[]}},"environment":{"version":1,"selection":{"entries":[]}},"mcp":{"version":1,"selection":{"servers":[]}},"instructions":{"version":1,"selection":[]}},"overlays":{}}`
+			body = `{"version":3,"name":"example","common":{"skills":{"version":1,"selection":[]},"workspace":{"version":1,"selection":{"access":"read-only"}},"paths":{"version":1,"selection":{"entries":[]}},"exclusions":{"version":1,"selection":{"entries":[]}},"executables":{"version":1,"selection":{"entries":[]}},"environment":{"version":1,"selection":{"entries":[]}},"mcp":{"version":1,"selection":{"servers":[]}},"instructions":{"version":1,"selection":[]}},"overlays":{}}`
 		}
 		t.Run(fmt.Sprint(version), func(t *testing.T) {
 			entry := InspectBytes("example", []byte(body))

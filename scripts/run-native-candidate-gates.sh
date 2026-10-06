@@ -139,6 +139,8 @@ trap 'handle_signal 143' TERM
 
 require_test ./internal/codexauthresource TestNativeInstalledACSExecutesLockedCodexToolThroughNamedIdentity
 run_auth_test ./internal/codexauthresource -run '^TestNativeInstalledACSExecutesLockedCodexToolThroughNamedIdentity$' -count=1 -v
+require_test ./internal/codexauthresource TestNativeInstalledACSFilesystemExclusionCatalog
+run_auth_test ./internal/codexauthresource -run '^TestNativeInstalledACSFilesystemExclusionCatalog$' -count=1 -v
 require_test ./internal/codexauthresource TestCodexPublicProductionMCPProtection
 run_auth_test ./internal/codexauthresource -run '^TestCodexPublicProductionMCPProtection$' -count=1 -v
 
@@ -148,6 +150,10 @@ go test -v ./...
 
 require_test ./acceptance TestPromotedArtifactSharedTargetConformance
 run_acceptance_test ./acceptance -run '^TestPromotedArtifactSharedTargetConformance$' -count=1 -v
+require_test ./acceptance TestPromotedArtifactNativeFilesystemExclusions
+run_acceptance_test ./acceptance -run '^TestPromotedArtifactNativeFilesystemExclusions$' -count=1 -v
+require_test ./acceptance TestPromotedArtifactNativeFilesystemExclusionCatalogs
+run_acceptance_test ./acceptance -run '^TestPromotedArtifactNativeFilesystemExclusionCatalogs$' -count=1 -v
 require_test ./acceptance TestPromotedArtifactNativeProductionMCPProtection
 run_acceptance_test ./acceptance -run '^TestPromotedArtifactNativeProductionMCPProtection$' -count=1 -v
 require_test ./acceptance TestPromotedArtifactNativeRealDevinMCP

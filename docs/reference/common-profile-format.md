@@ -34,6 +34,10 @@ to use the established read, edit and explicit migration paths.
       "version": 1,
       "selection": {"entries": []}
     },
+    "exclusions": {
+      "version": 1,
+      "selection": {"entries": []}
+    },
     "executables": {
       "version": 1,
       "selection": {
@@ -181,6 +185,69 @@ Older v3 Profiles without `paths` remain readable as an empty compatibility
 default without rewrite. New creation and confirmed mutation emit an explicit
 empty or populated `paths` selection. A legacy edit that selects a nonempty
 path grant is refused until the user performs explicit v3 migration.
+
+## Filesystem exclusions
+
+`common.exclusions` version 1 denies access to explicitly selected pathnames and
+directory trees. It uses the same reference kinds as path grants, without an
+`access` field or wildcard matching:
+
+```json
+"exclusions": {
+  "version": 1,
+  "selection": {
+    "entries": [
+      {"id": "repo-skills", "type": "directory", "reference": {"kind": "workspace-relative", "path": ".agents/skills"}},
+      {"id": "private-file", "type": "file", "reference": {"kind": "local-absolute", "path": "/Users/example/private.md"}}
+    ]
+  }
+}
+```
+
+Select at most 128 entries. IDs match `[a-z][a-z0-9._-]{0,63}`; duplicate IDs or
+canonical destinations are rejected. Paths have at most 1,024 UTF-8 bytes and
+128 components. Types are `file` or `directory`; references are
+`workspace-relative` or `local-absolute`. Local roots are limited to descendants
+of the real user home or a mounted `/Volumes/<name>` filesystem. Unknown fields,
+unsupported versions, null entries, escapes and malformed values fail admission
+in both launch and passive inspection. There is no Skill-name or content filter.
+
+Exclusions take precedence over workspace access and broader path grants. ACS
+denies reads and writes at the selected logical and canonical names and below
+them, and denies mutation of their ancestor names to prevent target-side rename,
+unlink or replacement. Ordinary sibling writes remain available when granted.
+The parent directory can still reveal the excluded name in its listing.
+
+ACS captures the existing workspace and path identities before Session
+allocation and revalidates them before preparation and startup. An absent final
+component is allowed only when its existing direct parent can be safely
+captured. Missing ancestors, wrong existing types, unsafe links and observed
+identity changes fail closed. The policy is fixed for each Session; changing the
+Profile affects later launches.
+
+Explicit path grants inside exclusions, selected executables, required runtime
+inputs and private Session state cannot conflict with a denial. Selected Skill
+and instruction source conflicts fail before material is copied into a Session.
+This includes a selected whole Skill bundle containing an excluded descendant.
+Remove the selection or exclusion to resolve the conflict. Project-local Skills
+inside denied roots are omitted from the supported targets' discoverable catalogs.
+Owner-side planning labels covered bundles as excluded; `explain` and dry-run
+report logical IDs, types and references without exposing local absolute bindings.
+
+The guarantee is pathname based. It does not erase Git history, independent
+copies, existing external hard links, previously supplied prompt material, or
+names visible from parent listings. A cooperating host process can change a
+pathname after final validation; ACS does not provide an immutable filesystem
+snapshot or content-wide secrecy.
+
+Older v3 Profiles that omit `exclusions` remain readable with an empty default.
+New creation and confirmed mutation emit an explicit empty or populated
+selection. Nonempty legacy edits require explicit v3 migration. Edit, clone and
+rename preserve intent; history restore retains compatible current local
+bindings and requires rebinding when they are missing or incompatible. Portable
+exchange v3 carries workspace references and symbolic local bindings. Older ACS
+versions reject a present unknown capability, including an empty one; restore a
+pre-feature Profile revision before downgrading.
 
 ## Executable visibility
 

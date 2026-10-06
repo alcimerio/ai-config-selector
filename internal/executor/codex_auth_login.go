@@ -15,12 +15,13 @@ import (
 )
 
 type codexLoginConfig struct {
-	BinaryPath        string
-	RuntimeInputs     []string
-	RuntimeProbePaths []string
-	SessionsDirectory string
-	WorkingDirectory  string
-	PrivateRoot       string
+	filesystemExclusions []launch.FilesystemExclusion
+	BinaryPath           string
+	RuntimeInputs        []string
+	RuntimeProbePaths    []string
+	SessionsDirectory    string
+	WorkingDirectory     string
+	PrivateRoot          string
 }
 
 type codexLoginRunner struct {

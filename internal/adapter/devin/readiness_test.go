@@ -3,6 +3,10 @@ package devin
 import (
 	"context"
 	"errors"
+	"github.com/alcimerio/ai-config-selector/internal/commonprofile"
+	"github.com/alcimerio/ai-config-selector/internal/profile"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -179,4 +183,48 @@ func planSectionText(section launch.PlanSection) string {
 func (sandbox *readinessSandbox) RunDevin(context.Context, executor.DevinRequest) (int, error) {
 	sandbox.prepareCalls++
 	return 1, errors.New("unexpected process execution")
+}
+
+func TestPlanLaunchLabelsExcludedProjectSkills(t *testing.T) {
+	home, workspace := t.TempDir(), t.TempDir()
+	for _, name := range []string{"hidden", "permitted"} {
+		path := filepath.Join(workspace, ".agents", "skills", name)
+		if err := os.MkdirAll(path, 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(path, "SKILL.md"), []byte("fixture"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	adapter, err := newAdapter(Config{BinaryPath: "devin", ExistingHomeDir: home})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sandbox := &readinessSandbox{}
+	adapter.executor = sandbox
+	candidate := NewSkillsProfile("preview", nil)
+	encoded, err := commonprofile.EncodeExclusionSelection(commonprofile.ExclusionSelection{Entries: []commonprofile.ExclusionEntry{{ID: "hidden", Type: "directory", Reference: commonprofile.ExclusionReference{Kind: "workspace-relative", Path: ".agents/skills/hidden"}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate.Common["exclusions"] = profile.CommonPayload{Version: 1, Selection: encoded}
+	resolved, err := adapter.Categories().Resolve(context.Background(), candidate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := adapter.PlanLaunch(context.Background(), workspace, resolved)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var text strings.Builder
+	for _, section := range plan.Sections {
+		text.WriteString(section.Title)
+		text.WriteString(planSectionText(section))
+	}
+	if !strings.Contains(text.String(), "hidden [excluded by Profile]") || !strings.Contains(text.String(), "permitted ") {
+		t.Fatalf("plan=%s", text.String())
+	}
+	if sandbox.checkCalls != 0 || sandbox.prepareCalls != 0 {
+		t.Fatal("planning started target")
+	}
 }

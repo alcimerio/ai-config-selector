@@ -422,7 +422,12 @@ func TestInteractiveCodexBindsOneIdentityBeforeSessionAndUsesFixedRecipe(t *test
 				t.Fatal(err)
 			}
 			registry.execution = newCodexExecutionRunner(config, sandbox)
-			plan := authority.New([]authority.Contribution{{ID: "test", Value: executionMaterializer{}}}, launch.WorkspaceAccessReadOnly, 3, "codex", authority.TargetRequirements{Recipe: authority.RecipeCodex, Executable: binary}).WithAuthRef("work")
+
+			if err := os.MkdirAll(filepath.Join(registry.workingDirectory, "hidden"), 0700); err != nil {
+				t.Fatal(err)
+			}
+			exclusions := exclusionMaterial{intents: []launch.PathExclusionIntent{{ID: "hidden", Type: launch.PathTypeDirectory, ReferenceKind: launch.PathReferenceWorkspaceRelative, Path: "hidden"}}}
+			plan := authority.New([]authority.Contribution{{ID: "test", Value: executionMaterializer{}}, {ID: "exclusions", Value: exclusions}}, launch.WorkspaceAccessReadOnly, 3, "codex", authority.TargetRequirements{Recipe: authority.RecipeCodex, Executable: binary}).WithAuthRef("work")
 			exitCode, err := registry.ExecuteCodex(context.Background(), CodexRequest{ResolvedPlan: &plan})
 			if err != nil || exitCode != 0 {
 				t.Fatalf("execution = (%d, %v)", exitCode, err)
@@ -431,6 +436,9 @@ func TestInteractiveCodexBindsOneIdentityBeforeSessionAndUsesFixedRecipe(t *test
 				t.Fatalf("prepared processes = %d, want version plus interactive", len(sandbox.requests))
 			}
 			for _, request := range sandbox.requests {
+				if len(request.FilesystemExclusions) != 1 || !reflect.DeepEqual(request.FilesystemExclusions, sandbox.check.FilesystemExclusions) {
+					t.Fatal("version and attached exclusion policy differ from Check")
+				}
 				if request.WorkspaceAccess != launch.WorkspaceAccessReadOnly {
 					t.Fatalf("workspace access = %q", request.WorkspaceAccess)
 				}

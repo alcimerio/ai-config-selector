@@ -37,8 +37,10 @@ type Reference struct {
 	RelativePath string `json:"relativePath"`
 }
 type Bundle struct {
-	Reference Reference
-	Content   []byte
+	// SourcePath is a private origin used to reject exclusion conflicts before projection.
+	SourcePath string `json:"-"`
+	Reference  Reference
+	Content    []byte
 }
 
 // ValidateSelection enforces the portable identity contract without touching the filesystem.
@@ -269,7 +271,7 @@ func Resolve(home string, refs []Reference) ([]Bundle, error) {
 		if total > MaxAggregateBytes {
 			return nil, errors.New("instruction selection exceeds aggregate size limit")
 		}
-		result = append(result, Bundle{Reference: ref, Content: append([]byte(nil), data...)})
+		result = append(result, Bundle{Reference: ref, SourcePath: filepath.Join(home, ".acs", "instructions", filepath.FromSlash(ref.RelativePath)), Content: append([]byte(nil), data...)})
 	}
 	return result, nil
 }

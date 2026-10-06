@@ -158,6 +158,7 @@ func TestInspectionCountsEachCapabilityWithoutDisclosingPrivateSelections(t *tes
 		"workspace":{"version":1,"selection":{"access":"read-write"}},
 		"instructions":{"version":1,"selection":[{"source":"acs-instructions","relativePath":"guide.md"}]},
 		"paths":{"version":1,"selection":{"entries":[{"id":"input","access":"read-only","type":"file","reference":{"kind":"local-absolute","path":"/private/inspection-sentinel"}}]}},
+		"exclusions":{"version":1,"selection":{"entries":[{"id":"hidden","type":"directory","reference":{"kind":"local-absolute","path":"/private/exclusion-sentinel"}}]}},
 		"executables":{"version":1,"selection":{"entries":[{"id":"server-bin","reference":{"kind":"fixed-search-name","name":"private-executable-sentinel"}}]}},
 		"environment":{"version":1,"selection":{"entries":[{"id":"token","destination":"API_TOKEN","scope":"attached-process-tree","source":{"kind":"secret-reference","provider":"host-environment","reference":"PRIVATE_ENV_SENTINEL"},"required":true,"classification":"secret"},{"id":"mode","destination":"BUILD_MODE","scope":"attached-process-tree","source":{"kind":"host-environment","name":"PRIVATE_MODE_SENTINEL"},"required":false,"classification":"non-secret"}]}},
 		"mcp":{"version":1,"selection":{"servers":[{"id":"private-server-sentinel","transport":"stdio","executableRef":"server-bin","arguments":[],"inputRefs":["input"],"environmentRefs":["token"]}]}}
@@ -174,7 +175,7 @@ func TestInspectionCountsEachCapabilityWithoutDisclosingPrivateSelections(t *tes
 			if code := app.Run(context.Background(), args); code != 0 || errOut.Len() != 0 {
 				t.Fatalf("code %d: %s %s", code, &out, &errOut)
 			}
-			for _, secret := range []string{"inspection-sentinel", "private-executable-sentinel", "PRIVATE_ENV_SENTINEL", "PRIVATE_MODE_SENTINEL", "private-server-sentinel", "private-auth-sentinel"} {
+			for _, secret := range []string{"inspection-sentinel", "exclusion-sentinel", "private-executable-sentinel", "PRIVATE_ENV_SENTINEL", "PRIVATE_MODE_SENTINEL", "private-server-sentinel", "private-auth-sentinel"} {
 				if strings.Contains(out.String(), secret) {
 					t.Fatalf("private selection leaked: %s", secret)
 				}
@@ -189,7 +190,7 @@ func TestInspectionCountsEachCapabilityWithoutDisclosingPrivateSelections(t *tes
 				if err := json.Unmarshal(out.Bytes(), &result); err != nil {
 					t.Fatal(err)
 				}
-				if len(result.Entries) != 1 || len(result.Entries[0].Categories) != 7 {
+				if len(result.Entries) != 1 || len(result.Entries[0].Categories) != 8 {
 					t.Fatalf("categories: %s", &out)
 				}
 				seen := map[string]bool{}
@@ -211,7 +212,7 @@ func TestInspectionCountsEachCapabilityWithoutDisclosingPrivateSelections(t *tes
 						if string(item["instructions"]) != `[{"source":"acs-instructions","relativePath":"guide.md"}]` {
 							t.Fatalf("changed instruction references: %s", item["instructions"])
 						}
-					case "workspace", "paths", "executables", "environment", "mcp":
+					case "workspace", "paths", "exclusions", "executables", "environment", "mcp":
 					default:
 						t.Fatalf("unexpected category: %q", id)
 					}
@@ -226,7 +227,7 @@ func TestInspectionCountsEachCapabilityWithoutDisclosingPrivateSelections(t *tes
 				}
 				return
 			}
-			for id, count := range map[string]int{"skills": 2, "instructions": 1, "paths": 1, "executables": 1, "environment": 2, "mcp": 1} {
+			for id, count := range map[string]int{"skills": 2, "instructions": 1, "paths": 1, "exclusions": 1, "executables": 1, "environment": 2, "mcp": 1} {
 				want := fmt.Sprintf("%s: %d selected; stored category version: 1", id, count)
 				if !strings.Contains(out.String(), want) {
 					t.Errorf("missing %q in %s", want, &out)

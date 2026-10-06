@@ -896,6 +896,25 @@ func buildSeatbeltPolicy(request validatedProcessRequest) (string, []string, err
 			}
 		}
 	}
+	// Explicit denials override workspace, runtime and selected path grants.
+	var exclusionRules strings.Builder
+	seenExclusionPaths := map[string]bool{}
+	for index, exclusion := range request.filesystemExclusions {
+		for aliasIndex, path := range []string{exclusion.logicalPath, exclusion.path} {
+			if seenExclusionPaths[path] {
+				continue
+			}
+			seenExclusionPaths[path] = true
+			name := "PROFILE_EXCLUSION_" + strconv.Itoa(index) + "_" + strconv.Itoa(aliasIndex)
+			definitions = append(definitions, "-D"+name+"="+path)
+			fmt.Fprintf(&exclusionRules, "\n(deny file-read* file-write* (literal (param %q)) (subpath (param %q)))", name, name)
+			for ancestorIndex, ancestor := range seatbeltPathAncestors(path) {
+				ancestorName := name + "_ANCESTOR_" + strconv.Itoa(ancestorIndex)
+				definitions = append(definitions, "-D"+ancestorName+"="+ancestor)
+				fmt.Fprintf(&exclusionRules, "\n(deny file-write* (literal (param %q)))", ancestorName)
+			}
+		}
+	}
 	var sessionProtectionRules strings.Builder
 	seenSessionProtectionPaths := map[string]bool{}
 	addSessionProtection := func(index int, protection validatedSessionProtection, includeAncestors bool) {
@@ -1018,7 +1037,7 @@ func buildSeatbeltPolicy(request validatedProcessRequest) (string, []string, err
 ` + workspaceWriteRule + pathWriteRules.String() + `
   (literal (param "SESSION")) (subpath (param "SESSION")))
 ` + sessionProtectionRules.String() + `
-` + mcpConfigReadDenials.String() + `
+` + mcpConfigReadDenials.String() + exclusionRules.String() + `
 
 ; Normal outbound IP traffic and the macOS DNS resolver are available. Other
 ; Unix sockets remain denied by default.

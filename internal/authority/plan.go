@@ -211,10 +211,17 @@ type Plan struct {
 	commandArguments       int
 	explanation            Explanation
 	pathGrantIntents       []launch.PathGrantIntent
+	pathExclusionIntents   []launch.PathExclusionIntent
+	materialOrigins        []string
 	executableGrantIntents []launch.ExecutableGrantIntent
 	environmentIntents     []launch.EnvironmentIntent
 	mcpServerIntents       []launch.MCPServerIntent
 }
+
+type pathExclusionContributor interface {
+	PathExclusionIntents() []launch.PathExclusionIntent
+}
+type materialOriginContributor interface{ MaterialOrigins() []string }
 
 type pathGrantContributor interface {
 	PathGrantIntents() []launch.PathGrantIntent
@@ -252,6 +259,12 @@ func New(contributions []Contribution, workspaceAccess launch.WorkspaceAccess, s
 	}
 	plan := Plan{contributions: append([]Contribution(nil), contributions...), workspaceAccess: workspaceAccess, sourceVersion: sourceVersion, overlay: overlay, requirements: requirements, runtimeAuthority: launch.DefaultRuntimeAuthority()}
 	for _, contribution := range plan.contributions {
+		if exclusions, ok := contribution.Value.(pathExclusionContributor); ok {
+			plan.pathExclusionIntents = append(plan.pathExclusionIntents, exclusions.PathExclusionIntents()...)
+		}
+		if material, ok := contribution.Value.(materialOriginContributor); ok {
+			plan.materialOrigins = append(plan.materialOrigins, material.MaterialOrigins()...)
+		}
 		if paths, ok := contribution.Value.(pathGrantContributor); ok {
 			plan.pathGrantIntents = append(plan.pathGrantIntents, paths.PathGrantIntents()...)
 		}
@@ -346,6 +359,19 @@ func (plan Plan) AuthorityDigest() string                   { return plan.explan
 func (plan Plan) RuntimeAuthority() launch.RuntimeAuthority { return plan.runtimeAuthority.Clone() }
 func (plan Plan) ResolveFilesystemGrants(workingDirectory, sessionsDirectory string) ([]launch.FilesystemGrant, error) {
 	return plan.resolveFilesystemGrants(workingDirectory, sessionsDirectory, plan.requirements.Executable)
+}
+
+// ResolveFilesystemExclusions captures denial identities and rejects selected
+// material origins before any Session material can be copied.
+func (plan Plan) ResolveFilesystemExclusions(workspace, sessions string) ([]launch.FilesystemExclusion, error) {
+	exclusions, err := launch.ResolveFilesystemExclusions(append([]launch.PathExclusionIntent(nil), plan.pathExclusionIntents...), workspace, sessions)
+	if err != nil {
+		return nil, err
+	}
+	if err := launch.ValidateExclusionSources(exclusions, plan.materialOrigins); err != nil {
+		return nil, err
+	}
+	return exclusions, nil
 }
 
 func (plan Plan) ResolveExecutableGrants(workingDirectory, sessionsDirectory string) ([]launch.ExecutableGrant, error) {
@@ -452,6 +478,7 @@ func buildExplanation(plan Plan) Explanation {
 	}
 	add(Facts{Requested: []Fact{{ID: "common.workspace", Kind: "workspace", Value: FactValue{Access: string(plan.WorkspaceAccess())}, Reason: workspaceReason, Source: FactSource{Kind: "profile", ID: "workspace", Version: 1}}}})
 	add(pathGrantFacts(plan.pathGrantIntents, plan.WorkspaceAccess()))
+	add(pathExclusionFacts(plan.pathExclusionIntents))
 	add(executableGrantFacts(plan.executableGrantIntents))
 	add(environmentFacts(plan.environmentIntents))
 	for _, contribution := range plan.contributions {
@@ -533,6 +560,21 @@ func pathGrantFacts(intents []launch.PathGrantIntent, workspace launch.Workspace
 			continue
 		}
 		result.Effective = append(result.Effective, Fact{ID: "path." + intent.ID, Kind: "filesystem", Value: value, Reason: "common_path_identity_unchecked", Source: FactSource{Kind: "profile", ID: "paths", Version: 1}})
+	}
+	return result
+}
+
+func pathExclusionFacts(intents []launch.PathExclusionIntent) Facts {
+	result := Facts{}
+	for _, intent := range intents {
+		value := FactValue{Access: "denied", Mode: string(intent.Type), LogicalLocation: intent.ID, Names: []string{string(intent.ReferenceKind)}}
+		if intent.ReferenceKind == launch.PathReferenceWorkspaceRelative {
+			value.LogicalReference = intent.Path
+		}
+		fact := Fact{ID: "common.exclusions." + intent.ID, Kind: "filesystem-exclusion", Value: value, Reason: "stored_v3_intent", Source: FactSource{Kind: "profile", ID: "exclusions", Version: 1}}
+		result.Requested = append(result.Requested, fact)
+		fact.Reason = "exclusion_identity_unchecked"
+		result.Effective = append(result.Effective, fact)
 	}
 	return result
 }

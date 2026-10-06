@@ -95,6 +95,7 @@ type commonIntent struct {
 	Paths        exchangePaths         `json:"paths,omitempty"`
 	Executables  exchangeExecutables   `json:"executables,omitempty"`
 	Environment  exchangeEnvironment   `json:"environment,omitempty"`
+	Exclusions   *exchangeExclusions   `json:"exclusions,omitempty"`
 	MCP          *exchangeMCP          `json:"mcp,omitempty"`
 	Instructions *exchangeInstructions `json:"instructions,omitempty"`
 }
@@ -143,6 +144,16 @@ type exchangeExecutableReference struct {
 	Name              string `json:"name,omitempty"`
 	Path              string `json:"path,omitempty"`
 	ExecutableBinding string `json:"executableBinding,omitempty"`
+}
+
+type exchangeExclusions struct {
+	Version   int                      `json:"version"`
+	Selection []exchangeExclusionEntry `json:"selection"`
+}
+type exchangeExclusionEntry struct {
+	ID        string                `json:"id"`
+	Type      launch.PathType       `json:"type"`
+	Reference exchangePathReference `json:"reference"`
 }
 
 type exchangePaths struct {
@@ -235,6 +246,19 @@ func Export(candidate profile.Profile) ([]byte, Report, error) {
 			return nil, Report{}, errors.New("invalid paths intent")
 		}
 		pathSelection = decodedPaths
+	}
+	exclusionSelection := commonprofile.ExclusionSelection{}
+	exclusionPresent := false
+	if payload, ok := candidate.Common[commonprofile.ExclusionsCapabilityID]; ok {
+		exclusionPresent = true
+		if payload.Version != 1 {
+			return nil, Report{}, errors.New("unsupported exclusions capability")
+		}
+		decoded, decodeErr := commonprofile.DecodeExclusionSelection(payload.Selection)
+		if decodeErr != nil {
+			return nil, Report{}, errors.New("invalid exclusion intent")
+		}
+		exclusionSelection = decoded
 	}
 	executableSelection := commonprofile.ExecutableSelection{Entries: []commonprofile.ExecutableEntry{}}
 	if payload, ok := candidate.Common[commonprofile.ExecutablesCapabilityID]; ok {
@@ -349,6 +373,17 @@ func Export(candidate profile.Profile) ([]byte, Report, error) {
 		}
 		exchangePathEntries = append(exchangePathEntries, exchangePathEntry{ID: entry.ID, Access: entry.Access, Type: entry.Type, Reference: reference})
 	}
+	exchangeExclusionEntries := make([]exchangeExclusionEntry, 0, len(exclusionSelection.Entries))
+	for _, entry := range exclusionSelection.Entries {
+		reference := exchangePathReference{Kind: entry.Reference.Kind, Path: entry.Reference.Path}
+		if entry.Reference.Kind == string(launch.PathReferenceLocalAbsolute) {
+			pathBindingCount++
+			symbol := fmt.Sprintf("path-%d", pathBindingCount)
+			reference = exchangePathReference{Kind: "bound", PathBinding: symbol}
+			reqs.Paths = append(reqs.Paths, requirement{ID: symbol, Kind: "local-absolute"})
+		}
+		exchangeExclusionEntries = append(exchangeExclusionEntries, exchangeExclusionEntry{ID: entry.ID, Type: launch.PathType(entry.Type), Reference: reference})
+	}
 	exchangeExecutableEntries := make([]exchangeExecutableEntry, 0, len(executableSelection.Entries))
 	executableBindingCount := 0
 	for _, entry := range executableSelection.Entries {
@@ -410,6 +445,9 @@ func Export(candidate profile.Profile) ([]byte, Report, error) {
 		Executables: exchangeExecutables{Version: commonprofile.ExecutablesCapabilityVersion, Selection: exchangeExecutableEntries},
 		Environment: exchangeEnvironment{Version: commonprofile.EnvironmentCapabilityVersion, Selection: exchangeEnvironmentEntries},
 	}, Overlays: overlays}, Requirements: reqs}
+	if exclusionPresent {
+		doc.Profile.Common.Exclusions = &exchangeExclusions{Version: 1, Selection: exchangeExclusionEntries}
+	}
 	if mcpPresent {
 		selection, encodeErr := commonprofile.EncodeMCPSelection(mcpSelection)
 		if encodeErr != nil {
@@ -696,6 +734,16 @@ func validateDocumentRelations(doc *document) Code {
 			usedPaths[entry.Reference.PathBinding] = true
 		}
 	}
+	if doc.Profile.Common.Exclusions != nil {
+		for _, entry := range doc.Profile.Common.Exclusions.Selection {
+			if entry.Reference.Kind == "bound" {
+				if !paths[entry.Reference.PathBinding] {
+					return CodeBindingInvalid
+				}
+				usedPaths[entry.Reference.PathBinding] = true
+			}
+		}
+	}
 	for _, entry := range doc.Profile.Common.Executables.Selection {
 		switch entry.Reference.Kind {
 		case string(launch.ExecutableReferenceFixedSearchName):
@@ -843,6 +891,7 @@ func KnownFieldClassifications() map[string]string {
 		"common.skills.version": "portable", "common.skills.selection": "portable", "common.skills.source": "host-bound", "common.skills.relativePath": "portable",
 		"common.workspace.version": "portable", "common.workspace.selection": "portable", "common.workspace.access": "portable", "overlays": "portable",
 		"common.paths.version": "portable", "common.paths.selection": "portable", "common.paths.id": "portable", "common.paths.access": "portable", "common.paths.type": "portable", "common.paths.reference.kind": "portable", "common.paths.reference.path": "portable-or-symbolic",
+		"common.exclusions.version": "portable", "common.exclusions.selection": "portable", "common.exclusions.id": "portable", "common.exclusions.type": "portable", "common.exclusions.reference.kind": "portable", "common.exclusions.reference.path": "portable-or-symbolic",
 		"common.executables.version": "portable", "common.executables.selection": "portable", "common.executables.id": "portable", "common.executables.reference.kind": "portable", "common.executables.reference.name": "portable", "common.executables.reference.path": "portable-or-symbolic",
 		"common.environment.version": "portable", "common.environment.selection": "portable", "common.environment.id": "portable", "common.environment.destination": "portable", "common.environment.scope": "portable", "common.environment.required": "portable", "common.environment.classification": "portable", "common.environment.source.kind": "portable", "common.environment.source.name": "portable", "common.environment.source.provider": "portable", "common.environment.source.reference": "secret-reference-symbolic",
 		"overlays.devin.version": "portable", "overlays.codex.version": "portable", "overlays.codex.authRef": "secret-reference",

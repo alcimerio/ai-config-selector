@@ -11,6 +11,7 @@ import (
 
 	"github.com/alcimerio/ai-config-selector/internal/adapter/codex"
 	"github.com/alcimerio/ai-config-selector/internal/adapter/devin"
+	"github.com/alcimerio/ai-config-selector/internal/capabilitycatalog"
 	"github.com/alcimerio/ai-config-selector/internal/commonprofile"
 	"github.com/alcimerio/ai-config-selector/internal/profile"
 	"github.com/alcimerio/ai-config-selector/internal/profileexchange"
@@ -23,6 +24,7 @@ const completeProfile = `{"version":3,"name":"example","common":{
 "instructions":{"version":1,"selection":[{"source":"acs-instructions","relativePath":"guide.md"}]},
 "workspace":{"version":1,"selection":{"access":"read-write"}},
 "paths":{"version":1,"selection":{"entries":[{"id":"settings","access":"read-only","type":"file","reference":{"kind":"workspace-relative","path":"config.json"}}]}},
+"exclusions":{"version":1,"selection":{"entries":[{"id":"hidden","type":"directory","reference":{"kind":"workspace-relative","path":".agents/skills"}}]}},
 "executables":{"version":1,"selection":{"entries":[{"id":"server-bin","reference":{"kind":"fixed-search-name","name":"tool"}}]}},
 "environment":{"version":1,"selection":{"entries":[{"id":"token","destination":"MCP_TOKEN","scope":"attached-process-tree","source":{"kind":"secret-reference","provider":"host-environment","reference":"HOST_CODEC_TOKEN"},"required":true,"classification":"secret"}]}},
 "mcp":{"version":1,"selection":{"servers":[{"id":"tool","transport":"stdio","executableRef":"server-bin","arguments":[{"kind":"path","ref":"settings"}],"inputRefs":["settings"],"environmentRefs":["token"],"disabledTools":["remove_issue"]}]}}
@@ -128,7 +130,7 @@ func TestNeutralCodecPreservesAdapterAdmissionAndCanonicalBytes(t *testing.T) {
 				if got.Version != 2 || got.Common != nil || len(got.Categories) != 1 {
 					t.Fatalf("legacy behavior migrated implicitly: %+v", got)
 				}
-			} else if len(got.Common) != 7 {
+			} else if len(got.Common) != len(capabilitycatalog.CommonCapabilities()) {
 				t.Fatalf("common defaults lost: %+v", got.Common)
 			}
 		})
@@ -187,7 +189,7 @@ func TestNeutralCodecOptionalDefaultsMatchStoredSchema(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for id, want := range map[string]string{"skills": "[]", "instructions": "[]", "workspace": `{"access":"read-only"}`, "paths": `{"entries":[]}`, "executables": `{"entries":[]}`, "environment": `{"entries":[]}`, "mcp": `{"servers":[]}`} {
+	for id, want := range map[string]string{"skills": "[]", "instructions": "[]", "workspace": `{"access":"read-only"}`, "paths": `{"entries":[]}`, "exclusions": `{"entries":[]}`, "executables": `{"entries":[]}`, "environment": `{"entries":[]}`, "mcp": `{"servers":[]}`} {
 		payload := candidate.Common[id]
 		if payload.Version != 1 || !json.Valid(payload.Selection) || string(payload.Selection) != want {
 			t.Fatalf("%s default=%+v want version 1 %s", id, payload, want)

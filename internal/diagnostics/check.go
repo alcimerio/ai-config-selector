@@ -2,6 +2,7 @@ package diagnostics
 
 import (
 	"context"
+	"fmt"
 	"github.com/alcimerio/ai-config-selector/internal/instructions"
 	"github.com/alcimerio/ai-config-selector/internal/profileinspect"
 )
@@ -26,7 +27,13 @@ func LaunchCheck(ctx context.Context, name, target string, home func() (string, 
 	if entry.Status == "valid" {
 		selectOverlay(&r, entry, target)
 		refs := []instructions.Reference{}
+
 		for _, category := range entry.Categories {
+			if category.ID == "exclusions" {
+				if count, known := category.SelectionCount(); known && count > 0 {
+					r.Checks = append(r.Checks, Check{"profile.exclusions", "unchecked", "launch_required", fmt.Sprintf("Configured exclusions: %d. Use explain for logical intent. Launch checks path identity, material/runtime conflicts and native enforcement.", count)})
+				}
+			}
 			refs = append(refs, category.Instructions...)
 		}
 		if _, err := instructions.Resolve(directory, refs); err != nil {
