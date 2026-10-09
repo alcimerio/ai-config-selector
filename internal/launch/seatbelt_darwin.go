@@ -721,7 +721,13 @@ func (process *seatbeltProcess) restoreForegroundTerminal() error {
 	if setForeground == nil {
 		setForeground = setSeatbeltForegroundProcessGroup
 	}
-	return setForeground(process.terminal, process.foregroundGroup)
+	err := setForeground(process.terminal, process.foregroundGroup)
+	if process.setForegroundProcessGroup == nil {
+		// Input queued on the shared terminal while the contained target held
+		// it is discarded before the invoking shell resumes reading.
+		err = errors.Join(err, flushSeatbeltTerminalInput(process.terminal))
+	}
+	return err
 }
 
 func (process *seatbeltProcess) markCleanupDone() {
@@ -788,6 +794,22 @@ func seatbeltForegroundTerminal(terminal Terminal) (*os.File, int) {
 }
 
 var seatbeltTerminalProcessGroupMutex sync.Mutex
+
+// seatbeltFlushRead is FREAD from <sys/fcntl.h>; TIOCFLUSH takes a pointer to it.
+const seatbeltFlushRead = 0x1
+
+// flushSeatbeltTerminalInput discards pending terminal input. It runs outside
+// the sandbox after the target returned the terminal to the ACS process group.
+func flushSeatbeltTerminalInput(terminal *os.File) error {
+	seatbeltTerminalProcessGroupMutex.Lock()
+	defer seatbeltTerminalProcessGroupMutex.Unlock()
+	alreadyIgnored := signal.Ignored(syscall.SIGTTOU)
+	if !alreadyIgnored {
+		signal.Ignore(syscall.SIGTTOU)
+		defer signal.Reset(syscall.SIGTTOU)
+	}
+	return unix.IoctlSetPointerInt(int(terminal.Fd()), unix.TIOCFLUSH, seatbeltFlushRead)
+}
 
 func setSeatbeltForegroundProcessGroup(terminal *os.File, processGroup int) error {
 	seatbeltTerminalProcessGroupMutex.Lock()
