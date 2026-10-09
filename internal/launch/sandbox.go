@@ -105,14 +105,22 @@ type MCPServerIntent struct {
 // ExecutableGrant is an operation-scoped private witness. Public explanations
 // use only its logical ID and reference form.
 type ExecutableGrant struct {
-	ID                      string
-	ReferenceKind           ExecutableReferenceKind
-	searchName              string
-	logicalPath             string
-	logicalWitness          []pathIdentity
-	path                    string
-	identity                pathIdentity
-	digest                  [32]byte
+	ID             string
+	ReferenceKind  ExecutableReferenceKind
+	searchName     string
+	logicalPath    string
+	logicalWitness []pathIdentity
+	path           string
+	identity       pathIdentity
+	digest         [32]byte
+	// changedNanos is the inode change time (ctime) observed when digest was
+	// computed. ctime cannot be set from user space, and any write, chmod,
+	// rename or link-count change advances it, so an unchanged
+	// (identity, ctime) pair lets revalidation reuse digest without
+	// re-reading the executable. digestReusable is false when ctime was too
+	// recent at hash time to be trusted (see executableDigestReuseMargin).
+	changedNanos            int64
+	digestReusable          bool
 	workspaceRelative       bool
 	workspaceLogicalPath    string
 	workspaceLogicalWitness []pathIdentity

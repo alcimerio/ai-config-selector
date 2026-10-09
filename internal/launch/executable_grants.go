@@ -7,7 +7,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"syscall"
+	"time"
 
 	"github.com/alcimerio/ai-config-selector/internal/runcommand"
 	"golang.org/x/sys/unix"
@@ -60,7 +62,8 @@ func ResolveExecutableGrants(intents []ExecutableGrantIntent, workspace, session
 		default:
 			return nil, errors.New("unsupported executable reference")
 		}
-		canonical, logicalWitness, identity, digest, err := inspectExecutableGrant(candidate)
+		inspected, err := inspectExecutableGrantReusing(candidate, nil)
+		canonical, logicalWitness, identity, digest := inspected.path, inspected.witness, inspected.identity, inspected.digest
 		if err != nil {
 			return nil, err
 		}
@@ -79,7 +82,7 @@ func ResolveExecutableGrants(intents []ExecutableGrantIntent, workspace, session
 				return nil, errors.New("executable overlaps protected private state")
 			}
 		}
-		grant := ExecutableGrant{ID: intent.ID, ReferenceKind: intent.ReferenceKind, searchName: intent.Name, logicalPath: filepath.Clean(candidate), logicalWitness: logicalWitness, path: canonical, identity: identity, digest: digest}
+		grant := ExecutableGrant{ID: intent.ID, ReferenceKind: intent.ReferenceKind, searchName: intent.Name, logicalPath: filepath.Clean(candidate), logicalWitness: logicalWitness, path: canonical, identity: identity, digest: digest, changedNanos: inspected.changedNanos, digestReusable: inspected.digestReusable}
 		if intent.ReferenceKind == ExecutableReferenceWorkspaceRelative {
 			workspacePath, workspaceWitness, workspaceIdentity, inspectErr := inspectGrantPath(filepath.Clean(workspace), PathTypeDirectory, PathAccessReadOnly)
 			if inspectErr != nil || workspacePath != canonicalWorkspace {
@@ -121,57 +124,102 @@ func supportedExecutableLogicalRoot(home, logical, workspace string) bool {
 }
 
 func inspectExecutableGrant(candidate string) (string, []pathIdentity, pathIdentity, [sha256.Size]byte, error) {
+	inspected, err := inspectExecutableGrantReusing(candidate, nil)
+	if err != nil {
+		return "", nil, pathIdentity{}, [sha256.Size]byte{}, err
+	}
+	return inspected.path, inspected.witness, inspected.identity, inspected.digest, nil
+}
+
+type inspectedExecutable struct {
+	path         string
+	witness      []pathIdentity
+	identity     pathIdentity
+	digest       [sha256.Size]byte
+	changedNanos int64
+	// digestReusable is true only when ctime was already older than
+	// executableDigestReuseMargin when the digest was computed.
+	digestReusable bool
+}
+
+// executableDigestReuseMargin is how much older than the hash itself an
+// executable's ctime must be before the digest may be reused. Kernels stamp
+// ctime from a coarse clock (one scheduler tick on Linux), so a write landing
+// in the same tick as the hash could leave ctime unchanged. Like Git's "racy
+// index" rule, a recently changed file is simply re-hashed every time.
+var executableDigestReuseMargin = time.Second
+
+// executableDigestReads counts full SHA-256 reads of executables. Tests use it
+// to prove that revalidation within one launch does not re-hash.
+var executableDigestReads atomic.Int64
+
+// inspectExecutableGrantReusing inspects candidate like inspectExecutableGrant.
+// When previous is non-nil and the opened file still has the same canonical
+// path, identity (device, inode, mode, links, size, mtime) and ctime that were
+// recorded when previous.digest was computed, the digest is reused instead of
+// re-reading the whole executable. Any content change advances ctime (and
+// mtime, size or inode), so a modified or replaced executable is re-hashed and
+// then rejected by the caller's digest comparison.
+func inspectExecutableGrantReusing(candidate string, previous *ExecutableGrant) (inspectedExecutable, error) {
 	clean := filepath.Clean(candidate)
 	witness, err := inspectLogicalComponents(clean)
 	if err != nil {
-		return "", nil, pathIdentity{}, [sha256.Size]byte{}, pathInspectionError("selected executable is unsafe", err)
+		return inspectedExecutable{}, pathInspectionError("selected executable is unsafe", err)
 	}
 	canonical, err := filepath.EvalSymlinks(clean)
 	if err != nil {
-		return "", nil, pathIdentity{}, [sha256.Size]byte{}, errors.New("selected executable is unavailable")
+		return inspectedExecutable{}, errors.New("selected executable is unavailable")
 	}
 	fd, err := openCanonicalPath(canonical, PathTypeFile)
 	if err != nil {
-		return "", nil, pathIdentity{}, [sha256.Size]byte{}, pathInspectionError("selected executable is unsafe", err)
+		return inspectedExecutable{}, pathInspectionError("selected executable is unsafe", err)
 	}
 	file := os.NewFile(uintptr(fd), "selected executable")
 	if file == nil {
 		_ = unix.Close(fd)
-		return "", nil, pathIdentity{}, [sha256.Size]byte{}, errors.New("selected executable is unsafe")
+		return inspectedExecutable{}, errors.New("selected executable is unsafe")
 	}
 	defer file.Close()
 	info, err := file.Stat()
 	if err != nil || !info.Mode().IsRegular() {
-		return "", nil, pathIdentity{}, [sha256.Size]byte{}, errors.New("selected executable is unsafe")
+		return inspectedExecutable{}, errors.New("selected executable is unsafe")
 	}
 	stat, ok := info.Sys().(*syscall.Stat_t)
 	if !ok {
-		return "", nil, pathIdentity{}, [sha256.Size]byte{}, errors.New("selected executable is unsafe")
+		return inspectedExecutable{}, errors.New("selected executable is unsafe")
 	}
 	identity := identityFromFileInfo(info, stat)
 	if identity.mode.Perm()&0o111 == 0 {
-		return "", nil, pathIdentity{}, [sha256.Size]byte{}, errors.New("selected executable is not executable")
+		return inspectedExecutable{}, errors.New("selected executable is not executable")
 	}
+	changed := statChangeNanos(stat)
+	if previous != nil && previous.digestReusable && previous.path == canonical && previous.identity == identity && previous.changedNanos == changed {
+		return inspectedExecutable{path: canonical, witness: witness, identity: identity, digest: previous.digest, changedNanos: changed, digestReusable: true}, nil
+	}
+	hashedAt := time.Now()
+	executableDigestReads.Add(1)
 	hash := sha256.New()
 	if _, err := io.Copy(hash, file); err != nil {
-		return "", nil, pathIdentity{}, [sha256.Size]byte{}, errors.New("selected executable is unsafe")
+		return inspectedExecutable{}, errors.New("selected executable is unsafe")
 	}
 	after, err := file.Stat()
 	if err != nil {
-		return "", nil, pathIdentity{}, [sha256.Size]byte{}, errors.New("selected executable is unsafe")
+		return inspectedExecutable{}, errors.New("selected executable is unsafe")
 	}
 	afterStat, ok := after.Sys().(*syscall.Stat_t)
-	if !ok || identityFromFileInfo(after, afterStat) != identity {
-		return "", nil, pathIdentity{}, [sha256.Size]byte{}, errors.New("selected executable changed during read")
+	if !ok || identityFromFileInfo(after, afterStat) != identity || statChangeNanos(afterStat) != changed {
+		return inspectedExecutable{}, errors.New("selected executable changed during read")
 	}
-	var digest [sha256.Size]byte
-	copy(digest[:], hash.Sum(nil))
-	return canonical, witness, identity, digest, nil
+	reusable := changed < hashedAt.Add(-executableDigestReuseMargin).UnixNano()
+	result := inspectedExecutable{path: canonical, witness: witness, identity: identity, changedNanos: changed, digestReusable: reusable}
+	copy(result.digest[:], hash.Sum(nil))
+	return result, nil
 }
 
 func revalidateExecutableGrants(grants []ExecutableGrant, workspace, sessions string) ([]ExecutableGrant, error) {
 	result := append([]ExecutableGrant(nil), grants...)
-	for _, grant := range result {
+	for index := range result {
+		grant := &result[index]
 		if grant.ReferenceKind == ExecutableReferenceFixedSearchName {
 			selected := fixedSearchExecutable(grant.searchName)
 			if selected == "" || filepath.Clean(selected) != grant.logicalPath {
@@ -184,7 +232,8 @@ func revalidateExecutableGrants(grants []ExecutableGrant, workspace, sessions st
 				return nil, errors.New("workspace identity changed")
 			}
 		}
-		canonical, witness, identity, digest, err := inspectExecutableGrant(grant.logicalPath)
+		inspected, err := inspectExecutableGrantReusing(grant.logicalPath, grant)
+		canonical, witness, identity, digest := inspected.path, inspected.witness, inspected.identity, inspected.digest
 		if err != nil || canonical != grant.path || identity != grant.identity || digest != grant.digest || !equalPathWitness(witness, grant.logicalWitness) {
 			return nil, errors.New("selected executable identity changed")
 		}
