@@ -25,7 +25,7 @@ func TestPromotedProfileHistoryDiffDeleteAndRestoreArePublicAndPassive(t *testin
 	binary := promotedBinary(t)
 	home := realTemporaryDirectory(t)
 	input := filepath.Join(home, "profile.json")
-	document := []byte(`{"version":3,"name":"history-demo","common":{"skills":{"version":1,"selection":[]},"workspace":{"version":1,"selection":{"access":"read-only"}}},"overlays":{"codex":{"version":1,"authRef":"private-history-auth-canary"},"devin":{"version":1}}}`)
+	document := []byte(`{"version":1,"name":"history-demo","common":{"skills":{"version":1,"selection":[]},"workspace":{"version":1,"selection":{"access":"read-only"}}},"overlays":{"codex":{"version":1,"authRef":"private-history-auth-canary"},"devin":{"version":1}}}`)
 	if err := os.WriteFile(input, document, 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -91,7 +91,7 @@ func TestPromotedProfileHistoryDiffDeleteAndRestoreArePublicAndPassive(t *testin
 	assertNoSessions(t, home)
 }
 
-const newerMutationProfile = `{"version":3,"name":"old","common":{"skills":{"version":1,"selection":[{"source":"shared-agents","relativePath":"newer"}]},"workspace":{"version":1,"selection":{"access":"read-write"}}},"overlays":{"devin":{"version":1}}}`
+const newerMutationProfile = `{"version":1,"name":"old","common":{"skills":{"version":1,"selection":[{"source":"shared-agents","relativePath":"newer"}]},"workspace":{"version":1,"selection":{"access":"read-write"}}},"overlays":{"devin":{"version":1}}}`
 
 // A separate process uses the production transaction boundary while the editor
 // retains its previously captured revision. It never touches the user's home.
@@ -123,7 +123,7 @@ func TestPromotedProfileMutationReloadThenSignalReportsCurrentCancellation(t *te
 			result := runMutationCandidatePTY(t, binary, home, args, func(master *os.File, capture *safeCapture, process *os.Process) {
 				waitForOutput(t, capture, "Profile \"")
 				openProfilePreview(t, master)
-				waitForOutput(t, capture, "Stored v3 -> v3")
+				waitForOutput(t, capture, "Stored v1 -> v1")
 				executable, err := os.Executable()
 				if err != nil {
 					t.Fatal(err)
@@ -164,7 +164,7 @@ func mutationCandidateHome(t *testing.T) (string, string, []byte) {
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		t.Fatal(err)
 	}
-	raw := []byte(`{"version":3,"name":"old","common":{"skills":{"version":1,"selection":[{"source":"devin-config","relativePath":"lost"}]},"workspace":{"version":1,"selection":{"access":"read-write"}}},"overlays":{"devin":{"version":1}}}`)
+	raw := []byte(`{"version":1,"name":"old","common":{"skills":{"version":1,"selection":[{"source":"devin-config","relativePath":"lost"}]},"workspace":{"version":1,"selection":{"access":"read-write"}}},"overlays":{"devin":{"version":1}}}`)
 	if err := os.WriteFile(path, raw, 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -257,7 +257,7 @@ func TestPromotedProfileMutationSeedPreviewAndCommit(t *testing.T) {
 					writePTY(t, master, "\x1b[D")
 					openProfilePreview(t, master)
 				}
-				waitForOutput(t, capture, "Stored v3 -> v3")
+				waitForOutput(t, capture, "Stored v1 -> v1")
 				writePTY(t, master, "\x1b[F")
 				waitForOutput(t, capture, "acknowledge unresolved")
 				// No generic confirmation may bypass availability acknowledgement.
@@ -275,7 +275,7 @@ func TestPromotedProfileMutationSeedPreviewAndCommit(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !bytes.Contains(stored, []byte(`"version": 3`)) || !bytes.Contains(stored, []byte(`"name": "`+destination+`"`)) || !bytes.Contains(stored, []byte(`"relativePath": "lost"`)) {
+			if !bytes.Contains(stored, []byte(`"version": 1`)) || !bytes.Contains(stored, []byte(`"name": "`+destination+`"`)) || !bytes.Contains(stored, []byte(`"relativePath": "lost"`)) {
 				t.Fatalf("lost stored intention: %s", stored)
 			}
 			if operation == "clone" {

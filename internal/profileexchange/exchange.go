@@ -218,7 +218,7 @@ var bindingIDPattern = regexp.MustCompile(`^(source|authentication|path|executab
 // Export encodes only understood stored intent. The caller must have
 // strictly admitted the source bytes before calling Export.
 func Export(candidate profile.Profile) ([]byte, Report, error) {
-	if candidate.Version != profile.CurrentVersion {
+	if !profile.SupportedVersion(candidate.Version) {
 		return nil, Report{}, errors.New("unsupported Profile content")
 	}
 	commonIDs := make([]string, 0, len(candidate.Common))

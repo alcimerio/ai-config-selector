@@ -16,7 +16,7 @@ import (
 	"github.com/alcimerio/ai-config-selector/internal/skills"
 )
 
-func decodeVersionThree(entry Entry, envelope map[string]json.RawMessage) Entry {
+func decodeEnvelope(entry Entry, envelope map[string]json.RawMessage) Entry {
 	if unknown(envelope, "version", "name", "common", "overlays") {
 		return entry.failed("unsupported_content")
 	}

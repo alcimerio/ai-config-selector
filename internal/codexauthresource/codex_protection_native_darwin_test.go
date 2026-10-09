@@ -361,7 +361,7 @@ func writeCodexProtectionProfile(t *testing.T, home, name string) {
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		t.Fatal(err)
 	}
-	document := `{"version":3,"name":"` + name + `","common":{"skills":{"version":1,"selection":[]},"workspace":{"version":1,"selection":{"access":"read-write"}},"executables":{"version":1,"selection":{"entries":[{"id":"mcp-server","reference":{"kind":"workspace-relative","path":"native-mcp-server.sh"}}]}},"mcp":{"version":1,"selection":{"servers":[{"id":"fixture","transport":"stdio","executableRef":"mcp-server","arguments":[],"inputRefs":[],"environmentRefs":[],"disabledTools":["blocked"]}]}}},"overlays":{"codex":{"version":1,"authRef":"interactive-coding"}}}`
+	document := `{"version":1,"name":"` + name + `","common":{"skills":{"version":1,"selection":[]},"workspace":{"version":1,"selection":{"access":"read-write"}},"executables":{"version":1,"selection":{"entries":[{"id":"mcp-server","reference":{"kind":"workspace-relative","path":"native-mcp-server.sh"}}]}},"mcp":{"version":1,"selection":{"servers":[{"id":"fixture","transport":"stdio","executableRef":"mcp-server","arguments":[],"inputRefs":[],"environmentRefs":[],"disabledTools":["blocked"]}]}}},"overlays":{"codex":{"version":1,"authRef":"interactive-coding"}}}`
 	if err := os.WriteFile(filepath.Join(dir, name+".json"), []byte(document), 0600); err != nil {
 		t.Fatal(err)
 	}

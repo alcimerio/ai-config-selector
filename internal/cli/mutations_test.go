@@ -101,7 +101,7 @@ func mutationFixtureWithEditor(t *testing.T, raw []byte) (App, *profilerepo.Repo
 
 // mutationDocument is a valid but noncanonical stored Profile, so every
 // confirmed rewrite produces different canonical bytes.
-var mutationDocument = []byte(`{"version":3,"name":"old","common":{"skills":{"version":1,"selection":[{"source":"shared-agents","relativePath":"lost"},{"source":"devin-config","relativePath":"lost"}]},"workspace":{"version":1,"selection":{"access":"read-write"}}},"overlays":{"devin":{"version":1}}}`)
+var mutationDocument = []byte(`{"version":1,"name":"old","common":{"skills":{"version":1,"selection":[{"source":"shared-agents","relativePath":"lost"},{"source":"devin-config","relativePath":"lost"}]},"workspace":{"version":1,"selection":{"access":"read-write"}}},"overlays":{"devin":{"version":1}}}`)
 
 func TestMutationPreviewCommitsExactCanonicalBytes(t *testing.T) {
 	for _, operation := range []string{"edit", "clone", "rename"} {
@@ -122,7 +122,7 @@ func TestMutationPreviewCommitsExactCanonicalBytes(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if !strings.Contains(prepared.Text, "Stored v3 -> v3") {
+				if !strings.Contains(prepared.Text, "Stored v1 -> v1") {
 					t.Fatalf("no canonical representation preview: %s", prepared.Text)
 				}
 				_, canonical, ok := strings.Cut(prepared.Text, "Exact resulting canonical JSON (including final newline):\n")
@@ -158,7 +158,7 @@ func TestMutationPreviewCommitsExactCanonicalBytes(t *testing.T) {
 
 func TestMutationRefusesUnsupportedBytesWithoutTreeChanges(t *testing.T) {
 	fixtures := []string{
-		`{"version":3,"name":"old","target":"devin","categories":{}}`,
+		`{"version":1,"name":"old","target":"devin","categories":{}}`,
 		`{"version":2,"name":"other","target":"devin","categories":{}}`,
 		`{"version":2,"name":"old","target":"future","categories":{}}`,
 		`{"version":2,"name":"old","target":"devin","categories":{},"future":true}`,
@@ -199,8 +199,8 @@ func TestMutationRefusesUnsupportedBytesWithoutTreeChanges(t *testing.T) {
 	}
 }
 
-func TestVersionThreeMutationRefusesUnknownInactiveOverlayWithoutWrites(t *testing.T) {
-	raw := []byte(`{"version":3,"name":"old","common":{"skills":{"version":1,"selection":[]},"workspace":{"version":1,"selection":{"access":"read-only"}}},"overlays":{"devin":{"version":1},"codex":{"version":9,"future":{"opaque":true}}}}`)
+func TestMutationRefusesUnknownInactiveOverlayWithoutWrites(t *testing.T) {
+	raw := []byte(`{"version":1,"name":"old","common":{"skills":{"version":1,"selection":[]},"workspace":{"version":1,"selection":{"access":"read-only"}}},"overlays":{"devin":{"version":1},"codex":{"version":9,"future":{"opaque":true}}}}`)
 	for _, operation := range []string{"edit", "clone", "rename"} {
 		t.Run(operation, func(t *testing.T) {
 			app, _, home, output := mutationFixture(t, raw)
@@ -223,7 +223,7 @@ func TestVersionThreeMutationRefusesUnknownInactiveOverlayWithoutWrites(t *testi
 	}
 }
 
-func TestSupportedVersionThreeEditDoesNotDowngradeOrRewriteOverlayVersion(t *testing.T) {
+func TestReadAliasVersionThreeEditRewritesCurrentVersionWithoutChangingOverlay(t *testing.T) {
 	raw := []byte(`{"version":3,"name":"old","common":{"skills":{"version":1,"selection":[]},"workspace":{"version":1,"selection":{"access":"read-only"}}},"overlays":{"devin":{"version":1}}}`)
 	app, repository, _, output := mutationFixture(t, raw)
 	app.MutationBuilder = mutationEditorFunc(func(ctx context.Context, _ string, draft category.Draft, options builder.MutationOptions, _ io.Reader, _ io.Writer) (builder.Outcome, error) {
@@ -231,8 +231,8 @@ func TestSupportedVersionThreeEditDoesNotDowngradeOrRewriteOverlayVersion(t *tes
 		if err != nil {
 			return builder.Outcome{}, err
 		}
-		if !strings.Contains(prepared.Text, "Stored v3 -> v3") {
-			t.Fatalf("v3 rewrite preview = %s", prepared.Text)
+		if !strings.Contains(prepared.Text, "Stored v3 -> v1") {
+			t.Fatalf("read alias rewrite preview = %s", prepared.Text)
 		}
 		path, err := prepared.Save(ctx, draft)
 		return builder.Outcome{Create: err == nil, Draft: draft, Path: path}, err
@@ -244,14 +244,17 @@ func TestSupportedVersionThreeEditDoesNotDowngradeOrRewriteOverlayVersion(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
+	if !bytes.HasPrefix(stored.Bytes, []byte("{\n  \"version\": 1,\n")) {
+		t.Fatalf("read alias edit did not write the current version: %s", stored.Bytes)
+	}
 	entry := profileinspect.InspectBytes("old", stored.Bytes)
-	if entry.Status != "valid" || entry.StoredVersion == nil || *entry.StoredVersion != 3 || len(entry.Overlays) != 1 || entry.Overlays[0].ID != "devin" || entry.Overlays[0].Version == nil || *entry.Overlays[0].Version != 1 {
-		t.Fatalf("v3 edit downgraded or changed overlay: %#v", entry)
+	if entry.Status != "valid" || entry.StoredVersion == nil || *entry.StoredVersion != 1 || len(entry.Overlays) != 1 || entry.Overlays[0].ID != "devin" || entry.Overlays[0].Version == nil || *entry.Overlays[0].Version != 1 {
+		t.Fatalf("read alias edit kept version 3 or changed overlay: %#v", entry)
 	}
 }
 
-func TestSupportedInactiveCodexOverlayIsPreservedByVersionThreeMutation(t *testing.T) {
-	raw := []byte(`{"version":3,"name":"old","common":{"skills":{"version":1,"selection":[]},"workspace":{"version":1,"selection":{"access":"read-only"}}},"overlays":{"devin":{"version":1},"codex":{"version":1,"authRef":"work"}}}`)
+func TestSupportedInactiveCodexOverlayIsPreservedByMutation(t *testing.T) {
+	raw := []byte(`{"version":1,"name":"old","common":{"skills":{"version":1,"selection":[]},"workspace":{"version":1,"selection":{"access":"read-only"}}},"overlays":{"devin":{"version":1},"codex":{"version":1,"authRef":"work"}}}`)
 	app, repository, _, output := mutationFixture(t, raw)
 	app.MutationBuilder = mutationEditorFunc(func(ctx context.Context, _ string, draft category.Draft, options builder.MutationOptions, _ io.Reader, _ io.Writer) (builder.Outcome, error) {
 		prepared, err := options.Prepare(draft)
@@ -612,7 +615,7 @@ func TestMutationExplicitReloadCreatesNewRevisionAndLeavesOldPreviewFrozen(t *te
 		if err != nil {
 			t.Fatal(err)
 		}
-		newer := []byte(`{"version":3,"name":"old","common":{"skills":{"version":1,"selection":[]},"workspace":{"version":1,"selection":{"access":"read-only"}}},"overlays":{"devin":{"version":1}}}`)
+		newer := []byte(`{"version":1,"name":"old","common":{"skills":{"version":1,"selection":[]},"workspace":{"version":1,"selection":{"access":"read-only"}}},"overlays":{"devin":{"version":1}}}`)
 		out, err := repository.Apply(ctx, profilerepo.ReplaceRequest{Name: "old", Expected: snapshot.Revision, Bytes: newer})
 		if err != nil || out.State != profilerepo.Committed {
 			t.Fatal(out, err)

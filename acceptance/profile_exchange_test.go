@@ -18,7 +18,7 @@ func TestPromotedProfileExchangeRoundTripNeedsNoTargetsOrCredentials(t *testing.
 	if err := os.MkdirAll(profiles, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	local := `{"version":3,"name":"source","common":{"skills":{"version":1,"selection":[{"source":"shared-agents","relativePath":"review"}]},"workspace":{"version":1,"selection":{"access":"read-only"}}},"overlays":{"codex":{"version":1,"authRef":"private-local-name"},"devin":{"version":1}}}`
+	local := `{"version":1,"name":"source","common":{"skills":{"version":1,"selection":[{"source":"shared-agents","relativePath":"review"}]},"workspace":{"version":1,"selection":{"access":"read-only"}}},"overlays":{"codex":{"version":1,"authRef":"private-local-name"},"devin":{"version":1}}}`
 	if err := os.WriteFile(filepath.Join(profiles, "source.json"), []byte(local), 0o600); err != nil {
 		t.Fatal(err)
 	}

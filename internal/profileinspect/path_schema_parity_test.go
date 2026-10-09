@@ -20,7 +20,7 @@ func TestPassiveAndActivePathSchemaAdmissionStayInParity(t *testing.T) {
 	}
 	for _, selection := range selections {
 		_, activeErr := commonprofile.DecodePathSelection(json.RawMessage(selection))
-		profileBytes := fmt.Sprintf(`{"version":3,"name":"example","common":{"skills":{"version":1,"selection":[]},"workspace":{"version":1,"selection":{"access":"read-only"}},"paths":{"version":1,"selection":%s}},"overlays":{"devin":{"version":1}}}`, selection)
+		profileBytes := fmt.Sprintf(`{"version":1,"name":"example","common":{"skills":{"version":1,"selection":[]},"workspace":{"version":1,"selection":{"access":"read-only"}},"paths":{"version":1,"selection":%s}},"overlays":{"devin":{"version":1}}}`, selection)
 		passiveValid := profileinspect.InspectBytes("example", []byte(profileBytes)).Status == "valid"
 		if passiveValid != (activeErr == nil) {
 			t.Fatalf("admission drift for %s: activeErr=%v passiveValid=%v", selection, activeErr, passiveValid)

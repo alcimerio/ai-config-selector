@@ -359,7 +359,7 @@ func assertFormat1Contract(t *testing.T, result strictExplanation, recipe string
 	if result.FormatVersion != 1 || result.Operation != "explain" || result.Plan == nil || result.Diagnostic != nil {
 		t.Fatalf("invalid format-1 envelope: %#v", result)
 	}
-	if result.Profile.Name != "format-profile" || result.Profile.StoredVersion != 3 || result.Intent.Recipe != recipe {
+	if result.Profile.Name != "format-profile" || result.Profile.StoredVersion != 1 || result.Intent.Recipe != recipe {
 		t.Fatalf("unexpected public identity: %#v", result)
 	}
 	if !strings.HasPrefix(result.Plan.AuthorityDigest, "sha256:") || len(result.Plan.AuthorityDigest) != len("sha256:")+64 || result.Plan.AuthorityManifestVersion != 1 {
@@ -368,7 +368,7 @@ func assertFormat1Contract(t *testing.T, result strictExplanation, recipe string
 	if result.Checks == nil || result.Limitations == nil || result.Plan.Requested == nil || result.Plan.TargetAdded == nil || result.Plan.Effective == nil || result.Plan.Unsupported == nil {
 		t.Fatal("format-1 arrays must be present, including empty arrays")
 	}
-	if fact := formatFact(result.Plan.Requested, "common.workspace"); fact == nil || fact.Value.Access != "read-only" || fact.Reason != "stored_v3_intent" {
+	if fact := formatFact(result.Plan.Requested, "common.workspace"); fact == nil || fact.Value.Access != "read-only" || fact.Reason != "stored_intent" {
 		t.Fatalf("workspace fact violates the format contract: %#v", fact)
 	}
 	if fact := formatFact(result.Plan.Requested, "execution.recipe"); fact == nil || fact.Value.Mode != recipe {
@@ -377,7 +377,7 @@ func assertFormat1Contract(t *testing.T, result strictExplanation, recipe string
 	if fact := formatFact(result.Plan.Effective, "runtime.network"); fact == nil || fact.Value.Mode != "local-ip-socket-bind-no-listen-coarse-outbound-ip-macos-dns" {
 		t.Fatalf("network fact violates the format contract: %#v", fact)
 	}
-	if fact := formatFact(result.Plan.Requested, "common.executables.workspace-tool"); fact == nil || fact.Reason != "stored_v3_intent_covered_by_workspace_read" || fact.Value.LogicalReference != "bin/tool" {
+	if fact := formatFact(result.Plan.Requested, "common.executables.workspace-tool"); fact == nil || fact.Reason != "stored_intent_covered_by_workspace_read" || fact.Value.LogicalReference != "bin/tool" {
 		t.Fatalf("workspace-covered executable fact violates the format contract: %#v", fact)
 	}
 	if formatFact(result.Plan.Effective, "executable.workspace-tool") != nil {

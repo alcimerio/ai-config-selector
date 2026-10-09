@@ -22,7 +22,7 @@ import (
 )
 
 func declarativeDocument(name string) []byte {
-	return []byte(`{"version":3,"name":"` + name + `","common":{"skills":{"version":1,"selection":[{"source":"shared-agents","relativePath":"review"}]},"workspace":{"version":1,"selection":{"access":"read-only"}}},"overlays":{"codex":{"version":1,"authRef":"work"},"devin":{"version":1}}}`)
+	return []byte(`{"version":1,"name":"` + name + `","common":{"skills":{"version":1,"selection":[{"source":"shared-agents","relativePath":"review"}]},"workspace":{"version":1,"selection":{"access":"read-only"}}},"overlays":{"codex":{"version":1,"authRef":"work"},"devin":{"version":1}}}`)
 }
 
 func TestDeclarativeCreatePreservesMultipleInstructionReferencesWithoutResolvingSources(t *testing.T) {
@@ -37,7 +37,7 @@ func TestDeclarativeCreatePreservesMultipleInstructionReferencesWithoutResolving
 	}
 	storeHome := filepath.Join(home, ".acs")
 	app := cli.App{Categories: editor.Categories(), Profiles: profile.NewStore(storeHome, editor.Categories()), Output: &bytes.Buffer{}, ErrorOutput: &bytes.Buffer{}}
-	const document = `{"version":3,"name":"instruction-create","common":{"skills":{"version":1,"selection":[]},"instructions":{"version":1,"selection":[{"source":"acs-instructions","relativePath":"available.md"},{"source":"acs-instructions","relativePath":"unavailable/missing.md"}]},"workspace":{"version":1,"selection":{"access":"read-only"}}},"overlays":{"devin":{"version":1}}}`
+	const document = `{"version":1,"name":"instruction-create","common":{"skills":{"version":1,"selection":[]},"instructions":{"version":1,"selection":[{"source":"acs-instructions","relativePath":"available.md"},{"source":"acs-instructions","relativePath":"unavailable/missing.md"}]},"workspace":{"version":1,"selection":{"access":"read-only"}}},"overlays":{"devin":{"version":1}}}`
 	app.ReadProfileDocument = func(string) ([]byte, error) { return []byte(document), nil }
 	var out, errOut bytes.Buffer
 	app.Output, app.ErrorOutput = &out, &errOut
@@ -118,7 +118,7 @@ func TestDeclarativeDryRunCanonicalizesOnceWithoutWrites(t *testing.T) {
 	if calls != 1 {
 		t.Fatalf("input reads=%d, want 1", calls)
 	}
-	for _, want := range []string{`"version": 3`, `"name": "example"`, `"source": "shared-agents"`, `"authRef": "work"`, "readiness was not checked", "No Profile storage, lock, journal, Session, credential, input, or process was changed."} {
+	for _, want := range []string{`"version": 1`, `"name": "example"`, `"source": "shared-agents"`, `"authRef": "work"`, "readiness was not checked", "No Profile storage, lock, journal, Session, credential, input, or process was changed."} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("preview missing %q: %s", want, out.String())
 		}
@@ -147,7 +147,7 @@ func TestDeclarativeCreatePublishesExactCapturedCandidateAndDoesNotTouchInput(t 
 		t.Fatal(err)
 	}
 	if !bytes.Contains(stored, []byte("\n  \"common\"")) || !bytes.Contains(stored, []byte(`"codex"`)) || !bytes.Contains(stored, []byte(`"devin"`)) {
-		t.Fatalf("stored bytes are not canonical complete v3: %s", stored)
+		t.Fatalf("stored bytes are not canonical complete Profile: %s", stored)
 	}
 	after, _ := os.Stat(input)
 	unchanged, _ := os.ReadFile(input)
@@ -162,9 +162,9 @@ func TestDeclarativeCreatePublishesExactCapturedCandidateAndDoesNotTouchInput(t 
 func TestDeclarativeCreateStrictlyRejectsUnsupportedOrLossyDocuments(t *testing.T) {
 	valid := string(declarativeDocument("example"))
 	cases := map[string]string{
-		"legacy":          strings.Replace(valid, `"version":3`, `"version":2`, 1),
-		"future":          strings.Replace(valid, `"version":3`, `"version":4`, 1),
-		"duplicate":       strings.Replace(valid, `"version":3`, `"version":3,"version":3`, 1),
+		"legacy":          strings.Replace(valid, `"version":1`, `"version":2`, 1),
+		"future":          strings.Replace(valid, `"version":1`, `"version":4`, 1),
+		"duplicate":       strings.Replace(valid, `"version":1`, `"version":1,"version":1`, 1),
 		"unknown common":  strings.Replace(valid, `"skills":`, `"network":{"version":1,"selection":{}},"skills":`, 1),
 		"unknown overlay": strings.Replace(valid, `"codex":`, `"future":{"version":1},"codex":`, 1),
 		"unsafe skill":    strings.Replace(valid, `"relativePath":"review"`, `"relativePath":"../review"`, 1),

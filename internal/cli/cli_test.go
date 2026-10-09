@@ -681,7 +681,7 @@ func TestDryRunPassesConfiguredSessionsDirectoryToPlanner(t *testing.T) {
 	}
 }
 
-func TestDryRunLoadsStoredProfileWithoutRewritingIt(t *testing.T) {
+func TestDryRunLoadsReadAliasProfileWithoutRewritingIt(t *testing.T) {
 	existingHome := t.TempDir()
 	acsHome := filepath.Join(existingHome, ".acs")
 	storedPath, stored := writeStoredProfile(t, acsHome, "legacy")
@@ -798,7 +798,7 @@ func TestSandboxLaunchDelegatesResolvedProfileAndTerminalToSandboxLauncher(t *te
 	}
 }
 
-func TestLaunchLoadsStoredProfileWithoutRewritingIt(t *testing.T) {
+func TestLaunchLoadsReadAliasProfileWithoutRewritingIt(t *testing.T) {
 	existingHome := t.TempDir()
 	acsHome := filepath.Join(existingHome, ".acs")
 	storedPath, stored := writeStoredProfile(t, acsHome, "reviews")
@@ -1009,7 +1009,7 @@ func TestDryRunRejectsUnknownProfileCategoryBeforeDiscovery(t *testing.T) {
 	}
 	if err := os.WriteFile(
 		filepath.Join(profilesDirectory, "unknown.json"),
-		[]byte(`{"version":3,"name":"unknown","common":{"agents":{"version":1,"selection":[]}},"overlays":{"devin":{"version":1}}}`),
+		[]byte(`{"version":1,"name":"unknown","common":{"agents":{"version":1,"selection":[]}},"overlays":{"devin":{"version":1}}}`),
 		0o600,
 	); err != nil {
 		t.Fatal(err)
@@ -1731,6 +1731,9 @@ func (launcher *recordingProfileLauncher) Launch(
 	launcher.terminal = terminal
 	return launcher.exitCode, launcher.err
 }
+
+// writeStoredProfile writes a Profile numbered with the read alias version 3,
+// as earlier builds stored it, so load paths prove they accept it unchanged.
 func writeStoredProfile(t *testing.T, acsHome, name string) (string, []byte) {
 	t.Helper()
 	profilesDirectory := filepath.Join(acsHome, "profiles")

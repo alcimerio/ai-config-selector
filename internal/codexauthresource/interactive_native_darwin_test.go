@@ -2600,7 +2600,7 @@ func writeNativeCodexProfile(t *testing.T, home, profileName, authRef, access st
 	if err := os.MkdirAll(profiles, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	document := `{"version":3,"name":` + strconv.Quote(profileName) + `,"common":{"skills":{"version":1,"selection":[{"source":"shared-agents","relativePath":"managed-proof"}]},"workspace":{"version":1,"selection":{"access":` + strconv.Quote(access) + `}}},"overlays":{"codex":{"version":1,"authRef":` + strconv.Quote(authRef) + `}}}`
+	document := `{"version":1,"name":` + strconv.Quote(profileName) + `,"common":{"skills":{"version":1,"selection":[{"source":"shared-agents","relativePath":"managed-proof"}]},"workspace":{"version":1,"selection":{"access":` + strconv.Quote(access) + `}}},"overlays":{"codex":{"version":1,"authRef":` + strconv.Quote(authRef) + `}}}`
 	if err := os.WriteFile(filepath.Join(profiles, profileName+".json"), []byte(document), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -2612,7 +2612,7 @@ func writeNativeCodexEnvironmentProfile(t *testing.T, home, profileName, authRef
 	if err := os.MkdirAll(profiles, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	document := `{"version":3,"name":` + strconv.Quote(profileName) + `,"common":{"skills":{"version":1,"selection":[{"source":"shared-agents","relativePath":"managed-proof"}]},"workspace":{"version":1,"selection":{"access":"read-write"}},"environment":{"version":1,"selection":{"entries":[` +
+	document := `{"version":1,"name":` + strconv.Quote(profileName) + `,"common":{"skills":{"version":1,"selection":[{"source":"shared-agents","relativePath":"managed-proof"}]},"workspace":{"version":1,"selection":{"access":"read-write"}},"environment":{"version":1,"selection":{"entries":[` +
 		`{"id":"mode","destination":"PROFILE_CODEX_MODE","scope":"attached-process-tree","source":{"kind":"host-environment","name":"ACS_NATIVE_CODEX_MODE"},"required":true,"classification":"non-secret"},` +
 		`{"id":"token","destination":"PROFILE_CODEX_TOKEN","scope":"attached-process-tree","source":{"kind":"secret-reference","provider":"host-environment","reference":"ACS_NATIVE_CODEX_TOKEN"},"required":true,"classification":"secret"}` +
 		`]}}},"overlays":{"codex":{"version":1,"authRef":` + strconv.Quote(authRef) + `}}}`
@@ -2627,7 +2627,7 @@ func writeNativeCodexMCPProfile(t *testing.T, home, profileName, authRef string)
 	if err := os.MkdirAll(profiles, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	document := `{"version":3,"name":` + strconv.Quote(profileName) + `,"common":{
+	document := `{"version":1,"name":` + strconv.Quote(profileName) + `,"common":{
 		"skills":{"version":1,"selection":[{"source":"shared-agents","relativePath":"managed-proof"}]},
 		"workspace":{"version":1,"selection":{"access":"read-write"}},
 		"executables":{"version":1,"selection":{"entries":[{"id":"mcp-server","reference":{"kind":"workspace-relative","path":"native-mcp-server.sh"}}]}},
@@ -2704,7 +2704,7 @@ func writeNativeCodexPathGrantProfile(t *testing.T, home, authRef string, fixtur
 		nativeCodexLocalPathEntry("read-only-parent", "read-only", "directory", fixture.readOnlyParent),
 		nativeCodexLocalPathEntry("writable-child", "read-write", "directory", fixture.writableChild),
 	}
-	document := `{"version":3,"name":"path-grants","common":{"skills":{"version":1,"selection":[{"source":"shared-agents","relativePath":"managed-proof"}]},"workspace":{"version":1,"selection":{"access":"read-only"}},"paths":{"version":1,"selection":{"entries":[` + strings.Join(entries, ",") + `]}}},"overlays":{"codex":{"version":1,"authRef":` + strconv.Quote(authRef) + `}}}`
+	document := `{"version":1,"name":"path-grants","common":{"skills":{"version":1,"selection":[{"source":"shared-agents","relativePath":"managed-proof"}]},"workspace":{"version":1,"selection":{"access":"read-only"}},"paths":{"version":1,"selection":{"entries":[` + strings.Join(entries, ",") + `]}}},"overlays":{"codex":{"version":1,"authRef":` + strconv.Quote(authRef) + `}}}`
 	if err := os.WriteFile(filepath.Join(profiles, "path-grants.json"), []byte(document), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -2723,7 +2723,7 @@ func restoreDeletedNativeCodexProfile(t *testing.T, candidate, home, tools, work
 	t.Helper()
 	const profileName = "restored-coding"
 	documentPath := filepath.Join(home, "restored-coding.json")
-	document := `{"version":3,"name":"` + profileName + `","common":{"skills":{"version":1,"selection":[{"source":"shared-agents","relativePath":"managed-proof"}]},"workspace":{"version":1,"selection":{"access":"read-write"}}},"overlays":{"codex":{"version":1,"authRef":` + strconv.Quote(authRef) + `}}}`
+	document := `{"version":1,"name":"` + profileName + `","common":{"skills":{"version":1,"selection":[{"source":"shared-agents","relativePath":"managed-proof"}]},"workspace":{"version":1,"selection":{"access":"read-write"}}},"overlays":{"codex":{"version":1,"authRef":` + strconv.Quote(authRef) + `}}}`
 	if err := os.WriteFile(documentPath, []byte(document), 0o600); err != nil {
 		t.Fatal(err)
 	}

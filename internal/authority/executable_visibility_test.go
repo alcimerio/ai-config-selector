@@ -32,7 +32,7 @@ func TestExecutableVisibilityExplanationDistinguishesCoverageAndNonExclusiveRunt
 	})
 	explanation := plan.Explanation()
 	workspace := factByID(t, explanation.Requested, "common.executables.workspace")
-	if workspace.Reason != "stored_v3_intent_covered_by_workspace_read" || workspace.Value.LogicalReference != "bin/tool" {
+	if workspace.Reason != "stored_intent_covered_by_workspace_read" || workspace.Value.LogicalReference != "bin/tool" {
 		t.Fatalf("workspace requested fact = %#v", workspace)
 	}
 	for _, fact := range explanation.Effective {

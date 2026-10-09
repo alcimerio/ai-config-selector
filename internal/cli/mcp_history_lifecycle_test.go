@@ -24,7 +24,7 @@ func TestMCPChangedHistoryRestorePreservesCurrentBindingsAndRejectsStalePreview(
 		server := map[string]any{"id": "fixture", "transport": "stdio", "executableRef": "exe", "arguments": args, "inputRefs": []string{"input"}, "environmentRefs": []string{"flag", "token"}, "disabledTools": []string{filter}}
 		capability := func(selection any) map[string]any { return map[string]any{"version": 1, "selection": selection} }
 		entries := func(v ...any) map[string]any { return map[string]any{"entries": v} }
-		doc := map[string]any{"version": 3, "name": "alpha", "common": map[string]any{
+		doc := map[string]any{"version": 1, "name": "alpha", "common": map[string]any{
 			"skills": capability([]any{}), "workspace": capability(map[string]any{"access": "read-only"}),
 			"executables": capability(entries(map[string]any{"id": "exe", "reference": map[string]string{"kind": "local-absolute", "path": "/" + binding + "/tool"}})),
 			"paths":       capability(entries(map[string]any{"id": "input", "access": "read-only", "type": "file", "reference": map[string]string{"kind": "local-absolute", "path": "/" + binding + "/input"}})),

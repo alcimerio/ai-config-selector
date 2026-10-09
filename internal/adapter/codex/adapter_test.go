@@ -41,7 +41,7 @@ func TestCodexProjectionConsumesCommonSessionCopyAndPreservesSourceIdentity(t *t
 	}
 	selection, _ := json.Marshal([]skills.SkillReference{{Source: "shared-agents", RelativePath: "review"}})
 	workspace, _ := json.Marshal(map[string]string{"access": "read-only"})
-	candidate := profile.Profile{Version: 3, Name: "example",
+	candidate := profile.Profile{Version: 1, Name: "example",
 		Common:   map[string]profile.CommonPayload{"skills": {Version: 1, Selection: selection}, "workspace": {Version: 1, Selection: workspace}},
 		Overlays: map[string]profile.OverlayPayload{"codex": {Version: 1, AuthRef: "work"}},
 	}
@@ -73,7 +73,7 @@ func TestCodexAuthOverrideIsResolvedOnceForPlanAndExecution(t *testing.T) {
 	}
 	selection := json.RawMessage(`[]`)
 	workspace := json.RawMessage(`{"access":"read-only"}`)
-	candidate := profile.Profile{Version: 3, Name: "example",
+	candidate := profile.Profile{Version: 1, Name: "example",
 		Common:   map[string]profile.CommonPayload{"skills": {Version: 1, Selection: selection}, "workspace": {Version: 1, Selection: workspace}},
 		Overlays: map[string]profile.OverlayPayload{"codex": {Version: 1, AuthRef: "stored"}},
 	}
@@ -114,7 +114,7 @@ func TestCodexProfileWithoutDefaultCanBeExplainedAndRequiresRuntimeOverride(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	candidate := profile.Profile{Version: 3, Name: "example",
+	candidate := profile.Profile{Version: 1, Name: "example",
 		Common: map[string]profile.CommonPayload{
 			"skills":    {Version: 1, Selection: json.RawMessage(`[]`)},
 			"workspace": {Version: 1, Selection: json.RawMessage(`{"access":"read-only"}`)},

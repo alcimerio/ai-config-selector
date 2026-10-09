@@ -40,10 +40,10 @@ func decode(entry Entry, data []byte) Entry {
 		return entry.failed("invalid_structure")
 	}
 	entry.StoredVersion = &version
-	if version != profile.CurrentVersion {
+	if !profile.SupportedVersion(version) {
 		return entry.failed("unsupported_content")
 	}
-	return decodeVersionThree(entry, envelope)
+	return decodeEnvelope(entry, envelope)
 }
 
 func decodeCommonPayload(raw json.RawMessage) (int, json.RawMessage, string) {

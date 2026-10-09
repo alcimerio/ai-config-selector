@@ -219,7 +219,7 @@ func (app App) importProfile(ctx context.Context, inv invocation, codec exchange
 	}
 	if inv.enabled {
 		var preview bytes.Buffer
-		fmt.Fprintf(&preview, "Profile import dry run for %q\nBindings: complete. Destination: absent. Source availability, authentication, and runtime: unchecked.\n\nExact canonical version-3 Profile JSON (including final newline):\n", candidate.Name)
+		fmt.Fprintf(&preview, "Profile import dry run for %q\nBindings: complete. Destination: absent. Source availability, authentication, and runtime: unchecked.\n\nExact canonical Profile JSON (including final newline):\n", candidate.Name)
 		preview.Write(canonical)
 		fmt.Fprintln(&preview, "\nNo Profile storage, lock, journal, Session, credential, input, or process was changed.")
 		if written, err := app.Output.Write(preview.Bytes()); err != nil || written != preview.Len() {

@@ -15,7 +15,7 @@ import (
 
 func TestRoundTripProducesEquivalentCommonAndTargetPlans(t *testing.T) {
 	references, _ := json.Marshal([]map[string]string{{"source": "shared-agents", "relativePath": "review"}})
-	original := profile.Profile{Version: 3, Name: "original", Common: map[string]profile.CommonPayload{
+	original := profile.Profile{Version: 1, Name: "original", Common: map[string]profile.CommonPayload{
 		"skills": {Version: 1, Selection: references}, "workspace": {Version: 1, Selection: json.RawMessage(`{"access":"read-write"}`)},
 	}, Overlays: map[string]profile.OverlayPayload{"devin": {Version: 1}, "codex": {Version: 1, AuthRef: "work"}}}
 	document, _, err := profileexchange.Export(original)

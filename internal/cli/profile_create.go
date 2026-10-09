@@ -14,7 +14,7 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-var errInvalidProfileInput = errors.New("input must be one bounded regular file containing a supported version-3 Profile")
+var errInvalidProfileInput = errors.New("input must be one bounded regular file containing a supported Profile")
 
 // readProfileDocument opens with O_NONBLOCK before inspecting the descriptor,
 // so a FIFO or device cannot stall the command. Symlinks are deliberately
@@ -64,7 +64,7 @@ func (app App) createProfileFromDocument(ctx context.Context, source string, dry
 		Version int    `json:"version"`
 		Name    string `json:"name"`
 	}
-	if json.Unmarshal(contents, &envelope) != nil || envelope.Version != profile.CurrentVersion || profile.ValidateName(envelope.Name) != nil {
+	if json.Unmarshal(contents, &envelope) != nil || !profile.SupportedVersion(envelope.Version) || profile.ValidateName(envelope.Name) != nil {
 		return app.fail("Profile document has unsupported or invalid structure")
 	}
 	candidate, err := app.Categories.DecodeNamed(envelope.Name, contents)
@@ -88,7 +88,7 @@ func (app App) createProfileFromDocument(ctx context.Context, source string, dry
 			return app.fail("destination is occupied or could not be safely proven absent; nothing was changed")
 		}
 		var preview bytes.Buffer
-		fmt.Fprintf(&preview, "Dry run for Profile %q\n\nExact canonical version-3 Profile JSON (including final newline):\n", candidate.Name)
+		fmt.Fprintf(&preview, "Dry run for Profile %q\n\nExact canonical Profile JSON (including final newline):\n", candidate.Name)
 		preview.Write(canonical)
 		fmt.Fprintln(&preview, "\nSelected Skill material, named authentication, target executables, native sandbox readiness, and runtime readiness was not checked.")
 		fmt.Fprintln(&preview, "No Profile storage, lock, journal, Session, credential, input, or process was changed.")

@@ -117,7 +117,7 @@ func TestResolvedCommonSkillsUseExactIdentityAndSelectedProjection(t *testing.T)
 		t.Fatal(err)
 	}
 	if candidate.Version != profile.CurrentVersion || candidate.Common[SkillsCapabilityID].Version != 1 {
-		t.Fatalf("v3 envelope = %#v", candidate)
+		t.Fatalf("envelope = %#v", candidate)
 	}
 
 	shell, err := registry.ResolveFor(context.Background(), candidate, "")
