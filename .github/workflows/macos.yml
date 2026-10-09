@@ -97,6 +97,11 @@ jobs:
           go test -v -timeout=90s ./internal/launch
           -run '^TestSeatbelt(Policy.*Terminal.*|Terminal.*|NativeRestrictsTerminalAccessToInheritedPTYs|NativeRetainsControllingTTYWithRedirectedStdio|PreservesRawTerminalDescriptors|PreservesTerminalResize|NativeRoutesTerminalSignalsOnlyToContainedTarget)$'
 
+      - name: Test sandbox denials
+        run: >-
+          go test -v -timeout=3m ./internal/launch
+          -run '^TestSeatbelt(Verifies(HostAutomationIsDenied|InboundConnectionsAreNotAccepted)|Reports(DetachedDescendantAfterSupervisorLoss|TerminalInputQueueAfterTargetExit|AbsentExclusionSpellingVariants))$'
+
       - name: Test
         run: go test -v -timeout=5m ./...
 
