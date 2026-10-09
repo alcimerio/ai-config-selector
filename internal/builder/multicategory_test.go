@@ -390,10 +390,10 @@ func TestFailedLoadConfirmationNamesEveryCategoryBeforeEmptyConfirmation(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := string(saved.Categories["skills"].Selection); got != "[]" {
+	if got := string(saved.Common["skills"].Selection); got != "[]" {
 		t.Fatalf("saved empty Skills selection = %s", got)
 	}
-	if got := string(saved.Categories["switches"].Selection); got != `{"codes":[]}` {
+	if got := string(saved.Common["switches"].Selection); got != `{"codes":[]}` {
 		t.Fatalf("saved empty Switches selection = %s", got)
 	}
 }

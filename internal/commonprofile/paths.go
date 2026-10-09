@@ -29,17 +29,17 @@ func (PathContribution) Verify(context.Context, launch.VerificationContext) erro
 func (contribution PathContribution) PathGrantIntents() []launch.PathGrantIntent {
 	return append([]launch.PathGrantIntent(nil), contribution.entries...)
 }
-func (PathContribution) SemanticFacts(int, string) authority.Facts { return authority.Facts{} }
+func (PathContribution) SemanticFacts(string) authority.Facts { return authority.Facts{} }
 
 type PathsBinding = category.Binding[PathSelection, PathSelection, PathContribution]
 
 func NewPathsBinding() (PathsBinding, error) {
 	return category.Bind(category.Definition[PathSelection, PathSelection, PathContribution]{
 		ID: PathsCapabilityID, SchemaVersion: PathsCapabilityVersion,
-		Empty:       pathintent.Empty,
-		LegacyEmpty: pathintent.Empty,
-		Encode:      encodePathSelection,
-		Decode:      decodePathSelection,
+		Empty:    pathintent.Empty,
+		Optional: true,
+		Encode:   encodePathSelection,
+		Decode:   decodePathSelection,
 		Resolve: func(_ context.Context, selection PathSelection) (PathSelection, error) {
 			return pathintent.Canonical(selection)
 		},

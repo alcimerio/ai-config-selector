@@ -41,7 +41,7 @@ func TestNativeShellEnforcesResolvedWorkspaceModes(t *testing.T) {
 			}
 			commands := "set -u\nprintf session > \"$HOME/session-write\"\nif printf workspace > ./workspace-write 2>/dev/null; then print -r -- workspace-written; else print -r -- workspace-denied; fi\nprint -r -- session-written\nexit 0\n"
 			var output bytes.Buffer
-			plan := authority.New([]authority.Contribution{{ID: "fixture", Value: shellSelection{marker: "selected"}}}, test.access, 3, "")
+			plan := authority.New([]authority.Contribution{{ID: "fixture", Value: shellSelection{marker: "selected"}}}, test.access, "")
 			code, err := New().Launch(context.Background(), filepath.Join(root, "sessions"), workspace, plan, launch.Terminal{Input: strings.NewReader(commands), Output: &output, ErrorOutput: &output})
 			if err != nil || code != 0 || !strings.Contains(output.String(), "session-written") {
 				t.Fatalf("native mode = (%d, %v), output=%q", code, err, output.String())

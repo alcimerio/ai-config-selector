@@ -54,7 +54,7 @@ func TestEmptyPathSelectionEncodesAsArray(t *testing.T) {
 
 func pathAuthorityPlan(entries []launch.PathGrantIntent) authority.Plan {
 	contribution := PathContribution{entries: append([]launch.PathGrantIntent(nil), entries...)}
-	return authority.New([]authority.Contribution{{ID: PathsCapabilityID, Value: contribution}}, launch.WorkspaceAccessReadOnly, 3, "")
+	return authority.New([]authority.Contribution{{ID: PathsCapabilityID, Value: contribution}}, launch.WorkspaceAccessReadOnly, "")
 }
 
 func TestPathSemanticDigestTracksPortableIntentAndExcludesPrivateBindings(t *testing.T) {
@@ -106,7 +106,7 @@ func TestPathSemanticDigestIsOrderIndependentAndAuthorityValuesAreImmutable(t *t
 		{ID: "alpha", Access: launch.PathAccessReadOnly, Type: launch.PathTypeDirectory, ReferenceKind: launch.PathReferenceWorkspaceRelative, Path: "docs/alpha"},
 	}
 	contribution := PathContribution{entries: append([]launch.PathGrantIntent(nil), entries...)}
-	plan := authority.New([]authority.Contribution{{ID: PathsCapabilityID, Value: contribution}}, launch.WorkspaceAccessReadOnly, 3, "")
+	plan := authority.New([]authority.Contribution{{ID: PathsCapabilityID, Value: contribution}}, launch.WorkspaceAccessReadOnly, "")
 	reversed := pathAuthorityPlan([]launch.PathGrantIntent{entries[1], entries[0]})
 	if plan.AuthorityDigest() != reversed.AuthorityDigest() || !reflect.DeepEqual(plan.Explanation(), reversed.Explanation()) {
 		t.Fatal("common.paths entry ordering changed canonical semantic authority")

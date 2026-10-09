@@ -16,6 +16,7 @@ import (
 
 	"github.com/alcimerio/ai-config-selector/internal/instructions"
 	"github.com/alcimerio/ai-config-selector/internal/launch"
+	"github.com/alcimerio/ai-config-selector/internal/profile"
 	"github.com/alcimerio/ai-config-selector/internal/skills"
 )
 
@@ -196,12 +197,11 @@ type Explanation struct {
 	Unsupported              []Fact `json:"unsupported"`
 }
 
-type semanticContributor interface{ SemanticFacts(int, string) Facts }
+type semanticContributor interface{ SemanticFacts(overlay string) Facts }
 
 type Plan struct {
 	contributions          []Contribution
 	workspaceAccess        launch.WorkspaceAccess
-	sourceVersion          int
 	overlay                string
 	requirements           TargetRequirements
 	authRef                string
@@ -236,7 +236,7 @@ type mcpServerContributor interface {
 	MCPServerIntents() []launch.MCPServerIntent
 }
 
-func New(contributions []Contribution, workspaceAccess launch.WorkspaceAccess, sourceVersion int, overlay string, supplied ...TargetRequirements) Plan {
+func New(contributions []Contribution, workspaceAccess launch.WorkspaceAccess, overlay string, supplied ...TargetRequirements) Plan {
 	requirements := TargetRequirements{Recipe: RecipeShell}
 	if overlay != "" {
 		requirements.Recipe = RecipeDevin
@@ -257,7 +257,7 @@ func New(contributions []Contribution, workspaceAccess launch.WorkspaceAccess, s
 			requirements.Semantics = DevinSemantics()
 		}
 	}
-	plan := Plan{contributions: append([]Contribution(nil), contributions...), workspaceAccess: workspaceAccess, sourceVersion: sourceVersion, overlay: overlay, requirements: requirements, runtimeAuthority: launch.DefaultRuntimeAuthority()}
+	plan := Plan{contributions: append([]Contribution(nil), contributions...), workspaceAccess: workspaceAccess, overlay: overlay, requirements: requirements, runtimeAuthority: launch.DefaultRuntimeAuthority()}
 	for _, contribution := range plan.contributions {
 		if exclusions, ok := contribution.Value.(pathExclusionContributor); ok {
 			plan.pathExclusionIntents = append(plan.pathExclusionIntents, exclusions.PathExclusionIntents()...)
@@ -296,9 +296,8 @@ func (plan Plan) WorkspaceAccess() launch.WorkspaceAccess {
 	}
 	return plan.workspaceAccess
 }
-func (plan Plan) SourceVersion() int { return plan.sourceVersion }
-func (plan Plan) Overlay() string    { return plan.overlay }
-func (plan Plan) AuthRef() string    { return plan.authRef }
+func (plan Plan) Overlay() string { return plan.overlay }
+func (plan Plan) AuthRef() string { return plan.authRef }
 
 // WithAuthRef returns an independent resolved plan with one canonical opaque
 // authentication reference. Validation belongs to the target adapter.
@@ -472,18 +471,14 @@ func buildExplanation(plan Plan) Explanation {
 		facts.Effective = append(facts.Effective, value.Effective...)
 		facts.Unsupported = append(facts.Unsupported, value.Unsupported...)
 	}
-	workspaceReason := "stored_v3_intent"
-	if plan.sourceVersion < 3 {
-		workspaceReason = "legacy_compatibility_default"
-	}
-	add(Facts{Requested: []Fact{{ID: "common.workspace", Kind: "workspace", Value: FactValue{Access: string(plan.WorkspaceAccess())}, Reason: workspaceReason, Source: FactSource{Kind: "profile", ID: "workspace", Version: 1}}}})
+	add(Facts{Requested: []Fact{{ID: "common.workspace", Kind: "workspace", Value: FactValue{Access: string(plan.WorkspaceAccess())}, Reason: "stored_v3_intent", Source: FactSource{Kind: "profile", ID: "workspace", Version: 1}}}})
 	add(pathGrantFacts(plan.pathGrantIntents, plan.WorkspaceAccess()))
 	add(pathExclusionFacts(plan.pathExclusionIntents))
 	add(executableGrantFacts(plan.executableGrantIntents))
 	add(environmentFacts(plan.environmentIntents))
 	for _, contribution := range plan.contributions {
 		if semantic, ok := contribution.Value.(semanticContributor); ok {
-			add(semantic.SemanticFacts(plan.sourceVersion, plan.overlay))
+			add(semantic.SemanticFacts(plan.overlay))
 		}
 	}
 	add(recipeFacts(plan))
@@ -500,7 +495,7 @@ func buildExplanation(plan Plan) Explanation {
 			*list = []Fact{}
 		}
 	}
-	encoded := canonicalManifest(plan.sourceVersion, plan.overlay, plan.requirements.Recipe, facts)
+	encoded := canonicalManifest(profile.CurrentVersion, plan.overlay, plan.requirements.Recipe, facts)
 	sum := sha256.Sum256(encoded)
 	return Explanation{AuthorityManifestVersion: AuthorityManifestVersion, AuthorityDigest: "sha256:" + hex.EncodeToString(sum[:]), Requested: facts.Requested, TargetAdded: facts.TargetAdded, Effective: facts.Effective, Unsupported: facts.Unsupported}
 }
@@ -805,12 +800,7 @@ func (plan Plan) DevinExpectedInstructions() []instructions.Bundle {
 }
 
 func (plan Plan) Plan(ctx context.Context, workingDirectory string) (launch.Plan, error) {
-	provenance := fmt.Sprintf("Profile envelope v%d", plan.sourceVersion)
-	if plan.sourceVersion < 3 {
-		provenance += " legacy compatibility"
-	} else {
-		provenance += " common workspace v1"
-	}
+	provenance := fmt.Sprintf("Profile envelope v%d common workspace v1", profile.CurrentVersion)
 	explanation := launch.Plan{Sections: []launch.PlanSection{{
 		Title: "Resolved execution authority:",
 		Items: []launch.PlanItem{
@@ -827,9 +817,9 @@ func (plan Plan) Plan(ctx context.Context, workingDirectory string) (launch.Plan
 	for _, entry := range plan.contributions {
 		var err error
 		if resolved, ok := entry.Value.(interface {
-			PlanResolved(context.Context, string, int, string, *launch.Plan) error
+			PlanResolved(context.Context, string, string, *launch.Plan) error
 		}); ok {
-			err = resolved.PlanResolved(ctx, workingDirectory, plan.sourceVersion, plan.overlay, &explanation)
+			err = resolved.PlanResolved(ctx, workingDirectory, plan.overlay, &explanation)
 		} else {
 			err = entry.Value.Plan(ctx, workingDirectory, &explanation)
 		}
@@ -844,9 +834,9 @@ func (plan Plan) Materialize(sessionHome string) error {
 	for _, entry := range plan.contributions {
 		var err error
 		if resolved, ok := entry.Value.(interface {
-			MaterializeResolved(string, int, string) error
+			MaterializeResolved(string, string) error
 		}); ok {
-			err = resolved.MaterializeResolved(sessionHome, plan.sourceVersion, plan.overlay)
+			err = resolved.MaterializeResolved(sessionHome, plan.overlay)
 		} else {
 			err = entry.Value.Materialize(sessionHome)
 		}

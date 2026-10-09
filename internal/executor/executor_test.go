@@ -46,7 +46,7 @@ func (value authorityTestExecutableContribution) ExecutableGrantIntents() []laun
 
 func TestRunShellUsesOneResolvedPlanForCheckAndProcess(t *testing.T) {
 	sandbox := &fakeSandbox{process: &fakeProcess{}}
-	plan := authority.New([]authority.Contribution{{ID: "test", Value: authorityTestContribution{}}}, launch.WorkspaceAccessReadOnly, 3, "")
+	plan := authority.New([]authority.Contribution{{ID: "test", Value: authorityTestContribution{}}}, launch.WorkspaceAccessReadOnly, "")
 	err := newExecutor(sandbox).RunShell(context.Background(), ShellRequest{
 		SessionsDirectory: filepath.Join(t.TempDir(), "sessions"), WorkingDirectory: t.TempDir(),
 		WorkspaceAccess: launch.WorkspaceAccessReadWrite, ResolvedPlan: &plan,
@@ -173,7 +173,7 @@ func TestRunDevinOwnsBothPreflightsAndTheSessionLease(t *testing.T) {
 		RuntimeInputs: []string{"caller-runtime-must-not-be-granted"}, ExistingHomeDirectory: filepath.Join(t.TempDir(), "caller-home"),
 		ExpectedCatalog: []skills.SkillReference{}, Terminal: launch.Terminal{Output: io.Discard, ErrorOutput: io.Discard},
 	}
-	plan := authority.New([]authority.Contribution{{ID: "test", Value: authorityTestContribution{}}}, launch.WorkspaceAccessReadOnly, 3, "devin", authority.TargetRequirements{Recipe: authority.RecipeDevin, Executable: "devin", RuntimeInputs: []string{"registered-runtime"}, ExistingHomeDirectory: filepath.Join(t.TempDir(), "registered-home")})
+	plan := authority.New([]authority.Contribution{{ID: "test", Value: authorityTestContribution{}}}, launch.WorkspaceAccessReadOnly, "devin", authority.TargetRequirements{Recipe: authority.RecipeDevin, Executable: "devin", RuntimeInputs: []string{"registered-runtime"}, ExistingHomeDirectory: filepath.Join(t.TempDir(), "registered-home")})
 	request.ResolvedPlan = &plan
 	// The catalog interpreter accepts an empty JSON catalog; write the probe
 	// outputs through the request terminals as the real contained processes do.
@@ -736,7 +736,7 @@ func TestRunDevinProjectsOnlyAllowlistedCredentialAndSelectedFiles(t *testing.T)
 		}
 		return nil
 	})
-	plan := authority.New([]authority.Contribution{{ID: "selected-skills", Value: materializer}}, launch.WorkspaceAccessReadOnly, 3, "devin", authority.TargetRequirements{
+	plan := authority.New([]authority.Contribution{{ID: "selected-skills", Value: materializer}}, launch.WorkspaceAccessReadOnly, "devin", authority.TargetRequirements{
 		Recipe: authority.RecipeDevin, Executable: "fixture-devin", ExistingHomeDirectory: source, Semantics: authority.DevinSemantics(),
 	})
 	callerMaterialized := false

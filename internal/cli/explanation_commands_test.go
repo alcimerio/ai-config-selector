@@ -24,7 +24,7 @@ func (explanationBoundContribution) Materialize(string) error                   
 func (explanationBoundContribution) Verify(context.Context, launch.VerificationContext) error {
 	return nil
 }
-func (contribution explanationBoundContribution) SemanticFacts(int, string) authority.Facts {
+func (contribution explanationBoundContribution) SemanticFacts(string) authority.Facts {
 	facts := make([]authority.Fact, contribution.Facts)
 	for index := range facts {
 		facts[index] = authority.Fact{ID: "synthetic-bound", Kind: "test", Value: authority.FactValue{Mode: strings.Repeat("x", contribution.StringBytes)}, Reason: "public_bound", Source: authority.FactSource{Kind: "test", ID: "registered"}}

@@ -14,9 +14,6 @@ import (
 	"encoding/hex"
 	"encoding/pem"
 	"fmt"
-	"github.com/alcimerio/ai-config-selector/internal/launch"
-	"github.com/alcimerio/ai-config-selector/internal/selfupdate"
-	"github.com/alcimerio/ai-config-selector/internal/session"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -27,6 +24,10 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/alcimerio/ai-config-selector/internal/launch"
+	"github.com/alcimerio/ai-config-selector/internal/selfupdate"
+	"github.com/alcimerio/ai-config-selector/internal/session"
 )
 
 // A disposable test binary runs the public dispatcher while replacing its own

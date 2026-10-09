@@ -48,12 +48,12 @@ func TestCommonCapabilitiesReturnIndependentCopies(t *testing.T) {
 			t.Fatalf("lookup mutation changed catalog %q: %#v, %v", capability.ID, again, ok)
 		}
 	}
-	if !SupportsCommonV3([]string{"skills", "workspace"}) || SupportsCommonV3([]string{"mutated", "workspace"}) {
+	if !SupportsCommonCatalog([]string{"skills", "workspace"}) || SupportsCommonCatalog([]string{"mutated", "workspace"}) {
 		t.Fatal("caller mutation changed common admission")
 	}
 }
 
-func TestSupportsCommonV3PreservesRequirednessAndExactIDs(t *testing.T) {
+func TestSupportsCommonCatalogPreservesRequirednessAndExactIDs(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		ids  []string
@@ -78,8 +78,8 @@ func TestSupportsCommonV3PreservesRequirednessAndExactIDs(t *testing.T) {
 		{"empty ID", []string{"skills", "workspace", ""}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := SupportsCommonV3(tc.ids); got != tc.want {
-				t.Fatalf("SupportsCommonV3(%q) = %v, want %v", tc.ids, got, tc.want)
+			if got := SupportsCommonCatalog(tc.ids); got != tc.want {
+				t.Fatalf("SupportsCommonCatalog(%q) = %v, want %v", tc.ids, got, tc.want)
 			}
 		})
 	}

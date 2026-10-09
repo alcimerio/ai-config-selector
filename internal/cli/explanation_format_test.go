@@ -234,7 +234,6 @@ type strictExplanation struct {
 type strictExplanationProfile struct {
 	Name          string `json:"name"`
 	StoredVersion int    `json:"storedVersion"`
-	Compatibility string `json:"compatibility"`
 }
 type strictExplanationIntent struct {
 	Recipe  string  `json:"recipe"`
@@ -360,7 +359,7 @@ func assertFormat1Contract(t *testing.T, result strictExplanation, recipe string
 	if result.FormatVersion != 1 || result.Operation != "explain" || result.Plan == nil || result.Diagnostic != nil {
 		t.Fatalf("invalid format-1 envelope: %#v", result)
 	}
-	if result.Profile.Name != "format-profile" || result.Profile.StoredVersion != 3 || result.Profile.Compatibility != "current" || result.Intent.Recipe != recipe {
+	if result.Profile.Name != "format-profile" || result.Profile.StoredVersion != 3 || result.Intent.Recipe != recipe {
 		t.Fatalf("unexpected public identity: %#v", result)
 	}
 	if !strings.HasPrefix(result.Plan.AuthorityDigest, "sha256:") || len(result.Plan.AuthorityDigest) != len("sha256:")+64 || result.Plan.AuthorityManifestVersion != 1 {

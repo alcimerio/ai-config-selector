@@ -215,20 +215,17 @@ type bindingDocument struct {
 
 var bindingIDPattern = regexp.MustCompile(`^(source|authentication|path|executable|environment)-[1-9][0-9]{0,2}$`)
 
-// Export encodes only understood version-3 stored intent. The caller must have
+// Export encodes only understood stored intent. The caller must have
 // strictly admitted the source bytes before calling Export.
 func Export(candidate profile.Profile) ([]byte, Report, error) {
-	if candidate.Version != profile.CurrentVersion || candidate.SourceVersion != profile.CurrentVersion {
-		return nil, Report{}, errors.New("legacy Profile requires explicit migration before export")
-	}
-	if candidate.Target != "" || candidate.Categories != nil {
+	if candidate.Version != profile.CurrentVersion {
 		return nil, Report{}, errors.New("unsupported Profile content")
 	}
 	commonIDs := make([]string, 0, len(candidate.Common))
 	for id := range candidate.Common {
 		commonIDs = append(commonIDs, id)
 	}
-	if !capabilitycatalog.SupportsCommonV3(commonIDs) {
+	if !capabilitycatalog.SupportsCommonCatalog(commonIDs) {
 		return nil, Report{}, errors.New("unsupported common capability")
 	}
 	skillsPayload, skillsOK := candidate.Common[commonprofile.SkillsCapabilityID]

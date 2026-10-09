@@ -39,7 +39,7 @@ func TestExclusionsCommandCheckPrepareAndSourceConflict(t *testing.T) {
 		t.Fatal(err)
 	}
 	material := exclusionMaterial{intents: []launch.PathExclusionIntent{{ID: "hidden", Type: launch.PathTypeDirectory, ReferenceKind: launch.PathReferenceWorkspaceRelative, Path: "hidden"}}}
-	base := authority.New([]authority.Contribution{{ID: "exclusions", Value: material}}, launch.WorkspaceAccessReadWrite, 3, "")
+	base := authority.New([]authority.Contribution{{ID: "exclusions", Value: material}}, launch.WorkspaceAccessReadWrite, "")
 	plan, err := base.ForCommand()
 	if err != nil {
 		t.Fatal(err)
@@ -59,7 +59,7 @@ func TestExclusionsCommandCheckPrepareAndSourceConflict(t *testing.T) {
 	}
 	material.intents[0].Path = "hidden"
 	material.origins = []string{hidden}
-	conflict, err := authority.New([]authority.Contribution{{ID: "material", Value: material}}, launch.WorkspaceAccessReadWrite, 3, "").ForCommand()
+	conflict, err := authority.New([]authority.Contribution{{ID: "material", Value: material}}, launch.WorkspaceAccessReadWrite, "").ForCommand()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,7 +82,7 @@ func TestExclusionsFixedRecipesCarryPolicyThroughEveryGeneration(t *testing.T) {
 			if entrypoint == "shell" {
 				requirements = authority.TargetRequirements{Recipe: authority.RecipeShell, Executable: "/bin/zsh"}
 			}
-			plan := authority.New([]authority.Contribution{{ID: "exclusions", Value: material}}, launch.WorkspaceAccessReadOnly, 3, "devin", requirements)
+			plan := authority.New([]authority.Contribution{{ID: "exclusions", Value: material}}, launch.WorkspaceAccessReadOnly, "devin", requirements)
 			sandbox := &phaseMatrixSandbox{}
 			runner := newExecutor(sandbox)
 			terminal := launch.Terminal{Output: io.Discard, ErrorOutput: io.Discard}

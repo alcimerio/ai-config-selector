@@ -14,8 +14,7 @@ import (
 
 func TestStoredProfileEditorSeedsWithoutSourceResolution(t *testing.T) {
 	for _, raw := range []string{
-		`{"version":1,"name":"old","target":"devin","skillReferences":[{"source":"devin-config","relativePath":"lost"}]}`,
-		`{"version":2,"name":"old","target":"devin","categories":{"skills":{"schemaVersion":1,"selection":[{"source":"devin-config","relativePath":"lost"}]}}}`,
+		`{"version":3,"name":"old","common":{"skills":{"version":1,"selection":[{"source":"devin-config","relativePath":"lost"}]},"workspace":{"version":1,"selection":{"access":"read-only"}}},"overlays":{"devin":{"version":1}}}`,
 	} {
 		home := t.TempDir()
 		editor, err := NewProfileEditor(home)

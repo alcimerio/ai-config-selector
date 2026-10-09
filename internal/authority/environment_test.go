@@ -19,15 +19,15 @@ func (value environmentFactContribution) EnvironmentIntents() []launch.Environme
 }
 
 func TestEnvironmentSemanticDigestExcludesPrivateBindingAndPreservesEmptyBaseline(t *testing.T) {
-	baseline := New(nil, launch.WorkspaceAccessReadOnly, 3, "")
-	empty := New([]Contribution{{ID: "environment", Value: environmentFactContribution{intents: []launch.EnvironmentIntent{}}}}, launch.WorkspaceAccessReadOnly, 3, "")
+	baseline := New(nil, launch.WorkspaceAccessReadOnly, "")
+	empty := New([]Contribution{{ID: "environment", Value: environmentFactContribution{intents: []launch.EnvironmentIntent{}}}}, launch.WorkspaceAccessReadOnly, "")
 	if baseline.AuthorityDigest() != empty.AuthorityDigest() {
 		t.Fatalf("empty environment changed baseline digest: %s != %s", baseline.AuthorityDigest(), empty.AuthorityDigest())
 	}
 	intent := launch.EnvironmentIntent{ID: "token", Destination: "TOOL_TOKEN", Scope: "attached-process-tree", SourceKind: "secret-reference", Provider: "host-environment", Reference: "PRIVATE_A", Required: true, Classification: "secret"}
-	plan := New([]Contribution{{ID: "environment", Value: environmentFactContribution{intents: []launch.EnvironmentIntent{intent}}}}, launch.WorkspaceAccessReadOnly, 3, "")
+	plan := New([]Contribution{{ID: "environment", Value: environmentFactContribution{intents: []launch.EnvironmentIntent{intent}}}}, launch.WorkspaceAccessReadOnly, "")
 	intent.Reference = "PRIVATE_B"
-	rebound := New([]Contribution{{ID: "environment", Value: environmentFactContribution{intents: []launch.EnvironmentIntent{intent}}}}, launch.WorkspaceAccessReadOnly, 3, "")
+	rebound := New([]Contribution{{ID: "environment", Value: environmentFactContribution{intents: []launch.EnvironmentIntent{intent}}}}, launch.WorkspaceAccessReadOnly, "")
 	if plan.AuthorityDigest() != rebound.AuthorityDigest() {
 		t.Fatal("private secret reference changed semantic digest")
 	}
@@ -42,7 +42,7 @@ func TestEnvironmentSemanticDigestExcludesPrivateBindingAndPreservesEmptyBaselin
 		t.Run(name, func(t *testing.T) {
 			changed := intent
 			mutate(&changed)
-			other := New([]Contribution{{ID: "environment", Value: environmentFactContribution{intents: []launch.EnvironmentIntent{changed}}}}, launch.WorkspaceAccessReadOnly, 3, "")
+			other := New([]Contribution{{ID: "environment", Value: environmentFactContribution{intents: []launch.EnvironmentIntent{changed}}}}, launch.WorkspaceAccessReadOnly, "")
 			if plan.AuthorityDigest() == other.AuthorityDigest() {
 				t.Fatalf("%s mutation did not change digest", name)
 			}

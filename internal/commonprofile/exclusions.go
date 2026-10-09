@@ -73,17 +73,17 @@ func (ExclusionContribution) Verify(context.Context, launch.VerificationContext)
 func (contribution ExclusionContribution) PathExclusionIntents() []launch.PathExclusionIntent {
 	return append([]launch.PathExclusionIntent(nil), contribution.entries...)
 }
-func (ExclusionContribution) SemanticFacts(int, string) authority.Facts { return authority.Facts{} }
+func (ExclusionContribution) SemanticFacts(string) authority.Facts { return authority.Facts{} }
 
 type ExclusionsBinding = category.Binding[ExclusionSelection, ExclusionSelection, ExclusionContribution]
 
 func NewExclusionsBinding() (ExclusionsBinding, error) {
 	return category.Bind(category.Definition[ExclusionSelection, ExclusionSelection, ExclusionContribution]{
 		ID: ExclusionsCapabilityID, SchemaVersion: ExclusionsCapabilityVersion,
-		Empty:       exclusionintent.Empty,
-		LegacyEmpty: exclusionintent.Empty,
-		Encode:      EncodeExclusionSelection,
-		Decode:      DecodeExclusionSelection,
+		Empty:    exclusionintent.Empty,
+		Optional: true,
+		Encode:   EncodeExclusionSelection,
+		Decode:   DecodeExclusionSelection,
 		Resolve: func(_ context.Context, selection ExclusionSelection) (ExclusionSelection, error) {
 			return exclusionintent.Canonical(selection)
 		},

@@ -22,10 +22,12 @@ var categoryIDPattern = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
 // Definition keeps one category's concrete selection, resolved value, and
 // launch contribution types together.
 type Definition[S, R any, C launch.Contribution] struct {
-	ID                 string
-	SchemaVersion      int
-	Empty              func() S
-	LegacyEmpty        func() S
+	ID            string
+	SchemaVersion int
+	Empty         func() S
+	// Optional capabilities may be omitted from a stored Profile; an omitted
+	// selection is admitted as Empty and emitted explicitly on rewrite.
+	Optional           bool
 	Encode             func(S) (json.RawMessage, error)
 	Decode             func(json.RawMessage) (S, error)
 	Resolve            func(context.Context, S) (R, error)
@@ -60,7 +62,7 @@ type Registration struct {
 	id                 string
 	schemaVersion      int
 	empty              func() any
-	legacyEmpty        func() any
+	optional           bool
 	encode             func(any) (json.RawMessage, error)
 	decode             func(json.RawMessage) (any, error)
 	resolve            func(context.Context, any) (any, error)
@@ -122,6 +124,7 @@ func bindDefinition[S, R any, C launch.Contribution](definition Definition[S, R,
 		id:            definition.ID,
 		schemaVersion: definition.SchemaVersion,
 		empty:         func() any { return definition.Empty() },
+		optional:      definition.Optional,
 		encode: func(value any) (json.RawMessage, error) {
 			selection, ok := value.(S)
 			if !ok {
@@ -176,9 +179,6 @@ func bindDefinition[S, R any, C launch.Contribution](definition Definition[S, R,
 			return definition.ResolveSyntax(selection)
 		}
 	}
-	if definition.LegacyEmpty != nil {
-		registration.legacyEmpty = func() any { return definition.LegacyEmpty() }
-	}
 	if codecOnly {
 		registration.resolve, registration.resolveSyntax, registration.contribute = nil, nil, nil
 	}
@@ -191,7 +191,6 @@ type Registry struct {
 	requirements authority.TargetRequirements
 	ordered      []*Registration
 	byID         map[string]*Registration
-	legacy       map[int]func([]byte) (profile.Profile, error)
 }
 
 const supportedOverlayVersion = 1
@@ -213,27 +212,14 @@ func (registry *Registry) Owns(draft Draft) bool {
 	return registry != nil && draft.registry == registry
 }
 
-// LegacyDecoder migrates one older envelope version into the current Profile
-// shape before category normalization.
-type LegacyDecoder struct {
-	Version int
-	Decode  func([]byte) (profile.Profile, error)
-}
-
 // NewRegistry validates and assembles one target's fixed category set.
 func NewRegistry(target string, registrations ...Registration) (*Registry, error) {
-	return NewRegistryWithLegacy(target, registrations)
-}
-
-// NewRegistryWithLegacy assembles a Registry with explicit older envelope
-// decoders.
-func NewRegistryWithLegacy(target string, registrations []Registration, legacyDecoders ...LegacyDecoder) (*Registry, error) {
-	return NewRegistryWithRequirements(target, authority.TargetRequirements{Recipe: authority.RecipeDevin, ExecutableRequirementID: "devin-cli", Semantics: authority.DevinSemantics()}, registrations, legacyDecoders...)
+	return NewRegistryWithRequirements(target, authority.TargetRequirements{Recipe: authority.RecipeDevin, ExecutableRequirementID: "devin-cli", Semantics: authority.DevinSemantics()}, registrations)
 }
 
 // NewRegistryWithRequirements assembles a Registry with fixed intrinsic
 // execution requirements. Profile capabilities cannot modify these inputs.
-func NewRegistryWithRequirements(target string, requirements authority.TargetRequirements, registrations []Registration, legacyDecoders ...LegacyDecoder) (*Registry, error) {
+func NewRegistryWithRequirements(target string, requirements authority.TargetRequirements, registrations []Registration) (*Registry, error) {
 	if target == "" {
 		return nil, errors.New("category Registry target is required")
 	}
@@ -251,7 +237,7 @@ func NewRegistryWithRequirements(target string, requirements authority.TargetReq
 			return nil, errors.New("category Registry contains a codec-only registration")
 		}
 	}
-	registry, err := newRegistry(target, registrations, legacyDecoders...)
+	registry, err := newRegistry(target, registrations)
 	if err != nil {
 		return nil, err
 	}
@@ -259,12 +245,11 @@ func NewRegistryWithRequirements(target string, requirements authority.TargetReq
 	return registry, nil
 }
 
-func newRegistry(target string, registrations []Registration, legacyDecoders ...LegacyDecoder) (*Registry, error) {
+func newRegistry(target string, registrations []Registration) (*Registry, error) {
 	registry := &Registry{
 		target:  target,
 		ordered: make([]*Registration, 0, len(registrations)),
 		byID:    make(map[string]*Registration, len(registrations)),
-		legacy:  make(map[int]func([]byte) (profile.Profile, error), len(legacyDecoders)),
 	}
 	for index := range registrations {
 		registration := registrations[index]
@@ -277,15 +262,6 @@ func newRegistry(target string, registrations []Registration, legacyDecoders ...
 		entry := registration
 		registry.ordered = append(registry.ordered, &entry)
 		registry.byID[entry.id] = &entry
-	}
-	for _, decoder := range legacyDecoders {
-		if decoder.Version < 1 || decoder.Version >= profile.CurrentVersion || decoder.Decode == nil {
-			return nil, fmt.Errorf("invalid legacy Profile decoder for version %d", decoder.Version)
-		}
-		if _, exists := registry.legacy[decoder.Version]; exists {
-			return nil, fmt.Errorf("duplicate legacy Profile decoder for version %d", decoder.Version)
-		}
-		registry.legacy[decoder.Version] = decoder.Decode
 	}
 	return registry, nil
 }
@@ -406,13 +382,13 @@ func (draft Draft) Summaries() []Summary {
 	return summaries
 }
 
-// NewProfile encodes every Draft selection into the strict version-3 common
-// envelope. New Profiles default through each common capability's Empty value.
+// NewProfile encodes every Draft selection into the strict common envelope.
+// New Profiles default through each common capability's Empty value.
 func (registry *Registry) NewProfile(name string, draft Draft) (profile.Profile, error) {
 	return registry.NewProfileWithOverlay(name, draft, profile.OverlayPayload{Version: supportedOverlayVersion})
 }
 
-// NewProfileWithOverlay creates a v3 Profile with the registry's independently
+// NewProfileWithOverlay creates a Profile with the registry's independently
 // versioned target overlay. Target adapters supply only their typed payload.
 func (registry *Registry) NewProfileWithOverlay(name string, draft Draft, overlay profile.OverlayPayload) (profile.Profile, error) {
 	if err := profile.ValidateName(name); err != nil {
@@ -421,15 +397,11 @@ func (registry *Registry) NewProfileWithOverlay(name string, draft Draft, overla
 	if draft.registry != registry {
 		return profile.Profile{}, errors.New("build Profile: Draft belongs to another category Registry")
 	}
-	if !registry.supportsCommonV3() {
-		return registry.newVersionTwoProfile(name, draft, false)
-	}
 	candidate := profile.Profile{
-		Version:       profile.CurrentVersion,
-		Name:          name,
-		SourceVersion: profile.CurrentVersion,
-		Common:        make(map[string]profile.CommonPayload, len(registry.ordered)),
-		Overlays:      map[string]profile.OverlayPayload{registry.target: overlay},
+		Version:  profile.CurrentVersion,
+		Name:     name,
+		Common:   make(map[string]profile.CommonPayload, len(registry.ordered)),
+		Overlays: map[string]profile.OverlayPayload{registry.target: overlay},
 	}
 	for _, registration := range registry.ordered {
 		selection, err := registration.encode(draft.selections[registration.id])
@@ -444,147 +416,46 @@ func (registry *Registry) NewProfileWithOverlay(name string, draft Draft, overla
 	return candidate, nil
 }
 
-func (registry *Registry) supportsCommonV3() bool {
+// supportsCommonCatalog reports whether this Registry carries exactly the
+// common capability catalog, so stored bytes can use strict passive admission.
+func (registry *Registry) supportsCommonCatalog() bool {
 	ids := make([]string, 0, len(registry.ordered))
 	for _, registration := range registry.ordered {
 		ids = append(ids, registration.id)
 	}
-	return capabilitycatalog.SupportsCommonV3(ids)
+	return capabilitycatalog.SupportsCommonCatalog(ids)
 }
 
-func (registry *Registry) newVersionTwoProfile(name string, draft Draft, omitWorkspace bool) (profile.Profile, error) {
-	candidate := profile.Profile{Version: profile.LegacyCurrentVersion, SourceVersion: profile.LegacyCurrentVersion, Name: name, Target: registry.target, Categories: map[string]profile.CategoryPayload{}}
-	for _, registration := range registry.ordered {
-		if omitWorkspace && registration.id == "workspace" {
-			continue
-		}
-		selection, err := registration.encode(draft.selections[registration.id])
-		if err != nil {
-			return profile.Profile{}, fmt.Errorf("encode %s category selection: %w", registration.id, err)
-		}
-		candidate.Categories[registration.id] = profile.CategoryPayload{SchemaVersion: registration.schemaVersion, Selection: selection}
-	}
-	return candidate, nil
-}
-
-// NewLegacyProfile preserves the shipped writable v2 representation and old
-// target placement for an explicitly approved edit/clone/rename of v1/v2.
-// Selecting a different common authority requires explicit v3 migration.
-func (registry *Registry) NewLegacyProfile(name string, draft Draft) (profile.Profile, error) {
-	if err := profile.ValidateName(name); err != nil {
-		return profile.Profile{}, err
-	}
-	if draft.registry != registry {
-		return profile.Profile{}, errors.New("build legacy Profile: Draft belongs to another category Registry")
-	}
-	if !registry.supportsCommonV3() {
-		return registry.newVersionTwoProfile(name, draft, false)
-	}
-	candidate := profile.Profile{Version: profile.LegacyCurrentVersion, SourceVersion: profile.LegacyCurrentVersion, Name: name, Target: registry.target, Categories: map[string]profile.CategoryPayload{}}
-	for _, registration := range registry.ordered {
-		if registration.id == "workspace" {
-			selection, err := registration.encode(draft.selections[registration.id])
-			if err != nil {
-				return profile.Profile{}, err
-			}
-			var intent struct {
-				Access launch.WorkspaceAccess `json:"access"`
-			}
-			if json.Unmarshal(selection, &intent) != nil || intent.Access != launch.WorkspaceAccessReadWrite {
-				return profile.Profile{}, errors.New("legacy workspace authority can change only through explicit migration")
-			}
-			continue
-		}
-		if registration.legacyEmpty != nil {
-			if registration.count(draft.selections[registration.id]) != 0 {
-				return profile.Profile{}, fmt.Errorf("common capability %q requires explicit Profile migration", registration.id)
-			}
-			continue
-		}
-		selection, err := registration.encode(draft.selections[registration.id])
-		if err != nil {
-			return profile.Profile{}, fmt.Errorf("encode %s category selection: %w", registration.id, err)
-		}
-		candidate.Categories[registration.id] = profile.CategoryPayload{SchemaVersion: registration.schemaVersion, Selection: selection}
-	}
-	return candidate, nil
-}
-
-// Normalize validates the current Profile envelope and canonicalizes every
-// category payload without changing the saved file.
+// Normalize validates the Profile envelope and canonicalizes every common
+// capability payload without changing the saved file.
 func (registry *Registry) Normalize(candidate profile.Profile) (profile.Profile, error) {
-	if candidate.SourceVersion == 0 {
-		candidate.SourceVersion = candidate.Version
-	}
-	if candidate.Version != profile.CurrentVersion && candidate.Version != profile.LegacyCurrentVersion {
+	if candidate.Version != profile.CurrentVersion {
 		return profile.Profile{}, fmt.Errorf("unsupported schema version %d", candidate.Version)
 	}
-	if candidate.Version == profile.LegacyCurrentVersion && candidate.Target != registry.target {
-		return profile.Profile{}, fmt.Errorf("Profile %q targets %q, not %s", candidate.Name, candidate.Target, registry.target)
-	}
-	if candidate.Version == profile.CurrentVersion && (candidate.Target != "" || candidate.Categories != nil) {
-		return profile.Profile{}, errors.New("version-3 Profile cannot contain legacy target or categories fields")
-	}
-	known := candidate.Categories
-	if candidate.Version == profile.CurrentVersion {
-		known = make(map[string]profile.CategoryPayload, len(candidate.Common))
-		for id, payload := range candidate.Common {
-			known[id] = profile.CategoryPayload{SchemaVersion: payload.Version, Selection: payload.Selection}
-		}
-	}
-	for id := range known {
-		registration, exists := registry.byID[id]
-		if !exists {
-			if candidate.Version == profile.LegacyCurrentVersion {
-				return profile.Profile{}, fmt.Errorf("unknown Profile category %q", id)
-			}
+	for id := range candidate.Common {
+		if _, exists := registry.byID[id]; !exists {
 			return profile.Profile{}, fmt.Errorf("unknown common capability %q", id)
 		}
-		if candidate.Version == profile.LegacyCurrentVersion && registration.legacyEmpty != nil {
-			return profile.Profile{}, fmt.Errorf("common capability %q is not valid in a legacy Profile", id)
-		}
 	}
-	if known == nil {
-		known = make(map[string]profile.CategoryPayload, len(registry.ordered))
-	}
+	common := make(map[string]profile.CommonPayload, len(registry.ordered))
 	selections := make(map[string]any, len(registry.ordered))
 	for _, registration := range registry.ordered {
-		payload, exists := known[registration.id]
+		payload, exists := candidate.Common[registration.id]
 		if !exists {
-			if candidate.Version == profile.CurrentVersion {
-				if registration.legacyEmpty == nil {
-					return profile.Profile{}, fmt.Errorf("missing common capability %q", registration.id)
-				}
-				empty := registration.empty()
-				encoded, err := registration.encode(empty)
-				if err != nil {
-					return profile.Profile{}, fmt.Errorf("encode empty %s category selection: %w", registration.id, err)
-				}
-				known[registration.id] = profile.CategoryPayload{SchemaVersion: registration.schemaVersion, Selection: encoded}
-				selections[registration.id] = empty
-				continue
-			}
-			// A LegacyEmpty registration is common-only. Its legacy value is
-			// synthesized for drafts and resolution, never serialized into the
-			// supported v2 categories map.
-			if registration.legacyEmpty != nil {
-				selections[registration.id] = registration.legacyEmpty()
-				continue
+			if !registration.optional {
+				return profile.Profile{}, fmt.Errorf("missing common capability %q", registration.id)
 			}
 			empty := registration.empty()
 			encoded, err := registration.encode(empty)
 			if err != nil {
 				return profile.Profile{}, fmt.Errorf("encode empty %s category selection: %w", registration.id, err)
 			}
-			known[registration.id] = profile.CategoryPayload{
-				SchemaVersion: registration.schemaVersion,
-				Selection:     encoded,
-			}
+			common[registration.id] = profile.CommonPayload{Version: registration.schemaVersion, Selection: encoded}
 			selections[registration.id] = empty
 			continue
 		}
-		if payload.SchemaVersion != registration.schemaVersion {
-			return profile.Profile{}, fmt.Errorf("%s category uses unsupported schema version %d", registration.id, payload.SchemaVersion)
+		if payload.Version != registration.schemaVersion {
+			return profile.Profile{}, fmt.Errorf("%s category uses unsupported schema version %d", registration.id, payload.Version)
 		}
 		selection, err := registration.decode(payload.Selection)
 		if err != nil {
@@ -594,8 +465,7 @@ func (registry *Registry) Normalize(candidate profile.Profile) (profile.Profile,
 		if err != nil {
 			return profile.Profile{}, fmt.Errorf("encode %s category selection: %w", registration.id, err)
 		}
-		payload.Selection = encoded
-		known[registration.id] = payload
+		common[registration.id] = profile.CommonPayload{Version: payload.Version, Selection: encoded}
 		selections[registration.id] = selection
 	}
 	for _, registration := range registry.ordered {
@@ -603,18 +473,12 @@ func (registry *Registry) Normalize(candidate profile.Profile) (profile.Profile,
 			return profile.Profile{}, fmt.Errorf("validate %s category references: %w", registration.id, err)
 		}
 	}
-	if candidate.Version == profile.CurrentVersion {
-		candidate.Common = make(map[string]profile.CommonPayload, len(known))
-		for id, payload := range known {
-			candidate.Common[id] = profile.CommonPayload{Version: payload.SchemaVersion, Selection: payload.Selection}
-		}
-	} else {
-		candidate.Categories = known
-	}
+	candidate.Common = common
 	return candidate, nil
 }
 
-// Decode parses and normalizes a current Profile envelope.
+// Decode parses and normalizes a stored Profile envelope. Exact-byte structural
+// admission belongs to DecodeNamed.
 func (registry *Registry) Decode(contents []byte) (profile.Profile, error) {
 	var envelope struct {
 		Version int `json:"version"`
@@ -622,37 +486,13 @@ func (registry *Registry) Decode(contents []byte) (profile.Profile, error) {
 	if err := json.Unmarshal(contents, &envelope); err != nil {
 		return profile.Profile{}, err
 	}
-	if envelope.Version == profile.LegacyCurrentVersion {
-		var candidate profile.Profile
-		if err := json.Unmarshal(contents, &candidate); err != nil {
-			return profile.Profile{}, err
-		}
-		candidate.SourceVersion = profile.LegacyCurrentVersion
-		return registry.Normalize(candidate)
-	}
 	if envelope.Version != profile.CurrentVersion {
-		decoder, exists := registry.legacy[envelope.Version]
-		if !exists {
-			return profile.Profile{}, fmt.Errorf("unsupported schema version %d", envelope.Version)
-		}
-		candidate, err := decoder(contents)
-		if err != nil {
-			return profile.Profile{}, err
-		}
-		// Legacy decoders written before v3 returned profile.CurrentVersion in
-		// the target/categories shape. Admit that typed result as v2 without
-		// changing the stored bytes or granting v3 defaults.
-		if candidate.Version == profile.CurrentVersion && candidate.Target != "" && candidate.Categories != nil {
-			candidate.Version = profile.LegacyCurrentVersion
-		}
-		candidate.SourceVersion = envelope.Version
-		return registry.Normalize(candidate)
+		return profile.Profile{}, fmt.Errorf("unsupported schema version %d", envelope.Version)
 	}
 	var candidate profile.Profile
 	if err := json.Unmarshal(contents, &candidate); err != nil {
 		return profile.Profile{}, err
 	}
-	candidate.SourceVersion = profile.CurrentVersion
 	return registry.Normalize(candidate)
 }
 
@@ -660,7 +500,7 @@ func (registry *Registry) Decode(contents []byte) (profile.Profile, error) {
 // inspection used by passive commands, including duplicate and filename/body
 // mismatch rejection.
 func (registry *Registry) DecodeNamed(name string, contents []byte) (profile.Profile, error) {
-	if !registry.supportsCommonV3() {
+	if !registry.supportsCommonCatalog() {
 		return registry.Decode(contents)
 	}
 	entry := profileinspect.InspectBytes(name, contents)
@@ -706,7 +546,7 @@ func (registry *Registry) resolveFor(ctx context.Context, candidate profile.Prof
 		return ResolvedProfile{}, err
 	}
 
-	if normalized.Version == profile.CurrentVersion && overlay != "" {
+	if overlay != "" {
 		payload, exists := normalized.Overlays[overlay]
 		if !exists {
 			return ResolvedProfile{}, fmt.Errorf("selected target overlay %q is missing", overlay)
@@ -716,7 +556,7 @@ func (registry *Registry) resolveFor(ctx context.Context, candidate profile.Prof
 		}
 	}
 	workspaceAccess := launch.WorkspaceAccessReadWrite
-	if _, ownsWorkspace := registry.byID["workspace"]; normalized.Version == profile.CurrentVersion && ownsWorkspace {
+	if _, ownsWorkspace := registry.byID["workspace"]; ownsWorkspace {
 		workspace, exists := normalized.Common["workspace"]
 		if !exists || workspace.Version != 1 {
 			return ResolvedProfile{}, errors.New("supported common workspace intent is required")
@@ -783,32 +623,19 @@ func (registry *Registry) resolveFor(ctx context.Context, candidate profile.Prof
 			ProtectedPathIDs: append([]string(nil), registry.requirements.ProtectedPathIDs...),
 		}
 	}
-	resolved := authority.New(contributions, workspaceAccess, normalized.SourceVersion, overlay, requirements)
+	resolved := authority.New(contributions, workspaceAccess, overlay, requirements)
 	if overlay == "codex" {
 		resolved = resolved.WithAuthRef(normalized.Overlays[overlay].AuthRef)
 	}
 	return resolved, nil
 }
 
-func (registry *Registry) payloadFor(candidate profile.Profile, registration *Registration) (profile.CategoryPayload, error) {
-	if candidate.Version == profile.CurrentVersion {
-		common, exists := candidate.Common[registration.id]
-		if !exists {
-			return profile.CategoryPayload{}, fmt.Errorf("missing common capability %q", registration.id)
-		}
-		return profile.CategoryPayload{SchemaVersion: common.Version, Selection: common.Selection}, nil
+func (registry *Registry) payloadFor(candidate profile.Profile, registration *Registration) (profile.CommonPayload, error) {
+	common, exists := candidate.Common[registration.id]
+	if !exists {
+		return profile.CommonPayload{}, fmt.Errorf("missing common capability %q", registration.id)
 	}
-	if payload, exists := candidate.Categories[registration.id]; exists {
-		return payload, nil
-	}
-	if registration.legacyEmpty == nil {
-		return profile.CategoryPayload{}, fmt.Errorf("missing legacy category %q", registration.id)
-	}
-	selection, err := registration.encode(registration.legacyEmpty())
-	if err != nil {
-		return profile.CategoryPayload{}, fmt.Errorf("encode legacy %s default: %w", registration.id, err)
-	}
-	return profile.CategoryPayload{SchemaVersion: registration.schemaVersion, Selection: selection}, nil
+	return common, nil
 }
 
 func isNilContribution(contribution launch.Contribution) bool {

@@ -27,7 +27,7 @@ import (
 func exchangeProfile(t *testing.T, name string) profile.Profile {
 	t.Helper()
 	references, _ := json.Marshal([]map[string]string{{"source": "shared-agents", "relativePath": "review"}})
-	return profile.Profile{Version: 3, SourceVersion: 3, Name: name, Common: map[string]profile.CommonPayload{
+	return profile.Profile{Version: 3, Name: name, Common: map[string]profile.CommonPayload{
 		"skills": {Version: 1, Selection: references}, "workspace": {Version: 1, Selection: json.RawMessage(`{"access":"read-only"}`)},
 	}, Overlays: map[string]profile.OverlayPayload{"devin": {Version: 1}, "codex": {Version: 1, AuthRef: "work"}}}
 }
@@ -316,28 +316,28 @@ func TestProfileImportValidationFileSafetyDoesNotBlock(t *testing.T) {
 	}
 }
 
-func TestProfileExportRequiresExistingExplicitLegacyMigration(t *testing.T) {
+func TestProfileExportRejectsRemovedEnvelopeWithoutChangingIt(t *testing.T) {
 	acsHome := filepath.Join(t.TempDir(), ".acs")
 	profiles := filepath.Join(acsHome, "profiles")
 	if err := os.MkdirAll(profiles, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	legacy := []byte(`{"version":2,"name":"legacy","target":"devin","categories":{"skills":{"schemaVersion":1,"selection":[]}}}`)
-	path := filepath.Join(profiles, "legacy.json")
-	if err := os.WriteFile(path, legacy, 0o600); err != nil {
+	removed := []byte(`{"version":2,"name":"removed","target":"devin","categories":{"skills":{"schemaVersion":1,"selection":[]}}}`)
+	path := filepath.Join(profiles, "removed.json")
+	if err := os.WriteFile(path, removed, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	app, out, errOut := exchangeApp(t, acsHome)
-	before, err := app.Repository.Read(context.Background(), "legacy")
+	before, err := app.Repository.Read(context.Background(), "removed")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if code := app.Run(context.Background(), []string{"profile", "export", "legacy"}); code != 1 {
+	if code := app.Run(context.Background(), []string{"profile", "export", "removed"}); code != 1 {
 		t.Fatalf("code=%d", code)
 	}
-	after, err := app.Repository.Read(context.Background(), "legacy")
-	if err != nil || !bytes.Equal(after.Bytes, legacy) || before.Revision != after.Revision || out.Len() != 0 || !strings.Contains(errOut.String(), "acs profile migrate NAME") {
-		t.Fatalf("legacy changed or guidance missing: %v stdout=%q stderr=%q", err, out.String(), errOut.String())
+	after, err := app.Repository.Read(context.Background(), "removed")
+	if err != nil || !bytes.Equal(after.Bytes, removed) || before.Revision != after.Revision || out.Len() != 0 || !strings.Contains(errOut.String(), "unsupported or invalid content") {
+		t.Fatalf("removed envelope changed or error missing: %v stdout=%q stderr=%q", err, out.String(), errOut.String())
 	}
 }
 

@@ -8,10 +8,8 @@ import (
 	"regexp"
 )
 
-const (
-	CurrentVersion       = 3
-	LegacyCurrentVersion = 2
-)
+// CurrentVersion is the only supported stored Profile envelope version.
+const CurrentVersion = 3
 
 var (
 	ErrInvalidProfileName = errors.New("invalid Profile name")
@@ -19,20 +17,10 @@ var (
 )
 
 type Profile struct {
-	Version    int                        `json:"version"`
-	Name       string                     `json:"name"`
-	Target     string                     `json:"target,omitempty"`
-	Categories map[string]CategoryPayload `json:"categories,omitempty"`
-	Common     map[string]CommonPayload   `json:"common,omitempty"`
-	Overlays   map[string]OverlayPayload  `json:"overlays,omitempty"`
-	// SourceVersion records the admitted on-disk envelope without changing its
-	// bytes. It preserves legacy grant and placement semantics after decoding.
-	SourceVersion int `json:"-"`
-}
-
-type CategoryPayload struct {
-	SchemaVersion int             `json:"schemaVersion"`
-	Selection     json.RawMessage `json:"selection"`
+	Version  int                       `json:"version"`
+	Name     string                    `json:"name"`
+	Common   map[string]CommonPayload  `json:"common,omitempty"`
+	Overlays map[string]OverlayPayload `json:"overlays,omitempty"`
 }
 
 // CommonPayload is one independently versioned common capability. Selection
@@ -57,11 +45,11 @@ func ValidateName(name string) error {
 	return nil
 }
 
-// MarshalJSON preserves the required v3 overlays object even for a common-only
-// Profile. Legacy envelopes retain their original omission rules.
+// MarshalJSON preserves the required overlays object even for a common-only
+// Profile.
 func (p Profile) MarshalJSON() ([]byte, error) {
 	type stored Profile
-	if p.Version != CurrentVersion || p.Overlays == nil || len(p.Overlays) != 0 {
+	if p.Overlays == nil || len(p.Overlays) != 0 {
 		return json.Marshal(stored(p))
 	}
 	overlays := p.Overlays

@@ -465,13 +465,13 @@ func fixtureProfile(t *testing.T) profile.Profile {
 		t.Fatal(err)
 	}
 	workspace := json.RawMessage(`{"access":"read-write"}`)
-	return profile.Profile{Version: 3, SourceVersion: 3, Name: "source", Common: map[string]profile.CommonPayload{
+	return profile.Profile{Version: 3, Name: "source", Common: map[string]profile.CommonPayload{
 		"skills": {Version: 1, Selection: skills}, "workspace": {Version: 1, Selection: workspace},
 	}, Overlays: map[string]profile.OverlayPayload{"devin": {Version: 1}, "codex": {Version: 1, AuthRef: "work"}}}
 }
 
 func FuzzDecodeBounded(f *testing.F) {
-	candidate := profile.Profile{Version: 3, SourceVersion: 3, Name: "source", Common: map[string]profile.CommonPayload{
+	candidate := profile.Profile{Version: 3, Name: "source", Common: map[string]profile.CommonPayload{
 		"skills": {Version: 1, Selection: json.RawMessage(`[]`)}, "workspace": {Version: 1, Selection: json.RawMessage(`{"access":"read-only"}`)},
 	}, Overlays: map[string]profile.OverlayPayload{"devin": {Version: 1}}}
 	seed, _, _ := Export(candidate)

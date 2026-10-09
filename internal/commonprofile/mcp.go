@@ -63,7 +63,7 @@ func (value MCPContribution) MCPServerIntents() []launch.MCPServerIntent {
 	}
 	return result
 }
-func (value MCPContribution) SemanticFacts(sourceVersion int, _ string) authority.Facts {
+func (value MCPContribution) SemanticFacts(string) authority.Facts {
 	facts := authority.Facts{Requested: []authority.Fact{}, Effective: []authority.Fact{}}
 	for _, server := range value.selection.Servers {
 		count := len(server.Arguments)
@@ -99,7 +99,7 @@ type MCPBinding = category.Binding[MCPSelection, MCPSelection, MCPContribution]
 func NewMCPBinding() (MCPBinding, error) {
 	return category.Bind(category.Definition[MCPSelection, MCPSelection, MCPContribution]{
 		ID: MCPCapabilityID, SchemaVersion: MCPCapabilityVersion,
-		Empty: mcpintent.Empty, LegacyEmpty: mcpintent.Empty,
+		Empty: mcpintent.Empty, Optional: true,
 		Encode: mcpintent.Encode, Decode: mcpintent.Decode,
 		Resolve: func(_ context.Context, selection MCPSelection) (MCPSelection, error) {
 			return mcpintent.Canonical(selection)

@@ -17,7 +17,7 @@ func TestPassiveInspectionIgnoresLiveAndMalformedTransactionState(t *testing.T) 
 		t.Fatal(err)
 	}
 	files := map[string][]byte{
-		"example.json":                []byte(`{"version":2,"name":"example","target":"devin","categories":{}}`),
+		"example.json":                []byte(`{"version":3,"name":"example","common":{"skills":{"version":1,"selection":[]},"workspace":{"version":1,"selection":{"access":"read-only"}}},"overlays":{}}`),
 		".profile-transaction-plan":   []byte("malformed metadata"),
 		".profile-transaction-future": []byte("unknown future metadata"),
 		".profile-transaction-lock":   nil,

@@ -60,7 +60,7 @@ func TestEmptyExclusionSelectionEncodesAsArray(t *testing.T) {
 
 func exclusionAuthorityPlan(entries []launch.PathExclusionIntent) authority.Plan {
 	contribution := ExclusionContribution{entries: append([]launch.PathExclusionIntent(nil), entries...)}
-	return authority.New([]authority.Contribution{{ID: ExclusionsCapabilityID, Value: contribution}}, launch.WorkspaceAccessReadOnly, 3, "")
+	return authority.New([]authority.Contribution{{ID: ExclusionsCapabilityID, Value: contribution}}, launch.WorkspaceAccessReadOnly, "")
 }
 
 func TestExclusionSemanticDigestTracksPortableIntentAndExcludesPrivateBindings(t *testing.T) {
@@ -111,7 +111,7 @@ func TestExclusionSemanticDigestIsOrderIndependentAndAuthorityValuesAreImmutable
 		{ID: "alpha", Type: launch.PathTypeDirectory, ReferenceKind: launch.PathReferenceWorkspaceRelative, Path: "docs/alpha"},
 	}
 	contribution := ExclusionContribution{entries: append([]launch.PathExclusionIntent(nil), entries...)}
-	plan := authority.New([]authority.Contribution{{ID: ExclusionsCapabilityID, Value: contribution}}, launch.WorkspaceAccessReadOnly, 3, "")
+	plan := authority.New([]authority.Contribution{{ID: ExclusionsCapabilityID, Value: contribution}}, launch.WorkspaceAccessReadOnly, "")
 	reversed := exclusionAuthorityPlan([]launch.PathExclusionIntent{entries[1], entries[0]})
 	if plan.AuthorityDigest() != reversed.AuthorityDigest() || !reflect.DeepEqual(plan.Explanation(), reversed.Explanation()) {
 		t.Fatal("common.exclusions entry ordering changed canonical semantic authority")
@@ -182,7 +182,7 @@ func TestExclusionsRejectSelectedCommonMaterialOrigins(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			denial := ExclusionContribution{entries: []launch.PathExclusionIntent{{ID: "hidden", Type: tc.kind, ReferenceKind: launch.PathReferenceWorkspaceRelative, Path: tc.path}}}
-			plan := authority.New([]authority.Contribution{{ID: "exclusions", Value: denial}, {ID: "material", Value: tc.material}}, launch.WorkspaceAccessReadOnly, 3, "codex")
+			plan := authority.New([]authority.Contribution{{ID: "exclusions", Value: denial}, {ID: "material", Value: tc.material}}, launch.WorkspaceAccessReadOnly, "codex")
 			_, err := plan.ResolveFilesystemExclusions(workspace, filepath.Join(t.TempDir(), "sessions"))
 			var classified *launch.SandboxError
 			if !errors.As(err, &classified) || !strings.Contains(err.Error(), `excluded path "hidden"`) || strings.Contains(err.Error(), workspace) {

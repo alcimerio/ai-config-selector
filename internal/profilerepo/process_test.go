@@ -70,7 +70,7 @@ func TestRepositoryProcessHelper(t *testing.T) {
 	switch mode {
 	case "canonical-create":
 		expected, _ := AbsentRevision("destination")
-		if _, err := r.Apply(ctx, CreateRequest{"destination", expected, []byte(`{"version":2,"name":"destination","target":"devin","categories":{}}`)}); err != nil {
+		if _, err := r.Apply(ctx, CreateRequest{"destination", expected, []byte(`{"version":3,"name":"destination","common":{"skills":{"version":1,"selection":[]},"workspace":{"version":1,"selection":{"access":"read-only"}}},"overlays":{}}`)}); err != nil {
 			t.Fatal(err)
 		}
 	case "apply":

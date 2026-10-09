@@ -2,7 +2,6 @@ package category_test
 
 import (
 	"context"
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -63,6 +62,7 @@ func TestProfileStoreUsesRegistryDefaultsWithoutKnowingCategoryTypes(t *testing.
 	toggle := mustBind(t, category.Definition[toggleSelection, toggleResolved, toggleContribution]{
 		ID:            "toggle",
 		SchemaVersion: 1,
+		Optional:      true,
 		Empty:         func() toggleSelection { return false },
 		Resolve: func(context.Context, toggleSelection) (toggleResolved, error) {
 			return 0, nil
@@ -81,7 +81,7 @@ func TestProfileStoreUsesRegistryDefaultsWithoutKnowingCategoryTypes(t *testing.
 	}
 	if err := os.WriteFile(
 		filepath.Join(profilesDirectory, "older.json"),
-		[]byte(`{"version":2,"name":"older","target":"devin","categories":{"texts":{"schemaVersion":3,"selection":{"values":["alpha"]}}}}`),
+		[]byte(`{"version":3,"name":"older","common":{"texts":{"version":3,"selection":{"values":["alpha"]}}}}`),
 		0o600,
 	); err != nil {
 		t.Fatal(err)
@@ -91,83 +91,12 @@ func TestProfileStoreUsesRegistryDefaultsWithoutKnowingCategoryTypes(t *testing.
 	if err != nil {
 		t.Fatalf("load Profile: %v", err)
 	}
-	togglePayload, exists := loaded.Categories["toggle"]
+	togglePayload, exists := loaded.Common["toggle"]
 	if !exists {
-		t.Fatal("Registry did not add the empty toggle category")
+		t.Fatal("Registry did not add the empty optional toggle capability")
 	}
-	if togglePayload.SchemaVersion != 1 || string(togglePayload.Selection) != "false" {
+	if togglePayload.Version != 1 || string(togglePayload.Selection) != "false" {
 		t.Fatalf("empty toggle payload = %#v, want schema 1 and false", togglePayload)
-	}
-}
-
-func TestProfileStoreUsesRegisteredLegacyDecoderWithoutRewritingSource(t *testing.T) {
-	texts := mustBind(t, category.Definition[textSelection, textResolved, textContribution]{
-		ID:            "texts",
-		SchemaVersion: 3,
-		Empty:         func() textSelection { return textSelection{Values: []string{}} },
-		Resolve: func(context.Context, textSelection) (textResolved, error) {
-			return textResolved{}, nil
-		},
-		Contribute: func(textResolved) (textContribution, error) { return textContribution{}, nil },
-		Count:      func(selection textSelection) int { return len(selection.Values) },
-	})
-	registry, err := category.NewRegistryWithLegacy(
-		"devin",
-		[]category.Registration{texts.Registration()},
-		category.LegacyDecoder{
-			Version: 1,
-			Decode: func(contents []byte) (profile.Profile, error) {
-				var legacy struct {
-					Version int           `json:"version"`
-					Name    string        `json:"name"`
-					Target  string        `json:"target"`
-					Texts   textSelection `json:"texts"`
-				}
-				if err := json.Unmarshal(contents, &legacy); err != nil {
-					return profile.Profile{}, err
-				}
-				selection, err := json.Marshal(legacy.Texts)
-				if err != nil {
-					return profile.Profile{}, err
-				}
-				return profile.Profile{
-					Version: profile.CurrentVersion,
-					Name:    legacy.Name,
-					Target:  legacy.Target,
-					Categories: map[string]profile.CategoryPayload{
-						"texts": {SchemaVersion: 3, Selection: selection},
-					},
-				}, nil
-			},
-		},
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	acsHome := t.TempDir()
-	profilesDirectory := filepath.Join(acsHome, "profiles")
-	if err := os.MkdirAll(profilesDirectory, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	legacy := []byte(`{"version":1,"name":"legacy","target":"devin","texts":{"values":["alpha"]}}`)
-	path := filepath.Join(profilesDirectory, "legacy.json")
-	if err := os.WriteFile(path, legacy, 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	loaded, err := profile.NewStore(acsHome, registry).Load("legacy")
-	if err != nil {
-		t.Fatalf("load legacy Profile: %v", err)
-	}
-	if loaded.Version != profile.LegacyCurrentVersion || loaded.SourceVersion != 1 || string(loaded.Categories["texts"].Selection) != `{"values":["alpha"]}` {
-		t.Fatalf("normalized legacy Profile = %#v", loaded)
-	}
-	afterLoad, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !reflect.DeepEqual(afterLoad, legacy) {
-		t.Fatalf("legacy Profile was rewritten: %s", afterLoad)
 	}
 }
 
@@ -241,7 +170,7 @@ func TestRegistryBuildsProfileFromTypedDraftAndIncludesEmptyCategories(t *testin
 		t.Fatalf("build Profile: %v", err)
 	}
 
-	if candidate.Version != 2 || candidate.Name != "typed" || candidate.Target != "devin" {
+	if _, overlay := candidate.Overlays["devin"]; candidate.Version != profile.CurrentVersion || candidate.Name != "typed" || !overlay {
 		t.Fatalf("Profile envelope = %#v", candidate)
 	}
 	wantPayloads := map[string]struct {
@@ -251,16 +180,16 @@ func TestRegistryBuildsProfileFromTypedDraftAndIncludesEmptyCategories(t *testin
 		"texts":  {schemaVersion: 3, selection: `{"values":["alpha","beta"]}`},
 		"toggle": {schemaVersion: 1, selection: `false`},
 	}
-	if len(candidate.Categories) != len(wantPayloads) {
-		t.Fatalf("category count = %d, want %d", len(candidate.Categories), len(wantPayloads))
+	if len(candidate.Common) != len(wantPayloads) {
+		t.Fatalf("category count = %d, want %d", len(candidate.Common), len(wantPayloads))
 	}
 	for id, want := range wantPayloads {
-		payload, exists := candidate.Categories[id]
+		payload, exists := candidate.Common[id]
 		if !exists {
 			t.Errorf("Profile is missing category %q", id)
 			continue
 		}
-		if payload.SchemaVersion != want.schemaVersion || string(payload.Selection) != want.selection {
+		if payload.Version != want.schemaVersion || string(payload.Selection) != want.selection {
 			t.Errorf("category %q payload = %#v, want schema %d selection %s", id, payload, want.schemaVersion, want.selection)
 		}
 	}
@@ -414,13 +343,6 @@ func TestRegistryRejectsInvalidAssembly(t *testing.T) {
 	if _, err := category.NewRegistry("devin", category.Registration{}); err == nil || !strings.Contains(err.Error(), "invalid registration") {
 		t.Fatalf("incomplete assembly error = %v", err)
 	}
-	if _, err := category.NewRegistryWithLegacy("devin", []category.Registration{binding.Registration()}, category.LegacyDecoder{
-		Version: profile.CurrentVersion + 1,
-		Decode:  func([]byte) (profile.Profile, error) { return profile.Profile{}, nil },
-	}); err == nil || !strings.Contains(err.Error(), "invalid legacy Profile decoder") {
-		t.Fatalf("future legacy-decoder assembly error = %v", err)
-	}
-
 }
 
 func (contribution recordingContribution) Plan(_ context.Context, _ string, _ *launch.Plan) error {

@@ -26,7 +26,7 @@ func TestSkillSemanticDigestUsesExactIdentityButNotBundlePath(t *testing.T) {
 	projection := &testProjection{}
 	planFor := func(reference skills.SkillReference, bundlePath string) authority.Plan {
 		contribution := SkillsContribution{selected: []skills.SkillBundle{{Reference: reference, BundlePath: bundlePath}}, projection: projection}
-		return authority.New([]authority.Contribution{{ID: SkillsCapabilityID, Value: contribution}}, launch.WorkspaceAccessReadOnly, 3, "devin", authority.TargetRequirements{Recipe: authority.RecipeDevin, ExecutableRequirementID: "devin-cli", Semantics: authority.DevinSemantics()})
+		return authority.New([]authority.Contribution{{ID: SkillsCapabilityID, Value: contribution}}, launch.WorkspaceAccessReadOnly, "devin", authority.TargetRequirements{Recipe: authority.RecipeDevin, ExecutableRequirementID: "devin-cli", Semantics: authority.DevinSemantics()})
 	}
 	identity := skills.SkillReference{Source: "shared-agents", RelativePath: "review"}
 	first := planFor(identity, "/private/source-one")
@@ -116,7 +116,7 @@ func TestResolvedCommonSkillsUseExactIdentityAndSelectedProjection(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if candidate.Version != profile.CurrentVersion || candidate.Target != "" || candidate.Common[SkillsCapabilityID].Version != 1 {
+	if candidate.Version != profile.CurrentVersion || candidate.Common[SkillsCapabilityID].Version != 1 {
 		t.Fatalf("v3 envelope = %#v", candidate)
 	}
 
@@ -159,7 +159,7 @@ func TestResolvedCommonSkillsUseExactIdentityAndSelectedProjection(t *testing.T)
 func TestEmptySkillSelectionStillIdentifiesRegisteredCapabilityAndProjection(t *testing.T) {
 	planFor := func(version int) authority.Plan {
 		contribution := SkillsContribution{selected: []skills.SkillBundle{}, projection: &testProjection{version: version}}
-		return authority.New([]authority.Contribution{{ID: SkillsCapabilityID, Value: contribution}}, launch.WorkspaceAccessReadOnly, 3, "devin", authority.TargetRequirements{Recipe: authority.RecipeDevin, ExecutableRequirementID: "devin-cli", Semantics: authority.DevinSemantics()})
+		return authority.New([]authority.Contribution{{ID: SkillsCapabilityID, Value: contribution}}, launch.WorkspaceAccessReadOnly, "devin", authority.TargetRequirements{Recipe: authority.RecipeDevin, ExecutableRequirementID: "devin-cli", Semantics: authority.DevinSemantics()})
 	}
 	first, second := planFor(1), planFor(2)
 	if first.AuthorityDigest() == second.AuthorityDigest() {

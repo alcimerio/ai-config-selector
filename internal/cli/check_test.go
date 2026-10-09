@@ -4,12 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"github.com/alcimerio/ai-config-selector/internal/cli"
-	"github.com/alcimerio/ai-config-selector/internal/codexauth"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/alcimerio/ai-config-selector/internal/cli"
+	"github.com/alcimerio/ai-config-selector/internal/codexauth"
 )
 
 func TestCheckGrammarAndPassiveDispatch(t *testing.T) {

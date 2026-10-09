@@ -14,29 +14,36 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+// validProfile is a minimal valid stored Profile with the given name and
+// Skills selection.
+func validProfile(name, selection string) string {
+	return fmt.Sprintf(`{"version":3,"name":%q,"common":{"skills":{"version":1,"selection":%s},"workspace":{"version":1,"selection":{"access":"read-only"}}},"overlays":{}}`, name, selection)
+}
+
 func TestStructuralInspection(t *testing.T) {
-	valid := `{"version":2,"name":"example","target":"devin","categories":{"skills":{"schemaVersion":1,"selection":%s}}}`
+	valid := `{"version":3,"name":"example","common":{"skills":{"version":1,"selection":%s},"workspace":{"version":1,"selection":{"access":"read-only"}}},"overlays":{}}`
 	reference := `[{"source":"shared-agents","relativePath":"missing"}]`
 	for _, tc := range []struct{ name, body, code string }{
 		{"valid", fmt.Sprintf(valid, reference), ""},
-		{"empty categories", `{"version":2,"name":"example","target":"devin","categories":{}}`, ""},
-		{"legacy", `{"version":1,"name":"example","target":"devin","skillReferences":[]}`, ""},
+		{"empty selection", fmt.Sprintf(valid, `[]`), ""},
+		{"removed version one", `{"version":1,"name":"example","target":"devin","skillReferences":[]}`, "unsupported_content"},
+		{"removed version two", `{"version":2,"name":"example","target":"devin","categories":{}}`, "unsupported_content"},
 		{"malformed", "secret garbage", "invalid_structure"},
 		{"null", "null", "invalid_structure"},
 		{"array", "[]", "invalid_structure"},
 		{"trailing", fmt.Sprintf(valid, reference) + ` {}`, "invalid_structure"},
-		{"duplicate", `{"version":1,"version":2,"name":"example","target":"devin","categories":{}}`, "invalid_structure"},
-		{"case alias", `{"version":2,"Version":2,"name":"example","target":"devin","categories":{}}`, "unsupported_content"},
-		{"identity", `{"version":2,"name":"other","target":"devin","categories":{}}`, "identity_mismatch"},
-		{"bad body name", `{"version":2,"name":"../secret","target":"devin","categories":{}}`, "invalid_structure"},
-		{"future", `{"version":3,"secret":"do not show"}`, "unsupported_content"},
-		{"target", `{"version":2,"name":"example","target":"other","categories":{}}`, "unsupported_content"},
-		{"category", `{"version":2,"name":"example","target":"devin","categories":{"secret":{}}}`, "unsupported_content"},
-		{"category version", `{"version":2,"name":"example","target":"devin","categories":{"skills":{"schemaVersion":3,"selection":[]}}}`, "unsupported_content"},
-		{"category null", `{"version":2,"name":"example","target":"devin","categories":null}`, "invalid_structure"},
-		{"category field", `{"version":2,"name":"example","target":"devin","categories":{"skills":{"schemaVersion":1,"selection":[],"secret":true}}}`, "unsupported_content"},
-		{"missing version", `{"name":"example","target":"devin","categories":{}}`, "invalid_structure"},
-		{"null version", `{"version":null,"name":"example","target":"devin","categories":{}}`, "invalid_structure"},
+		{"duplicate", strings.Replace(fmt.Sprintf(valid, `[]`), `"version":3`, `"version":3,"version":3`, 1), "invalid_structure"},
+		{"case alias", strings.Replace(fmt.Sprintf(valid, `[]`), `"version":3`, `"version":3,"Version":3`, 1), "unsupported_content"},
+		{"identity", validProfile("other", `[]`), "identity_mismatch"},
+		{"bad body name", validProfile("../secret", `[]`), "invalid_structure"},
+		{"future", `{"version":4,"secret":"do not show"}`, "unsupported_content"},
+		{"target", strings.Replace(fmt.Sprintf(valid, `[]`), `"name":"example"`, `"name":"example","target":"devin"`, 1), "unsupported_content"},
+		{"category", strings.Replace(fmt.Sprintf(valid, `[]`), `"common":{`, `"common":{"secret":{},`, 1), "unsupported_content"},
+		{"category version", strings.Replace(fmt.Sprintf(valid, `[]`), `"skills":{"version":1`, `"skills":{"version":3`, 1), "unsupported_content"},
+		{"category null", `{"version":3,"name":"example","common":null,"overlays":{}}`, "unsupported_content"},
+		{"category field", strings.Replace(fmt.Sprintf(valid, `[]`), `"selection":[]`, `"selection":[],"secret":true`, 1), "unsupported_content"},
+		{"missing version", `{"name":"example","common":{},"overlays":{}}`, "invalid_structure"},
+		{"null version", `{"version":null,"name":"example","common":{},"overlays":{}}`, "invalid_structure"},
 		{"selection null", fmt.Sprintf(valid, "null"), "invalid_structure"},
 		{"selection object", fmt.Sprintf(valid, "{}"), "invalid_structure"},
 		{"selection scalar", fmt.Sprintf(valid, `[1]`), "invalid_structure"},
@@ -67,9 +74,9 @@ func TestStructuralInspection(t *testing.T) {
 	}
 }
 func TestInspectionPreservesStoredSpellingsAndSorts(t *testing.T) {
-	data := `{"version":1,"name":"example","target":"devin","skillReferences":[{"source":"shared-agents","relativePath":"./z\u001b[31m"},{"source":"devin-config","relativePath":"folder/../a"}]}`
+	data := validProfile("example", `[{"source":"shared-agents","relativePath":"./z\u001b[31m"},{"source":"devin-config","relativePath":"folder/../a"}]`)
 	entry := decode(newEntry("example"), []byte(data))
-	if entry.Status != "valid" || *entry.StoredVersion != 1 || entry.Categories[0].SchemaVersion != nil {
+	if entry.Status != "valid" || *entry.StoredVersion != 3 || *entry.Categories[0].SchemaVersion != 1 {
 		t.Fatalf("%+v", entry)
 	}
 	refs := entry.Categories[0].Selection
@@ -161,7 +168,7 @@ func TestInspectionStoreIndirection(t *testing.T) {
 	store, dir := makeStore(t)
 	directory, _ := store.open()
 	defer directory.Close()
-	if err := os.WriteFile(filepath.Join(dir, "example.json"), []byte(`{"version":2,"name":"example","target":"devin","categories":{}}`), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "example.json"), []byte(validProfile("example", `[]`)), 0600); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Rename(dir, dir+"-old"); err != nil {
@@ -213,7 +220,7 @@ func TestInspectionUnreadableDoesNotHideSibling(t *testing.T) {
 		if name == "denied" {
 			mode = 0000
 		}
-		body := fmt.Sprintf(`{"version":2,"name":%q,"target":"devin","categories":{}}`, name)
+		body := validProfile(name, `[]`)
 		if err := os.WriteFile(filepath.Join(home, ".acs", "profiles", name+".json"), []byte(body), mode); err != nil {
 			t.Fatal(err)
 		}
@@ -281,7 +288,7 @@ func TestInspectionEntryReplacementDoesNotFollowOrBlock(t *testing.T) {
 	directory, _ := store.open()
 	defer directory.Close()
 	outside := filepath.Join(t.TempDir(), "secret.json")
-	if err := os.WriteFile(outside, []byte(`{"version":2,"name":"example","target":"devin","categories":{}}`), 0600); err != nil {
+	if err := os.WriteFile(outside, []byte(validProfile("example", `[]`)), 0600); err != nil {
 		t.Fatal(err)
 	}
 	destination := filepath.Join(dir, "example.json")
@@ -313,38 +320,32 @@ func TestInspectionEntryReplacementDoesNotFollowOrBlock(t *testing.T) {
 }
 
 func TestInspectionRejectsLossyUnicodeEscapes(t *testing.T) {
-	for _, version := range []int{1, 2} {
-		for _, tc := range []struct {
-			name, encoded, want string
-			valid               bool
-		}{
-			{"high", `corrupt-\ud800`, "", false},
-			{"low", `corrupt-\udc00`, "", false},
-			{"high followed by text", `corrupt-\ud800x`, "", false},
-			{"two high", `corrupt-\ud800\ud800`, "", false},
-			{"reversed", `corrupt-\udc00\ud800`, "", false},
-			{"escaped pair", `skill-\ud83d\ude00`, "skill-😀", true},
-			{"uppercase pair", `skill-\uD83D\uDE00`, "skill-😀", true},
-			{"literal replacement", `skill-�`, "skill-�", true},
-			{"escaped replacement", `skill-\ufffd`, "skill-�", true},
-			{"literal backslash u", `skill-\\ud800`, `skill-\ud800`, true},
-			{"escaped slash then surrogate", `corrupt-\\\ud800`, "", false},
-		} {
-			t.Run(fmt.Sprintf("v%d/%s", version, tc.name), func(t *testing.T) {
-				selection := fmt.Sprintf(`[{"source":"shared-agents","relativePath":"%s"}]`, tc.encoded)
-				body := fmt.Sprintf(`{"version":1,"name":"example","target":"devin","skillReferences":%s}`, selection)
-				if version == 2 {
-					body = fmt.Sprintf(`{"version":2,"name":"example","target":"devin","categories":{"skills":{"schemaVersion":1,"selection":%s}}}`, selection)
+	for _, tc := range []struct {
+		name, encoded, want string
+		valid               bool
+	}{
+		{"high", `corrupt-\ud800`, "", false},
+		{"low", `corrupt-\udc00`, "", false},
+		{"high followed by text", `corrupt-\ud800x`, "", false},
+		{"two high", `corrupt-\ud800\ud800`, "", false},
+		{"reversed", `corrupt-\udc00\ud800`, "", false},
+		{"escaped pair", `skill-\ud83d\ude00`, "skill-😀", true},
+		{"uppercase pair", `skill-\uD83D\uDE00`, "skill-😀", true},
+		{"literal replacement", `skill-�`, "skill-�", true},
+		{"escaped replacement", `skill-\ufffd`, "skill-�", true},
+		{"literal backslash u", `skill-\\ud800`, `skill-\ud800`, true},
+		{"escaped slash then surrogate", `corrupt-\\\ud800`, "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			selection := fmt.Sprintf(`[{"source":"shared-agents","relativePath":"%s"}]`, tc.encoded)
+			entry := decode(newEntry("example"), []byte(validProfile("example", selection)))
+			if tc.valid {
+				if entry.Status != "valid" || entry.Categories[0].Selection[0].RelativePath != tc.want {
+					t.Fatalf("lost valid spelling: %+v", entry)
 				}
-				entry := decode(newEntry("example"), []byte(body))
-				if tc.valid {
-					if entry.Status != "valid" || entry.Categories[0].Selection[0].RelativePath != tc.want {
-						t.Fatalf("lost valid spelling: %+v", entry)
-					}
-				} else if entry.Status != "invalid" || entry.Diagnostic == nil || entry.Diagnostic.Code != "invalid_structure" || len(entry.Categories) != 0 || entry.Target != nil {
-					t.Fatalf("accepted lossy Unicode: %+v", entry)
-				}
-			})
-		}
+			} else if entry.Status != "invalid" || entry.Diagnostic == nil || entry.Diagnostic.Code != "invalid_structure" || len(entry.Categories) != 0 || entry.Target != nil {
+				t.Fatalf("accepted lossy Unicode: %+v", entry)
+			}
+		})
 	}
 }

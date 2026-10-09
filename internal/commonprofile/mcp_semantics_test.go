@@ -10,9 +10,9 @@ import (
 func TestMCPSemanticDigestIncludesOrderedReferencesAndFilters(t *testing.T) {
 	base := MCPSelection{Servers: []MCPServer{{ID: "server", Transport: "stdio", ExecutableRef: "exe", Arguments: []MCPArgument{{Kind: "environment", Ref: "first"}, {Kind: "path", Ref: "input"}}, InputRefs: []string{"input"}, EnvironmentRefs: []string{"first", "token"}, DisabledTools: []string{"write"}}}}
 	planFor := func(selection MCPSelection) authority.Plan {
-		return authority.New([]authority.Contribution{{ID: "mcp", Value: MCPContribution{selection: selection}}}, launch.WorkspaceAccessReadOnly, 3, "codex", authority.TargetRequirements{Recipe: authority.RecipeCodex, Semantics: authority.CodexSemantics()})
+		return authority.New([]authority.Contribution{{ID: "mcp", Value: MCPContribution{selection: selection}}}, launch.WorkspaceAccessReadOnly, "codex", authority.TargetRequirements{Recipe: authority.RecipeCodex, Semantics: authority.CodexSemantics()})
 	}
-	noMCP := authority.New(nil, launch.WorkspaceAccessReadOnly, 3, "codex", authority.TargetRequirements{Recipe: authority.RecipeCodex, Semantics: authority.CodexSemantics()})
+	noMCP := authority.New(nil, launch.WorkspaceAccessReadOnly, "codex", authority.TargetRequirements{Recipe: authority.RecipeCodex, Semantics: authority.CodexSemantics()})
 	emptyMCP := planFor(MCPSelection{Servers: []MCPServer{}})
 	if noMCP.AuthorityDigest() != emptyMCP.AuthorityDigest() {
 		t.Fatal("empty MCP capability changed no-MCP authority digest")

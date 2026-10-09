@@ -46,16 +46,6 @@ func LaunchCheck(ctx context.Context, name, target string, home func() (string, 
 	return r
 }
 func selectOverlay(r *Result, entry profileinspect.Entry, target string) {
-	if entry.StoredVersion != nil && *entry.StoredVersion < 3 {
-		if target == "sandbox" {
-			r.set("profile.overlays", "pass", "legacy_common_only", "Sandbox consumes legacy common capabilities without selecting the implicit Devin overlay; legacy workspace write remains effective.")
-		} else if target == "devin" {
-			r.set("profile.overlays", "pass", "legacy_devin_binding", "Legacy v1/v2 Profiles remain bound to Devin.")
-		} else {
-			r.set("profile.overlays", "fail", "legacy_target_mismatch", "Explicitly migrate this legacy Devin Profile before selecting another target.")
-		}
-		return
-	}
 	if target == "sandbox" {
 		r.set("profile.overlays", "pass", "common_only", "Sandbox consumes common capabilities without selecting a target overlay or account.")
 		return

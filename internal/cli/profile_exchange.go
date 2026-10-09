@@ -87,9 +87,6 @@ func (app App) exportProfile(ctx context.Context, inv invocation, codec exchange
 	}
 	document, report, err := profileexchange.Export(candidate)
 	if err != nil {
-		if candidate.SourceVersion < profile.CurrentVersion {
-			return app.fail("export Profile: legacy Profile requires explicit acs profile migrate NAME before export")
-		}
 		return app.fail("export Profile: stored Profile contains unsupported or unclassified content")
 	}
 	if inv.value == "" {

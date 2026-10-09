@@ -40,72 +40,10 @@ func decode(entry Entry, data []byte) Entry {
 		return entry.failed("invalid_structure")
 	}
 	entry.StoredVersion = &version
-	if version != 1 && version != 2 && version != 3 {
+	if version != profile.CurrentVersion {
 		return entry.failed("unsupported_content")
 	}
-	if version == 3 {
-		return decodeVersionThree(entry, envelope)
-	}
-	keys := []string{"version", "name", "target", "categories"}
-	if version == 1 {
-		keys[3] = "skillReferences"
-	}
-	if unknown(envelope, keys...) {
-		return entry.failed("unsupported_content")
-	}
-	var name, target string
-	if !required(envelope, "name", &name) || profile.ValidateName(name) != nil || !required(envelope, "target", &target) {
-		return entry.failed("invalid_structure")
-	}
-	if entry.Name == nil || name != *entry.Name {
-		return entry.failed("identity_mismatch")
-	}
-	if target != "devin" {
-		return entry.failed("unsupported_content")
-	}
-	categories := []Category{}
-	if version == 1 {
-		references, code := decodeReferences(envelope["skillReferences"])
-		if code != "" {
-			return entry.failed(code)
-		}
-		categories = append(categories, Category{ID: "skills", Selection: references})
-	} else {
-		var payloads map[string]json.RawMessage
-		if !required(envelope, "categories", &payloads) {
-			return entry.failed("invalid_structure")
-		}
-		for id := range payloads {
-			if id != "skills" {
-				return entry.failed("unsupported_content")
-			}
-		}
-		if raw, ok := payloads["skills"]; ok {
-			var payload map[string]json.RawMessage
-			if json.Unmarshal(raw, &payload) != nil || payload == nil {
-				return entry.failed("invalid_structure")
-			}
-			if unknown(payload, "schemaVersion", "selection") {
-				return entry.failed("unsupported_content")
-			}
-			var schema int
-			if !required(payload, "schemaVersion", &schema) {
-				return entry.failed("invalid_structure")
-			}
-			if schema != 1 {
-				return entry.failed("unsupported_content")
-			}
-			references, code := decodeReferences(payload["selection"])
-			if code != "" {
-				return entry.failed(code)
-			}
-			categories = append(categories, Category{ID: "skills", SchemaVersion: &schema, Selection: references})
-		}
-	}
-	entry.Status = "valid"
-	entry.Target = &target
-	entry.Categories = categories
-	return entry
+	return decodeVersionThree(entry, envelope)
 }
 
 func decodeCommonPayload(raw json.RawMessage) (int, json.RawMessage, string) {

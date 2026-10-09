@@ -24,7 +24,6 @@ const maximumExplanationOverlays = 16
 type explanationProfile struct {
 	Name          string `json:"name"`
 	StoredVersion int    `json:"storedVersion"`
-	Compatibility string `json:"compatibility"`
 }
 type explanationIntent struct {
 	Recipe  string  `json:"recipe"`
@@ -175,7 +174,7 @@ func (app App) RunExplanation(ctx context.Context, args []string) (bool, int) {
 	if !explanationWithinBounds(semantic, checks, limitations) {
 		return fail("explanation_too_large", "The semantic explanation exceeds a declared format bound.")
 	}
-	result := explanationResult{FormatVersion: 1, Operation: "explain", Profile: explanationProfile{Name: inv.value, StoredVersion: resolved.SourceVersion(), Compatibility: compatibility(resolved.SourceVersion())}, Intent: explanationIntent{Recipe: string(resolved.Requirements().Recipe), Overlay: optionalOverlay(overlay)}, Plan: &semantic, Checks: checks, Limitations: limitations, Diagnostic: nil}
+	result := explanationResult{FormatVersion: 1, Operation: "explain", Profile: explanationProfile{Name: inv.value, StoredVersion: profile.CurrentVersion}, Intent: explanationIntent{Recipe: string(resolved.Requirements().Recipe), Overlay: optionalOverlay(overlay)}, Plan: &semantic, Checks: checks, Limitations: limitations, Diagnostic: nil}
 	var output bytes.Buffer
 	if inv.enabled {
 		encoded, marshalErr := json.Marshal(result)
@@ -273,12 +272,6 @@ func explanationWithinBounds(explanation authority.Explanation, checks []explana
 		}
 	}
 	return true
-}
-func compatibility(version int) string {
-	if version < 3 {
-		return "legacy"
-	}
-	return "current"
 }
 func optionalOverlay(value string) *string {
 	if value == "" {

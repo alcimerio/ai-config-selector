@@ -20,7 +20,7 @@ type Store struct {
 	codec       Codec
 }
 
-// Codec owns Profile envelope migration and category normalization.
+// Codec owns Profile envelope admission and category normalization.
 type Codec interface {
 	Normalize(Profile) (Profile, error)
 	Decode([]byte) (Profile, error)

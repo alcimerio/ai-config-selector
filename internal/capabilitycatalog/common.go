@@ -37,10 +37,10 @@ func LookupCommon(id string) (CommonCapability, bool) {
 	return CommonCapability{}, false
 }
 
-// SupportsCommonV3 validates that one active Registry contains the required
+// SupportsCommonCatalog validates that one active Registry contains the required
 // common capabilities and no capability passive admission would reject.
 // Payload versions and selections are still validated by each consumer.
-func SupportsCommonV3(ids []string) bool {
+func SupportsCommonCatalog(ids []string) bool {
 	seen := make(map[string]bool, len(ids))
 	for _, id := range ids {
 		if _, supported := LookupCommon(id); !supported || seen[id] {

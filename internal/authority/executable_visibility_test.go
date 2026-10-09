@@ -21,7 +21,7 @@ func (value executableFactsContribution) ExecutableGrantIntents() []launch.Execu
 }
 
 func executableVisibilityPlan(intents []launch.ExecutableGrantIntent) Plan {
-	return New([]Contribution{{ID: "executables", Value: executableFactsContribution{intents: intents}}}, launch.WorkspaceAccessReadOnly, 3, "")
+	return New([]Contribution{{ID: "executables", Value: executableFactsContribution{intents: intents}}}, launch.WorkspaceAccessReadOnly, "")
 }
 
 func TestExecutableVisibilityExplanationDistinguishesCoverageAndNonExclusiveRuntime(t *testing.T) {

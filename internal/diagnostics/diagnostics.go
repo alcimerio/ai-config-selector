@@ -149,15 +149,11 @@ func validateEntry(ctx context.Context, name string, home func() (string, error)
 		r.set("profile.sources", "unchecked", "structure_required", "Correct the Profile structure before resolving selected Skill sources.")
 		return r, profileinspect.Entry{}, directory
 	}
-	r.set("profile.structure", "pass", "valid_structure", "Supported stored Profile structure; no migration or persistence write occurred.")
+	r.set("profile.structure", "pass", "valid_structure", "Supported stored Profile structure; no persistence write occurred.")
 	entry := inspected.Entries[0]
-	if entry.Workspace == nil {
-		r.set("profile.authority", "pass", "legacy_workspace_write", "Legacy workspace write remains effective until an explicit previewed migration or later edit changes it.")
-	} else {
-		r.set("profile.authority", "pass", "explicit_common_authority", "Stored common workspace authority is structurally supported; native enforcement remains unchecked.")
-	}
+	r.set("profile.authority", "pass", "explicit_common_authority", "Stored common workspace authority is structurally supported; native enforcement remains unchecked.")
 	if len(entry.Overlays) == 0 {
-		r.set("profile.overlays", "unchecked", "legacy_implicit_target", "Legacy target compatibility is structural only; migrate explicitly before using v3 overlays.")
+		r.set("profile.overlays", "pass", "no_overlays", "This Profile stores no target overlay; only common capabilities apply.")
 	} else {
 		status, code, next := "pass", "supported_inactive_overlays", "Known overlay structure is supported; this passive command selected and executed no overlay."
 		for _, overlay := range entry.Overlays {

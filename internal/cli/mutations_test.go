@@ -6,15 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/alcimerio/ai-config-selector/internal/adapter/devin"
-	"github.com/alcimerio/ai-config-selector/internal/builder"
-	"github.com/alcimerio/ai-config-selector/internal/category"
-	"github.com/alcimerio/ai-config-selector/internal/commonprofile"
-	"github.com/alcimerio/ai-config-selector/internal/launch"
-	"github.com/alcimerio/ai-config-selector/internal/profile"
-	"github.com/alcimerio/ai-config-selector/internal/profileinspect"
-	"github.com/alcimerio/ai-config-selector/internal/profilerepo"
-	"golang.org/x/sys/unix"
 	"io"
 	"os"
 	"os/exec"
@@ -22,6 +13,14 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/alcimerio/ai-config-selector/internal/adapter/devin"
+	"github.com/alcimerio/ai-config-selector/internal/builder"
+	"github.com/alcimerio/ai-config-selector/internal/category"
+	"github.com/alcimerio/ai-config-selector/internal/profile"
+	"github.com/alcimerio/ai-config-selector/internal/profileinspect"
+	"github.com/alcimerio/ai-config-selector/internal/profilerepo"
+	"golang.org/x/sys/unix"
 )
 
 func TestMutationGrammarAccepted(t *testing.T) {
@@ -34,59 +33,10 @@ func TestMutationGrammarAccepted(t *testing.T) {
 		{"profile", "delete", "old"},
 		{"profile", "delete", "--confirm", "old", "old"},
 		{"profile", "delete", "old", "--confirm", "old"},
-		{"profile", "migrate", "old"},
 	} {
 		if _, problem := parseCommand(args); problem != "" {
 			t.Errorf("%q: %s", args, problem)
 		}
-	}
-}
-
-func TestExplicitMigrationPreservesLegacyWriteAndUsesRevisionedReplace(t *testing.T) {
-	app, repository, _, output := mutationFixture(t, legacyMutationDocument)
-	app.MutationBuilder = mutationEditorFunc(func(ctx context.Context, name string, draft category.Draft, options builder.MutationOptions, _ io.Reader, _ io.Writer) (builder.Outcome, error) {
-		prepared, err := options.Prepare(draft)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, text := range []string{"Stored v1 -> v3", "workspace write is retained", ".acs/common/v1/skills", "Devin projection paths"} {
-			if !strings.Contains(prepared.Text, text) {
-				t.Fatalf("migration preview lacks %q:\n%s", text, prepared.Text)
-			}
-		}
-		path, err := prepared.Save(ctx, draft)
-		if err != nil {
-			return builder.Outcome{}, err
-		}
-		return builder.Outcome{Create: true, Draft: draft, Path: path}, nil
-	})
-	if code := app.Run(context.Background(), []string{"profile", "migrate", "old"}); code != 0 {
-		t.Fatalf("migration exit %d: %s", code, output)
-	}
-	stored, err := repository.Read(context.Background(), "old")
-	if err != nil {
-		t.Fatal(err)
-	}
-	entry := profileinspect.InspectBytes("old", stored.Bytes)
-	if entry.Status != "valid" || entry.StoredVersion == nil || *entry.StoredVersion != 3 || entry.Workspace == nil || *entry.Workspace != "read-write" {
-		t.Fatalf("migrated entry = %#v", entry)
-	}
-}
-
-func TestCancelledMigrationPreservesExactLegacyBytes(t *testing.T) {
-	app, repository, _, output := mutationFixture(t, legacyMutationDocument)
-	app.MutationBuilder = mutationEditorFunc(func(_ context.Context, _ string, draft category.Draft, options builder.MutationOptions, _ io.Reader, _ io.Writer) (builder.Outcome, error) {
-		if _, err := options.Prepare(draft); err != nil {
-			t.Fatal(err)
-		}
-		return builder.Outcome{Draft: draft, Cancelled: true}, nil
-	})
-	if code := app.Run(context.Background(), []string{"profile", "migrate", "old"}); code != 130 {
-		t.Fatalf("cancel exit %d: %s", code, output)
-	}
-	stored, err := repository.Read(context.Background(), "old")
-	if err != nil || !bytes.Equal(stored.Bytes, legacyMutationDocument) {
-		t.Fatalf("cancel changed bytes: %s %v", stored.Bytes, err)
 	}
 }
 
@@ -149,88 +99,60 @@ func mutationFixtureWithEditor(t *testing.T, raw []byte) (App, *profilerepo.Repo
 	return app, repository, home, output, editor
 }
 
-var legacyMutationDocument = []byte(`{"version":1,"name":"old","target":"devin","skillReferences":[{"source":"shared-agents","relativePath":"lost"},{"source":"devin-config","relativePath":"lost"}]}`)
+// mutationDocument is a valid but noncanonical stored Profile, so every
+// confirmed rewrite produces different canonical bytes.
+var mutationDocument = []byte(`{"version":3,"name":"old","common":{"skills":{"version":1,"selection":[{"source":"shared-agents","relativePath":"lost"},{"source":"devin-config","relativePath":"lost"}]},"workspace":{"version":1,"selection":{"access":"read-write"}}},"overlays":{"devin":{"version":1}}}`)
 
 func TestMutationPreviewCommitsExactCanonicalBytes(t *testing.T) {
 	for _, operation := range []string{"edit", "clone", "rename"} {
-		for _, version := range []int{1, 2} {
-			t.Run(fmt.Sprintf("%s-v%d", operation, version), func(t *testing.T) {
-				raw := append([]byte(nil), legacyMutationDocument...)
-				if version == 2 {
-					raw = []byte(`{"version":2,"name":"old","target":"devin","categories":{"skills":{"schemaVersion":1,"selection":[{"source":"shared-agents","relativePath":"lost"},{"source":"devin-config","relativePath":"lost"}]}}}`)
+		t.Run(operation, func(t *testing.T) {
+			raw := append([]byte(nil), mutationDocument...)
+			app, repository, _, output := mutationFixture(t, raw)
+			destination := "old"
+			args := []string{"profile", operation, "old"}
+			if operation != "edit" {
+				destination = "new"
+				args = append(args, "--name", "new")
+			}
+			app.MutationBuilder = mutationEditorFunc(func(ctx context.Context, name string, draft category.Draft, options builder.MutationOptions, _ io.Reader, _ io.Writer) (builder.Outcome, error) {
+				if name != destination || draft.Summaries()[0].Count != 2 {
+					t.Fatalf("seed/name: %s %v", name, draft.Summaries())
 				}
-				app, repository, _, output := mutationFixture(t, raw)
-				destination := "old"
-				args := []string{"profile", operation, "old"}
-				if operation != "edit" {
-					destination = "new"
-					args = append(args, "--name", "new")
-				}
-				app.MutationBuilder = mutationEditorFunc(func(ctx context.Context, name string, draft category.Draft, options builder.MutationOptions, _ io.Reader, _ io.Writer) (builder.Outcome, error) {
-					if name != destination || draft.Summaries()[0].Count != 2 {
-						t.Fatalf("seed/name: %s %v", name, draft.Summaries())
-					}
-					prepared, err := options.Prepare(draft)
-					if err != nil {
-						t.Fatal(err)
-					}
-					if !strings.Contains(prepared.Text, fmt.Sprintf("Stored v%d -> v2", version)) {
-						t.Fatalf("no conversion preview: %s", prepared.Text)
-					}
-					_, canonical, ok := strings.Cut(prepared.Text, "Exact resulting canonical JSON (including final newline):\n")
-					if !ok {
-						t.Fatal("no canonical preview")
-					}
-					path, err := prepared.Save(ctx, app.Categories.NewDraft())
-					if err != nil {
-						return builder.Outcome{}, err
-					}
-					stored, err := repository.Read(ctx, destination)
-					if err != nil || !bytes.Equal(stored.Bytes, []byte(canonical)) {
-						t.Fatalf("preview mismatch: %s %v", stored.Bytes, err)
-					}
-					return builder.Outcome{Create: true, Draft: draft, Path: path}, nil
-				})
-				if code := app.Run(context.Background(), args); code != 0 {
-					t.Fatalf("exit %d: %s", code, output)
-				}
-				source, err := repository.Read(context.Background(), "old")
+				prepared, err := options.Prepare(draft)
 				if err != nil {
 					t.Fatal(err)
 				}
-				if operation == "clone" && !bytes.Equal(source.Bytes, raw) {
-					t.Fatal("clone changed source")
+				if !strings.Contains(prepared.Text, "Stored v3 -> v3") {
+					t.Fatalf("no canonical representation preview: %s", prepared.Text)
 				}
-				if operation == "rename" && source.Exists {
-					t.Fatal("rename retained source")
+				_, canonical, ok := strings.Cut(prepared.Text, "Exact resulting canonical JSON (including final newline):\n")
+				if !ok {
+					t.Fatal("no canonical preview")
 				}
+				path, err := prepared.Save(ctx, app.Categories.NewDraft())
+				if err != nil {
+					return builder.Outcome{}, err
+				}
+				stored, err := repository.Read(ctx, destination)
+				if err != nil || !bytes.Equal(stored.Bytes, []byte(canonical)) {
+					t.Fatalf("preview mismatch: %s %v", stored.Bytes, err)
+				}
+				return builder.Outcome{Create: true, Draft: draft, Path: path}, nil
 			})
-		}
-	}
-}
-
-func TestLegacyMutationRefusesNonemptyPathsWithoutExplicitMigration(t *testing.T) {
-	app, repository, _, _, editor := mutationFixtureWithEditor(t, legacyMutationDocument)
-	before, err := repository.Read(context.Background(), "old")
-	if err != nil {
-		t.Fatal(err)
-	}
-	app.MutationBuilder = mutationEditorFunc(func(ctx context.Context, name string, draft category.Draft, options builder.MutationOptions, _ io.Reader, _ io.Writer) (builder.Outcome, error) {
-		selection := commonprofile.PathSelection{Entries: []commonprofile.PathEntry{{ID: "data", Access: launch.PathAccessReadOnly, Type: launch.PathTypeDirectory, Reference: commonprofile.PathReference{Kind: string(launch.PathReferenceWorkspaceRelative), Path: "data"}}}}
-		if err := editor.SetPathSelection(&draft, selection); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := options.Prepare(draft); err == nil || !strings.Contains(err.Error(), "requires explicit Profile migration") {
-			t.Fatalf("legacy mutation did not refuse nonempty paths: %v", err)
-		}
-		return builder.Outcome{Cancelled: true}, nil
-	})
-	if code := app.Run(context.Background(), []string{"profile", "edit", "old"}); code != 130 {
-		t.Fatalf("cancelled mutation exit = %d", code)
-	}
-	after, err := repository.Read(context.Background(), "old")
-	if err != nil || !bytes.Equal(after.Bytes, before.Bytes) || after.Revision != before.Revision {
-		t.Fatalf("legacy bytes changed: %v", err)
+			if code := app.Run(context.Background(), args); code != 0 {
+				t.Fatalf("exit %d: %s", code, output)
+			}
+			source, err := repository.Read(context.Background(), "old")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if operation == "clone" && !bytes.Equal(source.Bytes, raw) {
+				t.Fatal("clone changed source")
+			}
+			if operation == "rename" && source.Exists {
+				t.Fatal("rename retained source")
+			}
+		})
 	}
 }
 
@@ -385,9 +307,9 @@ func mutationTree(t *testing.T, home string) map[string]string {
 }
 
 func TestMutationCancellationNeverPublishes(t *testing.T) {
-	for _, operation := range []string{"edit", "clone", "rename", "delete", "migrate"} {
+	for _, operation := range []string{"edit", "clone", "rename", "delete"} {
 		t.Run(operation, func(t *testing.T) {
-			app, _, home, output := mutationFixture(t, legacyMutationDocument)
+			app, _, home, output := mutationFixture(t, mutationDocument)
 			before := mutationTree(t, home)
 			app.MutationBuilder = mutationEditorFunc(func(_ context.Context, _ string, draft category.Draft, options builder.MutationOptions, _ io.Reader, _ io.Writer) (builder.Outcome, error) {
 				if _, err := options.Prepare(draft); err != nil {
@@ -486,13 +408,13 @@ func independentMutationWriter(t *testing.T, home, name string) {
 }
 
 func TestMutationExpectedRevisionAgainstIndependentWriter(t *testing.T) {
-	for _, operation := range []string{"edit", "clone", "rename", "delete", "migrate"} {
+	for _, operation := range []string{"edit", "clone", "rename", "delete"} {
 		for _, raceDestination := range []bool{false, true} {
 			if raceDestination && operation != "clone" && operation != "rename" {
 				continue
 			}
 			t.Run(fmt.Sprintf("%s-destination=%v", operation, raceDestination), func(t *testing.T) {
-				app, repository, home, output := mutationFixture(t, legacyMutationDocument)
+				app, repository, home, output := mutationFixture(t, mutationDocument)
 				app.MutationBuilder = mutationEditorFunc(func(ctx context.Context, _ string, draft category.Draft, options builder.MutationOptions, _ io.Reader, _ io.Writer) (builder.Outcome, error) {
 					prepared, err := options.Prepare(draft)
 					if err != nil {
@@ -514,7 +436,7 @@ func TestMutationExpectedRevisionAgainstIndependentWriter(t *testing.T) {
 						t.Fatalf("lost newer writer: %s %v", newer.Bytes, readErr)
 					}
 					source, _ := repository.Read(ctx, "old")
-					if raceDestination && !bytes.Equal(source.Bytes, legacyMutationDocument) {
+					if raceDestination && !bytes.Equal(source.Bytes, mutationDocument) {
 						t.Fatal("destination race changed source")
 					}
 					if !raceDestination && (operation == "clone" || operation == "rename") {
@@ -543,10 +465,10 @@ func TestMutationExpectedRevisionAgainstIndependentWriter(t *testing.T) {
 func TestMutationNonregularAndOccupiedDestinationRefusal(t *testing.T) {
 	for _, kind := range []string{"symlink", "directory", "hardlink", "fifo"} {
 		t.Run(kind, func(t *testing.T) {
-			app, _, home, output := mutationFixture(t, legacyMutationDocument)
+			app, _, home, output := mutationFixture(t, mutationDocument)
 			path := filepath.Join(home, ".acs", "profiles", "old.json")
 			outside := filepath.Join(home, "sentinel")
-			if err := os.WriteFile(outside, legacyMutationDocument, 0600); err != nil {
+			if err := os.WriteFile(outside, mutationDocument, 0600); err != nil {
 				t.Fatal(err)
 			}
 			if err := os.Remove(path); err != nil {
@@ -581,7 +503,7 @@ func TestMutationNonregularAndOccupiedDestinationRefusal(t *testing.T) {
 	}
 	for _, operation := range []string{"clone", "rename"} {
 		t.Run(operation+"-occupied", func(t *testing.T) {
-			app, _, home, output := mutationFixture(t, legacyMutationDocument)
+			app, _, home, output := mutationFixture(t, mutationDocument)
 			if err := os.WriteFile(filepath.Join(home, ".acs", "profiles", "new.json"), []byte("malformed occupied destination"), 0600); err != nil {
 				t.Fatal(err)
 			}
@@ -610,7 +532,7 @@ func (r *outcomeMutationRepository) Apply(context.Context, profilerepo.Request) 
 func TestMutationTruthfulTerminalOutcomes(t *testing.T) {
 	for _, state := range []profilerepo.State{profilerepo.Committed, profilerepo.Unknown} {
 		t.Run(string(state), func(t *testing.T) {
-			app, repository, _, output := mutationFixture(t, legacyMutationDocument)
+			app, repository, _, output := mutationFixture(t, mutationDocument)
 			injected := &outcomeMutationRepository{ProfileRepository: repository, outcome: profilerepo.Outcome{State: state, RecoveryRequired: true}}
 			app.Repository = injected
 			code := app.Run(context.Background(), []string{"profile", "delete", "old", "--confirm", "old"})
@@ -634,7 +556,7 @@ func TestMutationTruthfulTerminalOutcomes(t *testing.T) {
 func TestCommittedReportingFailureDoesNotInventRecovery(t *testing.T) {
 	for _, operation := range []string{"edit", "create"} {
 		t.Run(operation, func(t *testing.T) {
-			app, repository, home, output := mutationFixture(t, legacyMutationDocument)
+			app, repository, home, output := mutationFixture(t, mutationDocument)
 			args := []string{"profile", "edit", "old"}
 			name := "old"
 			app.MutationBuilder = mutationEditorFunc(func(ctx context.Context, _ string, draft category.Draft, options builder.MutationOptions, _ io.Reader, _ io.Writer) (builder.Outcome, error) {
@@ -658,7 +580,7 @@ func TestCommittedReportingFailureDoesNotInventRecovery(t *testing.T) {
 				t.Fatalf("invented recovery or lost committed reporting failure: %s", message)
 			}
 			snapshot, err := repository.Read(context.Background(), name)
-			if err != nil || !snapshot.Exists || bytes.Equal(snapshot.Bytes, legacyMutationDocument) {
+			if err != nil || !snapshot.Exists || bytes.Equal(snapshot.Bytes, mutationDocument) {
 				t.Fatal("test did not commit real canonical Profile bytes", err)
 			}
 		})
@@ -680,7 +602,7 @@ func (reportingFailureCreationBuilder) BuildProfile(ctx context.Context, _ strin
 }
 
 func TestMutationExplicitReloadCreatesNewRevisionAndLeavesOldPreviewFrozen(t *testing.T) {
-	app, repository, _, output := mutationFixture(t, legacyMutationDocument)
+	app, repository, _, output := mutationFixture(t, mutationDocument)
 	app.MutationBuilder = mutationEditorFunc(func(ctx context.Context, _ string, draft category.Draft, options builder.MutationOptions, _ io.Reader, _ io.Writer) (builder.Outcome, error) {
 		oldPreview, err := options.Prepare(draft)
 		if err != nil {
@@ -690,7 +612,7 @@ func TestMutationExplicitReloadCreatesNewRevisionAndLeavesOldPreviewFrozen(t *te
 		if err != nil {
 			t.Fatal(err)
 		}
-		newer := []byte(`{"version":2,"name":"old","target":"devin","categories":{}}`)
+		newer := []byte(`{"version":3,"name":"old","common":{"skills":{"version":1,"selection":[]},"workspace":{"version":1,"selection":{"access":"read-only"}}},"overlays":{"devin":{"version":1}}}`)
 		out, err := repository.Apply(ctx, profilerepo.ReplaceRequest{Name: "old", Expected: snapshot.Revision, Bytes: newer})
 		if err != nil || out.State != profilerepo.Committed {
 			t.Fatal(out, err)

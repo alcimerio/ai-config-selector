@@ -2,12 +2,9 @@ package commonprofile
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
 
 	"github.com/alcimerio/ai-config-selector/internal/category"
 	"github.com/alcimerio/ai-config-selector/internal/instructions"
-	"github.com/alcimerio/ai-config-selector/internal/profile"
 	"github.com/alcimerio/ai-config-selector/internal/skills"
 )
 
@@ -95,35 +92,5 @@ func NewCodec() (*category.Codec, error) {
 	if err != nil {
 		return nil, err
 	}
-	// Devin is the supported historical v1/v2 envelope target, not a runtime
-	// dependency. V3 admission is shared and does not select any overlay.
-	return category.NewCodec("devin", bindings.Registrations(), LegacyDecoders()...)
-}
-
-// LegacyDecoders preserves the supported stored-envelope compatibility path.
-// Decoding performs no target discovery and does not migrate the stored bytes.
-func LegacyDecoders() []category.LegacyDecoder {
-	return []category.LegacyDecoder{{Version: 1, Decode: decodeVersionOneProfile}}
-}
-
-func decodeVersionOneProfile(contents []byte) (profile.Profile, error) {
-	var legacy struct {
-		Version         int             `json:"version"`
-		Name            string          `json:"name"`
-		Target          string          `json:"target"`
-		SkillReferences json.RawMessage `json:"skillReferences"`
-	}
-	if err := json.Unmarshal(contents, &legacy); err != nil {
-		return profile.Profile{}, err
-	}
-	references, err := DecodeSkillSelection(legacy.SkillReferences)
-	if err != nil {
-		return profile.Profile{}, fmt.Errorf("decode version-1 skillReferences: %w", err)
-	}
-	selection, err := EncodeSkillSelection(references)
-	if err != nil {
-		return profile.Profile{}, err
-	}
-	return profile.Profile{Version: profile.LegacyCurrentVersion, SourceVersion: 1, Name: legacy.Name, Target: legacy.Target,
-		Categories: map[string]profile.CategoryPayload{SkillsCapabilityID: {SchemaVersion: SkillsCapabilityVersion, Selection: selection}}}, nil
+	return category.NewCodec(bindings.Registrations())
 }
