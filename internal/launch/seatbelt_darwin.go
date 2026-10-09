@@ -196,7 +196,7 @@ func (backend *seatbeltBackend) prepare(ctx context.Context, request validatedPr
 	process := &seatbeltProcess{
 		ctx: ctx, command: command, terminal: foregroundTerminal, foregroundGroup: foregroundGroup,
 		terminalPins: terminalPins,
-		cleanupDone:  make(chan struct{}), supervised: true, control: control,
+		cleanupDone:  make(chan struct{}), cleanupUnproven: make(chan struct{}), supervised: true, control: control,
 		helperControl: helperControl, statusControl: statusControl, proxyStatus: proxyStatus,
 		challenge: challenge, environmentProjection: request.environmentProjection,
 	}
@@ -246,6 +246,8 @@ type seatbeltProcess struct {
 	setForegroundProcessGroup func(*os.File, int) error
 	cleanupDone               chan struct{}
 	cleanupDoneOnce           sync.Once
+	cleanupUnproven           chan struct{}
+	cleanupUnprovenOnce       sync.Once
 	leaderWaitMutex           sync.Mutex
 	leaderWaitDone            <-chan error
 	supervised                bool
@@ -737,10 +739,22 @@ func (process *seatbeltProcess) quarantineCleanup() {
 	quarantine(process)
 }
 
+// quarantineUnprovenCleanup records a supervised process whose cleanup proof
+// was lost. Its target tree runs in a process group ACS cannot prove empty, so
+// cleanupDone deliberately never closes and the Session stays retained for
+// durable recovery. Closing cleanupUnproven lets waiters fail immediately
+// instead of sitting out the full bounded cleanup wait for nothing.
 func (process *seatbeltProcess) quarantineUnprovenCleanup() {
 	seatbeltCleanupQuarantine.Lock()
 	seatbeltCleanupQuarantine.processes[process] = struct{}{}
 	seatbeltCleanupQuarantine.Unlock()
+	if process.cleanupUnproven != nil {
+		process.cleanupUnprovenOnce.Do(func() { close(process.cleanupUnproven) })
+	}
+}
+
+func (process *seatbeltProcess) CleanupUnproven() <-chan struct{} {
+	return process.cleanupUnproven
 }
 
 func (process *seatbeltProcess) retainLeaderWait(waitDone <-chan error) {

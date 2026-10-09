@@ -390,12 +390,15 @@ func RetainSessionUntilProcessDone(process Process, session *SessionLease) (Proc
 	if err != nil {
 		return nil, err
 	}
-	var cleanupDone <-chan struct{}
+	var cleanupDone, cleanupUnproven <-chan struct{}
 	if notifier, ok := process.(ProcessCleanup); ok {
 		cleanupDone = notifier.CleanupDone()
 	}
+	if notifier, ok := process.(ProcessCleanupUnproven); ok {
+		cleanupUnproven = notifier.CleanupUnproven()
+	}
 	return &sessionProcess{
-		process: process, cleanupDone: cleanupDone, release: release, releaseDone: make(chan struct{}),
+		process: process, cleanupDone: cleanupDone, cleanupUnproven: cleanupUnproven, release: release, releaseDone: make(chan struct{}),
 		cleanupTimeout: func() <-chan time.Time { return time.After(sessionCleanupWaitTime) },
 	}, nil
 }
@@ -403,6 +406,7 @@ func RetainSessionUntilProcessDone(process Process, session *SessionLease) (Proc
 type sessionProcess struct {
 	process                 Process
 	cleanupDone             <-chan struct{}
+	cleanupUnproven         <-chan struct{}
 	release                 func() error
 	releaseOnce             sync.Once
 	releaseAfterCleanupOnce sync.Once
@@ -468,6 +472,17 @@ func (process *sessionProcess) awaitCleanup() error {
 	select {
 	case <-process.cleanupDone:
 		return process.releaseNow()
+	case <-process.cleanupUnproven:
+		// The backend reported that cleanup can never be proven, so
+		// cleanupDone will not close. Fail now instead of waiting out the
+		// timeout; the Session stays retained exactly as after a timeout.
+		select {
+		case <-process.cleanupDone:
+			return process.releaseNow()
+		default:
+		}
+		_ = process.releaseAfterCleanup()
+		return sandboxError(SandboxProcessWaitFailed, nil)
 	case <-timeout():
 		// Keep the Session retained after a bounded wait. The asynchronous
 		// release still runs once cleanup is eventually proven complete.
