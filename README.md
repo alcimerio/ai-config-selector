@@ -21,7 +21,8 @@ local MCP servers a tool may use in a reusable Profile, then launch it from any
 project.
 
 [Get started](docs/guides/getting-started.md) · [Documentation](docs/README.md) ·
-[Security boundaries](docs/reference/security-model.md) · [Contribute](CONTRIBUTING.md)
+[Security boundaries](docs/reference/security-model.md) · [Report a vulnerability](SECURITY.md) ·
+[Contribute](CONTRIBUTING.md)
 
 > [!IMPORTANT]
 > ACS supports macOS 26 on Apple Silicon (`darwin/arm64`). Linux and Intel Macs
@@ -217,6 +218,9 @@ process-tree cleanup, preserving uncertain state for recovery.
 
 Choose trusted Skills, instructions and programs. Read the
 [security model](docs/reference/security-model.md) before granting access.
+
+Report vulnerabilities privately as described in the
+[security policy](SECURITY.md), not in a public issue.
 
 ## Compatibility
 
