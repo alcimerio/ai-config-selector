@@ -59,7 +59,7 @@ func TestMaintainedTargetsShareCommonSkillsAndWorkspaceContract(t *testing.T) {
 			{
 				name: "devin", registry: devinTarget.Categories(),
 				plan: func(resolved category.ResolvedProfile) (launch.Plan, error) {
-					return devinTarget.PlanLaunch(context.Background(), workspace, resolved)
+					return devinTarget.PlanLaunch(context.Background(), filepath.Join(t.TempDir(), "sessions"), workspace, resolved)
 				},
 				projection: func(reference skills.SkillReference) string {
 					root := ".agents/skills"

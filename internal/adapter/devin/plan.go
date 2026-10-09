@@ -13,13 +13,14 @@ import (
 )
 
 // PlanLaunch describes the selected global Skill Bundles and repository-local
-// Skill Bundles Devin may inherit without creating a Session.
-func (a *Adapter) PlanLaunch(ctx context.Context, workingDirectory string, resolved category.ResolvedProfile) (launch.Plan, error) {
+// Skill Bundles Devin may inherit without creating a Session. It resolves
+// exclusions against the same Sessions directory Launch receives.
+func (a *Adapter) PlanLaunch(ctx context.Context, sessionsDirectory, workingDirectory string, resolved category.ResolvedProfile) (launch.Plan, error) {
 	plan, err := resolved.Plan(ctx, workingDirectory)
 	if err != nil {
 		return launch.Plan{}, err
 	}
-	exclusions, err := resolved.ResolveFilesystemExclusions(workingDirectory, filepath.Join(a.existingHomeDir, ".acs", "sessions"))
+	exclusions, err := resolved.ResolveFilesystemExclusions(workingDirectory, sessionsDirectory)
 	if err != nil {
 		return launch.Plan{}, err
 	}

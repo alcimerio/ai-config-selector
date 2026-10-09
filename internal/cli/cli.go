@@ -38,7 +38,9 @@ type ProfileStore interface {
 }
 
 type LaunchPlanner interface {
-	PlanLaunch(context.Context, string, category.ResolvedProfile) (launch.Plan, error)
+	// PlanLaunch receives the same Sessions directory Launch would use so
+	// planning checks (such as exclusion conflicts) match execution.
+	PlanLaunch(context.Context, string, string, category.ResolvedProfile) (launch.Plan, error)
 }
 
 type ProfileLauncher interface {
@@ -532,7 +534,7 @@ func (app App) dryRun(ctx context.Context, name, overlay, expectedDigest string,
 	if !matchesAuthorityDigest(resolved, expectedDigest) {
 		return app.fail("authority_plan_changed: semantic authority does not match --expect-authority-digest")
 	}
-	plan, err := planner.PlanLaunch(ctx, app.WorkingDirectory, resolved)
+	plan, err := planner.PlanLaunch(ctx, app.SessionsDirectory, app.WorkingDirectory, resolved)
 	if err != nil {
 		return app.fail("plan Profile %q launch: %v", name, err)
 	}

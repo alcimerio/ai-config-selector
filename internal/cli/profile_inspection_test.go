@@ -53,7 +53,7 @@ func (f forbiddenInspectionRuntime) Load(string) (profile.Profile, error) {
 	f.t.Fatal("inspection called launch codec/store")
 	return profile.Profile{}, nil
 }
-func (f forbiddenInspectionRuntime) PlanLaunch(context.Context, string, category.ResolvedProfile) (launch.Plan, error) {
+func (f forbiddenInspectionRuntime) PlanLaunch(context.Context, string, string, category.ResolvedProfile) (launch.Plan, error) {
 	f.t.Fatal("inspection called planner")
 	return launch.Plan{}, nil
 }
