@@ -187,10 +187,11 @@ func WriteMCPRecipes(home string, recipes []MCPRecipe) (string, error) {
 		return "", errors.New("MCP recipes could not be created")
 	}
 	file := os.NewFile(uintptr(fd), path)
+	// No fsync: recipes live in the per-Session HOME, which is deleted at
+	// exit and never reused after a crash.
 	_, writeErr := file.Write(append(encoded, '\n'))
-	syncErr := file.Sync()
 	closeErr := file.Close()
-	if writeErr != nil || syncErr != nil || closeErr != nil {
+	if writeErr != nil || closeErr != nil {
 		_ = os.Remove(path)
 		return "", errors.New("MCP recipes could not be persisted")
 	}
