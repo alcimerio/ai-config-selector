@@ -8,7 +8,7 @@ remain adapter-specific.
 
 ## Common intent and target differences
 
-A version-3 Profile selects global Skills by exact `source` plus `relativePath`
+A Profile selects global Skills by exact `source` plus `relativePath`
 identity and declares read-only or explicit read-write workspace access. Both
 targets consume the same resolved common copy under `.acs/common/v1/skills`;
 unselected global bundles are excluded. ACS creates the private writable
@@ -54,10 +54,7 @@ Codex dry-run does not check whether the identity exists or works. Follow
 [named authentication](../guides/codex.md#named-authentication) to create or inspect it, and never publish
 credential or account output.
 
-Legacy v1/v2 Profiles remain Devin-bound with writable workspace authority and
-their established target paths. `acs profile migrate NAME` explicitly creates
-a v3 common Profile; adding a Codex overlay is a separate choice. Unsupported
-selected overlays or combinations fail before discovery, target execution, or
+Unsupported selected overlays or combinations fail before discovery, target execution, or
 Session creation. Unknown inactive overlays remain inert; rewrite commands
 refuse them when lossless preservation cannot be proved.
 

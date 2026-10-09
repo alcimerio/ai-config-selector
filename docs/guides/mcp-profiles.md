@@ -2,7 +2,7 @@
 
 [Documentation index](../README.md)
 
-Version-3 Profiles can select local MCP servers under
+Profiles can select local MCP servers under
 `common.mcp`. The category has version 1 and a `selection.servers` array. ACS
 stores references to already selected executables, filesystem paths, and
 environment entries; it does not store command text, arbitrary argument
@@ -10,7 +10,7 @@ values, endpoint URLs, headers, or resolved environment values.
 
 ```json
 {
-  "version": 3,
+  "version": 1,
   "name": "review-with-local-tools",
   "common": {
     "skills": {"version": 1, "selection": []},

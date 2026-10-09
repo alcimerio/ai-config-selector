@@ -31,7 +31,7 @@ project.
 
 ## Why ACS?
 
-- **Explicit access.** New v3 Profiles default to a read-only workspace; write
+- **Explicit access.** New Profiles default to a read-only workspace; write
   access and extra paths are opt-in. See [Profiles](docs/guides/profiles.md).
 - **One Profile, many targets.** The same selections drive Devin, Codex, a
   sandbox shell or a [literal command](docs/guides/generic-run.md), from any
@@ -208,7 +208,7 @@ Use `acs help` for your binary's command grammar and the
 
 ## Security boundaries
 
-There is no unsandboxed fallback. New v3 Profiles default to read-only workspace
+There is no unsandboxed fallback. New Profiles default to read-only workspace
 access; the private Session is writable. ACS removes it only after proving
 process-tree cleanup, preserving uncertain state for recovery.
 

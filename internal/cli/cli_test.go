@@ -684,7 +684,7 @@ func TestDryRunPassesConfiguredSessionsDirectoryToPlanner(t *testing.T) {
 func TestDryRunLoadsReadAliasProfileWithoutRewritingIt(t *testing.T) {
 	existingHome := t.TempDir()
 	acsHome := filepath.Join(existingHome, ".acs")
-	storedPath, stored := writeStoredProfile(t, acsHome, "legacy")
+	storedPath, stored := writeStoredProfile(t, acsHome, "aliased")
 	bundlePath := filepath.Join(existingHome, ".config", "devin", "skills", "review")
 	if err := os.MkdirAll(bundlePath, 0o700); err != nil {
 		t.Fatal(err)
@@ -709,7 +709,7 @@ func TestDryRunLoadsReadAliasProfileWithoutRewritingIt(t *testing.T) {
 		ErrorOutput:      &stderr,
 	}
 
-	if exitCode := application.Run(context.Background(), []string{"devin", "--profile", "legacy", "--dry-run"}); exitCode != 0 {
+	if exitCode := application.Run(context.Background(), []string{"devin", "--profile", "aliased", "--dry-run"}); exitCode != 0 {
 		t.Fatalf("dry run exit code = %d, want 0; stderr: %s", exitCode, stderr.String())
 	}
 	if !strings.Contains(stdout.String(), "devin-config:review") {

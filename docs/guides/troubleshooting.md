@@ -14,7 +14,7 @@ Use `acs COMMAND --help` for that binary's grammar.
 | Native tests fail inside another sandbox | Run context and [Contributing](../../CONTRIBUTING.md) | Run native tests from a normal supported macOS terminal; report which environment failed |
 | Skill missing from builder | Immediate child bundle under `~/.agents/skills` or `~/.config/devin/skills`, regular `SKILL.md` | Check source layout, clear the search, restart builder after adding material |
 | A saved Skill no longer resolves | `acs profile show NAME --json`, then `acs profile validate NAME` | Restore the exact source identity or deliberately remove/reselect it in `profile edit`; display names do not rebind references |
-| Workspace writes are denied | `acs explain TARGET --profile NAME`; new v3 Profiles default read-only | If coding write is intended, explicitly select it in `profile edit`; don't weaken the sandbox |
+| Workspace writes are denied | `acs explain TARGET --profile NAME`; Profiles default read-only | If coding write is intended, explicitly select it in `profile edit`; don't weaken the sandbox |
 | Tool is missing or a script cannot run | Generic commands use fixed `/usr/local/bin:/usr/bin:/bin`, not host `PATH` | Use an explicit executable path and select any interpreter or runtime files outside intrinsic access; ACS does not infer grants from shebangs |
 | Codex version rejected | `codex --version`; supported integration is `codex-cli 0.149.1` | Use the supported target version; a newer target is not automatically compatible |
 | Codex Profile has no supported overlay or auth reference | `acs profile show NAME --json`; `acs codex --help` | Use `codex create-profile`, an explicit supported overlay, and one ACS-owned named identity |

@@ -162,7 +162,7 @@ func TestDeclarativeCreatePublishesExactCapturedCandidateAndDoesNotTouchInput(t 
 func TestDeclarativeCreateStrictlyRejectsUnsupportedOrLossyDocuments(t *testing.T) {
 	valid := string(declarativeDocument("example"))
 	cases := map[string]string{
-		"legacy":          strings.Replace(valid, `"version":1`, `"version":2`, 1),
+		"retired":         strings.Replace(valid, `"version":1`, `"version":2`, 1),
 		"future":          strings.Replace(valid, `"version":1`, `"version":4`, 1),
 		"duplicate":       strings.Replace(valid, `"version":1`, `"version":1,"version":1`, 1),
 		"unknown common":  strings.Replace(valid, `"skills":`, `"network":{"version":1,"selection":{}},"skills":`, 1),

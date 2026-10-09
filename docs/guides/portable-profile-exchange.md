@@ -33,9 +33,8 @@ carried without resolved host values. Local executable, path and secret
 environment references use the explicit bindings described below. Only local
 stdio transport is supported; remote URLs, headers and OAuth fields are
 rejected. Exchange versions 1 and 2 remain decodable and produce their original
-capability sets. A version-1 or version-2 local Profile must first
-use the existing explicit `acs profile migrate NAME` workflow. Export never
-migrates or rewrites its source.
+capability sets. These exchange versions are independent of the stored Profile
+envelope version. Export never rewrites its source.
 
 Without `--file`, stdout is only deterministic indented JSON plus its final
 newline. The sanitized classification report is stderr, so ordinary redirection
@@ -235,7 +234,7 @@ with complete bindings, exit 2 is supported intent with unresolved bindings, and
 exit 1 is invalid, unsafe, unsupported, or unreadable input.
 
 `--dry-run` also validates the explicit `--as NAME`, passively checks the
-destination is absent, and prints the exact canonical local v3 candidate. It
+destination is absent, and prints the exact canonical local Profile candidate. It
 creates no Profile directory, lock, journal, Session, credential, or other state.
 Actual import uses the existing revisioned conditional Create transaction. It
 never replaces a destination or case alias. Transaction messages preserve

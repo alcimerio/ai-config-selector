@@ -180,10 +180,14 @@ older writer, or newer protected Session state to an older launcher. If unsure,
 stop after `version` and use the compatible owner for inspection and recovery.
 Never overwrite newer live state with an old backup as routine rollback.
 
-Passive Profile inspection does not rewrite legacy v1/v2. Confirmed mutations
-preview any canonical v1-to-v2 conversion; `acs profile migrate NAME` explicitly
-adopts v3 and common material paths. Migration preserves legacy workspace write
-authority; making it read-only is a separate choice. Profiles, history,
+Passive Profile inspection never rewrites stored Profiles. Current binaries
+write the Profile envelope as `"version": 1` and still read `"version": 3`, the
+number earlier builds used for the same format; a confirmed edit, clone or
+rename rewrites it as `1`. Binaries from before this renumbering do not accept
+`"version": 1`, so do not hand rewritten Profiles back to such a writer.
+Retired pre-common envelopes are reported as unsupported and cannot be
+converted by current binaries; convert them with a pre-removal release's
+`profile migrate` before switching, or delete them. Profiles, history,
 transactions, Sessions and Keychain records have independent format/lifecycle
 rules. Installing a binary changes none of them. See [Profiles](profiles.md).
 
@@ -220,27 +224,17 @@ backup-restore or schema-downgrade command. Preserve current data separately
 before planning a case-specific restore against a settled compatible repository;
 never replace live locks or journals with this copy.
 
-### Explicit Profile migration
+### Inspect and export a Profile
 
 Use the inspected compatible binary's absolute path, even if you just rolled
-command selection back. Preview migration only for a legacy Profile you intend
-to adopt. Cancellation makes no decision; after confirmation, heed `not
-committed`, `committed`, `unknown` and `recovery required` literally. A strict
-maintenance shell exits on cancellation or failure; use the recovery shell below
-for inspection, and never blindly retry an unknown outcome.
-
-<!-- example: migrate -->
-```sh
-source_bin="/absolute/path/to/compatible-source/acs"
-"$source_bin" profile migrate backend-review
-```
-
-After a confirmed migration, inspect the result. For an optional exchange file,
-first `cd "$maintenance_root"` so it stays private. Export refuses overwrite and
+command selection back. After any confirmed change, heed `not committed`,
+`committed`, `unknown` and `recovery required` literally, and never blindly
+retry an unknown outcome. For an optional exchange file, first
+`cd "$maintenance_root"` so it stays private. Export refuses overwrite and
 omits source contents, resolved paths, history, Sessions and authentication; it
 is not a backup. Import validation checks structure, not target/auth readiness.
 
-<!-- example: after-migrate -->
+<!-- example: inspect-export -->
 ```sh
 "$source_bin" profile show backend-review
 "$source_bin" profile validate backend-review

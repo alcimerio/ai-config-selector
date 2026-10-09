@@ -38,8 +38,7 @@ output, private paths, environment values or generated Seatbelt policy.
   projection/declarative requirements in adapters. The shared executor owns
   backend selection, verification, Sessions, processes and cleanup. Keep typed
   authentication resources separate.
-- Preserve stable sanitized errors, process-tree cleanup proof and explicit
-  legacy Profile migration. Never delete a Session with possibly live descendants.
+- Preserve stable sanitized errors and process-tree cleanup proof. Never delete a Session with possibly live descendants.
 - Do not add a backend selector, sandbox bypass, unsandboxed fallback, arbitrary
   shell command option or `$SHELL` lookup.
 

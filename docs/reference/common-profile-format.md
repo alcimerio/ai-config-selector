@@ -1,17 +1,20 @@
-# Common Profile format, migration, grants and projection
+# Common Profile format, grants and projection
 
 [Documentation index](../README.md)
 
-New Profiles use envelope version 3. Versions 1 and 2 remain readable;
-inspection and launch leave their stored bytes unchanged.
+Profiles use a single envelope format, version 1. Profiles written by earlier
+builds carry `"version": 3` for this same format; ACS still reads them
+unchanged and writes `"version": 1` only when a confirmed edit, clone or rename
+rewrites the Profile. Inspection and launch never rewrite stored bytes. Any
+other envelope version, including the retired pre-common envelopes, is
+reported as unsupported; `acs profile delete` can still remove such a file.
 
-Noninteractive authoring accepts only this supported v3 representation; see
-[declarative creation](../guides/profiles.md#declarative-creation). Legacy documents continue
-to use the established read, edit and explicit migration paths.
+Noninteractive authoring accepts only this representation; see
+[declarative creation](../guides/profiles.md#declarative-creation).
 
 ```json
 {
-  "version": 3,
+  "version": 1,
   "name": "backend-review",
   "common": {
     "skills": {
@@ -92,15 +95,11 @@ data, edit, clone and rename refuse them before preview.
 
 ## Workspace authority
 
-New v3 Profiles default to a read-only workspace and a private writable
+New Profiles default to a read-only workspace and a private writable
 Session. In the Profile Builder, Workspace offers an explicit `Read and write
 (coding work)` choice. The resolved common intent is passed unchanged to native
 sandbox checks and every probe or attached process. Seatbelt omits workspace
 write rules for read-only Profiles. Session writes remain allowed in both modes.
-
-Legacy v1/v2 Profiles retain writable-workspace authority and their established
-synthetic-home paths. An approved legacy edit/clone/rename produces canonical
-v2, preserving that authority and placement. It does not silently adopt v3.
 
 ## Instruction bundles
 
@@ -181,10 +180,9 @@ authority also covers every name and hard link reachable inside that directory.
 The grants authorize paths; they do not bind runtime access to an immutable
 filesystem object.
 
-Older v3 Profiles without `paths` remain readable as an empty compatibility
-default without rewrite. New creation and confirmed mutation emit an explicit
-empty or populated `paths` selection. A legacy edit that selects a nonempty
-path grant is refused until the user performs explicit v3 migration.
+Profiles that omit `paths` remain readable with an empty default and are not
+rewritten. New creation and confirmed mutation emit an explicit empty or
+populated `paths` selection.
 
 ## Filesystem exclusions
 
@@ -252,9 +250,9 @@ names visible from parent listings. A cooperating host process can change a
 pathname after final validation; ACS does not provide an immutable filesystem
 snapshot or content-wide secrecy.
 
-Older v3 Profiles that omit `exclusions` remain readable with an empty default.
+Profiles that omit `exclusions` remain readable with an empty default.
 New creation and confirmed mutation emit an explicit empty or populated
-selection. Nonempty legacy edits require explicit v3 migration. Edit, clone and
+selection. Edit, clone and
 rename preserve intent; history restore retains compatible current local
 bindings and requires rebinding when they are missing or incompatible. Portable
 exchange v3 carries workspace references and symbolic local bindings. Older ACS
@@ -299,9 +297,8 @@ may still authorize edits to a selected tool it already covers. The pathname
 race after the final validation fence remains the
 same explicit Seatbelt limit described for path grants.
 
-Older v3 Profiles without `executables` read as an empty compatibility default.
-New creation and confirmed mutation emit the explicit selection; legacy Profiles
-must migrate before selecting a nonempty executable entry.
+Profiles that omit `executables` read with an empty default. New creation and
+confirmed mutation emit the explicit selection.
 
 ## Scoped environment
 
@@ -340,7 +337,7 @@ proved; uncertain cleanup remains quarantined rather than claiming erasure.
 Selected environment transport requires the supported macOS runtime. Unsupported
 hosts fail closed before Session creation.
 
-Older v3 Profiles without `environment` read as an empty compatibility default.
+Profiles that omit `environment` read with an empty default.
 New creation and confirmed mutation emit the explicit selection. Only
 host-environment references are supported; they are not durable credential
 storage.
@@ -357,7 +354,7 @@ and current evidence limitations.
 
 ## Common material and projections
 
-For v3, selected Skills are copied first to:
+Selected Skills are copied first to:
 
 ```text
 $SESSION_HOME/.acs/common/v1/skills/<source>/<relativePath>/
@@ -383,20 +380,14 @@ Workspace read access includes project-local files. "Selected only" refers
 to ACS-managed global material. Project-local Skills and other files in the
 granted workspace or writable Session remain readable.
 
-## Explicit migration and outcomes
+## Mutation outcomes
 
-Run `acs profile migrate NAME`. The same Profile Builder used for mutations
-shows an immutable preview with changed schema fields, retained defaults,
-effective workspace authority, common paths, Devin projection paths and exact
-resulting bytes. The migration uses the existing byte-oriented, revision-bound
-repository Replace transaction; it adds no lock, journal or persistence engine.
-
-The default migration preserves legacy workspace write explicitly. A later
-editor change to read-only is a separately visible authority reduction.
-Cancellation, refusal, revision conflict and other `NotCommitted` outcomes leave
-prior bytes unchanged. Once a decision may exist, ACS reports `Committed` or
-`Unknown` together with any recovery requirement. Recovery can roll publication
-forward and is not a universal rollback or backup feature.
+Edit, clone and rename use the Profile Builder's immutable preview of the exact
+resulting bytes and the byte-oriented, revision-bound repository Replace
+transaction. Cancellation, refusal, revision conflict and other `NotCommitted`
+outcomes leave prior bytes unchanged. Once a decision may exist, ACS reports
+`Committed` or `Unknown` together with any recovery requirement. Recovery can
+roll publication forward and is not a universal rollback or backup feature.
 
 Use [Profile inspection](../guides/profiles.md#inspection) and
 [diagnostics](../guides/diagnostics.md) for passive checks. See

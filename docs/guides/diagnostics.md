@@ -30,9 +30,7 @@ selected instruction files, admits the requested overlay, and combines passive
 host, backend-file and executable-presence facts. It starts no process, accesses
 no credentials, allocates or recovers no Session, and changes no Profile or file.
 It does not assemble a launch plan or resolve secret environment values.
-Sandbox uses common capabilities without an account or target client. Legacy
-v1/v2 Profiles retain their implicit Devin overlay and cannot select Codex.
-Sandbox can consume their common capabilities with legacy workspace write. Version-3
+Sandbox uses common capabilities without an account or target client.
 Devin/Codex checks require the selected supported overlay; unknown inactive
 overlays do not authorize that target or prevent common sandbox checks.
 
@@ -107,7 +105,7 @@ host pass. Backend availability is unchecked on non-macOS hosts or when host
 metadata is unreadable.
 
 `profile validate` uses the [inspection codec and safe
-traversal](profiles.md#inspection) for v1/v2/v3 stored structure, then resolves
+traversal](profiles.md#inspection) for stored structure, then resolves
 only selected Skill references using Devin discovery: immediate child
 directories with regular `SKILL.md` files under selected global sources.
 Unselected roots are not enumerated and malformed unselected entries do not
@@ -149,8 +147,8 @@ separate from persisted schemas and inspection output. It contains exactly:
 | --- | --- | --- |
 | `profile.structure` | unchecked | supported stored structure |
 | `profile.sources` | unchecked | selected Skill resolution after valid structure |
-| `profile.overlays` | unchecked | supported overlays, or unchecked legacy/unknown inactive overlays |
-| `profile.authority` | unchecked | legacy workspace write or explicit common authority |
+| `profile.overlays` | unchecked | supported overlays, no overlays, or unchecked unknown inactive overlays |
+| `profile.authority` | unchecked | explicit common authority |
 | `host.platform` | native metadata and supported-platform policy | unchecked |
 | `backend.file` | trusted system backend-file availability on macOS | unchecked |
 | `executable.availability` | selected target only; otherwise unchecked | unchecked |
@@ -172,8 +170,8 @@ source resolution unchecked (`structure_required`).
 | `executable_available`, `executable_unavailable` | Executable found or absent/unsafe/inaccessible. |
 | `valid_structure` | Supported stored structure. |
 | `structure_required` | Sources unchecked because structure could not be validated. |
-| `legacy_workspace_write`, `explicit_common_authority` | Legacy workspace-write compatibility or explicit v3 authority; no enforcement check. |
-| `legacy_implicit_target`, `supported_inactive_overlays`, `inactive_overlay_unknown` | Implicit legacy target, supported inactive overlays or unknown/unsupported inactive overlay; none selected/executed. |
+| `explicit_common_authority` | Explicit stored common authority; no enforcement check. |
+| `no_overlays`, `supported_inactive_overlays`, `inactive_overlay_unknown` | No stored overlay, supported inactive overlays or unknown/unsupported inactive overlay; none selected/executed. |
 | `selected_sources_resolved`, `selected_sources_unresolved`, `sources_unavailable` | Exact references resolved, missing/ambiguous or selected root cannot be enumerated. |
 | Inspection failure codes | `storage_unavailable`, `invalid_name`, `missing`, `unreadable`, `non_regular`, `too_large`, `invalid_structure`, `identity_mismatch`, `unsupported_content`; see [inspection](profiles.md#inspection). |
 
@@ -220,7 +218,7 @@ authority or a destination allowlist. Outbound IP and macOS DNS remain coarse.
 
 Executable selections are requested logical facts. A workspace-relative entry
 already covered by workspace read is marked
-`stored_v3_intent_covered_by_workspace_read`, without a redundant effective
+`stored_intent_covered_by_workspace_read`, without a redundant effective
 grant. Fixed-search/local selections add effective visibility facts without
 passive host lookup; local absolute values are omitted.
 `runtime.executable-visibility` records the intrinsic readable runtime;
@@ -243,11 +241,10 @@ source/workspace/executable/runtime/Session paths; argument values; auth
 references; credentials; project files; raw native policy; and backend/target
 output.
 
-Each unknown inactive v3 overlay yields one sanitized `inactive_overlay_unknown`
+Each unknown inactive overlay yields one sanitized `inactive_overlay_unknown`
 limitation. Its key/payload are omitted and it adds no plan fact or digest input.
-Missing or unsupported selected overlays fail closed. Legacy v1/v2 remains
-Devin-bound with writable workspace and legacy Skill placement; explanation
-never migrates or rewrites it.
+Missing or unsupported selected overlays fail closed. Explanation never
+rewrites a stored Profile.
 
 ### Digest meaning
 

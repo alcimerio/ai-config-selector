@@ -190,7 +190,7 @@ restore or retry; Session listing does not prove active owners have settled.
 Before a confirmed write, settle operations and make a private quiescent copy of
 Profile bytes. Follow the
 [migration and recovery steps](../guides/manual-upgrade-recovery.md#binary-rollback-is-not-a-data-downgrade)
-for explicit Profile migration, preview cancellation and interrupted operations.
+for Profile format compatibility, preview cancellation and interrupted operations.
 
 To select the retained executable again in the same maintenance shell:
 

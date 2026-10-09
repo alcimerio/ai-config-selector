@@ -3,7 +3,8 @@
 [Documentation index](../README.md)
 
 ACS records private local history for each committed Profile creation, edit,
-clone, rename, deletion, import, migration and restore. Use it to recover
+clone, rename, deletion, import and restore; journals written by earlier
+builds may also contain migration events, which remain readable. Use it to recover
 supported configuration state. Use [portable exchange](portable-profile-exchange.md)
 to transfer selections; history is not a portable backup.
 

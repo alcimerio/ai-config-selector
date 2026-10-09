@@ -1,5 +1,5 @@
 // Package profileinspect reads persisted Profile structure without launch,
-// migration, discovery, authentication, or Session dependencies.
+// rewriting, discovery, authentication, or Session dependencies.
 package profileinspect
 
 import (
