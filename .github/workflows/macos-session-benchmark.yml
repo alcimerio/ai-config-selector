@@ -41,20 +41,41 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Check out benchmarked ref
+      # actions/checkout only accepts full commit SHAs, so fetch the whole
+      # history once and resolve branches, tags and short SHAs with git.
+      - name: Check out repository history for benchmarked refs
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          ref: ${{ inputs.ref }}
-          path: bench-src/primary
+          fetch-depth: 0
+          path: bench-src/repository
 
-      - name: Check out comparison ref
-        if: ${{ inputs.compare_ref != '' }}
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-          ref: ${{ inputs.compare_ref }}
-          path: bench-src/compare
+      - name: Resolve benchmarked refs
+        env:
+          PRIMARY_REF: ${{ inputs.ref }}
+          COMPARE_REF: ${{ inputs.compare_ref }}
+        run: |
+          set -euo pipefail
+          resolve() {
+            local ref="$1" commit
+            for candidate in "$ref" "origin/$ref" "refs/tags/$ref"; do
+              if commit="$(git -C bench-src/repository rev-parse --verify --quiet --end-of-options "$candidate^{commit}")"; then
+                printf '%s\n' "$commit"
+                return 0
+              fi
+            done
+            echo "cannot resolve ref: $ref" >&2
+            return 1
+          }
+          worktree() {
+            local name="$1" commit
+            commit="$(resolve "$2")"
+            git -C bench-src/repository worktree add --detach "../$name" "$commit"
+          }
+          worktree primary "$PRIMARY_REF"
+          if [[ -n "$COMPARE_REF" ]]; then
+            worktree compare "$COMPARE_REF"
+          fi
 
       - name: Set up Go
         uses: ./.github/actions/setup-go-macos

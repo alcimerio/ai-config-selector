@@ -225,7 +225,10 @@ func createFixture(fake string, files int) (fixture, error) {
 		}
 	}
 	writes := map[string][]byte{
-		filepath.Join(bundle, "SKILL.md"):                                    []byte("# " + skillName + "\n\nSynthetic benchmark Skill.\n"),
+		filepath.Join(bundle, "SKILL.md"): []byte("# " + skillName + "\n\nSynthetic benchmark Skill.\n"),
+		// Envelope version 3 is the one format every benchmarked ref reads:
+		// binaries before the version 1 renumbering accept only 3, and later
+		// ones keep 3 as a read alias.
 		filepath.Join(created.home, ".acs", "profiles", profileName+".json"): []byte(`{"version":3,"name":"` + profileName + `","common":{"skills":{"version":1,"selection":[{"source":"devin-config","relativePath":"` + skillName + `"}]},"workspace":{"version":1,"selection":{"access":"read-write"}}},"overlays":{"devin":{"version":1}}}`),
 		// Synthetic placeholder so the credential copy step is exercised; it
 		// is not a real credential and the fake target never reads it.
