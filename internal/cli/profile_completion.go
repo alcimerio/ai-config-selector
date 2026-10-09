@@ -46,14 +46,21 @@ func savedProfile(err error) profileCompletion {
 }
 
 func (c profileCompletion) acknowledge(output io.Writer, receipt []byte) error {
-	written, err := output.Write(receipt)
-	if err == nil && written != len(receipt) {
+	if err := writeComplete(output, receipt); err != nil {
+		return &profilerepo.OutcomeError{Outcome: c.outcome, Err: errors.Join(c.err, err)}
+	}
+	return nil
+}
+
+// writeComplete performs exactly one Write and reports a silent short write
+// as io.ErrShortWrite. A single call keeps acknowledgment from being replayed
+// into a writer that has already accepted part of a receipt.
+func writeComplete(output io.Writer, data []byte) error {
+	written, err := output.Write(data)
+	if err == nil && written != len(data) {
 		err = io.ErrShortWrite
 	}
-	if err == nil {
-		return nil
-	}
-	return &profilerepo.OutcomeError{Outcome: c.outcome, Err: errors.Join(c.err, err)}
+	return err
 }
 
 type profileCompletionFormat uint8
@@ -88,17 +95,17 @@ func (app App) profileCompletionError(action string, err error, format profileCo
 			return app.fail("%s: Profile transaction committed; reporting failed. Inspect the stored Profile before deciding what to do", action)
 		case transaction.Outcome.State == profilerepo.Committed:
 			if format == mutationCompletion {
-				return app.fail("%s Profile mutation committed; cleanup or reporting failed.\nRecover with: acs profile recover\nThen inspect stored Profiles before deciding what to do. Do not delete transaction artifacts.", action)
+				return app.fail("%s: Profile mutation committed; cleanup or reporting failed.\nRecover with: acs profile recover\nThen inspect stored Profiles before deciding what to do. Do not delete transaction artifacts.", action)
 			}
 			return app.fail("%s: Profile transaction committed; cleanup requires recovery. Do not retry.\nRecover with: acs profile recover\nThen inspect the stored Profile. Do not delete transaction artifacts", action)
 		case transaction.Outcome.State != profilerepo.NotCommitted:
 			if format == mutationCompletion {
-				return app.fail("%s Outcome unknown; publication may have occurred. Do not blindly retry.\nRecover with: acs profile recover\nThen inspect stored Profiles before deciding what to do. Do not delete transaction artifacts.", action)
+				return app.fail("%s: Outcome unknown; publication may have occurred. Do not blindly retry.\nRecover with: acs profile recover\nThen inspect stored Profiles before deciding what to do. Do not delete transaction artifacts.", action)
 			}
 			return app.fail("%s: Profile transaction outcome unknown; publication may have occurred. Do not retry.\nRecover with: acs profile recover\nThen inspect the stored Profile. Do not delete transaction artifacts", action)
 		case transaction.Outcome.RecoveryRequired:
 			if format == mutationCompletion {
-				return app.fail("%s Requested mutation not committed; preceding transaction or cleanup needs recovery.\nRecover with: acs profile recover\nThen inspect stored Profiles before deciding what to do. Do not delete transaction artifacts.", action)
+				return app.fail("%s: Requested mutation not committed; preceding transaction or cleanup needs recovery.\nRecover with: acs profile recover\nThen inspect stored Profiles before deciding what to do. Do not delete transaction artifacts.", action)
 			}
 			return app.fail("%s: requested Profile transaction not committed; a preceding repository operation requires recovery.\nRecover with: acs profile recover\nThen inspect stored Profiles. Do not delete transaction artifacts", action)
 		case transaction.Outcome.State == profilerepo.NotCommitted && format != mutationCompletion:

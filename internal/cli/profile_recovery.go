@@ -112,10 +112,9 @@ func (app App) writeProfileRecovery(inv invocation, out profilerepo.Outcome, err
 		}
 		fmt.Fprintln(&receipt, result.Guidance)
 	}
-	completion := profileCompletion{outcome: out, err: err}
 	writeErr := encodeErr
 	if writeErr == nil {
-		writeErr = completion.acknowledge(app.Output, receipt.Bytes())
+		writeErr = writeComplete(app.Output, receipt.Bytes())
 	}
 	if writeErr != nil {
 		return app.fail("Profile recovery outcome %s (recovery required: %t) reporting failed; inspect stored Profiles before another mutation", out.State, out.RecoveryRequired)

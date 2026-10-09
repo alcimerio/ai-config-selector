@@ -234,7 +234,7 @@ func (app App) mutateProfile(ctx context.Context, inv invocation) int {
 		if err != nil {
 			return app.fail("prepare deletion: %v", err)
 		}
-		if written, err := io.WriteString(app.Output, prepared.Text); err != nil || written != len(prepared.Text) {
+		if err := writeComplete(app.Output, []byte(prepared.Text)); err != nil {
 			return app.fail("write deletion preview: Profile mutation not committed; nothing was deleted")
 		}
 		_, err = prepared.Save(ctx, captured.draft)
