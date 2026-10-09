@@ -24,6 +24,7 @@ import (
 	"github.com/alcimerio/ai-config-selector/internal/environmentresource"
 	"github.com/alcimerio/ai-config-selector/internal/instructions"
 	"github.com/alcimerio/ai-config-selector/internal/launch"
+	"github.com/alcimerio/ai-config-selector/internal/phasetiming"
 	"github.com/alcimerio/ai-config-selector/internal/runcommand"
 	"github.com/alcimerio/ai-config-selector/internal/session"
 	"github.com/alcimerio/ai-config-selector/internal/skillmaterial"
@@ -137,7 +138,9 @@ func (e *Executor) prepareRetainedProcess(ctx context.Context, created *session.
 		return nil, err
 	}
 	request.RecoveryProofChallenge = challenge
+	prepared := phasetiming.Start("sandbox.prepare")
 	process, err := e.sandbox.Prepare(ctx, request)
+	prepared()
 	if err != nil {
 		return nil, err
 	}
@@ -152,6 +155,7 @@ func (e *Executor) prepareRetainedProcess(ctx context.Context, created *session.
 }
 
 func settleRetainedProcess(process launch.Process, mode retainedSignalMode, devinSupervisor *devinSignalSupervisor) (error, error) {
+	ran := phasetiming.Start("process." + mode.String())
 	var runErr error
 	switch mode {
 	case retainedProbe:
@@ -170,7 +174,22 @@ func settleRetainedProcess(process launch.Process, mode retainedSignalMode, devi
 	default:
 		runErr = errors.New("contained process signal mode is invalid")
 	}
+	ran()
+	defer phasetiming.Start("process.await-cleanup")()
 	return runErr, launch.AwaitRetainedSessionCleanup(process)
+}
+
+func (mode retainedSignalMode) String() string {
+	switch mode {
+	case retainedProbe:
+		return "probe"
+	case retainedAttached:
+		return "attached"
+	case retainedDevinReserved:
+		return "devin-interactive"
+	default:
+		return "unknown"
+	}
 }
 
 func hasWritableFilesystemGrant(grants []launch.FilesystemGrant) bool {
@@ -265,11 +284,14 @@ func (e *Executor) runAttached(ctx context.Context, recipe attachedRecipe) (resu
 			return &launch.SandboxError{Category: launch.SandboxUnsafePath}, false
 		}
 	}
+	checked := phasetiming.Start("sandbox.check")
 	if err := e.sandbox.Check(ctx, launch.SandboxCheck{Workspace: recipe.workingDirectory,
 		WorkspaceAccess: recipe.workspaceAccess, SessionsDirectory: recipe.sessionsDirectory,
 		Executable: executable, RuntimeAuthority: recipe.runtimeAuthority, FilesystemExclusions: filesystemExclusions, FilesystemGrants: filesystemGrants, ExecutableGrants: executableGrants, RequiresEnvironment: requiresEnvironment}); err != nil {
+		checked()
 		return err, false
 	}
+	checked()
 	environment, err := resolvePlanEnvironment(recipe.resolvedPlan, e.environmentLookup)
 	if err != nil {
 		return err, false
@@ -401,7 +423,11 @@ func (e *Executor) RunDevin(ctx context.Context, request DevinRequest) (exitCode
 	supervisor := newDevinSignalSupervisor(cancelPreflight)
 	defer supervisor.stop()
 	requiresEnvironment := request.ResolvedPlan != nil && len(request.ResolvedPlan.EnvironmentIntents()) != 0
-	if err := e.sandbox.Check(preflightContext, launch.SandboxCheck{Workspace: request.WorkingDirectory, WorkspaceAccess: request.WorkspaceAccess, SessionsDirectory: request.SessionsDirectory, Executable: request.Executable, RuntimeInputs: request.RuntimeInputs, RuntimeAuthority: request.RuntimeAuthority, FilesystemExclusions: request.FilesystemExclusions, FilesystemGrants: request.FilesystemGrants, ExecutableGrants: request.ExecutableGrants, RequiresEnvironment: requiresEnvironment}); err != nil {
+	defer phasetiming.Start("devin.total")()
+	checked := phasetiming.Start("sandbox.check")
+	err := e.sandbox.Check(preflightContext, launch.SandboxCheck{Workspace: request.WorkingDirectory, WorkspaceAccess: request.WorkspaceAccess, SessionsDirectory: request.SessionsDirectory, Executable: request.Executable, RuntimeInputs: request.RuntimeInputs, RuntimeAuthority: request.RuntimeAuthority, FilesystemExclusions: request.FilesystemExclusions, FilesystemGrants: request.FilesystemGrants, ExecutableGrants: request.ExecutableGrants, RequiresEnvironment: requiresEnvironment})
+	checked()
+	if err != nil {
 		return 1, err
 	}
 	environment, err := resolvePlanEnvironment(request.ResolvedPlan, e.environmentLookup)
@@ -621,6 +647,7 @@ func (e *Executor) runDevinPreflights(ctx context.Context, created *session.Sess
 				return devinruntime.NewPreflightError(devinruntime.CapabilityInstructionRules, devinruntime.ReasonRuleMismatch)
 			}
 		}
+		done := phasetiming.Start(preflight.ID)
 		switch preflight.ID {
 		case "devin.preflight.skills":
 			if preflight.Mode != "contained-exact-catalog" {
@@ -637,12 +664,15 @@ func (e *Executor) runDevinPreflights(ctx context.Context, created *session.Sess
 				return errors.New("unsupported Devin instruction rules preflight")
 			}
 			if len(request.ExpectedInstructions) == 0 {
+				done()
 				continue
 			}
 			err = e.verifyDevinRules(ctx, created, request, instructionAnchor)
 		default:
+			done()
 			return errors.New("unsupported Devin preflight")
 		}
+		done()
 		if err != nil {
 			return err
 		}

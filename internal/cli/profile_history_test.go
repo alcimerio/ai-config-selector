@@ -248,6 +248,11 @@ func TestProfileRestoreReportsTruthfulApplyOutcomes(t *testing.T) {
 		{"conflict", profilerepo.Outcome{State: profilerepo.NotCommitted}, profilerepo.ErrConflict, "conflict"},
 		{"ordinary failure", profilerepo.Outcome{State: profilerepo.NotCommitted}, errors.New("injected"), "not_committed"},
 		{"unknown", profilerepo.Outcome{State: profilerepo.Unknown, RecoveryRequired: true}, errors.New("injected"), "recovery_required"},
+		{"committed beats cancellation and conflict", profilerepo.Outcome{State: profilerepo.Committed}, errors.Join(context.Canceled, profilerepo.ErrConflict), "committed_reporting_failed"},
+		{"committed cleanup beats cancellation", profilerepo.Outcome{State: profilerepo.Committed, RecoveryRequired: true}, context.Canceled, "recovery_required"},
+		{"preceding recovery beats cancellation", profilerepo.Outcome{State: profilerepo.NotCommitted, RecoveryRequired: true}, context.Canceled, "recovery_required"},
+		{"unknown beats conflict", profilerepo.Outcome{State: profilerepo.Unknown}, profilerepo.ErrConflict, "recovery_required"},
+		{"not committed without cause", profilerepo.Outcome{State: profilerepo.NotCommitted}, nil, "not_committed"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			var out, errOut bytes.Buffer

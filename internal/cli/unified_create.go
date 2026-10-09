@@ -24,7 +24,7 @@ func (app App) createUnifiedProfile(ctx context.Context, name string) int {
 		return app.fail("create Profile requires interactive stdin and stdout")
 	}
 	if err := app.Profiles.RecoverContext(ctx); err != nil {
-		return app.profileCreateError(name, "recover Profile repository", err)
+		return app.profileCompletionError("recover Profile repository", err, creationCompletion)
 	}
 	if _, err := app.Profiles.Load(name); err == nil {
 		return app.fail("destination Profile is occupied; nothing was overwritten")
@@ -47,7 +47,7 @@ func (app App) createUnifiedProfile(ctx context.Context, name string) int {
 	}
 	outcome, err := app.UnifiedBuilder.BuildUnifiedProfile(ctx, name, app.Categories.NewDraft(), save, app.Input, app.Output)
 	if err != nil {
-		return app.profileCreateError(name, "create Profile", err)
+		return app.profileCompletionError("create Profile", err, creationCompletion)
 	}
 	if outcome.Cancelled {
 		fmt.Fprintln(app.Output, "Profile creation cancelled.")
@@ -56,6 +56,5 @@ func (app App) createUnifiedProfile(ctx context.Context, name string) int {
 	if !outcome.Create {
 		return app.fail("Profile Builder ended without an outcome")
 	}
-	fmt.Fprintf(app.Output, "Created Profile %q.\n", name)
-	return 0
+	return app.completeProfile("create Profile", savedProfile(nil), fmt.Sprintf("Created Profile %q.\n", name), creationCompletion)
 }
