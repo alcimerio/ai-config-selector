@@ -258,6 +258,7 @@ func (service *CodexAuthService) ExecuteCodex(ctx context.Context, request Codex
 	defer cancelPreflight()
 	supervisor := newDevinSignalSupervisor(cancelPreflight)
 	defer supervisor.stop()
+	supervisor.setNotice(request.Terminal.ErrorOutput)
 	requirements := request.ResolvedPlan.Requirements()
 	exclusions, err := request.ResolvedPlan.ResolveFilesystemExclusions(service.workingDirectory, service.sessionsDirectory)
 	if err != nil {

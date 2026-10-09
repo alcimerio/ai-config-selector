@@ -361,3 +361,66 @@ func (pendingSessionCleanupProcess) Signal(os.Signal) error { return nil }
 func (process pendingSessionCleanupProcess) CleanupDone() <-chan struct{} {
 	return process.cleanupDone
 }
+
+type unprovenSessionCleanupProcess struct {
+	pendingSessionCleanupProcess
+	unproven <-chan struct{}
+}
+
+func (process unprovenSessionCleanupProcess) CleanupUnproven() <-chan struct{} {
+	return process.unproven
+}
+
+func TestAwaitRetainedSessionCleanupFailsFastWhenCleanupIsUnproven(t *testing.T) {
+	sessionsDirectory := filepath.Join(t.TempDir(), "sessions")
+	session, err := CreateSession(sessionsDirectory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cleanupDone, unproven := make(chan struct{}), make(chan struct{})
+	close(unproven)
+	retained, err := RetainSessionUntilProcessDone(sanitizedProcess{process: unprovenSessionCleanupProcess{pendingSessionCleanupProcess{cleanupDone: cleanupDone}, unproven}}, session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A timeout that never fires proves the wait ended because cleanup was
+	// reported unproven, not because the bounded wait expired.
+	retained.(*sessionProcess).cleanupTimeout = func() <-chan time.Time { return nil }
+	result := make(chan error, 1)
+	go func() { result <- AwaitRetainedSessionCleanup(retained) }()
+	var sandboxErr *SandboxError
+	select {
+	case err := <-result:
+		if !errors.As(err, &sandboxErr) || sandboxErr.Category != SandboxProcessWaitFailed {
+			t.Fatalf("unproven cleanup wait = %v, want safe process wait failure", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("unproven cleanup still waited for cleanupDone")
+	}
+	if err := session.Remove(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(session.RootDir); err != nil {
+		t.Fatalf("unproven cleanup released the retained Session: %v", err)
+	}
+}
+
+func TestAwaitRetainedSessionCleanupPrefersCompletedCleanupOverUnproven(t *testing.T) {
+	sessionsDirectory := filepath.Join(t.TempDir(), "sessions")
+	session, err := CreateSession(sessionsDirectory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cleanupDone, unproven := make(chan struct{}), make(chan struct{})
+	close(cleanupDone)
+	close(unproven)
+	retained, err := RetainSessionUntilProcessDone(unprovenSessionCleanupProcess{pendingSessionCleanupProcess{cleanupDone: cleanupDone}, unproven}, session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 20 {
+		if err := AwaitRetainedSessionCleanup(retained); err != nil {
+			t.Fatalf("completed cleanup reported failure: %v", err)
+		}
+	}
+}

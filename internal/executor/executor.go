@@ -18,6 +18,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/alcimerio/ai-config-selector/internal/authority"
 	"github.com/alcimerio/ai-config-selector/internal/devinruntime"
@@ -422,6 +423,7 @@ func (e *Executor) RunDevin(ctx context.Context, request DevinRequest) (exitCode
 	defer cancelPreflight()
 	supervisor := newDevinSignalSupervisor(cancelPreflight)
 	defer supervisor.stop()
+	supervisor.setNotice(request.Terminal.ErrorOutput)
 	requiresEnvironment := request.ResolvedPlan != nil && len(request.ResolvedPlan.EnvironmentIntents()) != 0
 	defer phasetiming.Start("devin.total")()
 	checked := phasetiming.Start("sandbox.check")
@@ -450,6 +452,9 @@ func (e *Executor) RunDevin(ctx context.Context, request DevinRequest) (exitCode
 			exitCode = 1
 		}
 	}()
+	// Deferred calls run in reverse order: enter cleanup mode before the
+	// Session removal above, so Ctrl-C during a slow exit is not swallowed.
+	defer supervisor.beginCleanup()
 	servers := []launch.MCPServerIntent{}
 	environmentIntents := []launch.EnvironmentIntent{}
 	if request.ResolvedPlan != nil {
@@ -1095,10 +1100,20 @@ type devinSignalSupervisor struct {
 	child           launch.Process
 	pending         os.Signal
 	starting        bool
+	// cleaningUp is set once no target or preflight can still be interrupted
+	// and ACS is only settling and removing the Session. The first
+	// termination signal then prints a notice and the second exits at once.
+	cleaningUp        bool
+	cleanupInterrupts int
+	notice            io.Writer
+	forceExit         func(os.Signal)
+	stopOnce          sync.Once
 }
 
+const cleanupInterruptNotice = "acs: finishing Session cleanup; press Ctrl-C again to exit now and leave the Session for the next acs launch to recover\n"
+
 func newDevinSignalSupervisor(cancel context.CancelFunc) *devinSignalSupervisor {
-	s := &devinSignalSupervisor{forwarded: make(chan os.Signal, 1), done: make(chan struct{}), cancelPreflight: cancel}
+	s := &devinSignalSupervisor{forwarded: make(chan os.Signal, 1), done: make(chan struct{}), cancelPreflight: cancel, forceExit: exitOnSignal}
 	signal.Notify(s.forwarded, os.Interrupt, syscall.SIGHUP, syscall.SIGQUIT, syscall.SIGTERM, syscall.SIGWINCH)
 	go s.run()
 	return s
@@ -1116,6 +1131,25 @@ func (s *devinSignalSupervisor) run() {
 
 func (s *devinSignalSupervisor) handleSignal(received os.Signal) {
 	s.mutex.Lock()
+	if s.cleaningUp {
+		if received == syscall.SIGWINCH {
+			s.mutex.Unlock()
+			return
+		}
+		s.cleanupInterrupts++
+		first, notice, forceExit := s.cleanupInterrupts == 1, s.notice, s.forceExit
+		s.mutex.Unlock()
+		if first {
+			if notice != nil {
+				_, _ = io.WriteString(notice, cleanupInterruptNotice)
+			}
+			return
+		}
+		if forceExit != nil {
+			forceExit(received)
+		}
+		return
+	}
 	child := s.child
 	if child == nil {
 		if s.starting {
@@ -1185,8 +1219,47 @@ func (s *devinSignalSupervisor) startReserved(child launch.Process) (bool, error
 	}
 	return true, nil
 }
-func (s *devinSignalSupervisor) detach() { s.mutex.Lock(); defer s.mutex.Unlock(); s.child = nil }
-func (s *devinSignalSupervisor) stop()   { signal.Stop(s.forwarded); close(s.done) }
+
+// detach ends signal forwarding to the interactive target after it exited and
+// enters cleanup mode: from here on ACS only settles and removes the Session.
+func (s *devinSignalSupervisor) detach() { s.beginCleanup() }
+
+// beginCleanup stops forwarding to any child and makes termination signals
+// interrupt cleanup on the second press instead of being swallowed until the
+// supervisor is stopped.
+func (s *devinSignalSupervisor) beginCleanup() {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+	s.child = nil
+	s.starting = false
+	s.cleaningUp = true
+}
+
+func (s *devinSignalSupervisor) setNotice(writer io.Writer) {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+	s.notice = writer
+}
+
+func (s *devinSignalSupervisor) stop() {
+	s.stopOnce.Do(func() { signal.Stop(s.forwarded); close(s.done) })
+}
+
+// exitOnSignal terminates ACS with the default disposition of received, so a
+// parent shell sees the usual signal exit. Remaining Session state is left
+// for durable recovery by a later launch.
+func exitOnSignal(received os.Signal) {
+	native, ok := received.(syscall.Signal)
+	if !ok {
+		os.Exit(1)
+	}
+	if native != syscall.SIGQUIT {
+		signal.Reset(native)
+		_ = syscall.Kill(os.Getpid(), native)
+		time.Sleep(200 * time.Millisecond)
+	}
+	os.Exit(128 + int(native))
+}
 func runDevinAttached(process launch.Process, supervisor *devinSignalSupervisor) error {
 	started, startErr := supervisor.start(process)
 	return runDevinStarted(process, supervisor, started, startErr)

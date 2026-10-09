@@ -371,6 +371,14 @@ type ProcessCleanup interface {
 	CleanupDone() <-chan struct{}
 }
 
+// ProcessCleanupUnproven optionally reports that backend cleanup can no
+// longer be proven, for example because the supervisor's cleanup proof was
+// lost. Once the channel is closed CleanupDone will never close, so waiting
+// for it is pointless; the Session stays retained for durable recovery.
+type ProcessCleanupUnproven interface {
+	CleanupUnproven() <-chan struct{}
+}
+
 // ProcessSandbox is the shared launch boundary used by probes and interactive
 // targets alike.
 type ProcessSandbox interface {
@@ -628,6 +636,14 @@ func (process sanitizedProcess) CleanupDone() <-chan struct{} {
 		return nil
 	}
 	return cleanup.CleanupDone()
+}
+
+func (process sanitizedProcess) CleanupUnproven() <-chan struct{} {
+	cleanup, ok := process.process.(ProcessCleanupUnproven)
+	if !ok {
+		return nil
+	}
+	return cleanup.CleanupUnproven()
 }
 
 type validatedSandboxCheck struct {
