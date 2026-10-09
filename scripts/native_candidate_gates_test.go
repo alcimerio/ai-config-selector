@@ -552,3 +552,76 @@ func TestNativeCandidateRequiresProfileRecoveryAcceptance(t *testing.T) {
 		}
 	})
 }
+
+func TestNativeCandidateBroadSuitesCoveredByMacOSVerify(t *testing.T) {
+	t.Run("covered mode omits only the duplicated unfiltered suites", func(t *testing.T) {
+		fixture := newNativeGateFixture(t)
+		command := fixture.command("success")
+		command.Env = append(command.Env, "ACS_NATIVE_BROAD_SUITES=covered-by-macos-verify")
+		output, err := command.CombinedOutput()
+		if err != nil {
+			t.Fatalf("covered mode failed: %v %s", err, output)
+		}
+		calls := fixture.calls(t)
+		for _, omitted := range []string{"go test -v ./...", "go test -race ./..."} {
+			if strings.Contains(calls, omitted) {
+				t.Errorf("covered mode still runs %q:\n%s", omitted, calls)
+			}
+		}
+		for _, required := range []string{
+			"TestNativeInstalledACSExecutesLockedCodexToolThroughNamedIdentity",
+			"TestPromotedArtifactSharedTargetConformance",
+			"TestPromotedArtifactNativeRealDevinMCP",
+			"TestPromotedProfileRecoveryNeedsNoLaunchDependencies",
+			"TestNativeDirectInstalledTargetInteractiveLifecycle",
+			"go test ./acceptance -count=1",
+			"TestNativeKeychainRecoveryEntrypoint",
+		} {
+			if !strings.Contains(calls, required) {
+				t.Errorf("covered mode omits %q:\n%s", required, calls)
+			}
+		}
+		for _, notice := range []string{"unfiltered source suite covered by Verify (macOS)", "unfiltered race suite covered by Verify (macOS)"} {
+			if !strings.Contains(string(output), notice) {
+				t.Errorf("covered mode does not record %q: %s", notice, output)
+			}
+		}
+	})
+
+	t.Run("unknown mode is refused before test discovery", func(t *testing.T) {
+		fixture := newNativeGateFixture(t)
+		command := fixture.command("success")
+		command.Env = append(command.Env, "ACS_NATIVE_BROAD_SUITES=skip")
+		output, err := command.CombinedOutput()
+		if err == nil || !strings.Contains(string(output), "ACS_NATIVE_BROAD_SUITES must be run or covered-by-macos-verify") {
+			t.Fatalf("unknown broad suite mode accepted: %v %s", err, output)
+		}
+		if _, err := os.Stat(fixture.callsPath); !os.IsNotExist(err) {
+			t.Fatalf("unknown broad suite mode reached Go test discovery: %v", err)
+		}
+	})
+
+	t.Run("the mode does not leak into Go test processes", func(t *testing.T) {
+		script := readRepositoryFile(t, "..", filepath.Join("scripts", "run-native-candidate-gates.sh"))
+		if !strings.Contains(script, "unset ACS_NATIVE_BROAD_SUITES") {
+			t.Fatal("broad suite mode is not removed from the test environment")
+		}
+	})
+
+	t.Run("only pull request and main validation declare coverage", func(t *testing.T) {
+		promoted := readRepositoryFile(t, "..", filepath.Join(".github", "workflows", "promoted-artifacts.yml"))
+		if strings.Count(promoted, "ACS_NATIVE_BROAD_SUITES: covered-by-macos-verify") != 1 {
+			t.Fatal("promoted artifact validation must declare its broad suites covered by Verify (macOS) exactly once")
+		}
+		macos := readRepositoryFile(t, "..", filepath.Join(".github", "workflows", "macos.yml"))
+		for _, required := range []string{"go test -v -timeout=5m ./...", "go test -race -timeout=10m ./..."} {
+			if !strings.Contains(macos, required) {
+				t.Errorf("Verify (macOS) no longer covers %q", required)
+			}
+		}
+		release := readRepositoryFile(t, "..", filepath.Join(".github", "workflows", "release.yml"))
+		if strings.Contains(release, "ACS_NATIVE_BROAD_SUITES") {
+			t.Fatal("release validation must always run the unfiltered suites")
+		}
+	})
+}

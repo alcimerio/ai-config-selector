@@ -41,3 +41,19 @@ which checks passed, failed, or were not run. Inspect every attachment first.
 See
 [safe bug reporting](../reference/security-model.md#sharing-a-safe-bug-report)
 for private information to omit and the current private-disclosure limitation.
+
+## Slow Session startup or exit
+
+Set `ACS_DEBUG_TIMING=1` for one launch to print the wall-clock duration of
+each Session lifecycle phase to standard error:
+
+```sh
+ACS_DEBUG_TIMING=1 acs devin --profile first-review
+```
+
+Lines start with `acs timing:` and name only fixed phases, such as
+`sandbox.check`, `session.create`, `session.arm`, `sandbox.prepare`, each Devin
+preflight, `process.probe`, `process.devin-interactive`, `process.await-cleanup`
+and `session.remove`. They never include paths, arguments or values. Devin
+launches run one contained probe per preflight before the interactive process,
+so preflight phases are usually the largest startup cost.

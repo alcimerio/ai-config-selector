@@ -223,11 +223,8 @@ func (app App) mutateProfile(ctx context.Context, inv invocation) int {
 		request = profilerepo.HistoryRequest{Request: request, Operation: historyOperation}
 		return builder.PreparedMutation{Text: text.String(), Save: func(commitContext context.Context, _ category.Draft) (string, error) {
 			outcome, err := app.Repository.Apply(commitContext, request)
-			if err != nil || outcome.State != profilerepo.Committed || outcome.RecoveryRequired {
-				if err == nil {
-					err = errors.New("Profile transaction requires outcome inspection")
-				}
-				return "", &profilerepo.OutcomeError{Outcome: outcome, Err: err}
+			if completion := appliedProfile(outcome, err); completion.err != nil {
+				return "", completion.err
 			}
 			return destination, nil
 		}}, nil
@@ -237,15 +234,17 @@ func (app App) mutateProfile(ctx context.Context, inv invocation) int {
 		if err != nil {
 			return app.fail("prepare deletion: %v", err)
 		}
-		fmt.Fprint(app.Output, prepared.Text)
+		if err := writeComplete(app.Output, []byte(prepared.Text)); err != nil {
+			return app.fail("write deletion preview: Profile mutation not committed; nothing was deleted")
+		}
 		_, err = prepared.Save(ctx, captured.draft)
 		if err != nil {
-			return app.mutationError(destination, "delete Profile", err)
+			return app.profileCompletionError("delete Profile", err, mutationCompletion)
 		}
 	} else {
 		outcome, err := app.MutationBuilder.MutateProfile(ctx, destination, captured.draft, options, app.Input, app.Output)
 		if err != nil {
-			return app.mutationError(destination, strings.ToLower(label)+" Profile", err)
+			return app.profileCompletionError(strings.ToLower(label)+" Profile", err, mutationCompletion)
 		}
 		if outcome.Cancelled {
 			fmt.Fprintln(app.Output, "Profile mutation cancelled before commit.")
@@ -255,8 +254,7 @@ func (app App) mutateProfile(ctx context.Context, inv invocation) int {
 			return app.fail("Profile editor ended without a confirmed outcome")
 		}
 	}
-	fmt.Fprintf(app.Output, "%s Profile committed: %s\n", label, destination)
-	return 0
+	return app.completeProfile(strings.ToLower(label)+" Profile", savedProfile(nil), fmt.Sprintf("%s Profile committed: %s\n", label, destination), mutationCompletion)
 }
 
 func describeSelections(output io.Writer, before, after profileinspect.Entry) {
@@ -283,29 +281,4 @@ func describeSelections(output io.Writer, before, after profileinspect.Entry) {
 			}
 		}
 	}
-}
-
-func (app App) mutationError(name, action string, err error) int {
-	var transaction *profilerepo.OutcomeError
-	if errors.As(err, &transaction) && (transaction.Outcome.State != profilerepo.NotCommitted || transaction.Outcome.RecoveryRequired) {
-		if transaction.Outcome.State == profilerepo.Committed && !transaction.Outcome.RecoveryRequired {
-			return app.fail("%s: Profile mutation committed; reporting failed. %s\nInspect stored Profiles before deciding what to do.", action, safeTerminalText(err.Error()))
-		}
-		state := "Outcome unknown; publication may have occurred. Do not blindly retry."
-		if transaction.Outcome.State == profilerepo.Committed {
-			state = "Profile mutation committed; cleanup or reporting failed."
-		}
-		if transaction.Outcome.State == profilerepo.NotCommitted {
-			state = "Requested mutation not committed; preceding transaction or cleanup needs recovery."
-		}
-		return app.fail("%s %s\nRecover with: acs profile recover\nThen inspect stored Profiles before deciding what to do. Do not delete transaction artifacts.", action, state)
-	}
-	if errors.Is(err, profilerepo.ErrConflict) {
-		return app.fail("storage changed; mutation not committed. Inspect and explicitly reload before making a new preview")
-	}
-	if errors.Is(err, context.Canceled) {
-		fmt.Fprintln(app.Output, "Profile mutation cancelled before commit.")
-		return 130
-	}
-	return app.fail("%s: %s", action, safeTerminalText(err.Error()))
 }

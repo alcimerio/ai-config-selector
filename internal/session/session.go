@@ -11,6 +11,7 @@ import (
 	"sync"
 
 	"github.com/alcimerio/ai-config-selector/internal/launch"
+	"github.com/alcimerio/ai-config-selector/internal/phasetiming"
 	"github.com/alcimerio/ai-config-selector/internal/sessionops"
 )
 
@@ -46,6 +47,7 @@ func CreateTracked(sessionsDirectory, workingDirectory string, materializer Mate
 }
 
 func create(sessionsDirectory, workingDirectory string, materializer Materializer, target string) (*Session, error) {
+	defer phasetiming.Start("session.create")()
 	var lease *launch.SessionLease
 	var err error
 	if target == "" {
@@ -97,7 +99,10 @@ func create(sessionsDirectory, workingDirectory string, materializer Materialize
 		}
 	}
 	if materializer != nil {
-		if err := materializer.Materialize(created.homeDirectory); err != nil {
+		materialized := phasetiming.Start("session.materialize")
+		err := materializer.Materialize(created.homeDirectory)
+		materialized()
+		if err != nil {
 			return cleanupFailure(fmt.Errorf("materialize ACS Session: %w", err))
 		}
 	}
@@ -143,7 +148,9 @@ func (session *Session) ArmOperation(supplied []byte) ([]byte, error) {
 			err = launch.PrepareSessionCleanupProof(session.RootDirectory(), challenge)
 		}
 	} else {
+		armed := phasetiming.Start("session.arm")
 		challenge, err = session.tracker.Arm(supplied)
+		armed()
 	}
 	if err != nil {
 		return nil, err
@@ -188,6 +195,7 @@ func (session *Session) PublicID() string {
 // Remove releases ownership of the leased Session and deletes it once every
 // retained contained process has completed cleanup.
 func (session *Session) Remove() error {
+	defer phasetiming.Start("session.remove")()
 	if session.tracker != nil {
 		_ = session.tracker.Settling()
 	}

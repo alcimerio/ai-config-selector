@@ -12,6 +12,12 @@ on:
 permissions:
   contents: read
 
+# Superseded pull request commits stop occupying macOS runners. Every main and
+# tag commit still completes its own validation.
+concurrency:
+  group: macos-validation-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   seatbelt-zombie-stress:
     name: Seatbelt zombie settlement (${{ matrix.target }})
@@ -31,10 +37,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: go.mod
-          cache: true
+        uses: ./.github/actions/setup-go-macos
 
       - name: Stress zombie settlement
         run: |
@@ -50,13 +53,12 @@ jobs:
           done
           exit "$status"
 
-  verify:
-    name: Verify (macOS)
+  verify-unit:
+    name: Verify unit (macOS)
     runs-on: macos-26
-    # Allow headroom for serial normal/race/stress suites, setup, and
-    # candidate builds. Preserve the per-package Go test deadlines
-    # below so a hung package still fails promptly.
-    timeout-minutes: 25
+    # The normal suite runs in parallel with verify-race. Preserve the
+    # per-package Go test deadline below so a hung package still fails promptly.
+    timeout-minutes: 20
 
     steps:
       - name: Check out repository
@@ -65,10 +67,10 @@ jobs:
           persist-credentials: false
 
       - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        id: go
+        uses: ./.github/actions/setup-go-macos
         with:
-          go-version-file: go.mod
-          cache: true
+          cache-family: unit
 
       - name: Check formatting
         shell: bash
@@ -98,6 +100,41 @@ jobs:
       - name: Test
         run: go test -v -timeout=5m ./...
 
+      - name: Build
+        run: go build -o /tmp/acs ./cmd/acs
+
+      - name: Build and verify Release candidate
+        run: scripts/release-candidate.sh v0.5.1
+
+      # The only writer of the unit cache family: one complete save per main commit.
+      - name: Save Go build and module caches
+        if: ${{ success() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/Library/Caches/go-build
+            ~/go/pkg/mod
+          key: ${{ steps.go.outputs.cache-key }}
+
+  verify-race:
+    name: Verify race (macOS)
+    runs-on: macos-26
+    # Preserve the per-package Go test deadlines below so a hung package
+    # still fails promptly.
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        id: go
+        uses: ./.github/actions/setup-go-macos
+        with:
+          cache-family: race
+
       - name: Race test
         run: go test -race -timeout=10m ./...
 
@@ -107,8 +144,34 @@ jobs:
           -run '^TestProfileBuilderPTYRestoresTerminal/recovered_panic$'
           -count=20 -timeout=2m
 
-      - name: Build
-        run: go build -o /tmp/acs ./cmd/acs
+      # The only writer of the race cache family: one complete save per main commit.
+      - name: Save Go build and module caches
+        if: ${{ success() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/Library/Caches/go-build
+            ~/go/pkg/mod
+          key: ${{ steps.go.outputs.cache-key }}
 
-      - name: Build and verify Release candidate
-        run: scripts/release-candidate.sh v0.5.1
+  verify:
+    name: Verify (macOS)
+    needs: [verify-unit, verify-race]
+    # Keep the required context stable while the normal and race suites run
+    # in parallel. Inspect unsuccessful dependencies instead of skipping this
+    # required check.
+    if: ${{ always() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+
+    steps:
+      - name: Require the normal and race suites to succeed
+        env:
+          UNIT_RESULT: ${{ needs.verify-unit.result }}
+          RACE_RESULT: ${{ needs.verify-race.result }}
+        shell: bash
+        run: |
+          if [[ "$UNIT_RESULT" != "success" || "$RACE_RESULT" != "success" ]]; then
+            printf 'Required macOS verification failed: unit=%s race=%s\n' "$UNIT_RESULT" "$RACE_RESULT"
+            exit 1
+          fi

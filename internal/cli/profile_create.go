@@ -100,42 +100,6 @@ func (app App) createProfileFromDocument(ctx context.Context, source string, dry
 	// CreateContext's single locked Apply first recovers any preceding operation
 	// and then publishes this captured candidate. A separate recovery call would
 	// create a race between recovery and the requested conditional creation.
-	if _, err := app.Profiles.CreateContext(ctx, candidate); err != nil {
-		return app.profileCreateError(candidate.Name, "create Profile", err)
-	}
-	if _, err := fmt.Fprintf(app.Output, "Created Profile %q.\n", candidate.Name); err != nil {
-		return app.profileCreateError(candidate.Name, "create Profile", &profilerepo.OutcomeError{Outcome: profilerepo.Outcome{State: profilerepo.Committed}, Err: err})
-	}
-	return 0
-}
-
-func (app App) profileCreateError(name, action string, err error) int {
-	var transaction *profilerepo.OutcomeError
-	if errors.As(err, &transaction) {
-		switch {
-		case transaction.Outcome.State == profilerepo.Committed && !transaction.Outcome.RecoveryRequired:
-			return app.fail("%s: Profile transaction committed; reporting failed. Inspect the stored Profile before deciding what to do", action)
-		case transaction.Outcome.State == profilerepo.Committed:
-			return app.fail("%s: Profile transaction committed; cleanup requires recovery. Do not retry.\nRecover with: acs profile recover\nThen inspect the stored Profile. Do not delete transaction artifacts", action)
-		case transaction.Outcome.State == profilerepo.Unknown:
-			return app.fail("%s: Profile transaction outcome unknown; publication may have occurred. Do not retry.\nRecover with: acs profile recover\nThen inspect the stored Profile. Do not delete transaction artifacts", action)
-		case transaction.Outcome.RecoveryRequired:
-			return app.fail("%s: requested Profile transaction not committed; a preceding repository operation requires recovery.\nRecover with: acs profile recover\nThen inspect stored Profiles. Do not delete transaction artifacts", action)
-		case transaction.Outcome.State == profilerepo.NotCommitted && errors.Is(err, profile.ErrProfileExists):
-			return app.fail("Profile transaction not committed: destination Profile is occupied; nothing was overwritten")
-		case transaction.Outcome.State == profilerepo.NotCommitted && errors.Is(err, context.Canceled):
-			fmt.Fprintln(app.Output, "Profile transaction not committed: creation cancelled before publication.")
-			return 130
-		case transaction.Outcome.State == profilerepo.NotCommitted:
-			return app.fail("%s: Profile transaction not committed; nothing was published", action)
-		}
-	}
-	if errors.Is(err, profile.ErrProfileExists) {
-		return app.fail("destination Profile is occupied; nothing was overwritten")
-	}
-	if errors.Is(err, context.Canceled) {
-		fmt.Fprintln(app.Output, "Profile creation cancelled before publication.")
-		return 130
-	}
-	return app.fail("%s failed; Profile was not reported as committed", action)
+	_, err = app.Profiles.CreateContext(ctx, candidate)
+	return app.completeProfile("create Profile", savedProfile(err), fmt.Sprintf("Created Profile %q.\n", candidate.Name), creationCompletion)
 }

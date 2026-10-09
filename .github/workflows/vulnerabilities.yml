@@ -20,7 +20,10 @@ concurrency:
 jobs:
   govulncheck:
     name: govulncheck (darwin/arm64)
-    runs-on: macos-26
+    # The scanner is built for the host while the source scan always targets
+    # GOOS=darwin GOARCH=arm64 CGO_ENABLED=0, so a Linux runner reports the
+    # same findings without occupying a macOS runner.
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     env:
       GOTOOLCHAIN: local

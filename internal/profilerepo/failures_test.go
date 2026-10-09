@@ -18,6 +18,7 @@ func TestEveryFilesystemFailureIsReportedAndRecoverable(t *testing.T) {
 	injected := errors.New("injected filesystem failure")
 	for _, op := range []string{"create", "replace", "clone", "rename", "delete"} {
 		t.Run(op, func(t *testing.T) {
+			t.Parallel()
 			for _, point := range trace(t, seeded(t), "apply", op) {
 				t.Run(point, func(t *testing.T) {
 					r := seeded(t)
@@ -384,6 +385,7 @@ func TestRecoveryFailuresPreserveEvidenceAndConverge(t *testing.T) {
 	failure := errors.New("recovery filesystem failure")
 	for _, initial := range []string{"stage.write.after", "decision.publish.after", "cleanup.stage.after"} {
 		t.Run(initial, func(t *testing.T) {
+			t.Parallel()
 			baseline := seeded(t)
 			runKilled(t, baseline, "apply", "rename", initial)
 			for _, point := range trace(t, baseline, "recover", "rename") {

@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"strconv"
+	"strings"
 
 	"github.com/alcimerio/ai-config-selector/internal/builder"
 	"github.com/alcimerio/ai-config-selector/internal/category"
@@ -329,7 +330,7 @@ func (app App) createCodexProfile(ctx context.Context, name, authRef string) int
 		return app.fail("create Profile requires interactive stdin and stdout")
 	}
 	if err := app.CodexProfiles.RecoverContext(ctx); err != nil {
-		return app.fail("recover Profile repository before creation: %v", err)
+		return app.profileCompletionError("recover Profile repository before creation", err, legacyCreationCompletion)
 	}
 	if _, err := app.CodexProfiles.Load(name); err == nil {
 		return app.fail("create Profile %q: %v: %q", name, profile.ErrProfileExists, name)
@@ -350,7 +351,7 @@ func (app App) createCodexProfile(ctx context.Context, name, authRef string) int
 	}
 	outcome, err := app.CodexBuilder.BuildProfile(ctx, name, draft, save, app.Input, app.Output)
 	if err != nil {
-		return app.fail("edit Profile %q: %v", name, err)
+		return app.profileCompletionError(fmt.Sprintf("edit Profile %q", name), err, legacyCreationCompletion)
 	}
 	if outcome.Cancelled {
 		fmt.Fprintln(app.Output, "Profile creation cancelled.")
@@ -359,8 +360,7 @@ func (app App) createCodexProfile(ctx context.Context, name, authRef string) int
 	if !outcome.Create {
 		return app.fail("edit Profile %q: Profile Builder ended without an outcome", name)
 	}
-	fmt.Fprintf(app.Output, "\nCreated Codex Profile %q at %s\n", name, safeTerminalText(outcome.Path))
-	return 0
+	return app.completeProfile("create Codex Profile", savedProfile(nil), fmt.Sprintf("\nCreated Codex Profile %q at %s\n", name, safeTerminalText(outcome.Path)), legacyCreationCompletion)
 }
 
 func (app App) loginCodexAuth(ctx context.Context, name string, deviceAuth bool) int {
@@ -462,7 +462,7 @@ func (app App) createProfile(ctx context.Context, name string) int {
 	// Explicit mutation entry: settle a previous transaction before the duplicate
 	// precheck, including when that transaction published this very name.
 	if err := app.Profiles.RecoverContext(ctx); err != nil {
-		return app.fail("recover Profile repository before creation: %v", err)
+		return app.profileCompletionError("recover Profile repository before creation", err, legacyCreationCompletion)
 	}
 	if _, err := app.Profiles.Load(name); err == nil {
 		return app.fail("create Profile %q: %v: %q", name, profile.ErrProfileExists, name)
@@ -485,7 +485,7 @@ func (app App) createProfile(ctx context.Context, name string) int {
 		}
 		outcome, err := app.Builder.BuildProfile(ctx, name, draft, save, app.Input, app.Output)
 		if err != nil {
-			return app.fail("edit Profile %q: %v", name, err)
+			return app.profileCompletionError(fmt.Sprintf("edit Profile %q", name), err, legacyCreationCompletion)
 		}
 		if outcome.Cancelled {
 			fmt.Fprintln(app.Output, "Profile creation cancelled.")
@@ -495,16 +495,12 @@ func (app App) createProfile(ctx context.Context, name string) int {
 			return app.fail("edit Profile %q: Profile Builder ended without an outcome", name)
 		}
 		draft = outcome.Draft
-		fmt.Fprintf(app.Output, "\nCreated Profile %q at %s\n", name, safeTerminalText(outcome.Path))
-		for _, summary := range draft.Summaries() {
-			fmt.Fprintf(app.Output, "  %s: %d selected\n", safeTerminalText(summary.ID), summary.Count)
-		}
-		return 0
+		return app.completeProfile("create Profile", savedProfile(nil), createdProfileReceipt(name, outcome.Path, draft), legacyCreationCompletion)
 	} else {
 		fmt.Fprintf(app.Output, "Create Profile %q\n\n", name)
 		edited, err := app.DraftEditor.EditProfileDraft(ctx, draft, app.Input, app.Output)
 		if err != nil {
-			return app.fail("edit Profile %q: %v", name, err)
+			return app.profileCompletionError(fmt.Sprintf("edit Profile %q", name), err, legacyCreationCompletion)
 		}
 		draft = edited
 	}
@@ -514,13 +510,18 @@ func (app App) createProfile(ctx context.Context, name string) int {
 	}
 	path, err := app.Profiles.Create(created)
 	if err != nil {
-		return app.fail("create Profile %q: %v", created.Name, err)
+		return app.profileCompletionError(fmt.Sprintf("create Profile %q", created.Name), err, legacyCreationCompletion)
 	}
-	fmt.Fprintf(app.Output, "\nCreated Profile %q at %s\n", created.Name, safeTerminalText(path))
+	return app.completeProfile("create Profile", savedProfile(nil), createdProfileReceipt(created.Name, path, draft), legacyCreationCompletion)
+}
+
+func createdProfileReceipt(name, path string, draft category.Draft) string {
+	var receipt strings.Builder
+	fmt.Fprintf(&receipt, "\nCreated Profile %q at %s\n", name, safeTerminalText(path))
 	for _, summary := range draft.Summaries() {
-		fmt.Fprintf(app.Output, "  %s: %d selected\n", safeTerminalText(summary.ID), summary.Count)
+		fmt.Fprintf(&receipt, "  %s: %d selected\n", safeTerminalText(summary.ID), summary.Count)
 	}
-	return 0
+	return receipt.String()
 }
 
 func (app App) dryRun(ctx context.Context, name, overlay, expectedDigest string, planner LaunchPlanner, closingMessage string) int {

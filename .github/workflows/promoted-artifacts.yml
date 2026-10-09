@@ -91,10 +91,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: go.mod
-          cache: true
+        uses: ./.github/actions/setup-go-macos
 
       - name: Download immutable candidate artifact set
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -162,6 +159,12 @@ jobs:
 
       - name: Run shared native release candidate gates
         id: baseline
+        env:
+          # The unfiltered `go test -v ./...` and `go test -race ./...` suites
+          # are identical for both reviewed target versions and run on this
+          # same commit in the required Verify (macOS) check. release.yml does
+          # not set this and still runs them inside its native gate.
+          ACS_NATIVE_BROAD_SUITES: covered-by-macos-verify
         run: |
           scripts/run-native-candidate-gates.sh \
             "$ACS_CANDIDATE_VERSION" \

@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -97,20 +98,23 @@ func (app App) writeProfileRecovery(inv invocation, out profilerepo.Outcome, err
 			code = 130
 		}
 	}
-	var writeErr error
+	var receipt bytes.Buffer
+	var encodeErr error
 	if inv.enabled {
-		writeErr = json.NewEncoder(app.Output).Encode(result)
+		encodeErr = json.NewEncoder(&receipt).Encode(result)
 	} else {
-		_, writeErr = fmt.Fprintf(app.Output, "Profile transaction recovery: %s\nRecovery required: %t\n", result.State, result.RecoveryRequired)
-		if writeErr == nil && result.History != nil {
-			_, writeErr = fmt.Fprintf(app.Output, "History: %s %s\n", result.History.LineageID, result.History.EventID)
+		fmt.Fprintf(&receipt, "Profile transaction recovery: %s\nRecovery required: %t\n", result.State, result.RecoveryRequired)
+		if result.History != nil {
+			fmt.Fprintf(&receipt, "History: %s %s\n", result.History.LineageID, result.History.EventID)
 		}
-		if writeErr == nil && result.Diagnostic != nil {
-			_, writeErr = fmt.Fprintf(app.Output, "%s: %s\n", result.Diagnostic.Code, result.Diagnostic.Message)
+		if result.Diagnostic != nil {
+			fmt.Fprintf(&receipt, "%s: %s\n", result.Diagnostic.Code, result.Diagnostic.Message)
 		}
-		if writeErr == nil {
-			_, writeErr = fmt.Fprintln(app.Output, result.Guidance)
-		}
+		fmt.Fprintln(&receipt, result.Guidance)
+	}
+	writeErr := encodeErr
+	if writeErr == nil {
+		writeErr = writeComplete(app.Output, receipt.Bytes())
 	}
 	if writeErr != nil {
 		return app.fail("Profile recovery outcome %s (recovery required: %t) reporting failed; inspect stored Profiles before another mutation", out.State, out.RecoveryRequired)
