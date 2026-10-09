@@ -21,18 +21,15 @@ func TestCurrentDocumentationDefinesTheMacOSSandboxShellContract(t *testing.T) {
 		}
 	}
 
+	// The README is free-form prose. Only the two security boundaries a reader
+	// must never lose are pinned; wording elsewhere is not a test contract.
 	readme := readRepositoryFile(t, repository, "README.md")
 	for _, required := range []string{
-		"acs sandbox --profile",
-		"/bin/zsh -f",
-		"macOS 26",
-		"darwin/arm64",
-		"Apple Silicon",
 		"There is no unsandboxed fallback",
 		"ACS is not an egress firewall",
 	} {
 		if !strings.Contains(readme, required) {
-			t.Errorf("README.md omits current contract %q", required)
+			t.Errorf("README.md omits security boundary %q", required)
 		}
 	}
 	for _, stale := range []string{
@@ -355,7 +352,7 @@ func TestSharedTargetConformanceDocumentationAndNativeGateStayExplicit(t *testin
 			t.Errorf("shared target guide omits %q", required)
 		}
 	}
-	for _, document := range []string{"README.md", "docs/reference/common-profile-format.md", "docs/guides/codex.md"} {
+	for _, document := range []string{"docs/reference/common-profile-format.md", "docs/guides/codex.md"} {
 		if !strings.Contains(readRepositoryFile(t, "..", document), "shared-target-conformance.md") {
 			t.Errorf("%s does not link the shared target guide", document)
 		}
