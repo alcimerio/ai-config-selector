@@ -1,0 +1,80 @@
+{
+  "version": 3,
+  "name": "skill-review-isolated",
+  "common": {
+    "environment": {
+      "version": 1,
+      "selection": {
+        "entries": []
+      }
+    },
+    "exclusions": {
+      "version": 1,
+      "selection": {
+        "entries": [
+          {
+            "id": "repo-agents-skills",
+            "type": "directory",
+            "reference": {
+              "kind": "workspace-relative",
+              "path": ".agents/skills"
+            }
+          },
+          {
+            "id": "repo-devin-skills",
+            "type": "directory",
+            "reference": {
+              "kind": "workspace-relative",
+              "path": ".devin/skills"
+            }
+          }
+        ]
+      }
+    },
+    "executables": {
+      "version": 1,
+      "selection": {
+        "entries": []
+      }
+    },
+    "instructions": {
+      "version": 1,
+      "selection": []
+    },
+    "mcp": {
+      "version": 1,
+      "selection": {
+        "servers": []
+      }
+    },
+    "paths": {
+      "version": 1,
+      "selection": {
+        "entries": []
+      }
+    },
+    "skills": {
+      "version": 1,
+      "selection": [
+        {
+          "source": "shared-agents",
+          "relativePath": "code-review"
+        }
+      ]
+    },
+    "workspace": {
+      "version": 1,
+      "selection": {
+        "access": "read-only"
+      }
+    }
+  },
+  "overlays": {
+    "codex": {
+      "version": 1
+    },
+    "devin": {
+      "version": 1
+    }
+  }
+}
