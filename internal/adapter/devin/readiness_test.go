@@ -28,7 +28,7 @@ func TestPlanLaunchReportsReadOnlySandboxReadinessWithoutPreparingADevinProcess(
 		t.Fatalf("create adapter: %v", err)
 	}
 	adapter.executor = sandbox
-	plan, err := adapter.PlanLaunch(context.Background(), t.TempDir(), resolvedEmptyProfile(t, adapter))
+	plan, err := adapter.PlanLaunch(context.Background(), filepath.Join(t.TempDir(), "sessions"), t.TempDir(), resolvedEmptyProfile(t, adapter))
 	if err != nil {
 		t.Fatalf("plan launch: %v", err)
 	}
@@ -72,7 +72,7 @@ func TestPlanLaunchReportsSafeUnavailableSandboxReadiness(t *testing.T) {
 		t.Fatalf("create adapter: %v", err)
 	}
 	adapter.executor = sandbox
-	plan, err := adapter.PlanLaunch(context.Background(), t.TempDir(), resolvedEmptyProfile(t, adapter))
+	plan, err := adapter.PlanLaunch(context.Background(), filepath.Join(t.TempDir(), "sessions"), t.TempDir(), resolvedEmptyProfile(t, adapter))
 	if err != nil {
 		t.Fatalf("plan launch: %v", err)
 	}
@@ -212,7 +212,7 @@ func TestPlanLaunchLabelsExcludedProjectSkills(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	plan, err := adapter.PlanLaunch(context.Background(), workspace, resolved)
+	plan, err := adapter.PlanLaunch(context.Background(), filepath.Join(home, ".acs", "sessions"), workspace, resolved)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -226,5 +226,78 @@ func TestPlanLaunchLabelsExcludedProjectSkills(t *testing.T) {
 	}
 	if sandbox.checkCalls != 0 || sandbox.prepareCalls != 0 {
 		t.Fatal("planning started target")
+	}
+}
+
+// The planner must check exclusion conflicts against the Sessions directory
+// the launch request uses, not a home-derived default.
+func TestPlanLaunchChecksExclusionConflictsAgainstRequestedSessionsDirectory(t *testing.T) {
+	home, workspace := t.TempDir(), t.TempDir()
+	adapter, err := newAdapter(Config{BinaryPath: "devin", ExistingHomeDir: home})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sandbox := &readinessSandbox{}
+	adapter.executor = sandbox
+	candidate := NewSkillsProfile("preview", nil)
+	encoded, err := commonprofile.EncodeExclusionSelection(commonprofile.ExclusionSelection{Entries: []commonprofile.ExclusionEntry{{ID: "state", Type: "directory", Reference: commonprofile.ExclusionReference{Kind: "workspace-relative", Path: "custom-sessions"}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate.Common["exclusions"] = profile.CommonPayload{Version: 1, Selection: encoded}
+	resolved, err := adapter.Categories().Resolve(context.Background(), candidate)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	custom := filepath.Join(workspace, "custom-sessions")
+	if _, err := adapter.PlanLaunch(context.Background(), custom, workspace, resolved); err == nil || !strings.Contains(err.Error(), "conflicts with required Session state") {
+		t.Fatalf("non-default Sessions directory conflict was not detected: %v", err)
+	}
+	// The home-derived default does not overlap the excluded path, so the same
+	// Profile plans when Sessions live there.
+	if _, err := adapter.PlanLaunch(context.Background(), filepath.Join(home, ".acs", "sessions"), workspace, resolved); err != nil {
+		t.Fatalf("default Sessions directory plan: %v", err)
+	}
+	if sandbox.checkCalls != 0 || sandbox.prepareCalls != 0 {
+		t.Fatal("planning started target")
+	}
+}
+
+// Profiles that already contain redundant exclusions keep resolving and
+// planning; the dry run reports them as warnings instead of rejecting them.
+func TestPlanLaunchWarnsAboutRedundantExclusionsWithoutRejectingProfile(t *testing.T) {
+	home, workspace := t.TempDir(), t.TempDir()
+	adapter, err := newAdapter(Config{BinaryPath: "devin", ExistingHomeDir: home})
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter.executor = &readinessSandbox{}
+	candidate := NewSkillsProfile("redundant", nil)
+	// Stored bytes bypass the editor, as an existing Profile on disk would.
+	candidate.Common["exclusions"] = profile.CommonPayload{Version: 1, Selection: []byte(`{"entries":[{"id":"data","type":"directory","reference":{"kind":"workspace-relative","path":"data"}},{"id":"data-cache","type":"directory","reference":{"kind":"workspace-relative","path":"data/cache"}},{"id":"data-upper","type":"directory","reference":{"kind":"workspace-relative","path":"Data"}}]}`)}
+	resolved, err := adapter.Categories().Resolve(context.Background(), candidate)
+	if err != nil {
+		t.Fatalf("existing redundant Profile rejected: %v", err)
+	}
+	plan, err := adapter.PlanLaunch(context.Background(), filepath.Join(home, ".acs", "sessions"), workspace, resolved)
+	if err != nil {
+		t.Fatalf("plan: %v", err)
+	}
+	var warnings []string
+	for _, section := range plan.Sections {
+		if section.Title == commonprofile.ExclusionWarningsTitle {
+			for _, item := range section.Items {
+				warnings = append(warnings, item.Label)
+			}
+		}
+	}
+	want := []string{
+		`exclusion "data-cache" is redundant: directory exclusion "data" already covers its path`,
+		`exclusions "data" and "data-upper" differ only by letter case and name the same path on case-insensitive macOS volumes`,
+		`exclusion "data-cache" is redundant: directory exclusion "data-upper" already covers its path`,
+	}
+	if strings.Join(warnings, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("warnings:\n%s", strings.Join(warnings, "\n"))
 	}
 }

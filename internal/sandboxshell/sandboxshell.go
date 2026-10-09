@@ -74,7 +74,7 @@ func sanitizeError(err error) error {
 
 // PlanLaunch reports Profile contents and native sandbox readiness without
 // creating a Session or starting a shell.
-func (launcher *Launcher) PlanLaunch(ctx context.Context, workingDirectory string, resolved category.ResolvedProfile) (launch.Plan, error) {
+func (launcher *Launcher) PlanLaunch(ctx context.Context, _ string, workingDirectory string, resolved category.ResolvedProfile) (launch.Plan, error) {
 	plan, err := resolved.Plan(ctx, workingDirectory)
 	if err != nil {
 		return launch.Plan{}, err

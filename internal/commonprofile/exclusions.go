@@ -13,13 +13,33 @@ import (
 const (
 	ExclusionsCapabilityID      = "exclusions"
 	ExclusionsCapabilityVersion = 1
+	// ExclusionWarningsTitle heads advisory output for redundant entries.
+	ExclusionWarningsTitle = "Exclusion warnings (Profile kept as stored; every entry is still enforced):"
 )
 
 type ExclusionReference = exclusionintent.Reference
 type ExclusionEntry = exclusionintent.Entry
 type ExclusionSelection = exclusionintent.Selection
 
-type ExclusionContribution struct{ entries []launch.PathExclusionIntent }
+type ExclusionContribution struct {
+	entries  []launch.PathExclusionIntent
+	warnings []string
+}
+
+// ExclusionWarnings describes redundant entries (nested under a directory entry
+// or differing only by letter case). They are advisory: the selection stays
+// valid and every entry is still enforced.
+func ExclusionWarnings(selection ExclusionSelection) []string {
+	advisories := exclusionintent.Advisories(selection)
+	if len(advisories) == 0 {
+		return nil
+	}
+	warnings := make([]string, 0, len(advisories))
+	for _, advisory := range advisories {
+		warnings = append(warnings, advisory.String())
+	}
+	return warnings
+}
 
 func (contribution ExclusionContribution) Plan(ctx context.Context, _ string, plan *launch.Plan) error {
 	if len(contribution.entries) == 0 {
@@ -37,6 +57,13 @@ func (contribution ExclusionContribution) Plan(ctx context.Context, _ string, pl
 		section.Items = append(section.Items, launch.PlanItem{Label: entry.ID, Details: details})
 	}
 	plan.Sections = append(plan.Sections, section)
+	if len(contribution.warnings) != 0 {
+		warnings := launch.PlanSection{Title: ExclusionWarningsTitle}
+		for _, warning := range contribution.warnings {
+			warnings.Items = append(warnings.Items, launch.PlanItem{Label: warning})
+		}
+		plan.Sections = append(plan.Sections, warnings)
+	}
 	return nil
 }
 func (ExclusionContribution) Materialize(string) error { return nil }
@@ -66,7 +93,7 @@ func NewExclusionsBinding() (ExclusionsBinding, error) {
 			for _, entry := range selection.Entries {
 				intents = append(intents, launch.PathExclusionIntent{ID: entry.ID, Type: launch.PathType(entry.Type), ReferenceKind: launch.PathReferenceKind(entry.Reference.Kind), Path: entry.Reference.Path})
 			}
-			return ExclusionContribution{entries: intents}, nil
+			return ExclusionContribution{entries: intents, warnings: ExclusionWarnings(selection)}, nil
 		},
 		Count: func(selection ExclusionSelection) int { return len(selection.Entries) },
 	})

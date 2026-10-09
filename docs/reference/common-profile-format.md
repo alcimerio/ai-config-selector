@@ -212,6 +212,14 @@ of the real user home or a mounted `/Volumes/<name>` filesystem. Unknown fields,
 unsupported versions, null entries, escapes and malformed values fail admission
 in both launch and passive inspection. There is no Skill-name or content filter.
 
+Redundant entries are valid but reported as warnings: an entry nested under a
+directory entry of the same reference kind (for example `data` and
+`data/cache`), and entries whose paths differ only by letter case (`Secrets` and
+`secrets`), which name the same path on case-insensitive macOS volumes. The
+Excluded paths editor, the mutation preview and dry-run plans list
+these warnings by entry ID only. They never block saving, loading or launching,
+and every stored entry is still enforced.
+
 Exclusions take precedence over workspace access and broader path grants. ACS
 denies reads and writes at the selected logical and canonical names and below
 them, and denies mutation of their ancestor names to prevent target-side rename,

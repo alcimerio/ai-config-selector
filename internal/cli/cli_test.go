@@ -583,7 +583,7 @@ func (noteContribution) Verify(context.Context, launch.VerificationContext) erro
 
 type resolvedPlanner struct{}
 
-func (resolvedPlanner) PlanLaunch(ctx context.Context, workingDirectory string, resolved category.ResolvedProfile) (launch.Plan, error) {
+func (resolvedPlanner) PlanLaunch(ctx context.Context, _ string, workingDirectory string, resolved category.ResolvedProfile) (launch.Plan, error) {
 	return resolved.Plan(ctx, workingDirectory)
 }
 
@@ -635,6 +635,48 @@ func TestDryRunCoordinatesAnUnrelatedCategoryWithoutCategorySpecificCLIChanges(t
 	}
 	if !strings.Contains(output.String(), "Notes:\n  CATEGORY-OWNED DRY RUN") {
 		t.Fatalf("generic dry-run output = %q", output.String())
+	}
+}
+
+type sessionsRecordingPlanner struct{ sessions, workspace *string }
+
+func (planner sessionsRecordingPlanner) PlanLaunch(ctx context.Context, sessionsDirectory, workingDirectory string, resolved category.ResolvedProfile) (launch.Plan, error) {
+	*planner.sessions, *planner.workspace = sessionsDirectory, workingDirectory
+	return resolved.Plan(ctx, workingDirectory)
+}
+
+// Dry runs must plan against the Sessions directory Launch would receive so
+// exclusion conflict checks cannot disagree with execution.
+func TestDryRunPassesConfiguredSessionsDirectoryToPlanner(t *testing.T) {
+	registry, err := category.NewRegistry("devin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate, err := registry.NewProfile("plain", registry.NewDraft())
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := profile.NewStore(t.TempDir(), registry)
+	if _, err := store.Create(candidate); err != nil {
+		t.Fatal(err)
+	}
+	var sessions, workspace string
+	sessionsDirectory, workingDirectory := filepath.Join(t.TempDir(), "custom-sessions"), t.TempDir()
+	var output, errorOutput bytes.Buffer
+	application := cli.App{
+		Categories:        registry,
+		Planner:           sessionsRecordingPlanner{sessions: &sessions, workspace: &workspace},
+		Profiles:          store,
+		SessionsDirectory: sessionsDirectory,
+		WorkingDirectory:  workingDirectory,
+		Output:            &output,
+		ErrorOutput:       &errorOutput,
+	}
+	if exitCode := application.Run(context.Background(), []string{"devin", "--profile", "plain", "--dry-run"}); exitCode != 0 {
+		t.Fatalf("exit code = %d; stderr: %s", exitCode, errorOutput.String())
+	}
+	if sessions != sessionsDirectory || workspace != workingDirectory {
+		t.Fatalf("planner sessions=%q workspace=%q", sessions, workspace)
 	}
 }
 
