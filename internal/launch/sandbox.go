@@ -428,6 +428,8 @@ type nativeProcessSandbox struct {
 // (sw_vers on macOS) and the backend self-test (a sandbox-exec spawn) run at
 // most once per process after they first succeed. Policy validation and the
 // sandboxed launch itself still run for every Prepare and fail closed.
+// Because the selector is shared, callers (including tests) must never mutate
+// its backends.
 func NewProcessSandbox() ProcessSandbox {
 	sharedProcessSandboxOnce.Do(func() {
 		sharedProcessSandbox = newNativeProcessSandbox(CurrentPlatform, nativeSandboxBackends())

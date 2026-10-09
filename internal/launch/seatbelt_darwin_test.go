@@ -5040,7 +5040,7 @@ func seatbeltCandidateMCPDenySandbox(t *testing.T, readPaths []string, writePath
 		denied.path = canonicalSeatbeltCandidatePath(denied.path)
 		canonicalWritePaths[index] = denied
 	}
-	sandbox, ok := NewProcessSandbox().(*nativeProcessSandbox)
+	sandbox, ok := newUnsharedProductionProcessSandbox().(*nativeProcessSandbox)
 	if !ok {
 		t.Fatalf("NewProcessSandbox() = %T, want production native sandbox", sandbox)
 	}
@@ -5082,7 +5082,7 @@ func seatbeltCandidateMCPBasenameDenySandbox(t *testing.T, selectedConfig string
 		denied.path = canonicalSeatbeltCandidatePath(denied.path)
 		canonicalWritePaths[index] = denied
 	}
-	sandbox, ok := NewProcessSandbox().(*nativeProcessSandbox)
+	sandbox, ok := newUnsharedProductionProcessSandbox().(*nativeProcessSandbox)
 	if !ok {
 		t.Fatalf("NewProcessSandbox() = %T, want production native sandbox", sandbox)
 	}
@@ -6156,7 +6156,7 @@ const seatbeltRemoteIPOutboundAllowance = "  (remote ip)\n"
 
 func seatbeltProductionTLSSandbox(t *testing.T, omitted string) ProcessSandbox {
 	t.Helper()
-	sandbox, ok := NewProcessSandbox().(*nativeProcessSandbox)
+	sandbox, ok := newUnsharedProductionProcessSandbox().(*nativeProcessSandbox)
 	if !ok {
 		t.Fatalf("NewProcessSandbox() = %T, want *nativeProcessSandbox", sandbox)
 	}
@@ -6348,4 +6348,12 @@ func (enumerator *seatbeltTransientZombieEnumerator) info(pid int) (seatbeltBSDI
 	}
 	enumerator.once.Do(func() { close(enumerator.secondSnapshot) })
 	return seatbeltBSDInfo{PID: uint32(pid), Status: seatbeltProcStatusZombie}, nil
+}
+
+// newUnsharedProductionProcessSandbox builds a production-configured selector
+// that is not the process-wide one returned by NewProcessSandbox. Tests that
+// replace backend hooks (for example the policy builder) must use it so the
+// mutation cannot leak into later tests through the shared selector.
+func newUnsharedProductionProcessSandbox() ProcessSandbox {
+	return newNativeProcessSandbox(CurrentPlatform, nativeSandboxBackends())
 }
