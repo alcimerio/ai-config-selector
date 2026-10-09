@@ -84,9 +84,11 @@ func (a *Adapter) planSelectedSkills(ctx context.Context, selected []skills.Skil
 	return nil
 }
 
-func (a *Adapter) planProjectSkills(ctx context.Context, workingDirectory string, plan *launch.Plan, supplied ...[]launch.FilesystemExclusion) error {
+// planProjectSkills lists inherited project Skill Bundles. Bundles under a
+// Profile exclusion are labeled without disclosing their path.
+func (a *Adapter) planProjectSkills(ctx context.Context, workingDirectory string, plan *launch.Plan, exclusions []launch.FilesystemExclusion) error {
 	projectSection := launch.PlanSection{
-		Title: "Project-local Skill Bundles:",
+		Title: "Project-local Skill Bundles inherited by Devin (not managed by ACS):",
 	}
 	for _, relativeRoot := range devinruntime.ProjectSourceDirectories() {
 		root := filepath.Join(workingDirectory, relativeRoot)
@@ -110,14 +112,11 @@ func (a *Adapter) planProjectSkills(ctx context.Context, workingDirectory string
 			if err != nil || !manifest.Mode().IsRegular() {
 				continue
 			}
-			projectSection.Items = append(projectSection.Items, launch.PlanItem{
-				Label: func() string {
-					if len(supplied) != 0 && launch.PathExcluded(supplied[0], bundlePath) {
-						return entry.Name() + " [excluded by Profile]"
-					}
-					return entry.Name() + " " + bundlePath
-				}(),
-			})
+			label := entry.Name() + " " + bundlePath
+			if launch.PathExcluded(exclusions, bundlePath) {
+				label = entry.Name() + " [excluded by Profile]"
+			}
+			projectSection.Items = append(projectSection.Items, launch.PlanItem{Label: label})
 		}
 	}
 	plan.Sections = append(plan.Sections, projectSection)

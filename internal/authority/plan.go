@@ -564,6 +564,11 @@ func pathGrantFacts(intents []launch.PathGrantIntent, workspace launch.Workspace
 	return result
 }
 
+// pathExclusionFacts reuses the shared FactValue shape instead of adding
+// exclusion-only fields, which would change the canonical manifest encoding:
+// LogicalLocation carries the entry ID, Names carries the reference kind, and
+// LogicalReference carries only portable workspace-relative paths. Local
+// absolute bindings stay private.
 func pathExclusionFacts(intents []launch.PathExclusionIntent) Facts {
 	result := Facts{}
 	for _, intent := range intents {

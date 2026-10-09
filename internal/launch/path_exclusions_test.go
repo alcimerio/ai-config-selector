@@ -47,9 +47,9 @@ func TestFilesystemExclusionsCaptureAbsentLeafAnchorsAndDrift(t *testing.T) {
 	if _, err := revalidateFilesystemExclusions(absent, workspace, sessions); err == nil {
 		t.Fatal("absent identity drift accepted")
 	}
-	intent.Path = "missing-parent/leaf"
+	intent.Path = "moved/missing/below-file"
 	if _, err := ResolveFilesystemExclusions([]PathExclusionIntent{intent}, workspace, sessions); err == nil {
-		t.Fatal("missing ancestor accepted")
+		t.Fatal("exclusion below an existing file accepted")
 	}
 	intent.Path = "moved/skills"
 	intent.Type = PathTypeFile
@@ -177,5 +177,56 @@ func TestFilesystemExclusionsRevalidateWorkspaceAtCheckPrepareAndStart(t *testin
 				}
 			})
 		}
+	}
+}
+
+func TestFilesystemExclusionsAnchorMissingAncestorsAtNearestExistingDirectory(t *testing.T) {
+	root := filesystemGrantTestRoot(t)
+	workspace := filepath.Join(root, "workspace")
+	sessions := filepath.Join(root, "sessions")
+	if err := os.MkdirAll(workspace, 0700); err != nil {
+		t.Fatal(err)
+	}
+	canonicalWorkspace, err := filepath.EvalSymlinks(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent := PathExclusionIntent{ID: "build-secrets", Type: PathTypeDirectory, ReferenceKind: PathReferenceWorkspaceRelative, Path: "build/out/secrets"}
+	exclusions, err := ResolveFilesystemExclusions([]PathExclusionIntent{intent}, workspace, sessions)
+	if err != nil {
+		t.Fatalf("missing ancestors blocked the exclusion: %v", err)
+	}
+	if len(exclusions) != 1 {
+		t.Fatalf("exclusions = %d, want 1", len(exclusions))
+	}
+	got := exclusions[0]
+	if got.exists || got.path != filepath.Join(canonicalWorkspace, "build", "out", "secrets") || got.logicalPath != filepath.Join(workspace, "build", "out", "secrets") || got.firstMissing != filepath.Join(workspace, "build") {
+		t.Fatalf("captured exclusion = exists %v path %q logical %q first missing %q", got.exists, got.path, got.logicalPath, got.firstMissing)
+	}
+	if _, err := revalidateFilesystemExclusions(exclusions, workspace, sessions); err != nil {
+		t.Fatal(err)
+	}
+	// A later excluded name stays recognized by planning and source checks.
+	if err := ValidateExclusionSources(exclusions, []string{workspace}); err == nil {
+		t.Fatal("workspace bundle containing a missing exclusion accepted")
+	}
+	// Creating a missing ancestor before startup could plant a redirecting link,
+	// so any creation of the highest missing component invalidates the capture.
+	for _, create := range []func(string) error{
+		func(path string) error { return os.Mkdir(path, 0700) },
+		func(path string) error { return os.Symlink(root, path) },
+	} {
+		if err := create(filepath.Join(workspace, "build")); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := revalidateFilesystemExclusions(exclusions, workspace, sessions); err == nil {
+			t.Fatal("missing ancestor creation accepted before startup")
+		}
+		if err := os.Remove(filepath.Join(workspace, "build")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := revalidateFilesystemExclusions(exclusions, workspace, sessions); err != nil {
+		t.Fatalf("restored absence rejected: %v", err)
 	}
 }

@@ -88,7 +88,7 @@ func TestPromotedArtifactNativeFilesystemExclusions(t *testing.T) {
 			if err := os.Symlink(filepath.Join(hidden, "SKILL.md"), filepath.Join(workspace, "alias")); err != nil {
 				t.Fatal(err)
 			}
-			home := exclusionCandidateHome(t, binary, workspace, access, []map[string]any{exclusionEntry("skills", "directory", "container/skills"), exclusionEntry("file", "file", "file-secret"), exclusionEntry("absent", "file", "absent")}, map[string]any{"id": "parent", "type": "directory", "access": "read-write", "reference": map[string]string{"kind": "workspace-relative", "path": "container"}})
+			home := exclusionCandidateHome(t, binary, workspace, access, []map[string]any{exclusionEntry("skills", "directory", "container/skills"), exclusionEntry("file", "file", "file-secret"), exclusionEntry("absent", "file", "absent"), exclusionEntry("missing-ancestor", "directory", "build/out/secrets")}, map[string]any{"id": "parent", "type": "directory", "access": "read-write", "reference": map[string]string{"kind": "workspace-relative", "path": "container"}})
 			cases := map[string]string{
 				"read":                   "/bin/cat container/skills/SKILL.md",
 				"list":                   "/bin/ls container/skills",
@@ -103,6 +103,14 @@ func TestPromotedArtifactNativeFilesystemExclusions(t *testing.T) {
 				"file":                   "/bin/cat file-secret",
 				"absent-create":          "printf late > absent",
 				"file-replace-directory": "/bin/rm file-secret && /bin/mkdir file-secret && printf leaked > file-secret/child",
+				// Missing ancestors do not block launch, but the Session can neither
+				// create the excluded path nor plant a link above it.
+				// Default APFS volumes are case-insensitive; a case variant names the
+				// same file and must stay denied.
+				"case-variant-read":       "/bin/cat Container/Skills/SKILL.md",
+				"case-variant-file":       "/bin/cat FILE-SECRET",
+				"missing-ancestor-create": "/bin/mkdir -p build/out/secrets",
+				"missing-ancestor-link":   "/bin/ln -s " + workspace + "/container build",
 			}
 			for name, operation := range cases {
 				t.Run(name, func(t *testing.T) {
