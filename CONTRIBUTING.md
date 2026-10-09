@@ -52,10 +52,19 @@ The [index](docs/README.md) routes readers to a task or contract:
 - `releases/` holds version-specific notes consumed by publication.
 - Fixture explanations stay beside tests; fixture Markdown is deterministic input.
 
-Give each detailed topic one owner and link to it. Keep the README focused on
-installation and the first run. Use command help for exhaustive grammar rather
-than repeating flags in every guide. Keep security/recovery prerequisites beside
+Give each detailed topic one owner and link to it. Keep the README a short
+overview: why ACS exists, how it works, installation, a credential-free
+quickstart, common commands and the core security boundaries, each linking to
+its owning page. Use command help for exhaustive grammar rather than repeating
+flags in every guide. Keep security/recovery prerequisites beside
 the action they govern, with links to their full contracts.
+
+README tests pin only the security boundaries `There is no unsandboxed
+fallback` and `ACS is not an egress firewall`; keep both sentences. Relative
+links and `README.md#fragment` links must resolve, so update incoming links when
+renaming a README heading. [SECURITY.md](SECURITY.md) owns vulnerability
+reporting, supported versions and scope; the
+[security model](docs/reference/security-model.md) owns the boundary contract.
 
 Current guides should not track the latest release number. Use stable release
 links and reviewed operator-supplied version/digest inputs; preserve exact

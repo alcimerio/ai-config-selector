@@ -158,8 +158,7 @@ Session contents, captured target output, or generated sandbox policy. Profile J
 can contain private local bindings; prefer a sanitized portable export and inspect
 it before sharing. Exported intent still deserves review before publication.
 
-No private contact or vulnerability-disclosure process is documented in this
-checkout. Check the repository Security tab for private reporting; if that is
-unavailable, arrange a private channel with the maintainer before sending
-sensitive details. Do not post a live credential or an untriaged sensitive
-reproduction to a public issue. This guide does not promise a response SLA.
+Report a suspected vulnerability privately as described in the
+[security policy](../../SECURITY.md), which also lists supported versions and
+scope. Do not post a live credential or an untriaged sensitive reproduction to
+a public issue. Neither page promises a response SLA.
