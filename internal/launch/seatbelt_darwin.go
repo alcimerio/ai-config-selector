@@ -25,6 +25,7 @@ import (
 	"github.com/alcimerio/ai-config-selector/internal/environmentresource"
 	"github.com/alcimerio/ai-config-selector/internal/phasetiming"
 	"golang.org/x/sys/unix"
+	"golang.org/x/text/unicode/norm"
 )
 
 const (
@@ -938,6 +939,7 @@ func buildSeatbeltPolicy(request validatedProcessRequest) (string, []string, err
 				fmt.Fprintf(&exclusionRules, "\n(deny file-write* (literal (param %q)))", ancestorName)
 			}
 		}
+		exclusionRules.WriteString(seatbeltAbsentExclusionSpellingRules(exclusion))
 	}
 	var sessionProtectionRules strings.Builder
 	seenSessionProtectionPaths := map[string]bool{}
@@ -1095,6 +1097,74 @@ func buildSeatbeltPolicy(request validatedProcessRequest) (string, []string, err
   (literal "/dev/fd")
   (subpath "/dev/fd"))`
 	return policy, definitions, nil
+}
+
+// seatbeltAbsentExclusionSpellingRules covers an exclusion whose path does
+// not exist yet. Pathname literals only match the exact spelling, while the
+// default APFS volume resolves names case- and normalization-insensitively.
+// Existing paths are matched by their on-disk name and need no extra rule.
+func seatbeltAbsentExclusionSpellingRules(exclusion FilesystemExclusion) string {
+	if exclusion.exists || exclusion.firstMissing == "" {
+		return ""
+	}
+	remainder, err := filepath.Rel(filepath.Dir(exclusion.firstMissing), exclusion.logicalPath)
+	if err != nil || !filepath.IsLocal(remainder) {
+		return ""
+	}
+	missing := len(strings.Split(remainder, string(filepath.Separator)))
+	var rules strings.Builder
+	seen := map[string]bool{}
+	for _, alias := range []string{exclusion.logicalPath, exclusion.path} {
+		path := alias
+		for depth := 0; depth < missing && path != string(filepath.Separator); depth++ {
+			if !seen[path] {
+				seen[path] = true
+				if pattern, ok := seatbeltSpellingInsensitivePattern(path); ok {
+					if depth == 0 {
+						fmt.Fprintf(&rules, "\n(deny file-read* file-write* (regex #\"^%s(/|$)\"))", pattern)
+					} else {
+						fmt.Fprintf(&rules, "\n(deny file-write* (regex #\"^%s$\"))", pattern)
+					}
+				}
+			}
+			path = filepath.Dir(path)
+		}
+	}
+	return rules.String()
+}
+
+// seatbeltSpellingInsensitivePattern returns a Seatbelt regex group matching
+// path in any ASCII letter case, in both NFC and NFD forms.
+func seatbeltSpellingInsensitivePattern(path string) (string, bool) {
+	forms := []string{norm.NFC.String(path)}
+	if decomposed := norm.NFD.String(path); decomposed != forms[0] {
+		forms = append(forms, decomposed)
+	}
+	escaped := make([]string, 0, len(forms))
+	for _, form := range forms {
+		var pattern strings.Builder
+		for _, character := range form {
+			switch {
+			case character >= 'a' && character <= 'z', character >= 'A' && character <= 'Z':
+				lower := strings.ToLower(string(character))
+				pattern.WriteString("[" + lower + strings.ToUpper(lower) + "]")
+			case character == '"' || character == '\\' || character < 0x20 || character == 0x7f:
+				return "", false
+			case strings.ContainsRune(".+*?(){}|$", character):
+				pattern.WriteString("[" + string(character) + "]")
+			case character == '[':
+				pattern.WriteString("[[]")
+			case character == ']':
+				pattern.WriteString("[]]")
+			case character == '^':
+				pattern.WriteString("[$^]")
+			default:
+				pattern.WriteRune(character)
+			}
+		}
+		escaped = append(escaped, pattern.String())
+	}
+	return "(" + strings.Join(escaped, "|") + ")", true
 }
 
 func seatbeltPathAncestors(path string) []string {
