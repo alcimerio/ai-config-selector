@@ -263,3 +263,41 @@ func TestPlanLaunchChecksExclusionConflictsAgainstRequestedSessionsDirectory(t *
 		t.Fatal("planning started target")
 	}
 }
+
+// Profiles that already contain redundant exclusions keep resolving and
+// planning; the dry run reports them as warnings instead of rejecting them.
+func TestPlanLaunchWarnsAboutRedundantExclusionsWithoutRejectingProfile(t *testing.T) {
+	home, workspace := t.TempDir(), t.TempDir()
+	adapter, err := newAdapter(Config{BinaryPath: "devin", ExistingHomeDir: home})
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter.executor = &readinessSandbox{}
+	candidate := NewSkillsProfile("redundant", nil)
+	// Stored bytes bypass the editor, as an existing Profile on disk would.
+	candidate.Common["exclusions"] = profile.CommonPayload{Version: 1, Selection: []byte(`{"entries":[{"id":"data","type":"directory","reference":{"kind":"workspace-relative","path":"data"}},{"id":"data-cache","type":"directory","reference":{"kind":"workspace-relative","path":"data/cache"}},{"id":"data-upper","type":"directory","reference":{"kind":"workspace-relative","path":"Data"}}]}`)}
+	resolved, err := adapter.Categories().Resolve(context.Background(), candidate)
+	if err != nil {
+		t.Fatalf("existing redundant Profile rejected: %v", err)
+	}
+	plan, err := adapter.PlanLaunch(context.Background(), filepath.Join(home, ".acs", "sessions"), workspace, resolved)
+	if err != nil {
+		t.Fatalf("plan: %v", err)
+	}
+	var warnings []string
+	for _, section := range plan.Sections {
+		if section.Title == commonprofile.ExclusionWarningsTitle {
+			for _, item := range section.Items {
+				warnings = append(warnings, item.Label)
+			}
+		}
+	}
+	want := []string{
+		`exclusion "data-cache" is redundant: directory exclusion "data" already covers its path`,
+		`exclusions "data" and "data-upper" differ only by letter case and name the same path on case-insensitive macOS volumes`,
+		`exclusion "data-cache" is redundant: directory exclusion "data-upper" already covers its path`,
+	}
+	if strings.Join(warnings, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("warnings:\n%s", strings.Join(warnings, "\n"))
+	}
+}

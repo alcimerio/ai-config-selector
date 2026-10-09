@@ -146,6 +146,17 @@ func (editor *exclusionsEditor) updateForm(press tea.KeyPressMsg) {
 	}
 }
 
+// Advisories reports non-blocking warnings for the mutation preview: nested
+// entries and entries that differ only by letter case (APFS is
+// case-insensitive). They never block saving.
+func (editor exclusionsEditor) Advisories() []string {
+	selection, err := category.Selection(editor.draft, editor.binding)
+	if err != nil {
+		return nil
+	}
+	return commonprofile.ExclusionWarnings(selection)
+}
+
 func (editor exclusionsEditor) Draft() category.Draft { return editor.draft }
 func (editor exclusionsEditor) WithDraft(draft category.Draft) Editor {
 	editor.draft = draft
@@ -189,6 +200,12 @@ func (editor exclusionsEditor) View() tea.View {
 			displayPath = filepath.Base(displayPath)
 		}
 		fmt.Fprintf(&lines, "%s%s  %s  %s:%s\n", marker, entry.ID, entry.Type, entry.Reference.Kind, displayPath)
+	}
+	if warnings := commonprofile.ExclusionWarnings(selection); len(warnings) != 0 {
+		lines.WriteString("\nWarning: redundant entries (saved as entered; every entry is still enforced):\n")
+		for _, warning := range warnings {
+			fmt.Fprintf(&lines, "  ! %s\n", warning)
+		}
 	}
 	lines.WriteString("\nBlock access to these files and folders in this Session.\nFolder names may remain visible. Git history and other copies are separate.\n\nA add  E/Enter edit  D delete. Local absolute values are basename-redacted in the list.")
 	return tea.NewView(lines.String())

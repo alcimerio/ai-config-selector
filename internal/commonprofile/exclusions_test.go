@@ -191,3 +191,46 @@ func TestExclusionsRejectSelectedCommonMaterialOrigins(t *testing.T) {
 		})
 	}
 }
+
+// Redundant entries produce an advisory plan section without disclosing
+// local-absolute paths. The full load path is covered by the Devin adapter.
+func TestExclusionPlanWarnsAboutRedundantEntries(t *testing.T) {
+	selection := ExclusionSelection{Entries: []ExclusionEntry{
+		{ID: "data", Type: "directory", Reference: ExclusionReference{Kind: string(launch.PathReferenceWorkspaceRelative), Path: "data"}},
+		{ID: "data-cache", Type: "directory", Reference: ExclusionReference{Kind: string(launch.PathReferenceWorkspaceRelative), Path: "data/cache"}},
+		{ID: "env-lower", Type: "file", Reference: ExclusionReference{Kind: string(launch.PathReferenceLocalAbsolute), Path: "/owner/private/.env"}},
+		{ID: "env-upper", Type: "file", Reference: ExclusionReference{Kind: string(launch.PathReferenceLocalAbsolute), Path: "/owner/private/.ENV"}},
+	}}
+	encoded, err := EncodeExclusionSelection(selection)
+	if err != nil {
+		t.Fatalf("redundant selection rejected: %v", err)
+	}
+	if _, err := DecodeExclusionSelection(encoded); err != nil {
+		t.Fatalf("redundant selection does not decode: %v", err)
+	}
+	want := []string{
+		`exclusion "data-cache" is redundant: directory exclusion "data" already covers its path`,
+		`exclusions "env-lower" and "env-upper" differ only by letter case and name the same path on case-insensitive macOS volumes`,
+	}
+	if got := ExclusionWarnings(selection); !reflect.DeepEqual(got, want) {
+		t.Fatalf("warnings = %q", got)
+	}
+	contribution := ExclusionContribution{warnings: ExclusionWarnings(selection)}
+	for _, entry := range selection.Entries {
+		contribution.entries = append(contribution.entries, launch.PathExclusionIntent{ID: entry.ID, Type: launch.PathType(entry.Type), ReferenceKind: launch.PathReferenceKind(entry.Reference.Kind), Path: entry.Reference.Path})
+	}
+	var plan launch.Plan
+	if err := contribution.Plan(context.Background(), "unused", &plan); err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Sections) != 2 || plan.Sections[1].Title != ExclusionWarningsTitle || len(plan.Sections[1].Items) != 2 || plan.Sections[1].Items[0].Label != want[0] {
+		t.Fatalf("plan = %#v", plan)
+	}
+	raw, err := json.Marshal(plan)
+	if err != nil || bytes.Contains(raw, []byte("/owner/private")) {
+		t.Fatalf("plan discloses local path: %s %v", raw, err)
+	}
+	if got := ExclusionWarnings(ExclusionSelection{Entries: selection.Entries[:1]}); got != nil {
+		t.Fatalf("single entry warnings = %q", got)
+	}
+}

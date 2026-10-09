@@ -60,6 +60,18 @@ func (m Model) prepareMutation() (Model, error) {
 			unresolved = append(unresolved, editor.Unresolved()...)
 		}
 	}
+	var advisories []string
+	for _, slot := range m.editors {
+		if editor, ok := slot.editor.WithDraft(snapshot).(interface{ Advisories() []string }); ok {
+			advisories = append(advisories, editor.Advisories()...)
+		}
+	}
+	if len(advisories) != 0 {
+		// Advisories describe a valid Profile and name validated entry IDs only;
+		// they inform but do not require acknowledgement, unlike unresolved
+		// selections.
+		prepared.Text += "\nWarnings (non-blocking; the Profile is saved as shown):\n  " + strings.Join(advisories, "\n  ") + "\n"
+	}
 	if len(unresolved) != 0 {
 		prepared.Warning = true
 		prepared.Text += "\nRetained unresolved selections (source availability is separate from structural validity):\n  " + strings.Join(unresolved, "\n  ") + "\n"
