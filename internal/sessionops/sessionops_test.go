@@ -429,6 +429,9 @@ func TestRemovedRetentionPrunesMetadataButKeepsPermanentFenceInode(t *testing.T)
 	if err := os.WriteFile(recordPath, append(data, '\n'), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	// Allocation runs retention at most once per check interval; age the
+	// advisory cursor so this allocation performs a pass.
+	ageRetentionCursor(t, private)
 	trigger, err := sessionops.NewTracker(sessions, filepath.Join(sessions, "session-retention-trigger"), "shell")
 	if err != nil {
 		t.Fatal(err)
@@ -609,6 +612,15 @@ func mutateSessionJSON(t *testing.T, path string, mutate func(map[string]any)) {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(path, append(data, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func ageRetentionCursor(t *testing.T, private string) {
+	t.Helper()
+	cursor := filepath.Join(private, ".retention-cursor.json")
+	old := time.Now().Add(-time.Hour)
+	if err := os.Chtimes(cursor, old, old); err != nil && !os.IsNotExist(err) {
 		t.Fatal(err)
 	}
 }
