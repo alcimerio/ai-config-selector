@@ -1,13 +1,13 @@
-Effective capability explanation for Profile "format-profile" (stored version 3)
+Effective capability explanation for Profile "format-profile" (stored version 1)
 Intent: devin
-Semantic authority digest: sha256:5370c0d89b53bf4f63b679fe093b663cb1db6e0d4b1d1b042a49ae158dc0f8cf
+Semantic authority digest: sha256:f2e478fd1b1f829b0437068ef97a99db33e98e57aa0a61667c8f8b843772f957
 Digest scope: semantic ACS authority and recipe requirements only; excluded local bindings are rechecked separately where execution requires it.
 
 Requested:
-  common.executables.fixed-tool [executable-visibility]: access=read-execute; location=fixed-tool; names=fixed-search-name (reason=stored_v3_intent; source=profile:executables@v1)
-  common.executables.workspace-tool [executable-visibility]: access=read-execute; location=workspace-tool; names=workspace-relative (reason=stored_v3_intent_covered_by_workspace_read; source=profile:executables@v1)
+  common.executables.fixed-tool [executable-visibility]: access=read-execute; location=fixed-tool; names=fixed-search-name (reason=stored_intent; source=profile:executables@v1)
+  common.executables.workspace-tool [executable-visibility]: access=read-execute; location=workspace-tool; names=workspace-relative (reason=stored_intent_covered_by_workspace_read; source=profile:executables@v1)
   common.skills [capability]: mode=selected-exact-identities (reason=stored_selection; source=profile:skills@v1)
-  common.workspace [workspace]: access=read-only (reason=stored_v3_intent; source=profile:workspace@v1)
+  common.workspace [workspace]: access=read-only (reason=stored_intent; source=profile:workspace@v1)
   execution.recipe [recipe]: mode=devin (reason=selected_intent; source=command:devin)
   target.overlay [overlay]: mode=devin (reason=selected_target; source=profile:devin@v1)
 

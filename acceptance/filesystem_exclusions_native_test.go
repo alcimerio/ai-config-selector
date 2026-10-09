@@ -25,7 +25,7 @@ func exclusionCandidateHome(t *testing.T, binary, workspace, access string, path
 		common["paths"] = map[string]any{"version": 1, "selection": map[string]any{"entries": grants}}
 	}
 
-	document, _ := json.Marshal(map[string]any{"version": 3, "name": "exclusions", "common": common, "overlays": map[string]any{"devin": map[string]int{"version": 1}}})
+	document, _ := json.Marshal(map[string]any{"version": 1, "name": "exclusions", "common": common, "overlays": map[string]any{"devin": map[string]int{"version": 1}}})
 	file := filepath.Join(home, "profile.json")
 	if err := os.WriteFile(file, document, 0600); err != nil {
 		t.Fatal(err)

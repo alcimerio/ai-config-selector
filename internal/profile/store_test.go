@@ -92,16 +92,16 @@ func TestMCPReferenceCapabilityRemovalIsRefusedBeforeProfileMutation(t *testing.
 	}
 }
 
-func TestStoreCreateRejectsCanonicalVersionThreeWithoutRequiredOverlay(t *testing.T) {
+func TestStoreCreateRejectsCanonicalProfileWithoutRequiredOverlay(t *testing.T) {
 	home := t.TempDir()
 	store := newDevinStore(t, filepath.Join(home, ".acs"))
-	candidate := devin.NewSkillsProfile("broken-v3", nil)
+	candidate := devin.NewSkillsProfile("broken-common", nil)
 	candidate.Overlays = nil
 	if _, err := store.Create(candidate); err == nil || !strings.Contains(err.Error(), "admit canonical Profile") {
-		t.Fatalf("Create accepted invalid canonical v3: %v", err)
+		t.Fatalf("Create accepted invalid canonical Profile: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(home, ".acs", "profiles", "broken-v3.json")); !os.IsNotExist(err) {
-		t.Fatalf("rejected canonical v3 was published: %v", err)
+	if _, err := os.Stat(filepath.Join(home, ".acs", "profiles", "broken-common.json")); !os.IsNotExist(err) {
+		t.Fatalf("rejected canonical Profile was published: %v", err)
 	}
 }
 
@@ -115,7 +115,7 @@ func TestStoreLoadUsesRepositoryFileAdmission(t *testing.T) {
 			}
 			path := filepath.Join(profiles, "unsafe.json")
 			outside := filepath.Join(t.TempDir(), "outside")
-			valid := []byte(`{"version":3,"name":"unsafe","common":{"skills":{"version":1,"selection":[]},"workspace":{"version":1,"selection":{"access":"read-only"}}},"overlays":{}}`)
+			valid := []byte(`{"version":1,"name":"unsafe","common":{"skills":{"version":1,"selection":[]},"workspace":{"version":1,"selection":{"access":"read-only"}}},"overlays":{}}`)
 			if err := os.WriteFile(outside, valid, 0o600); err != nil {
 				t.Fatal(err)
 			}
@@ -162,7 +162,7 @@ func TestStoreCreatesAtomicHumanReadableUserOnlyProfileWithoutOverwrite(t *testi
 	}
 	text := string(contents)
 	for _, fragment := range []string{
-		"\n  \"version\": 3",
+		"\n  \"version\": 1",
 		"\n  \"name\": \"backend-review\"",
 		"\n  \"common\": {",
 		"\n    \"skills\": {",
@@ -227,7 +227,7 @@ func TestStoreCreatesAtomicHumanReadableUserOnlyProfileWithoutOverwrite(t *testi
 
 func TestStoreRejectsInvalidNameOnLoad(t *testing.T) {
 	acsHome := t.TempDir()
-	if err := os.WriteFile(filepath.Join(acsHome, "escape.json"), []byte(`{"version":3,"name":"escape","common":{"skills":{"version":1,"selection":[]},"workspace":{"version":1,"selection":{"access":"read-only"}}},"overlays":{}}`), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(acsHome, "escape.json"), []byte(`{"version":1,"name":"escape","common":{"skills":{"version":1,"selection":[]},"workspace":{"version":1,"selection":{"access":"read-only"}}},"overlays":{}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	store := newDevinStore(t, acsHome)
@@ -245,22 +245,22 @@ func TestStoreRejectsInvalidSavedIntent(t *testing.T) {
 	}{
 		{
 			name:          "unknown-category",
-			contents:      `{"version":3,"name":"unknown-category","common":{"agents":{"version":1,"selection":[]},"skills":{"version":1,"selection":[]},"workspace":{"version":1,"selection":{"access":"read-only"}}},"overlays":{}}`,
+			contents:      `{"version":1,"name":"unknown-category","common":{"agents":{"version":1,"selection":[]},"skills":{"version":1,"selection":[]},"workspace":{"version":1,"selection":{"access":"read-only"}}},"overlays":{}}`,
 			wantErrorText: "Stored Profile",
 		},
 		{
 			name:          "unsupported-category-schema",
-			contents:      `{"version":3,"name":"unsupported-category-schema","common":{"skills":{"version":2,"selection":[]},"workspace":{"version":1,"selection":{"access":"read-only"}}},"overlays":{}}`,
+			contents:      `{"version":1,"name":"unsupported-category-schema","common":{"skills":{"version":2,"selection":[]},"workspace":{"version":1,"selection":{"access":"read-only"}}},"overlays":{}}`,
 			wantErrorText: "Stored Profile",
 		},
 		{
 			name:          "malformed-selection-shape",
-			contents:      `{"version":3,"name":"malformed-selection-shape","common":{"skills":{"version":1,"selection":{}},"workspace":{"version":1,"selection":{"access":"read-only"}}},"overlays":{}}`,
+			contents:      `{"version":1,"name":"malformed-selection-shape","common":{"skills":{"version":1,"selection":{}},"workspace":{"version":1,"selection":{"access":"read-only"}}},"overlays":{}}`,
 			wantErrorText: "Stored Profile",
 		},
 		{
 			name:          "malformed-reference",
-			contents:      `{"version":3,"name":"malformed-reference","common":{"skills":{"version":1,"selection":[{"source":"devin-config"}]},"workspace":{"version":1,"selection":{"access":"read-only"}}},"overlays":{}}`,
+			contents:      `{"version":1,"name":"malformed-reference","common":{"skills":{"version":1,"selection":[{"source":"devin-config"}]},"workspace":{"version":1,"selection":{"access":"read-only"}}},"overlays":{}}`,
 			wantErrorText: "Stored Profile",
 		},
 	}

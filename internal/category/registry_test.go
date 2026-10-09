@@ -81,7 +81,7 @@ func TestProfileStoreUsesRegistryDefaultsWithoutKnowingCategoryTypes(t *testing.
 	}
 	if err := os.WriteFile(
 		filepath.Join(profilesDirectory, "older.json"),
-		[]byte(`{"version":3,"name":"older","common":{"texts":{"version":3,"selection":{"values":["alpha"]}}}}`),
+		[]byte(`{"version":1,"name":"older","common":{"texts":{"version":3,"selection":{"values":["alpha"]}}}}`),
 		0o600,
 	); err != nil {
 		t.Fatal(err)

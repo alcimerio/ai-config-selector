@@ -37,7 +37,7 @@ func TestCodecRequiresNoRuntimeAndCannotSupplyExecutionBindings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := codec.Decode([]byte(`{"version":3,"name":"example","common":{}}`))
+	got, err := codec.Decode([]byte(`{"version":1,"name":"example","common":{}}`))
 	if err != nil || string(got.Common["texts"].Selection) != `[]` {
 		t.Fatalf("passive defaults: %+v, %v", got, err)
 	}

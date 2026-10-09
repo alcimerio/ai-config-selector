@@ -38,7 +38,7 @@ func TestReviewRestoreSuccessIdentityCannotRaceSameOperation(t *testing.T) {
 	}
 	repo := profilerepo.New(filepath.Join(home, ".acs"))
 	ctx := context.Background()
-	first := []byte(`{"version":3,"name":"alpha","common":{"skills":{"version":1,"selection":[]},"workspace":{"version":1,"selection":{"access":"read-only"}}},"overlays":{"devin":{"version":1}}}`)
+	first := []byte(`{"version":1,"name":"alpha","common":{"skills":{"version":1,"selection":[]},"workspace":{"version":1,"selection":{"access":"read-only"}}},"overlays":{"devin":{"version":1}}}`)
 	second := bytes.Replace(first, []byte(`"read-only"`), []byte(`"read-write"`), 1)
 	s, _ := repo.Read(ctx, "alpha")
 	if _, err = repo.Apply(ctx, profilerepo.CreateRequest{Name: "alpha", Expected: s.Revision, Bytes: first}); err != nil {
@@ -102,7 +102,7 @@ func TestReviewDerivedRestoreRejectsSourceNameReuseInsideApply(t *testing.T) {
 	}
 	repo := profilerepo.New(filepath.Join(home, ".acs"))
 	ctx := context.Background()
-	alpha := []byte(`{"version":3,"name":"alpha","common":{"skills":{"version":1,"selection":[]},"workspace":{"version":1,"selection":{"access":"read-only"}}},"overlays":{"devin":{"version":1}}}`)
+	alpha := []byte(`{"version":1,"name":"alpha","common":{"skills":{"version":1,"selection":[]},"workspace":{"version":1,"selection":{"access":"read-only"}}},"overlays":{"devin":{"version":1}}}`)
 	beta := bytes.Replace(alpha, []byte(`"alpha"`), []byte(`"beta"`), 1)
 	delta := bytes.Replace(beta, []byte(`"beta"`), []byte(`"delta"`), 1)
 	s, _ := repo.Read(ctx, "alpha")

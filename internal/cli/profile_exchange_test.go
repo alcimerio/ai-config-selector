@@ -27,7 +27,7 @@ import (
 func exchangeProfile(t *testing.T, name string) profile.Profile {
 	t.Helper()
 	references, _ := json.Marshal([]map[string]string{{"source": "shared-agents", "relativePath": "review"}})
-	return profile.Profile{Version: 3, Name: name, Common: map[string]profile.CommonPayload{
+	return profile.Profile{Version: 1, Name: name, Common: map[string]profile.CommonPayload{
 		"skills": {Version: 1, Selection: references}, "workspace": {Version: 1, Selection: json.RawMessage(`{"access":"read-only"}`)},
 	}, Overlays: map[string]profile.OverlayPayload{"devin": {Version: 1}, "codex": {Version: 1, AuthRef: "work"}}}
 }

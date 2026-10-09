@@ -34,7 +34,7 @@ func TestPromotedPassiveDiagnostics(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(home, ".agents", "skills", "selected", "SKILL.md"), []byte("# private-manifest-sentinel-9281"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(home, ".acs", "profiles", "example.json"), []byte(`{"version":3,"name":"example","common":{"skills":{"version":1,"selection":[{"source":"shared-agents","relativePath":"selected"}]},"workspace":{"version":1,"selection":{"access":"read-only"}}},"overlays":{"devin":{"version":1}}}`), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(home, ".acs", "profiles", "example.json"), []byte(`{"version":1,"name":"example","common":{"skills":{"version":1,"selection":[{"source":"shared-agents","relativePath":"selected"}]},"workspace":{"version":1,"selection":{"access":"read-only"}}},"overlays":{"devin":{"version":1}}}`), 0600); err != nil {
 		t.Fatal(err)
 	}
 	before := snapshotInspectionHome(t, home)

@@ -148,7 +148,7 @@ func TestTargetsRejectRemovedEnvelopeVersions(t *testing.T) {
 		[]byte(`{"version":1,"name":"old","target":"devin","skillReferences":[{"source":"devin-config","relativePath":"review"}]}`),
 		[]byte(`{"version":2,"name":"old","target":"devin","categories":{"skills":{"schemaVersion":1,"selection":[]}}}`),
 	} {
-		if _, err := devinTarget.Categories().Decode(document); err == nil || !strings.Contains(err.Error(), "unsupported schema version") {
+		if _, err := devinTarget.Categories().Decode(document); err == nil {
 			t.Fatalf("Devin admitted removed envelope %s: %v", document, err)
 		}
 		if _, err := codexTarget.Categories().DecodeNamed("old", document); err == nil {
@@ -219,7 +219,7 @@ func commonProfile(t *testing.T, name string, references []skills.SkillReference
 	if err != nil {
 		t.Fatal(err)
 	}
-	return profile.Profile{Version: 3, Name: name,
+	return profile.Profile{Version: 1, Name: name,
 		Common: map[string]profile.CommonPayload{
 			"skills":    {Version: 1, Selection: selection},
 			"workspace": {Version: 1, Selection: workspace},

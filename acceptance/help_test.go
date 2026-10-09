@@ -37,7 +37,7 @@ func TestPromotedCodexDryRunReadsOnlyTheProfileAndLeavesAuthenticationUnchecked(
 	if err := os.MkdirAll(profiles, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	document := `{"version":3,"name":"example","common":{"skills":{"version":1,"selection":[]},"workspace":{"version":1,"selection":{"access":"read-only"}}},"overlays":{"codex":{"version":1,"authRef":"stored"}}}`
+	document := `{"version":1,"name":"example","common":{"skills":{"version":1,"selection":[]},"workspace":{"version":1,"selection":{"access":"read-only"}}},"overlays":{"codex":{"version":1,"authRef":"stored"}}}`
 	if err := os.WriteFile(filepath.Join(profiles, "example.json"), []byte(document), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -65,7 +65,7 @@ func TestPromotedDeclarativeProfileCreationNeedsNoTTYTargetOrCredentials(t *test
 	home := realTemporaryDirectory(t)
 	inputDirectory := realTemporaryDirectory(t)
 	input := filepath.Join(inputDirectory, "candidate.json")
-	document := `{"version":3,"name":"declarative","common":{"skills":{"version":1,"selection":[{"source":"shared-agents","relativePath":"missing-but-valid"}]},"workspace":{"version":1,"selection":{"access":"read-only"}}},"overlays":{"codex":{"version":1,"authRef":"absent-identity"},"devin":{"version":1}}}`
+	document := `{"version":1,"name":"declarative","common":{"skills":{"version":1,"selection":[{"source":"shared-agents","relativePath":"missing-but-valid"}]},"workspace":{"version":1,"selection":{"access":"read-only"}}},"overlays":{"codex":{"version":1,"authRef":"absent-identity"},"devin":{"version":1}}}`
 	if err := os.WriteFile(input, []byte(document), 0o640); err != nil {
 		t.Fatal(err)
 	}

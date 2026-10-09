@@ -12,8 +12,8 @@ import (
 
 func TestCheckCommonAdmissionMatchesRegistry(t *testing.T) {
 	for _, body := range []string{
-		`{"version":3,"name":"example","common":{"skills":{"version":1,"selection":[]},"workspace":{"version":1,"selection":{"access":"read-only"}}},"overlays":{"devin":{"version":1}}}`,
-		`{"version":3,"name":"example","common":{"skills":{"version":1,"selection":[]},"workspace":{"version":1,"selection":{"access":"read-write"}}},"overlays":{"devin":{"version":1},"codex":{"version":1}}}`,
+		`{"version":1,"name":"example","common":{"skills":{"version":1,"selection":[]},"workspace":{"version":1,"selection":{"access":"read-only"}}},"overlays":{"devin":{"version":1}}}`,
+		`{"version":1,"name":"example","common":{"skills":{"version":1,"selection":[]},"workspace":{"version":1,"selection":{"access":"read-write"}}},"overlays":{"devin":{"version":1},"codex":{"version":1}}}`,
 	} {
 		home := t.TempDir()
 		editor, err := devin.NewProfileEditor(home)

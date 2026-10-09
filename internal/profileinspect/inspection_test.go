@@ -17,30 +17,31 @@ import (
 // validProfile is a minimal valid stored Profile with the given name and
 // Skills selection.
 func validProfile(name, selection string) string {
-	return fmt.Sprintf(`{"version":3,"name":%q,"common":{"skills":{"version":1,"selection":%s},"workspace":{"version":1,"selection":{"access":"read-only"}}},"overlays":{}}`, name, selection)
+	return fmt.Sprintf(`{"version":1,"name":%q,"common":{"skills":{"version":1,"selection":%s},"workspace":{"version":1,"selection":{"access":"read-only"}}},"overlays":{}}`, name, selection)
 }
 
 func TestStructuralInspection(t *testing.T) {
-	valid := `{"version":3,"name":"example","common":{"skills":{"version":1,"selection":%s},"workspace":{"version":1,"selection":{"access":"read-only"}}},"overlays":{}}`
+	valid := `{"version":1,"name":"example","common":{"skills":{"version":1,"selection":%s},"workspace":{"version":1,"selection":{"access":"read-only"}}},"overlays":{}}`
 	reference := `[{"source":"shared-agents","relativePath":"missing"}]`
 	for _, tc := range []struct{ name, body, code string }{
 		{"valid", fmt.Sprintf(valid, reference), ""},
 		{"empty selection", fmt.Sprintf(valid, `[]`), ""},
+		{"read alias version three", strings.Replace(fmt.Sprintf(valid, `[]`), `"version":1`, `"version":3`, 1), ""},
 		{"removed version one", `{"version":1,"name":"example","target":"devin","skillReferences":[]}`, "unsupported_content"},
 		{"removed version two", `{"version":2,"name":"example","target":"devin","categories":{}}`, "unsupported_content"},
 		{"malformed", "secret garbage", "invalid_structure"},
 		{"null", "null", "invalid_structure"},
 		{"array", "[]", "invalid_structure"},
 		{"trailing", fmt.Sprintf(valid, reference) + ` {}`, "invalid_structure"},
-		{"duplicate", strings.Replace(fmt.Sprintf(valid, `[]`), `"version":3`, `"version":3,"version":3`, 1), "invalid_structure"},
-		{"case alias", strings.Replace(fmt.Sprintf(valid, `[]`), `"version":3`, `"version":3,"Version":3`, 1), "unsupported_content"},
+		{"duplicate", strings.Replace(fmt.Sprintf(valid, `[]`), `"version":1`, `"version":1,"version":1`, 1), "invalid_structure"},
+		{"case alias", strings.Replace(fmt.Sprintf(valid, `[]`), `"version":1`, `"version":1,"Version":1`, 1), "unsupported_content"},
 		{"identity", validProfile("other", `[]`), "identity_mismatch"},
 		{"bad body name", validProfile("../secret", `[]`), "invalid_structure"},
 		{"future", `{"version":4,"secret":"do not show"}`, "unsupported_content"},
 		{"target", strings.Replace(fmt.Sprintf(valid, `[]`), `"name":"example"`, `"name":"example","target":"devin"`, 1), "unsupported_content"},
 		{"category", strings.Replace(fmt.Sprintf(valid, `[]`), `"common":{`, `"common":{"secret":{},`, 1), "unsupported_content"},
 		{"category version", strings.Replace(fmt.Sprintf(valid, `[]`), `"skills":{"version":1`, `"skills":{"version":3`, 1), "unsupported_content"},
-		{"category null", `{"version":3,"name":"example","common":null,"overlays":{}}`, "unsupported_content"},
+		{"category null", `{"version":1,"name":"example","common":null,"overlays":{}}`, "unsupported_content"},
 		{"category field", strings.Replace(fmt.Sprintf(valid, `[]`), `"selection":[]`, `"selection":[],"secret":true`, 1), "unsupported_content"},
 		{"missing version", `{"name":"example","common":{},"overlays":{}}`, "invalid_structure"},
 		{"null version", `{"version":null,"name":"example","common":{},"overlays":{}}`, "invalid_structure"},
@@ -73,10 +74,18 @@ func TestStructuralInspection(t *testing.T) {
 		})
 	}
 }
+func TestInspectionReportsReadAliasStoredVersion(t *testing.T) {
+	data := strings.Replace(validProfile("example", `[]`), `"version":1`, `"version":3`, 1)
+	entry := decode(newEntry("example"), []byte(data))
+	if entry.Status != "valid" || entry.StoredVersion == nil || *entry.StoredVersion != 3 {
+		t.Fatalf("read alias entry = %+v", entry)
+	}
+}
+
 func TestInspectionPreservesStoredSpellingsAndSorts(t *testing.T) {
 	data := validProfile("example", `[{"source":"shared-agents","relativePath":"./z\u001b[31m"},{"source":"devin-config","relativePath":"folder/../a"}]`)
 	entry := decode(newEntry("example"), []byte(data))
-	if entry.Status != "valid" || *entry.StoredVersion != 3 || *entry.Categories[0].SchemaVersion != 1 {
+	if entry.Status != "valid" || *entry.StoredVersion != 1 || *entry.Categories[0].SchemaVersion != 1 {
 		t.Fatalf("%+v", entry)
 	}
 	refs := entry.Categories[0].Selection

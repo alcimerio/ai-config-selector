@@ -60,7 +60,7 @@ func TestActualPermissionDenial(t *testing.T) {
 	if err := os.MkdirAll(source, 0700); err != nil {
 		t.Fatal(err)
 	}
-	writeProfile(t, home, `{"version":3,"name":"example","common":{"skills":{"version":1,"selection":[{"source":"shared-agents","relativePath":"selected"}]},"workspace":{"version":1,"selection":{"access":"read-only"}}},"overlays":{}}`)
+	writeProfile(t, home, `{"version":1,"name":"example","common":{"skills":{"version":1,"selection":[{"source":"shared-agents","relativePath":"selected"}]},"workspace":{"version":1,"selection":{"access":"read-only"}}},"overlays":{}}`)
 	if err := os.Chmod(source, 0000); err != nil {
 		t.Fatal(err)
 	}

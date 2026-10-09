@@ -1,14 +1,14 @@
-Effective capability explanation for Profile "format-profile" (stored version 3)
+Effective capability explanation for Profile "format-profile" (stored version 1)
 Intent: codex
-Semantic authority digest: sha256:d2add29dfc272b7b0d5887b8ecd495abaf11eece466a2656bf45dee10b3beef8
+Semantic authority digest: sha256:f7aebf0af2fb1d1b65976cbe3bc4baf8c079b4951274c409891d6576eee89d38
 Digest scope: semantic ACS authority and recipe requirements only; excluded local bindings are rechecked separately where execution requires it.
 
 Requested:
   codex.authentication [opaque-binding]: mode=required-value-omitted; value omitted (reason=overlay; source=target:codex@v1)
-  common.executables.fixed-tool [executable-visibility]: access=read-execute; location=fixed-tool; names=fixed-search-name (reason=stored_v3_intent; source=profile:executables@v1)
-  common.executables.workspace-tool [executable-visibility]: access=read-execute; location=workspace-tool; names=workspace-relative (reason=stored_v3_intent_covered_by_workspace_read; source=profile:executables@v1)
+  common.executables.fixed-tool [executable-visibility]: access=read-execute; location=fixed-tool; names=fixed-search-name (reason=stored_intent; source=profile:executables@v1)
+  common.executables.workspace-tool [executable-visibility]: access=read-execute; location=workspace-tool; names=workspace-relative (reason=stored_intent_covered_by_workspace_read; source=profile:executables@v1)
   common.skills [capability]: mode=selected-exact-identities (reason=stored_selection; source=profile:skills@v1)
-  common.workspace [workspace]: access=read-only (reason=stored_v3_intent; source=profile:workspace@v1)
+  common.workspace [workspace]: access=read-only (reason=stored_intent; source=profile:workspace@v1)
   execution.recipe [recipe]: mode=codex (reason=selected_intent; source=command:codex)
   target.overlay [overlay]: mode=codex (reason=selected_target; source=profile:codex@v1)
 

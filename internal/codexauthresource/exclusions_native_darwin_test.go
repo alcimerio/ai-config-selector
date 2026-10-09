@@ -112,7 +112,7 @@ int main(int argc,char **argv){char **out=calloc((size_t)argc+4,sizeof(char*)); 
 				}
 				executables = append(executables, map[string]any{"id": id, "reference": map[string]string{"kind": "local-absolute", "path": filepath.Join(runtimeRoot, name)}})
 			}
-			document, _ := json.Marshal(map[string]any{"version": 3, "name": "catalog-" + scenario, "common": map[string]any{
+			document, _ := json.Marshal(map[string]any{"version": 1, "name": "catalog-" + scenario, "common": map[string]any{
 				"skills": map[string]any{"version": 1, "selection": []any{}}, "workspace": map[string]any{"version": 1, "selection": map[string]string{"access": "read-only"}},
 				"exclusions": map[string]any{"version": 1, "selection": map[string]any{"entries": entries}}, "executables": map[string]any{"version": 1, "selection": map[string]any{"entries": executables}},
 			}, "overlays": map[string]any{"codex": map[string]any{"version": 1, "authRef": "exclusion-fixture"}}})

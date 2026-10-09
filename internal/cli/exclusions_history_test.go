@@ -13,8 +13,8 @@ import (
 
 func TestProfileRestorePreservesCurrentExclusionBindingAndWorkspaceIntent(t *testing.T) {
 	app, repository, home := historyApp(t)
-	historical := []byte(`{"version":3,"name":"alpha","common":{"skills":{"version":1,"selection":[]},"workspace":{"version":1,"selection":{"access":"read-only"}},"exclusions":{"version":1,"selection":{"entries":[{"id":"local","type":"file","reference":{"kind":"local-absolute","path":"/historical/private"}},{"id":"relative","type":"file","reference":{"kind":"workspace-relative","path":"configs/current"}}]} }},"overlays":{"devin":{"version":1}}}`)
-	current := []byte(`{"version":3,"name":"alpha","common":{"skills":{"version":1,"selection":[]},"workspace":{"version":1,"selection":{"access":"read-only"}},"exclusions":{"version":1,"selection":{"entries":[{"id":"local","type":"file","reference":{"kind":"local-absolute","path":"/current/safe"}},{"id":"relative","type":"file","reference":{"kind":"workspace-relative","path":"configs/changed"}}]} }},"overlays":{"devin":{"version":1}}}`)
+	historical := []byte(`{"version":1,"name":"alpha","common":{"skills":{"version":1,"selection":[]},"workspace":{"version":1,"selection":{"access":"read-only"}},"exclusions":{"version":1,"selection":{"entries":[{"id":"local","type":"file","reference":{"kind":"local-absolute","path":"/historical/private"}},{"id":"relative","type":"file","reference":{"kind":"workspace-relative","path":"configs/current"}}]} }},"overlays":{"devin":{"version":1}}}`)
+	current := []byte(`{"version":1,"name":"alpha","common":{"skills":{"version":1,"selection":[]},"workspace":{"version":1,"selection":{"access":"read-only"}},"exclusions":{"version":1,"selection":{"entries":[{"id":"local","type":"file","reference":{"kind":"local-absolute","path":"/current/safe"}},{"id":"relative","type":"file","reference":{"kind":"workspace-relative","path":"configs/changed"}}]} }},"overlays":{"devin":{"version":1}}}`)
 	applyHistory(t, repository, "alpha", historical, current)
 	history, err := repository.History(context.Background(), profilerepo.HistorySelector{Name: "alpha"}, 100)
 	if err != nil || len(history.Events) < 2 {
@@ -83,10 +83,10 @@ func TestProfileRestoreRequiresBindingsForMissingOrIncompatibleCurrentExclusion(
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			app, repository, home := historyApp(t)
-			historical := []byte(`{"version":3,"name":"alpha","common":{"skills":{"version":1,"selection":[]},"workspace":{"version":1,"selection":{"access":"read-only"}},"exclusions":{"version":1,"selection":{"entries":[{"id":"local","type":"file","reference":{"kind":"local-absolute","path":"/historical/private"}}]}}},"overlays":{"devin":{"version":1}}}`)
-			current := []byte(`{"version":3,"name":"alpha","common":{"skills":{"version":1,"selection":[]},"workspace":{"version":1,"selection":{"access":"read-only"}},"exclusions":{"version":1,"selection":{"entries":[` + tc.currentEntry + `]}}},"overlays":{"devin":{"version":1}}}`)
+			historical := []byte(`{"version":1,"name":"alpha","common":{"skills":{"version":1,"selection":[]},"workspace":{"version":1,"selection":{"access":"read-only"}},"exclusions":{"version":1,"selection":{"entries":[{"id":"local","type":"file","reference":{"kind":"local-absolute","path":"/historical/private"}}]}}},"overlays":{"devin":{"version":1}}}`)
+			current := []byte(`{"version":1,"name":"alpha","common":{"skills":{"version":1,"selection":[]},"workspace":{"version":1,"selection":{"access":"read-only"}},"exclusions":{"version":1,"selection":{"entries":[` + tc.currentEntry + `]}}},"overlays":{"devin":{"version":1}}}`)
 			if tc.currentEntry == "" {
-				current = []byte(`{"version":3,"name":"alpha","common":{"skills":{"version":1,"selection":[]},"workspace":{"version":1,"selection":{"access":"read-only"}}},"overlays":{"devin":{"version":1}}}`)
+				current = []byte(`{"version":1,"name":"alpha","common":{"skills":{"version":1,"selection":[]},"workspace":{"version":1,"selection":{"access":"read-only"}}},"overlays":{"devin":{"version":1}}}`)
 			}
 			applyHistory(t, repository, "alpha", historical, current)
 			snapshot, err := repository.Read(context.Background(), "alpha")
@@ -113,8 +113,8 @@ func TestProfileRestoreRequiresBindingsForMissingOrIncompatibleCurrentExclusion(
 
 func TestProfileRestoreRejectsStalePreviewAfterExclusionBindingChange(t *testing.T) {
 	app, repository, home := historyApp(t)
-	historical := []byte(`{"version":3,"name":"alpha","common":{"skills":{"version":1,"selection":[]},"workspace":{"version":1,"selection":{"access":"read-only"}},"exclusions":{"version":1,"selection":{"entries":[{"id":"local","type":"file","reference":{"kind":"local-absolute","path":"/historical/private"}}]}}},"overlays":{"devin":{"version":1}}}`)
-	current := []byte(`{"version":3,"name":"alpha","common":{"skills":{"version":1,"selection":[]},"workspace":{"version":1,"selection":{"access":"read-only"}},"exclusions":{"version":1,"selection":{"entries":[{"id":"local","type":"file","reference":{"kind":"local-absolute","path":"/current/safe"}}]}}},"overlays":{"devin":{"version":1}}}`)
+	historical := []byte(`{"version":1,"name":"alpha","common":{"skills":{"version":1,"selection":[]},"workspace":{"version":1,"selection":{"access":"read-only"}},"exclusions":{"version":1,"selection":{"entries":[{"id":"local","type":"file","reference":{"kind":"local-absolute","path":"/historical/private"}}]}}},"overlays":{"devin":{"version":1}}}`)
+	current := []byte(`{"version":1,"name":"alpha","common":{"skills":{"version":1,"selection":[]},"workspace":{"version":1,"selection":{"access":"read-only"}},"exclusions":{"version":1,"selection":{"entries":[{"id":"local","type":"file","reference":{"kind":"local-absolute","path":"/current/safe"}}]}}},"overlays":{"devin":{"version":1}}}`)
 	applyHistory(t, repository, "alpha", historical, current)
 	history, err := repository.History(context.Background(), profilerepo.HistorySelector{Name: "alpha"}, 100)
 	if err != nil || len(history.Events) < 2 {
@@ -134,7 +134,7 @@ func TestProfileRestoreRejectsStalePreviewAfterExclusionBindingChange(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	mutated := []byte(`{"version":3,"name":"alpha","common":{"skills":{"version":1,"selection":[]},"workspace":{"version":1,"selection":{"access":"read-only"}},"exclusions":{"version":1,"selection":{"entries":[{"id":"local","type":"file","reference":{"kind":"local-absolute","path":"/current/changed"}}]}}},"overlays":{"devin":{"version":1}}}`)
+	mutated := []byte(`{"version":1,"name":"alpha","common":{"skills":{"version":1,"selection":[]},"workspace":{"version":1,"selection":{"access":"read-only"}},"exclusions":{"version":1,"selection":{"entries":[{"id":"local","type":"file","reference":{"kind":"local-absolute","path":"/current/changed"}}]}}},"overlays":{"devin":{"version":1}}}`)
 	if _, err := repository.Apply(context.Background(), profilerepo.ReplaceRequest{Name: "alpha", Expected: snapshot.Revision, Bytes: mutated}); err != nil {
 		t.Fatal(err)
 	}

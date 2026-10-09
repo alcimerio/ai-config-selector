@@ -17,9 +17,9 @@ import (
 	"github.com/alcimerio/ai-config-selector/internal/profileexchange"
 )
 
-const minimalProfile = `{"version":3,"name":"example","common":{"skills":{"version":1,"selection":[]},"workspace":{"version":1,"selection":{"access":"read-only"}}},"overlays":{"devin":{"version":1},"codex":{"version":1,"authRef":"work"}}}`
+const minimalProfile = `{"version":1,"name":"example","common":{"skills":{"version":1,"selection":[]},"workspace":{"version":1,"selection":{"access":"read-only"}}},"overlays":{"devin":{"version":1},"codex":{"version":1,"authRef":"work"}}}`
 
-const completeProfile = `{"version":3,"name":"example","common":{
+const completeProfile = `{"version":1,"name":"example","common":{
 "skills":{"version":1,"selection":[{"source":"shared-agents","relativePath":"review"}]},
 "instructions":{"version":1,"selection":[{"source":"acs-instructions","relativePath":"guide.md"}]},
 "workspace":{"version":1,"selection":{"access":"read-write"}},
@@ -29,6 +29,14 @@ const completeProfile = `{"version":3,"name":"example","common":{
 "environment":{"version":1,"selection":{"entries":[{"id":"token","destination":"MCP_TOKEN","scope":"attached-process-tree","source":{"kind":"secret-reference","provider":"host-environment","reference":"HOST_CODEC_TOKEN"},"required":true,"classification":"secret"}]}},
 "mcp":{"version":1,"selection":{"servers":[{"id":"tool","transport":"stdio","executableRef":"server-bin","arguments":[{"kind":"path","ref":"settings"}],"inputRefs":["settings"],"environmentRefs":["token"],"disabledTools":["remove_issue"]}]}}
 },"overlays":{"devin":{"version":1},"codex":{"version":1,"authRef":"work"}}}`
+
+type caseKind int
+
+const (
+	currentEnvelope caseKind = iota
+	removedEnvelope
+	futureEnvelope
+)
 
 type strictCodec interface {
 	profile.Codec
@@ -49,31 +57,32 @@ func TestNeutralCodecPreservesAdapterAdmissionAndCanonicalBytes(t *testing.T) {
 		t.Fatal(err)
 	}
 	cases := []struct {
-		name    string
-		body    string
-		version int
-		valid   bool
+		name  string
+		body  string
+		kind  caseKind
+		valid bool
 	}{
-		{"removed v1 envelope", `{"version":1,"name":"example","target":"devin","skillReferences":[{"source":"shared-agents","relativePath":"z"},{"source":"devin-config","relativePath":"a"}]}`, 1, false},
-		{"removed v2 envelope", `{"version":2,"name":"example","target":"devin","categories":{"skills":{"schemaVersion":1,"selection":[]}}}`, 2, false},
-		{"v3 defaults", minimalProfile, 3, true},
-		{"v3 all capabilities", completeProfile, 3, true},
-		{"v3 codex only", strings.Replace(minimalProfile, `"devin":{"version":1},`, "", 1), 3, true},
-		{"v3 inactive unknown overlay", strings.Replace(minimalProfile, `"devin":{"version":1}`, `"future":{"version":1}`, 1), 3, true},
-		{"v3 inactive Codex version", strings.Replace(minimalProfile, `"codex":{"version":1`, `"codex":{"version":7`, 1), 3, true},
-		{"v3 inactive Devin extension", strings.Replace(minimalProfile, `"devin":{"version":1}`, `"devin":{"version":1,"future":true}`, 1), 3, true},
-		{"duplicate field", strings.Replace(minimalProfile, `"version":3`, `"version":3,"version":3`, 1), 3, false},
-		{"unknown envelope field", strings.Replace(minimalProfile, `"version":3`, `"version":3,"future":true`, 1), 3, false},
-		{"unknown capability", strings.Replace(minimalProfile, `"skills":`, `"future":`, 1), 3, false},
-		{"unsupported capability version", strings.Replace(minimalProfile, `"skills":{"version":1`, `"skills":{"version":2`, 1), 3, false},
-		{"unsupported envelope version", strings.Replace(minimalProfile, `"version":3`, `"version":4`, 1), 4, false},
-		{"mismatched name", strings.Replace(minimalProfile, `"name":"example"`, `"name":"other"`, 1), 3, false},
-		{"null selection", strings.Replace(minimalProfile, `"selection":[]`, `"selection":null`, 1), 3, false},
-		{"noncanonical case", strings.Replace(minimalProfile, `"skills":`, `"Skills":`, 1), 3, false},
-		{"trailing data", minimalProfile + `{}`, 3, false},
-		{"unsafe skill path", strings.Replace(completeProfile, `"relativePath":"review"`, `"relativePath":"../review"`, 1), 3, false},
-		{"dangling MCP reference", strings.Replace(completeProfile, `"executableRef":"server-bin"`, `"executableRef":"missing"`, 1), 3, false},
-		{"invalid instruction source", strings.Replace(completeProfile, `"source":"acs-instructions"`, `"source":"shared-agents"`, 1), 3, false},
+		{"removed v1 envelope", `{"version":1,"name":"example","target":"devin","skillReferences":[{"source":"shared-agents","relativePath":"z"},{"source":"devin-config","relativePath":"a"}]}`, removedEnvelope, false},
+		{"removed v2 envelope", `{"version":2,"name":"example","target":"devin","categories":{"skills":{"schemaVersion":1,"selection":[]}}}`, removedEnvelope, false},
+		{"current defaults", minimalProfile, currentEnvelope, true},
+		{"read alias version 3", strings.Replace(minimalProfile, `"version":1`, `"version":3`, 1), currentEnvelope, true},
+		{"current all capabilities", completeProfile, currentEnvelope, true},
+		{"current codex only", strings.Replace(minimalProfile, `"devin":{"version":1},`, "", 1), currentEnvelope, true},
+		{"current inactive unknown overlay", strings.Replace(minimalProfile, `"devin":{"version":1}`, `"future":{"version":1}`, 1), currentEnvelope, true},
+		{"current inactive Codex version", strings.Replace(minimalProfile, `"codex":{"version":1`, `"codex":{"version":7`, 1), currentEnvelope, true},
+		{"current inactive Devin extension", strings.Replace(minimalProfile, `"devin":{"version":1}`, `"devin":{"version":1,"future":true}`, 1), currentEnvelope, true},
+		{"duplicate field", strings.Replace(minimalProfile, `"version":1`, `"version":1,"version":1`, 1), currentEnvelope, false},
+		{"unknown envelope field", strings.Replace(minimalProfile, `"version":1`, `"version":1,"future":true`, 1), currentEnvelope, false},
+		{"unknown capability", strings.Replace(minimalProfile, `"skills":`, `"future":`, 1), currentEnvelope, false},
+		{"unsupported capability version", strings.Replace(minimalProfile, `"skills":{"version":1`, `"skills":{"version":2`, 1), currentEnvelope, false},
+		{"unsupported envelope version", strings.Replace(minimalProfile, `"version":1`, `"version":4`, 1), futureEnvelope, false},
+		{"mismatched name", strings.Replace(minimalProfile, `"name":"example"`, `"name":"other"`, 1), currentEnvelope, false},
+		{"null selection", strings.Replace(minimalProfile, `"selection":[]`, `"selection":null`, 1), currentEnvelope, false},
+		{"noncanonical case", strings.Replace(minimalProfile, `"skills":`, `"Skills":`, 1), currentEnvelope, false},
+		{"trailing data", minimalProfile + `{}`, currentEnvelope, false},
+		{"unsafe skill path", strings.Replace(completeProfile, `"relativePath":"review"`, `"relativePath":"../review"`, 1), currentEnvelope, false},
+		{"dangling MCP reference", strings.Replace(completeProfile, `"executableRef":"server-bin"`, `"executableRef":"missing"`, 1), currentEnvelope, false},
+		{"invalid instruction source", strings.Replace(completeProfile, `"source":"acs-instructions"`, `"source":"shared-agents"`, 1), currentEnvelope, false},
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
@@ -82,7 +91,7 @@ func TestNeutralCodecPreservesAdapterAdmissionAndCanonicalBytes(t *testing.T) {
 				t.Fatalf("admission = %v; want valid=%v", gotErr, test.valid)
 			}
 			adapters := []strictCodec{editor.Categories()}
-			if test.version >= 3 {
+			if test.kind != removedEnvelope {
 				adapters = append(adapters, codexTarget.Categories())
 			}
 			for _, adapter := range adapters {
@@ -92,7 +101,7 @@ func TestNeutralCodecPreservesAdapterAdmissionAndCanonicalBytes(t *testing.T) {
 				}
 				// Decode remains compatible too; exact-byte admission still belongs
 				// to DecodeNamed, as it did before this extraction.
-				if test.version <= 3 {
+				if test.kind != futureEnvelope {
 					decoded, decodeErr := codec.Decode([]byte(test.body))
 					active, activeErr := adapter.Decode([]byte(test.body))
 					if errorText(decodeErr) != errorText(activeErr) || !reflect.DeepEqual(decoded, active) {
@@ -117,6 +126,9 @@ func TestNeutralCodecPreservesAdapterAdmissionAndCanonicalBytes(t *testing.T) {
 				}
 				if len(actual) == 0 || actual[len(actual)-1] != '\n' {
 					t.Fatal("canonical newline lost")
+				}
+				if got.Version != profile.CurrentVersion || !bytes.HasPrefix(actual, []byte("{\n  \"version\": 1,\n")) {
+					t.Fatalf("canonical bytes do not use the current envelope version: %s", actual)
 				}
 			}
 			if gotErr != nil {

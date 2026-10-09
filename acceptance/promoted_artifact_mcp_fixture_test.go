@@ -9,7 +9,7 @@ import (
 )
 
 func genericSelectedMCPProfileDocument() []byte {
-	return []byte(`{"version":3,"name":"generic-selected-mcp","common":{"skills":{"version":1,"selection":[]},"workspace":{"version":1,"selection":{"access":"read-write"}},"executables":{"version":1,"selection":{"entries":[{"id":"server","reference":{"kind":"workspace-relative","path":"generic-mcp-server.sh"}}]}},"mcp":{"version":1,"selection":{"servers":[{"id":"fixture","transport":"stdio","executableRef":"server","arguments":[],"inputRefs":[],"environmentRefs":[],"disabledTools":["blocked"]}]}}},"overlays":{"devin":{"version":1},"codex":{"version":1,"authRef":"interactive-coding"}}}`)
+	return []byte(`{"version":1,"name":"generic-selected-mcp","common":{"skills":{"version":1,"selection":[]},"workspace":{"version":1,"selection":{"access":"read-write"}},"executables":{"version":1,"selection":{"entries":[{"id":"server","reference":{"kind":"workspace-relative","path":"generic-mcp-server.sh"}}]}},"mcp":{"version":1,"selection":{"servers":[{"id":"fixture","transport":"stdio","executableRef":"server","arguments":[],"inputRefs":[],"environmentRefs":[],"disabledTools":["blocked"]}]}}},"overlays":{"devin":{"version":1},"codex":{"version":1,"authRef":"interactive-coding"}}}`)
 }
 
 func TestGenericSelectedMCPProfileFixtureDecodesThroughProductionRegistry(t *testing.T) {

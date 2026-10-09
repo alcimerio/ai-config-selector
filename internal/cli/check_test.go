@@ -55,7 +55,7 @@ func TestCheckDefaultNeverExecutesTargetOrQueriesStoredAuth(t *testing.T) {
 	if err := os.MkdirAll(profiles, 0700); err != nil {
 		t.Fatal(err)
 	}
-	body := []byte(`{"version":3,"name":"example","common":{"skills":{"version":1,"selection":[]},"workspace":{"version":1,"selection":{"access":"read-only"}}},"overlays":{"codex":{"version":1,"authRef":"private-identity"}}}`)
+	body := []byte(`{"version":1,"name":"example","common":{"skills":{"version":1,"selection":[]},"workspace":{"version":1,"selection":{"access":"read-only"}}},"overlays":{"codex":{"version":1,"authRef":"private-identity"}}}`)
 	path := filepath.Join(profiles, "example.json")
 	if err := os.WriteFile(path, body, 0600); err != nil {
 		t.Fatal(err)

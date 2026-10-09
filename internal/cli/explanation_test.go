@@ -104,7 +104,7 @@ func TestExplainUnknownInactiveOverlaysAreSanitizedLimitationsOutsidePlanAndDige
 			t.Fatal(err)
 		}
 		name := fmt.Sprintf("unknown-overlays-%d", index)
-		document := fmt.Sprintf(`{"version":3,"name":%q,"common":{"skills":{"version":1,"selection":[]},"workspace":{"version":1,"selection":{"access":"read-only"}}},"overlays":{%s}}`, name, overlays)
+		document := fmt.Sprintf(`{"version":1,"name":%q,"common":{"skills":{"version":1,"selection":[]},"workspace":{"version":1,"selection":{"access":"read-only"}}},"overlays":{%s}}`, name, overlays)
 		if err := os.WriteFile(filepath.Join(profiles, name+".json"), []byte(document), 0o600); err != nil {
 			t.Fatal(err)
 		}
@@ -187,7 +187,7 @@ func TestExplainUnknownInactiveOverlayAndLimitationBoundsFailWithoutPartialPlan(
 			if err := os.MkdirAll(profiles, 0o700); err != nil {
 				t.Fatal(err)
 			}
-			document := fmt.Sprintf(`{"version":3,"name":"bounded-overlays","common":{"skills":{"version":1,"selection":[]},"workspace":{"version":1,"selection":{"access":"read-only"}}},"overlays":{%s}}`, overlays.String())
+			document := fmt.Sprintf(`{"version":1,"name":"bounded-overlays","common":{"skills":{"version":1,"selection":[]},"workspace":{"version":1,"selection":{"access":"read-only"}}},"overlays":{%s}}`, overlays.String())
 			if err := os.WriteFile(filepath.Join(profiles, "bounded-overlays.json"), []byte(document), 0o600); err != nil {
 				t.Fatal(err)
 			}

@@ -186,7 +186,7 @@ func TestPromotedArtifactNativeContainmentContract(t *testing.T) {
 	t.Run("readiness is native and sanitized", assertPromotedArtifactNativeReadiness)
 	t.Run("effective explanation is linked and narrowly observed", assertPromotedArtifactEffectiveExplanation)
 	t.Run("sandbox shell is credential-free contained and cleaned", assertPromotedArtifactSandboxShell)
-	t.Run("v3 common material and workspace modes are enforced", assertPromotedArtifactV3WorkspaceModes)
+	t.Run("common material and workspace modes are enforced", assertPromotedArtifactCommonWorkspaceModes)
 	t.Run("restored deleted lineage executes contained shell and Devin", assertPromotedArtifactRestoredProfile)
 	t.Run("generic literal command uses candidate containment", assertPromotedArtifactGenericRun)
 	t.Run("explicit profile filesystem grants are enforced", assertPromotedArtifactFilesystemGrants)
@@ -397,7 +397,7 @@ func writeMCPProtectionProfile(t *testing.T, home, name string) {
 	if err := os.MkdirAll(directory, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	contents := `{"version":3,"name":"` + name + `","common":{"skills":{"version":1,"selection":[{"source":"devin-config","relativePath":"review"}]},"workspace":{"version":1,"selection":{"access":"read-write"}},"executables":{"version":1,"selection":{"entries":[{"id":"mcp-server","reference":{"kind":"fixed-search-name","name":"sh"}}]}},"mcp":{"version":1,"selection":{"servers":[{"id":"fixture","transport":"stdio","executableRef":"mcp-server","arguments":[],"inputRefs":[],"environmentRefs":[],"disabledTools":["blocked"]}]}}},"overlays":{"devin":{"version":1}}}`
+	contents := `{"version":1,"name":"` + name + `","common":{"skills":{"version":1,"selection":[{"source":"devin-config","relativePath":"review"}]},"workspace":{"version":1,"selection":{"access":"read-write"}},"executables":{"version":1,"selection":{"entries":[{"id":"mcp-server","reference":{"kind":"fixed-search-name","name":"sh"}}]}},"mcp":{"version":1,"selection":{"servers":[{"id":"fixture","transport":"stdio","executableRef":"mcp-server","arguments":[],"inputRefs":[],"environmentRefs":[],"disabledTools":["blocked"]}]}}},"overlays":{"devin":{"version":1}}}`
 	if err := os.WriteFile(filepath.Join(directory, name+".json"), []byte(contents), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -502,7 +502,7 @@ func writeNativeInstructionProfile(t *testing.T, home, name string, ref instruct
 		t.Fatal(err)
 	}
 	selection := fmt.Sprintf(`{"source":%q,"relativePath":%q}`, ref.Source, ref.RelativePath)
-	raw := fmt.Sprintf(`{"version":3,"name":%q,"common":{"skills":{"version":1,"selection":[]},"workspace":{"version":1,"selection":{"access":"read-only"}},"instructions":{"version":1,"selection":[%s]}},"overlays":{"devin":{"version":1}}}`, name, selection)
+	raw := fmt.Sprintf(`{"version":1,"name":%q,"common":{"skills":{"version":1,"selection":[]},"workspace":{"version":1,"selection":{"access":"read-only"}},"instructions":{"version":1,"selection":[%s]}},"overlays":{"devin":{"version":1}}}`, name, selection)
 	if err := os.WriteFile(filepath.Join(directory, name+".json"), []byte(raw), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -519,7 +519,7 @@ func assertPromotedArtifactDevinGenerations(t *testing.T) {
 	if err := os.MkdirAll(tools, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	writeVersionThreeProfile(t, home, "generation", "read-write")
+	writeCommonProfile(t, home, "generation", "read-write")
 	installPromotedArtifactFakeDevin(t, tools)
 	writeFakeDevinConfiguration(t, workspace, fakeDevinConfiguration{Mode: "session-generations"})
 	before := promotedSessionSnapshot(t, binary, home, path)
@@ -727,7 +727,7 @@ func assertPromotedArtifactEffectiveExplanation(t *testing.T) {
 				}
 			}
 			workspaceExecutable, found := nativeExplanationFactByID(result.Plan.Requested, "common.executables.workspace-tool")
-			if !found || workspaceExecutable.Reason != "stored_v3_intent_covered_by_workspace_read" || nativeExplanationHasFact(result.Plan.Effective, "executable.workspace-tool") {
+			if !found || workspaceExecutable.Reason != "stored_intent_covered_by_workspace_read" || nativeExplanationHasFact(result.Plan.Effective, "executable.workspace-tool") {
 				t.Fatalf("workspace-covered executable explanation is not minimal: requested=%#v output=%s", workspaceExecutable, output)
 			}
 			if !nativeExplanationHasFact(result.Plan.Requested, "common.executables.fixed-tool") || !nativeExplanationHasFact(result.Plan.Effective, "executable.fixed-tool") || !nativeExplanationHasFact(result.Plan.Effective, "runtime.executable-visibility") {
@@ -839,10 +839,10 @@ func assertPromotedArtifactEffectiveExplanation(t *testing.T) {
 	assertPromotedArtifactExplanationFailuresArePlanless(t, binary, home, path, workspace)
 	assertPromotedArtifactRunDigestMeaning(t, binary, home, path, workspace, helper)
 	assertPromotedArtifactCodexAuthDigestMeaning(t, binary, home, path, workspace)
-	assertPromotedArtifactV3ExplanationWorkspaceModes(t, binary, home, path, workspace, helper)
+	assertPromotedArtifactExplanationWorkspaceModes(t, binary, home, path, workspace, helper)
 }
 
-func assertPromotedArtifactV3ExplanationWorkspaceModes(t *testing.T, binary, home, path, workspace, helper string) {
+func assertPromotedArtifactExplanationWorkspaceModes(t *testing.T, binary, home, path, workspace, helper string) {
 	t.Helper()
 	writeSharedTargetProfile(t, home, "explanation-readonly", "read-only")
 	type modeResult struct {
@@ -863,7 +863,7 @@ func assertPromotedArtifactV3ExplanationWorkspaceModes(t *testing.T, binary, hom
 			command.Dir, command.Env = workspace, nativeCandidateEnvironment(home, path, nil)
 			output, err := command.CombinedOutput()
 			if err != nil {
-				t.Fatalf("v3 %s %s explanation: %v; output=%s", profileName, test.name, err, output)
+				t.Fatalf("%s %s explanation: %v; output=%s", profileName, test.name, err, output)
 			}
 			var result struct {
 				Plan struct {
@@ -872,18 +872,18 @@ func assertPromotedArtifactV3ExplanationWorkspaceModes(t *testing.T, binary, hom
 				} `json:"plan"`
 			}
 			if err := json.Unmarshal(output, &result); err != nil {
-				t.Fatalf("decode v3 mode explanation: %v; output=%s", err, output)
+				t.Fatalf("decode mode explanation: %v; output=%s", err, output)
 			}
 			workspaceFact, found := nativeExplanationFactByID(result.Plan.Requested, "common.workspace")
-			if !found || workspaceFact.Value.Access == "" || workspaceFact.Reason != "stored_v3_intent" {
-				t.Fatalf("v3 workspace authority is incomplete: %#v output=%s", workspaceFact, output)
+			if !found || workspaceFact.Value.Access == "" || workspaceFact.Reason != "stored_intent" {
+				t.Fatalf("workspace authority is incomplete: %#v output=%s", workspaceFact, output)
 			}
 			byIntent[test.name] = append(byIntent[test.name], modeResult{access: workspaceFact.Value.Access, digest: result.Plan.Digest})
 		}
 	}
 	for intent, results := range byIntent {
 		if len(results) != 2 || results[0].access != "read-only" || results[1].access != "read-write" || results[0].digest == results[1].digest {
-			t.Fatalf("v3 %s workspace declaration/digest matrix = %#v", intent, results)
+			t.Fatalf("%s workspace declaration/digest matrix = %#v", intent, results)
 		}
 	}
 }
@@ -1060,7 +1060,7 @@ func writeNativeExplanationProfile(t *testing.T, home, name, overlays string) {
 	if err := os.MkdirAll(directory, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	contents := fmt.Sprintf(`{"version":3,"name":%q,"common":{"skills":{"version":1,"selection":[{"source":"devin-config","relativePath":"review"}]},"workspace":{"version":1,"selection":{"access":"read-only"}}},"overlays":{%s}}`, name, overlays)
+	contents := fmt.Sprintf(`{"version":1,"name":%q,"common":{"skills":{"version":1,"selection":[{"source":"devin-config","relativePath":"review"}]},"workspace":{"version":1,"selection":{"access":"read-only"}}},"overlays":{%s}}`, name, overlays)
 	if err := os.WriteFile(filepath.Join(directory, name+".json"), []byte(contents), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -1077,7 +1077,7 @@ func assertPromotedArtifactExplanationFailuresArePlanless(t *testing.T, binary, 
 		{name: "selected-skill-missing", selection: `[{"source":"shared-agents","relativePath":"PRIVATE-MISSING-SKILL"}]`, overlays: `"devin":{"version":1}`, code: "profile_resolution_failed"},
 	} {
 		directory := filepath.Join(home, ".acs", "profiles")
-		contents := fmt.Sprintf(`{"version":3,"name":%q,"common":{"skills":{"version":1,"selection":%s},"workspace":{"version":1,"selection":{"access":"read-only"}}},"overlays":{%s}}`, test.name, test.selection, test.overlays)
+		contents := fmt.Sprintf(`{"version":1,"name":%q,"common":{"skills":{"version":1,"selection":%s},"workspace":{"version":1,"selection":{"access":"read-only"}}},"overlays":{%s}}`, test.name, test.selection, test.overlays)
 		if err := os.WriteFile(filepath.Join(directory, test.name+".json"), []byte(contents), 0o600); err != nil {
 			t.Fatal(err)
 		}
@@ -1458,7 +1458,7 @@ func assertPromotedArtifactFilesystemGrants(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(home) })
 	writeSkillBundle(t, home, "review")
-	writeVersionThreeProfile(t, home, "reviews", "read-write")
+	writeCommonProfile(t, home, "reviews", "read-write")
 	credential := filepath.Join(home, ".local", "share", "devin", "credentials.toml")
 	if err := os.MkdirAll(filepath.Dir(credential), 0o700); err != nil {
 		t.Fatal(err)
@@ -1626,7 +1626,7 @@ func writeFilesystemGrantProfile(t *testing.T, home, name, workspaceAccess strin
 		entries = append(entries, map[string]any{"id": grant.ID, "access": grant.Access, "type": grant.Type, "reference": map[string]string{"kind": grant.Kind, "path": grant.Path}})
 	}
 	profileDocument := map[string]any{
-		"version": 3, "name": name,
+		"version": 1, "name": name,
 		"common": map[string]any{
 			"skills":    map[string]any{"version": 1, "selection": []any{}},
 			"workspace": map[string]any{"version": 1, "selection": map[string]string{"access": workspaceAccess}},
@@ -1688,7 +1688,7 @@ func writeExecutableVisibilityProfile(t *testing.T, home, name string, grants []
 		entries = append(entries, map[string]any{"id": grant.ID, "reference": reference})
 	}
 	profileDocument := map[string]any{
-		"version": 3, "name": name,
+		"version": 1, "name": name,
 		"common": map[string]any{
 			"skills":      map[string]any{"version": 1, "selection": []any{}},
 			"workspace":   map[string]any{"version": 1, "selection": map[string]string{"access": "read-write"}},
@@ -2234,7 +2234,7 @@ func writeGenericInstructionProfile(t *testing.T, home, name string) {
 	if err := os.MkdirAll(directory, 0700); err != nil {
 		t.Fatal(err)
 	}
-	raw := fmt.Sprintf(`{"version":3,"name":%q,"common":{"skills":{"version":1,"selection":[]},"workspace":{"version":1,"selection":{"access":"read-only"}},"instructions":{"version":1,"selection":[{"source":"acs-instructions","relativePath":"generic.md"}]}},"overlays":{}}`, name)
+	raw := fmt.Sprintf(`{"version":1,"name":%q,"common":{"skills":{"version":1,"selection":[]},"workspace":{"version":1,"selection":{"access":"read-only"}},"instructions":{"version":1,"selection":[{"source":"acs-instructions","relativePath":"generic.md"}]}},"overlays":{}}`, name)
 	if err := os.WriteFile(filepath.Join(directory, name+".json"), []byte(raw), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -2776,11 +2776,11 @@ func TestSharedTargetFixtureDoesNotInventPreflightEvidence(t *testing.T) {
 	}
 }
 
-func assertPromotedArtifactV3WorkspaceModes(t *testing.T) {
+func assertPromotedArtifactCommonWorkspaceModes(t *testing.T) {
 	binary := promotedBinary(t)
 	home, path := prepareRuntimeHome(t)
-	writeVersionThreeProfile(t, home, "readonly", "read-only")
-	writeVersionThreeProfile(t, home, "coding", "read-write")
+	writeCommonProfile(t, home, "readonly", "read-only")
+	writeCommonProfile(t, home, "coding", "read-write")
 	outsideDirectory := realTemporaryDirectory(t)
 	outside := filepath.Join(outsideDirectory, "unrelated-write")
 	outsideSecret := filepath.Join(outsideDirectory, "unrelated-secret")
@@ -2796,7 +2796,7 @@ func assertPromotedArtifactV3WorkspaceModes(t *testing.T) {
 		explain.Env, explain.Dir = nativeCandidateEnvironment(home, path, nil), workspace
 		explanationOutput, err := explain.CombinedOutput()
 		if err != nil {
-			t.Fatalf("installed v3 %s explanation: %v; output=%s", test.profile, err, explanationOutput)
+			t.Fatalf("installed %s explanation: %v; output=%s", test.profile, err, explanationOutput)
 		}
 		var explanation struct {
 			Plan struct {
@@ -2805,7 +2805,7 @@ func assertPromotedArtifactV3WorkspaceModes(t *testing.T) {
 			} `json:"plan"`
 		}
 		if err := json.Unmarshal(explanationOutput, &explanation); err != nil {
-			t.Fatalf("decode v3 %s explanation: %v; output=%s", test.profile, err, explanationOutput)
+			t.Fatalf("decode %s explanation: %v; output=%s", test.profile, err, explanationOutput)
 		}
 		workspaceFact, found := nativeExplanationFactByID(explanation.Plan.Requested, "common.workspace")
 		wantAccess := "read-only"
@@ -2813,7 +2813,7 @@ func assertPromotedArtifactV3WorkspaceModes(t *testing.T) {
 			wantAccess = "read-write"
 		}
 		if !found || workspaceFact.Value.Access != wantAccess || nativeExplanationHasFact(explanation.Plan.Effective, "workspace.write") != test.writable || !nativeExplanationHasFact(explanation.Plan.Effective, "runtime.session") {
-			t.Fatalf("v3 %s declared authority does not match expected behavioral case: %#v", test.profile, explanation.Plan)
+			t.Fatalf("%s declared authority does not match expected behavioral case: %#v", test.profile, explanation.Plan)
 		}
 		commands := "set -u\n" +
 			"test \"$(cat \"$HOME/.acs/common/v1/skills/devin-config/review/SKILL.md\")\" != \"\" || exit 61\n" +
@@ -2822,21 +2822,21 @@ func assertPromotedArtifactV3WorkspaceModes(t *testing.T) {
 			"if printf workspace > ./workspace-write 2>/dev/null; then print -r -- workspace-written; else print -r -- workspace-denied; fi\n" +
 			"if printf outside > " + strconv.Quote(outside) + " 2>/dev/null; then exit 64; fi\n" +
 			"if cat " + strconv.Quote(outsideSecret) + " >/dev/null 2>&1; then exit 65; fi\n" +
-			"print -r -- v3-common-ok\nexit 0\n"
+			"print -r -- common-material-ok\nexit 0\n"
 		command := exec.Command(binary, "sandbox", "--profile", test.profile)
 		command.Env, command.Dir, command.Stdin = nativeCandidateEnvironment(home, path, nil), workspace, strings.NewReader(commands)
 		output, err := command.CombinedOutput()
 		if err != nil {
-			t.Fatalf("installed v3 %s shell: %v; output=%s", test.profile, err, output)
+			t.Fatalf("installed %s shell: %v; output=%s", test.profile, err, output)
 		}
-		if !strings.Contains(string(output), "v3-common-ok") {
-			t.Fatalf("v3 common material was not consumed: %s", output)
+		if !strings.Contains(string(output), "common-material-ok") {
+			t.Fatalf("common material was not consumed: %s", output)
 		}
 		_, workspaceErr := os.Stat(filepath.Join(workspace, "workspace-write"))
 		if (workspaceErr == nil) != test.writable {
 			t.Fatalf("profile %s workspace state=%v, writable=%v; output=%s", test.profile, workspaceErr, test.writable, output)
 		}
-		assertMarkerAbsent(t, outside, "v3 shell wrote unrelated host path")
+		assertMarkerAbsent(t, outside, "shell wrote unrelated host path")
 		assertNoSessions(t, home)
 	}
 }
@@ -2857,7 +2857,7 @@ func assertPromotedArtifactRestoredProfile(t *testing.T) {
 	}
 	installPromotedArtifactFakeDevin(t, tools)
 	document := filepath.Join(root, "restored-profile.json")
-	if err := os.WriteFile(document, []byte(`{"version":3,"name":"native-history","common":{"skills":{"version":1,"selection":[{"source":"devin-config","relativePath":"review"}]},"workspace":{"version":1,"selection":{"access":"read-write"}}},"overlays":{"devin":{"version":1}}}`), 0o600); err != nil {
+	if err := os.WriteFile(document, []byte(`{"version":1,"name":"native-history","common":{"skills":{"version":1,"selection":[{"source":"devin-config","relativePath":"review"}]},"workspace":{"version":1,"selection":{"access":"read-write"}}},"overlays":{"devin":{"version":1}}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	run := func(args ...string) []byte {
@@ -3318,7 +3318,7 @@ func writeScopedEnvironmentProfile(t *testing.T, home, name string) {
 	if err := os.MkdirAll(directory, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	document := `{"version":3,"name":` + strconv.Quote(name) + `,"common":{"skills":{"version":1,"selection":[{"source":"devin-config","relativePath":"review"}]},"workspace":{"version":1,"selection":{"access":"read-write"}},"environment":{"version":1,"selection":{"entries":[` +
+	document := `{"version":1,"name":` + strconv.Quote(name) + `,"common":{"skills":{"version":1,"selection":[{"source":"devin-config","relativePath":"review"}]},"workspace":{"version":1,"selection":{"access":"read-write"}},"environment":{"version":1,"selection":{"entries":[` +
 		`{"id":"mode","destination":"PROFILE_SELECTED_MODE","scope":"attached-process-tree","source":{"kind":"host-environment","name":"ACS_NATIVE_PROFILE_MODE"},"required":true,"classification":"non-secret"},` +
 		`{"id":"optional","destination":"PROFILE_SELECTED_OPTIONAL","scope":"attached-process-tree","source":{"kind":"host-environment","name":"ACS_NATIVE_PROFILE_OPTIONAL"},"required":false,"classification":"non-secret"},` +
 		`{"id":"token","destination":"PROFILE_SELECTED_TOKEN","scope":"attached-process-tree","source":{"kind":"secret-reference","provider":"host-environment","reference":"ACS_NATIVE_PROFILE_TOKEN"},"required":true,"classification":"secret"}` +
@@ -3331,9 +3331,9 @@ func writeScopedEnvironmentProfile(t *testing.T, home, name string) {
 func assertPromotedArtifactNativeContainment(t *testing.T) {
 	binary := promotedBinary(t)
 	home, path := prepareRuntimeHome(t)
-	// Exercise the installed candidate's v3 common copy followed by its real
+	// Exercise the installed candidate's common copy followed by its real
 	// Devin projection; the fake target observes the projected managed path.
-	writeVersionThreeProfile(t, home, "reviews", "read-write")
+	writeCommonProfile(t, home, "reviews", "read-write")
 	fixtureRoot := realTemporaryDirectory(t)
 	workspace := filepath.Join(fixtureRoot, "workspace")
 	tools := filepath.Join(fixtureRoot, "tools")

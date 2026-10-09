@@ -14,7 +14,7 @@ func TestPassiveAndActiveEnvironmentAdmissionStayInParity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	base := `{"version":3,"name":"example","common":{"skills":{"version":1,"selection":[]},"workspace":{"version":1,"selection":{"access":"read-only"}}%s},"overlays":{"devin":{"version":1}}}`
+	base := `{"version":1,"name":"example","common":{"skills":{"version":1,"selection":[]},"workspace":{"version":1,"selection":{"access":"read-only"}}%s},"overlays":{"devin":{"version":1}}}`
 
 	t.Run("omitted synthesizes canonical empty", func(t *testing.T) {
 		data := []byte(fmt.Sprintf(base, ""))

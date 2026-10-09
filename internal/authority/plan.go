@@ -471,7 +471,7 @@ func buildExplanation(plan Plan) Explanation {
 		facts.Effective = append(facts.Effective, value.Effective...)
 		facts.Unsupported = append(facts.Unsupported, value.Unsupported...)
 	}
-	add(Facts{Requested: []Fact{{ID: "common.workspace", Kind: "workspace", Value: FactValue{Access: string(plan.WorkspaceAccess())}, Reason: "stored_v3_intent", Source: FactSource{Kind: "profile", ID: "workspace", Version: 1}}}})
+	add(Facts{Requested: []Fact{{ID: "common.workspace", Kind: "workspace", Value: FactValue{Access: string(plan.WorkspaceAccess())}, Reason: "stored_intent", Source: FactSource{Kind: "profile", ID: "workspace", Version: 1}}}})
 	add(pathGrantFacts(plan.pathGrantIntents, plan.WorkspaceAccess()))
 	add(pathExclusionFacts(plan.pathExclusionIntents))
 	add(executableGrantFacts(plan.executableGrantIntents))
@@ -513,7 +513,7 @@ func environmentFacts(intents []launch.EnvironmentIntent) Facts {
 			value.Provider = intent.Provider
 		}
 		source := FactSource{Kind: "profile", ID: "environment", Version: 1}
-		result.Requested = append(result.Requested, Fact{ID: "common.environment." + intent.ID, Kind: "environment", Value: value, Reason: "stored_v3_intent_value_omitted", Source: source})
+		result.Requested = append(result.Requested, Fact{ID: "common.environment." + intent.ID, Kind: "environment", Value: value, Reason: "stored_intent_value_omitted", Source: source})
 		result.Effective = append(result.Effective, Fact{ID: "environment." + intent.ID, Kind: "environment", Value: value, Reason: "attached_process_tree_binding_unresolved", Source: source})
 	}
 	return result
@@ -529,9 +529,9 @@ func executableGrantFacts(intents []launch.ExecutableGrantIntent) Facts {
 		if intent.ReferenceKind == launch.ExecutableReferenceWorkspaceRelative {
 			value.LogicalReference = intent.Path
 		}
-		reason := "stored_v3_intent"
+		reason := "stored_intent"
 		if intent.ReferenceKind == launch.ExecutableReferenceWorkspaceRelative {
-			reason = "stored_v3_intent_covered_by_workspace_read"
+			reason = "stored_intent_covered_by_workspace_read"
 		}
 		requested := Fact{ID: "common.executables." + intent.ID, Kind: "executable-visibility", Value: value, Reason: reason, Source: FactSource{Kind: "profile", ID: "executables", Version: 1}}
 		result.Requested = append(result.Requested, requested)
@@ -550,7 +550,7 @@ func pathGrantFacts(intents []launch.PathGrantIntent, workspace launch.Workspace
 		if intent.ReferenceKind == launch.PathReferenceWorkspaceRelative {
 			value.LogicalReference = intent.Path
 		}
-		result.Requested = append(result.Requested, Fact{ID: "common.paths." + intent.ID, Kind: "filesystem", Value: value, Reason: "stored_v3_intent", Source: FactSource{Kind: "profile", ID: "paths", Version: 1}})
+		result.Requested = append(result.Requested, Fact{ID: "common.paths." + intent.ID, Kind: "filesystem", Value: value, Reason: "stored_intent", Source: FactSource{Kind: "profile", ID: "paths", Version: 1}})
 		if intent.ReferenceKind == launch.PathReferenceWorkspaceRelative && (intent.Access == launch.PathAccessReadOnly || workspace == launch.WorkspaceAccessReadWrite) {
 			continue
 		}
@@ -571,7 +571,7 @@ func pathExclusionFacts(intents []launch.PathExclusionIntent) Facts {
 		if intent.ReferenceKind == launch.PathReferenceWorkspaceRelative {
 			value.LogicalReference = intent.Path
 		}
-		fact := Fact{ID: "common.exclusions." + intent.ID, Kind: "filesystem-exclusion", Value: value, Reason: "stored_v3_intent", Source: FactSource{Kind: "profile", ID: "exclusions", Version: 1}}
+		fact := Fact{ID: "common.exclusions." + intent.ID, Kind: "filesystem-exclusion", Value: value, Reason: "stored_intent", Source: FactSource{Kind: "profile", ID: "exclusions", Version: 1}}
 		result.Requested = append(result.Requested, fact)
 		fact.Reason = "exclusion_identity_unchecked"
 		result.Effective = append(result.Effective, fact)

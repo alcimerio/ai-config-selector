@@ -47,7 +47,7 @@ func TestUnifiedCreateStoresExplicitOverlayCombinationsWithoutCredentials(t *tes
 			if err != nil {
 				t.Fatal(err)
 			}
-			if saved.Version != 3 || len(saved.Overlays) != boolInt(options.Devin)+boolInt(options.Codex) {
+			if saved.Version != profile.CurrentVersion || len(saved.Overlays) != boolInt(options.Devin)+boolInt(options.Codex) {
 				t.Fatalf("Profile %+v", saved)
 			}
 			for target, overlay := range saved.Overlays {

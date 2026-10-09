@@ -110,7 +110,7 @@ func TestPromotedArtifactReportsItsVersionAndCreatesAnEmptyProfileThroughAPTY(t 
 	if err != nil {
 		t.Fatalf("created Profile is unavailable: %v", err)
 	}
-	for _, fragment := range []string{`"version": 3`, `"name": "promoted-empty"`, `"common"`, `"skills"`, `"selection": []`, `"workspace"`, `"access": "read-only"`, `"overlays"`, `"devin"`} {
+	for _, fragment := range []string{`"version": 1`, `"name": "promoted-empty"`, `"common"`, `"skills"`, `"selection": []`, `"workspace"`, `"access": "read-only"`, `"overlays"`, `"devin"`} {
 		if !bytes.Contains(contents, []byte(fragment)) {
 			t.Errorf("created Profile omits %s", fragment)
 		}
@@ -569,7 +569,7 @@ func prepareRuntimeHome(t *testing.T) (string, string) {
 	t.Helper()
 	home := realTemporaryDirectory(t)
 	writeSkillBundle(t, home, "review")
-	writeVersionThreeProfile(t, home, "reviews", "read-write")
+	writeCommonProfile(t, home, "reviews", "read-write")
 	credential := filepath.Join(home, ".local", "share", "devin", "credentials.toml")
 	if err := os.MkdirAll(filepath.Dir(credential), 0o700); err != nil {
 		t.Fatal(err)
@@ -667,13 +667,13 @@ func waitExitCode(t *testing.T, command *exec.Cmd, timeout time.Duration, output
 	return -1
 }
 
-func writeVersionThreeProfile(t *testing.T, home, name, workspaceAccess string) {
+func writeCommonProfile(t *testing.T, home, name, workspaceAccess string) {
 	t.Helper()
 	directory := filepath.Join(home, ".acs", "profiles")
 	if err := os.MkdirAll(directory, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	contents := fmt.Sprintf(`{"version":3,"name":%q,"common":{"skills":{"version":1,"selection":[{"source":"devin-config","relativePath":"review"}]},"workspace":{"version":1,"selection":{"access":%q}}},"overlays":{"devin":{"version":1}}}`, name, workspaceAccess)
+	contents := fmt.Sprintf(`{"version":1,"name":%q,"common":{"skills":{"version":1,"selection":[{"source":"devin-config","relativePath":"review"}]},"workspace":{"version":1,"selection":{"access":%q}}},"overlays":{"devin":{"version":1}}}`, name, workspaceAccess)
 	if err := os.WriteFile(filepath.Join(directory, name+".json"), []byte(contents), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -685,7 +685,7 @@ func writeSharedTargetProfile(t *testing.T, home, name, workspaceAccess string) 
 	if err := os.MkdirAll(directory, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	contents := fmt.Sprintf(`{"version":3,"name":%q,"common":{"skills":{"version":1,"selection":[{"source":"devin-config","relativePath":"review"},{"source":"shared-agents","relativePath":"delivery"}]},"workspace":{"version":1,"selection":{"access":%q}}},"overlays":{"devin":{"version":1},"codex":{"version":1,"authRef":%q}}}`, name, workspaceAccess, explanationStoredAuthRef)
+	contents := fmt.Sprintf(`{"version":1,"name":%q,"common":{"skills":{"version":1,"selection":[{"source":"devin-config","relativePath":"review"},{"source":"shared-agents","relativePath":"delivery"}]},"workspace":{"version":1,"selection":{"access":%q}}},"overlays":{"devin":{"version":1},"codex":{"version":1,"authRef":%q}}}`, name, workspaceAccess, explanationStoredAuthRef)
 	if err := os.WriteFile(filepath.Join(directory, name+".json"), []byte(contents), 0o600); err != nil {
 		t.Fatal(err)
 	}

@@ -7,7 +7,7 @@ import (
 )
 
 func TestSelectionCountsPreserveScalarAndEmptyCapabilities(t *testing.T) {
-	body := `{"version":3,"name":"example","common":{"skills":{"version":1,"selection":[]},"workspace":{"version":1,"selection":{"access":"read-only"}},"paths":{"version":1,"selection":{"entries":[]}},"exclusions":{"version":1,"selection":{"entries":[]}},"executables":{"version":1,"selection":{"entries":[]}},"environment":{"version":1,"selection":{"entries":[]}},"mcp":{"version":1,"selection":{"servers":[]}},"instructions":{"version":1,"selection":[]}},"overlays":{}}`
+	body := `{"version":1,"name":"example","common":{"skills":{"version":1,"selection":[]},"workspace":{"version":1,"selection":{"access":"read-only"}},"paths":{"version":1,"selection":{"entries":[]}},"exclusions":{"version":1,"selection":{"entries":[]}},"executables":{"version":1,"selection":{"entries":[]}},"environment":{"version":1,"selection":{"entries":[]}},"mcp":{"version":1,"selection":{"servers":[]}},"instructions":{"version":1,"selection":[]}},"overlays":{}}`
 	entry := InspectBytes("example", []byte(body))
 	if entry.Status != "valid" {
 		t.Fatalf("entry = %#v", entry)

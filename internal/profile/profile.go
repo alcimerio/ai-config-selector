@@ -8,8 +8,20 @@ import (
 	"regexp"
 )
 
-// CurrentVersion is the only supported stored Profile envelope version.
-const CurrentVersion = 3
+// CurrentVersion is the only Profile envelope version ACS writes.
+const CurrentVersion = 1
+
+// readAliasVersion is the number this same envelope carried before the retired
+// pre-common envelopes were removed and the format was renumbered to 1. It is
+// accepted on read only, so Profiles and history snapshots written by earlier
+// builds keep loading; every write emits CurrentVersion.
+const readAliasVersion = 3
+
+// SupportedVersion reports whether a stored envelope version denotes the
+// current Profile format.
+func SupportedVersion(version int) bool {
+	return version == CurrentVersion || version == readAliasVersion
+}
 
 var (
 	ErrInvalidProfileName = errors.New("invalid Profile name")

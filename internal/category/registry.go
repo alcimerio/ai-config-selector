@@ -429,9 +429,10 @@ func (registry *Registry) supportsCommonCatalog() bool {
 // Normalize validates the Profile envelope and canonicalizes every common
 // capability payload without changing the saved file.
 func (registry *Registry) Normalize(candidate profile.Profile) (profile.Profile, error) {
-	if candidate.Version != profile.CurrentVersion {
+	if !profile.SupportedVersion(candidate.Version) {
 		return profile.Profile{}, fmt.Errorf("unsupported schema version %d", candidate.Version)
 	}
+	candidate.Version = profile.CurrentVersion
 	for id := range candidate.Common {
 		if _, exists := registry.byID[id]; !exists {
 			return profile.Profile{}, fmt.Errorf("unknown common capability %q", id)
@@ -486,7 +487,7 @@ func (registry *Registry) Decode(contents []byte) (profile.Profile, error) {
 	if err := json.Unmarshal(contents, &envelope); err != nil {
 		return profile.Profile{}, err
 	}
-	if envelope.Version != profile.CurrentVersion {
+	if !profile.SupportedVersion(envelope.Version) {
 		return profile.Profile{}, fmt.Errorf("unsupported schema version %d", envelope.Version)
 	}
 	var candidate profile.Profile
