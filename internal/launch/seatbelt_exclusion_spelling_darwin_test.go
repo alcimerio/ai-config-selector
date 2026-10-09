@@ -63,6 +63,7 @@ func TestSeatbeltPolicyDeniesSpellingVariantsOfAbsentExclusions(t *testing.T) {
 func TestSeatbeltDeniesSpellingVariantsOfAbsentExclusions(t *testing.T) {
 	skipSeatbeltNativeTestBinaryUnderRace(t)
 	for _, test := range []struct{ name, excluded, variant string }{
+		{name: "control", excluded: ".envrc", variant: "unrelated"},
 		{name: "exact", excluded: ".envrc", variant: ".envrc"},
 		{name: "case-file", excluded: ".envrc", variant: ".ENVRC"},
 		{name: "case-directory", excluded: "secrets/token", variant: "Secrets/token"},
@@ -83,6 +84,12 @@ func TestSeatbeltDeniesSpellingVariantsOfAbsentExclusions(t *testing.T) {
 			}
 			outcome := string(readSeatbeltPTYFile(result))
 			t.Logf("spelling variant %q of absent exclusion %q: %s", test.variant, test.excluded, outcome)
+			if test.name == "control" {
+				if outcome != "created" {
+					t.Fatalf("workspace-writable target could not create an unrelated file: %s", outcome)
+				}
+				return
+			}
 			if outcome == "created" {
 				t.Fatalf("sandbox permitted creating %q despite absent exclusion %q", test.variant, test.excluded)
 			}
