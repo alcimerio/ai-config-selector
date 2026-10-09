@@ -214,6 +214,7 @@ func trace(t *testing.T, r *Repository, mode, op string) []string {
 func TestProcessCrashEveryBoundary(t *testing.T) {
 	for _, op := range []string{"create", "replace", "clone", "rename", "delete"} {
 		t.Run(op, func(t *testing.T) {
+			t.Parallel()
 			points := trace(t, seeded(t), "apply", op)
 			for _, point := range points {
 				t.Run(point, func(t *testing.T) {
@@ -229,6 +230,7 @@ func TestProcessCrashEveryBoundary(t *testing.T) {
 func TestInterruptedRecoveryEveryBoundary(t *testing.T) {
 	for _, op := range []string{"create", "replace", "clone", "rename", "delete"} {
 		t.Run(op, func(t *testing.T) {
+			t.Parallel()
 			baseline := seeded(t)
 			runKilled(t, baseline, "apply", op, "decision.publish.after")
 			points := trace(t, baseline, "recover", op)

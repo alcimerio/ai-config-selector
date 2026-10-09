@@ -38,6 +38,13 @@ on macOS 26. The native matrix tests each exact version against the same supplie
 ACS candidate. Credential-free native tests use real Seatbelt, a disposable Keychain
 and synthetic home, without account credentials or captured private content.
 
+On pull requests and main, the native matrix sets
+`ACS_NATIVE_BROAD_SUITES=covered-by-macos-verify`, so it does not repeat the
+unfiltered `go test -v ./...` and `go test -race ./...` suites: the required
+Verify (macOS) check runs them on the same commit as parallel unit and race
+jobs. The tag release workflow never sets it and always runs both suites inside
+the shared native gate.
+
 For a local run:
 
 1. Fetch and install the locked target with `scripts/fetch-codex-test-targets.sh`
