@@ -700,20 +700,24 @@ func validateSandboxCheck(request SandboxCheck) (validatedSandboxCheck, error) {
 	if err != nil {
 		return validatedSandboxCheck{}, sandboxError(SandboxUnsafePath, err)
 	}
-	required := append([]string{executable, sessionsDirectory, privateSessionOperations}, runtimeInputs...)
-	supervisor, err := os.Executable()
-	if err != nil {
-		return validatedSandboxCheck{}, sandboxError(SandboxUnsafePath, err)
-	}
-	supervisor, err = filepath.EvalSymlinks(supervisor)
-	if err != nil {
-		return validatedSandboxCheck{}, sandboxError(SandboxUnsafePath, err)
-	}
-	required = append(required, supervisor)
-
-	required = append(required, runtimeProbePaths...)
-	if err := validateExclusionRequirements(exclusions, filesystemGrants, executableGrants, required); err != nil {
-		return validatedSandboxCheck{}, sandboxError(SandboxUnsafePath, err)
+	// Exclusion conflicts can only exist when exclusions are selected. Skipping
+	// the supervisor lookup otherwise keeps exclusion-free launches free of a
+	// new failure mode and of extra filesystem work on every check.
+	if len(exclusions) != 0 {
+		required := append([]string{executable, sessionsDirectory, privateSessionOperations}, runtimeInputs...)
+		supervisor, err := os.Executable()
+		if err != nil {
+			return validatedSandboxCheck{}, sandboxError(SandboxUnsafePath, err)
+		}
+		supervisor, err = filepath.EvalSymlinks(supervisor)
+		if err != nil {
+			return validatedSandboxCheck{}, sandboxError(SandboxUnsafePath, err)
+		}
+		required = append(required, supervisor)
+		required = append(required, runtimeProbePaths...)
+		if err := validateExclusionRequirements(exclusions, filesystemGrants, executableGrants, required); err != nil {
+			return validatedSandboxCheck{}, sandboxError(SandboxUnsafePath, err)
+		}
 	}
 	return validatedSandboxCheck{
 		workspace: workspace, workspaceAccess: workspaceAccess, sessionsDirectory: sessionsDirectory, executable: executable,
