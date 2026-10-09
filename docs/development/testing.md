@@ -117,6 +117,16 @@ keep it separate from mandatory release gates and use no account credentials.
 These probes do not activate ACS-managed extensions or prove hosted inference
 or detached-child cleanup beyond their tested containment contract.
 
+The [macOS Session benchmark](../../.github/workflows/macos-session-benchmark.yml)
+is dispatched manually only (`gh workflow run macos-session-benchmark.yml -f ref=main
+-f iterations=10 [-f compare_ref=<ref>]`). It builds `acs` from the chosen refs
+and runs real Seatbelt `acs devin` Sessions with `ACS_DEBUG_TIMING=1` against
+the synthetic target in [`tools/sessionbench`](../../tools/sessionbench), which
+needs no account, credential or network access. Variants select one Skill
+bundle with 0 or 20 extra files. The job summary lists median and p90 per phase,
+and the raw JSON Lines and CSV are uploaded as an artifact. Numbers come from a
+shared CI runner: compare refs within one run rather than across runs.
+
 [Native transport probes](native-transport-research.md) use a disposable macOS
 runner. Their evidence does not change runtime policy or establish destination
 filtering. Keep research evidence separate from production feature claims.
