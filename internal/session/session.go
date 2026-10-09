@@ -197,7 +197,9 @@ func (session *Session) PublicID() string {
 func (session *Session) Remove() error {
 	defer phasetiming.Start("session.remove")()
 	if session.tracker != nil {
+		settling := phasetiming.Start("session.remove.settling")
 		_ = session.tracker.Settling()
+		settling()
 	}
 	return session.lease.Remove()
 }

@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+
+	"github.com/alcimerio/ai-config-selector/internal/phasetiming"
 )
 
 // pinnedExecutable resolves one operation-scoped Codex executable lazily and
@@ -249,6 +251,7 @@ func resolveConfiguredExecutable(configured string) (string, error) {
 // writable Session and workspace. Both contained subprocesses execute this
 // single immutable operation-scoped path.
 func (executable *pinnedExecutable) Snapshot(snapshotRoot string) (string, func(), error) {
+	defer phasetiming.Start("codex.executable-snapshot")()
 	if _, err := executable.Resolve(); err != nil {
 		return "", nil, err
 	}

@@ -173,9 +173,9 @@ func copyRegularFile(input io.Reader, parent *os.File, name string, mode os.File
 	if err := output.Chmod(mode); err != nil {
 		return err
 	}
-	if err := output.Sync(); err != nil {
-		return err
-	}
+	// No fsync: every caller copies into a per-Session HOME that is deleted
+	// when the Session ends and is never trusted after a crash. Forcing each
+	// file to stable storage (F_FULLFSYNC on macOS) only added latency.
 	if err := output.Close(); err != nil {
 		return err
 	}

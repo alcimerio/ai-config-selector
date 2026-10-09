@@ -12,10 +12,12 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/alcimerio/ai-config-selector/internal/environmentresource"
 	"github.com/alcimerio/ai-config-selector/internal/executableintent"
 	"github.com/alcimerio/ai-config-selector/internal/pathintent"
+	"github.com/alcimerio/ai-config-selector/internal/phasetiming"
 	"github.com/charmbracelet/x/term"
 )
 
@@ -103,14 +105,22 @@ type MCPServerIntent struct {
 // ExecutableGrant is an operation-scoped private witness. Public explanations
 // use only its logical ID and reference form.
 type ExecutableGrant struct {
-	ID                      string
-	ReferenceKind           ExecutableReferenceKind
-	searchName              string
-	logicalPath             string
-	logicalWitness          []pathIdentity
-	path                    string
-	identity                pathIdentity
-	digest                  [32]byte
+	ID             string
+	ReferenceKind  ExecutableReferenceKind
+	searchName     string
+	logicalPath    string
+	logicalWitness []pathIdentity
+	path           string
+	identity       pathIdentity
+	digest         [32]byte
+	// changedNanos is the inode change time (ctime) observed when digest was
+	// computed. ctime cannot be set from user space, and any write, chmod,
+	// rename or link-count change advances it, so an unchanged
+	// (identity, ctime) pair lets revalidation reuse digest without
+	// re-reading the executable. digestReusable is false when ctime was too
+	// recent at hash time to be trusted (see executableDigestReuseMargin).
+	changedNanos            int64
+	digestReusable          bool
 	workspaceRelative       bool
 	workspaceLogicalPath    string
 	workspaceLogicalWitness []pathIdentity
@@ -410,20 +420,68 @@ type nativeProcessSandbox struct {
 	platform platformProbe
 	backends map[string]sandboxBackend
 	environ  func() []string
+
+	// probeMu guards the per-process cache below. Only successful probes are
+	// cached, so a transient failure or a canceled context is retried on the
+	// next call instead of being remembered for the life of the process.
+	probeMu        sync.Mutex
+	probedPlatform *Platform
+	readyBackend   sandboxBackend
 }
 
 // NewProcessSandbox returns the fail-closed native sandbox selector. Native
 // backends register inside this package; callers cannot select or bypass them.
+//
+// The selector is shared by every caller in the process, so the platform probe
+// (sw_vers on macOS) and the backend self-test (a sandbox-exec spawn) run at
+// most once per process after they first succeed. Policy validation and the
+// sandboxed launch itself still run for every Prepare and fail closed.
+// Because the selector is shared, callers (including tests) must never mutate
+// its backends.
 func NewProcessSandbox() ProcessSandbox {
-	return newNativeProcessSandbox(CurrentPlatform, nativeSandboxBackends())
+	sharedProcessSandboxOnce.Do(func() {
+		sharedProcessSandbox = newNativeProcessSandbox(CurrentPlatform, nativeSandboxBackends())
+	})
+	return sharedProcessSandbox
 }
+
+var (
+	sharedProcessSandboxOnce sync.Once
+	sharedProcessSandbox     *nativeProcessSandbox
+)
 
 func newNativeProcessSandbox(platform platformProbe, backends map[string]sandboxBackend) *nativeProcessSandbox {
 	return &nativeProcessSandbox{platform: platform, backends: backends, environ: os.Environ}
 }
 
-func (sandbox *nativeProcessSandbox) selectedBackend(ctx context.Context) (sandboxBackend, error) {
+// cachedPlatform returns the platform probe result, probing at most once per
+// selector after the first success.
+func (sandbox *nativeProcessSandbox) cachedPlatform() (Platform, error) {
+	sandbox.probeMu.Lock()
+	defer sandbox.probeMu.Unlock()
+	return sandbox.cachedPlatformLocked()
+}
+
+func (sandbox *nativeProcessSandbox) cachedPlatformLocked() (Platform, error) {
+	if sandbox.probedPlatform != nil {
+		return *sandbox.probedPlatform, nil
+	}
 	platform, err := sandbox.platform()
+	if err != nil {
+		return Platform{}, err
+	}
+	sandbox.probedPlatform = &platform
+	return platform, nil
+}
+
+func (sandbox *nativeProcessSandbox) selectedBackend(ctx context.Context) (sandboxBackend, error) {
+	defer phasetiming.Start("sandbox.backend-check")()
+	sandbox.probeMu.Lock()
+	defer sandbox.probeMu.Unlock()
+	if sandbox.readyBackend != nil {
+		return sandbox.readyBackend, nil
+	}
+	platform, err := sandbox.cachedPlatformLocked()
 	if err != nil {
 		return nil, sandboxError(SandboxUnsupportedPlatform, err)
 	}
@@ -437,6 +495,7 @@ func (sandbox *nativeProcessSandbox) selectedBackend(ctx context.Context) (sandb
 	if err := backend.check(ctx); err != nil {
 		return nil, classifyBackendCheckError(err)
 	}
+	sandbox.readyBackend = backend
 	return backend, nil
 }
 
@@ -578,7 +637,7 @@ func (sandbox *nativeProcessSandbox) Prepare(ctx context.Context, request Proces
 }
 
 func (sandbox *nativeProcessSandbox) checkEnvironmentTransport() error {
-	platform, err := sandbox.platform()
+	platform, err := sandbox.cachedPlatform()
 	if err != nil {
 		return sandboxError(SandboxUnsupportedPlatform, err)
 	}

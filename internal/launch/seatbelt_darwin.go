@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/alcimerio/ai-config-selector/internal/environmentresource"
+	"github.com/alcimerio/ai-config-selector/internal/phasetiming"
 	"golang.org/x/sys/unix"
 )
 
@@ -212,6 +213,7 @@ func (backend *seatbeltBackend) validateGeneratedPolicy(
 	policy string,
 	definitions []string,
 ) error {
+	defer phasetiming.Start("sandbox.policy-validate")()
 	arguments := make([]string, 0, 4+len(definitions))
 	arguments = append(arguments, "-p", policy)
 	arguments = append(arguments, definitions...)
@@ -339,6 +341,7 @@ func (process *seatbeltProcess) AbortPrepared() error {
 }
 
 func (process *seatbeltProcess) startSupervisor() error {
+	defer phasetiming.Start("sandbox.supervisor-handshake")()
 	process.controlStateMutex.Lock()
 	control := process.control
 	process.controlStateMutex.Unlock()

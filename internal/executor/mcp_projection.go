@@ -161,10 +161,11 @@ func writeSessionProjection(path string, data []byte) error {
 	if err != nil {
 		return errors.New("MCP target config could not be created")
 	}
+	// No fsync: the projection lives in the per-Session HOME, which is
+	// deleted at exit and never reused after a crash.
 	_, writeErr := file.Write(data)
-	syncErr := file.Sync()
 	closeErr := file.Close()
-	if writeErr != nil || syncErr != nil || closeErr != nil {
+	if writeErr != nil || closeErr != nil {
 		_ = os.Remove(path)
 		return errors.New("MCP target config could not be persisted")
 	}

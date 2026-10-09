@@ -16,6 +16,7 @@ import (
 	"github.com/alcimerio/ai-config-selector/internal/codexcompat"
 	"github.com/alcimerio/ai-config-selector/internal/environmentresource"
 	"github.com/alcimerio/ai-config-selector/internal/launch"
+	"github.com/alcimerio/ai-config-selector/internal/phasetiming"
 	"github.com/alcimerio/ai-config-selector/internal/session"
 )
 
@@ -254,6 +255,7 @@ func (service *CodexAuthService) ExecuteCodex(ctx context.Context, request Codex
 	if service == nil || service.execution == nil || request.ResolvedPlan == nil || request.ResolvedPlan.Requirements().Recipe != authority.RecipeCodex {
 		return 1, ErrCodexFailed
 	}
+	defer phasetiming.Start("codex.total")()
 	preflightContext, cancelPreflight := context.WithCancel(ctx)
 	defer cancelPreflight()
 	supervisor := newDevinSignalSupervisor(cancelPreflight)

@@ -51,9 +51,22 @@ each Session lifecycle phase to standard error:
 ACS_DEBUG_TIMING=1 acs devin --profile first-review
 ```
 
-Lines start with `acs timing:` and name only fixed phases, such as
-`sandbox.check`, `session.create`, `session.arm`, `sandbox.prepare`, each Devin
-preflight, `process.probe`, `process.devin-interactive`, `process.await-cleanup`
-and `session.remove`. They never include paths, arguments or values. Devin
-launches run one contained probe per preflight before the interactive process,
-so preflight phases are usually the largest startup cost.
+Lines start with `acs timing:` and name only fixed phases. They never include
+paths, arguments or values. In launch order:
+
+- before the Session: `acs.startup-to-launch` (process start until the launch
+  command runs), `profile.load`, `profile.resolve`, `devin.resolve-grants`,
+  `sandbox.check` and `sandbox.backend-check`;
+- Session setup: `session.create` (including `session.cleanup-abandoned`),
+  `session.materialize`, `session.arm` and `session.project-config`;
+- each contained process: `sandbox.prepare` (on macOS including
+  `sandbox.policy-validate`), `sandbox.supervisor-handshake`, `process.probe`
+  or `process.devin-interactive`, and `process.await-cleanup`;
+- `devin.preflights` (the sum of every Devin preflight, each also reported by
+  name);
+- exit: `session.remove`, including `session.remove.settling` and
+  `session.remove.delete`, then `devin.total`.
+
+Codex launches also report `codex.executable-snapshot` and `codex.total`.
+Devin launches run one contained probe per preflight before the interactive
+process, so preflight phases are usually the largest startup cost.

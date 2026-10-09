@@ -15,6 +15,7 @@ import (
 	"github.com/alcimerio/ai-config-selector/internal/codexauth"
 	"github.com/alcimerio/ai-config-selector/internal/exchangefile"
 	"github.com/alcimerio/ai-config-selector/internal/launch"
+	"github.com/alcimerio/ai-config-selector/internal/phasetiming"
 	"github.com/alcimerio/ai-config-selector/internal/profile"
 	"github.com/alcimerio/ai-config-selector/internal/profileinspect"
 	"github.com/alcimerio/ai-config-selector/internal/runcommand"
@@ -557,6 +558,7 @@ func (app App) dryRun(ctx context.Context, name, overlay, expectedDigest string,
 }
 
 func (app App) launchProfile(ctx context.Context, name, overlay, expectedDigest string, launcher ProfileLauncher, action string) int {
+	phasetiming.SinceProcessStart("acs.startup-to-launch")
 	resolved, err := app.resolveProfile(ctx, name, overlay)
 	if err != nil {
 		return app.fail("%v", err)
@@ -589,11 +591,15 @@ func (app App) resolveProfile(ctx context.Context, name, overlay string) (catego
 	if err := profile.ValidateName(name); err != nil {
 		return category.ResolvedProfile{}, err
 	}
+	loadedTiming := phasetiming.Start("profile.load")
 	loaded, err := app.Profiles.Load(name)
+	loadedTiming()
 	if err != nil {
 		return category.ResolvedProfile{}, fmt.Errorf("load Profile %q: %w", name, err)
 	}
+	resolvedTiming := phasetiming.Start("profile.resolve")
 	resolved, err := app.Categories.ResolveFor(ctx, loaded, overlay)
+	resolvedTiming()
 	if err != nil {
 		return category.ResolvedProfile{}, fmt.Errorf("resolve Profile %q: %w", name, err)
 	}

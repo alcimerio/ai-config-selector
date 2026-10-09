@@ -623,9 +623,9 @@ func writeExclusivePrivateFile(path string, contents []byte) error {
 	if _, err := file.Write(contents); err != nil {
 		return err
 	}
-	if err := file.Sync(); err != nil {
-		return err
-	}
+	// No fsync: this projection lives in the per-Session CODEX_HOME, which is
+	// deleted at exit. After a crash, recovery validates auth.json and
+	// discards an incomplete projection without touching the Keychain.
 	if err := file.Close(); err != nil {
 		return err
 	}

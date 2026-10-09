@@ -398,6 +398,7 @@ func (e *Executor) RunDevin(ctx context.Context, request DevinRequest) (exitCode
 		request.ExpectedInstructions = request.ResolvedPlan.DevinExpectedInstructions()
 	}
 	request.Executable, request.RuntimeInputs, request.ExistingHomeDirectory = requirements.Executable, requirements.RuntimeInputs, requirements.ExistingHomeDirectory
+	resolvedGrants := phasetiming.Start("devin.resolve-grants")
 	if request.ResolvedPlan != nil {
 		request.RuntimeAuthority = request.ResolvedPlan.RuntimeAuthority()
 		var err error
@@ -419,6 +420,7 @@ func (e *Executor) RunDevin(ctx context.Context, request DevinRequest) (exitCode
 			return 1, &launch.SandboxError{Category: launch.SandboxUnsafePath}
 		}
 	}
+	resolvedGrants()
 	preflightContext, cancelPreflight := context.WithCancel(ctx)
 	defer cancelPreflight()
 	supervisor := newDevinSignalSupervisor(cancelPreflight)
@@ -461,6 +463,7 @@ func (e *Executor) RunDevin(ctx context.Context, request DevinRequest) (exitCode
 		servers = request.ResolvedPlan.MCPServerIntents()
 		environmentIntents = request.ResolvedPlan.EnvironmentIntents()
 	}
+	projected := phasetiming.Start("session.project-config")
 	recipes, recipeDirectory, launcher, err := prepareMCPRecipes(created.HomeDirectory(), servers, request.ExecutableGrants, request.FilesystemGrants, environmentIntents)
 	if err != nil {
 		return 1, errors.New("selected MCP bindings could not be compiled")
@@ -495,7 +498,11 @@ func (e *Executor) RunDevin(ctx context.Context, request DevinRequest) (exitCode
 	if err := copyDevinCredentialIfPresent(filepath.Join(request.ExistingHomeDirectory, ".local", "share", "devin", "credentials.toml"), filepath.Join(created.HomeDirectory(), ".local", "share", "devin", "credentials.toml")); err != nil {
 		return 1, err
 	}
-	if err := e.runDevinPreflights(preflightContext, created, request, requirements.Semantics); err != nil {
+	projected()
+	preflights := phasetiming.Start("devin.preflights")
+	err = e.runDevinPreflights(preflightContext, created, request, requirements.Semantics)
+	preflights()
+	if err != nil {
 		return 1, err
 	}
 	if preflightContext.Err() != nil {

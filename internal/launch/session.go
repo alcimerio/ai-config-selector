@@ -9,6 +9,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/alcimerio/ai-config-selector/internal/phasetiming"
 )
 
 const (
@@ -230,7 +232,10 @@ func createSession(sessionsDirectory string, protect bool) (*SessionLease, error
 	}
 	defer closeLockedFile(coordinator)
 
-	if err := removeAbandonedSessions(sessionsDirectory); err != nil {
+	abandoned := phasetiming.Start("session.cleanup-abandoned")
+	err = removeAbandonedSessions(sessionsDirectory)
+	abandoned()
+	if err != nil {
 		return nil, err
 	}
 	rootDir, err := os.MkdirTemp(sessionsDirectory, sessionDirectoryPrefix+"*")
@@ -339,6 +344,7 @@ func (session *SessionLease) removeLocked() error {
 	// Keep the lease locked until removal succeeds. A failed cleanup must remain
 	// owned by this ACS process so concurrent abandoned-session recovery cannot
 	// remove a Session whose contained process cleanup is still in progress.
+	defer phasetiming.Start("session.remove.delete")()
 	if err := os.RemoveAll(session.RootDir); err != nil {
 		session.cleanupErr = errors.New("delete ACS Session: cleanup failed")
 		session.observeRemovalLocked(session.cleanupErr)
