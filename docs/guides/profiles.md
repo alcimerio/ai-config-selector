@@ -23,14 +23,14 @@ acs profile validate backend-review
 ```
 
 The [common format](../reference/common-profile-format.md) defines schema
-versions, grants, and migration. Inspection reports stored structure;
+versions and grants. Inspection reports stored structure;
 [validation and explanation](diagnostics.md) report selected-source availability
 and effective authority separately. None of these observations alone proves
 launch readiness.
 
 ## Interactive creation
 
-`acs profile create --name NAME` opens the unified common v3 builder. Choose
+`acs profile create --name NAME` opens the unified common Profile builder. Choose
 neither target for sandbox/run, one supported target, or both. All selected
 overlays share the same common capabilities. Review starts with read-only
 workspace access; Development explicitly selects read-write. The common editors
@@ -38,7 +38,7 @@ can adjust that selection before creation. No account, login, target executable,
 or authentication lookup is required. A Codex overlay created here has no
 `authRef`; supply an opaque named reference with `--auth` at launch. The existing
 target-specific builders remain available, including `--auth` on Codex creation.
-Existing Profiles are never overwritten or silently migrated.
+Existing Profiles are never overwritten or silently rewritten.
 
 The **Excluded paths** editor adds, edits and deletes entries by ID, type,
 reference kind and path. For repository Skills, select the actual root such as
@@ -51,11 +51,12 @@ for source conflicts, absent paths and pathname limits.
 
 `acs profile create --file FILE [--dry-run]` accepts one explicit JSON file whose
 document supplies the Profile name. Standard input and implicit file selection
-are unsupported. Creation accepts only the supported version-3 representation:
+are unsupported. Creation accepts only the supported Profile representation (envelope version 1;
+version 3 from earlier builds is accepted as an alias and written as 1):
 common `skills`, optional `instructions`, `workspace`, `paths`, `exclusions`, `executables`,
 `environment`, reference-only `mcp`, and supported version-1 `devin` and `codex`
 overlays. [MCP references](mcp-profiles.md) must bind to selected executable,
-path and environment entries. Future envelopes, legacy v1/v2 input, duplicate
+path and environment entries. Future or retired envelopes, duplicate
 keys, unknown fields or capabilities, unsupported overlays, invalid references,
 and representations that cannot be preserved losslessly are rejected.
 
@@ -108,7 +109,7 @@ remain omitted from inspection output.
 
 Inspection reads stored structure only. It leaves source availability,
 authentication, target compatibility and runtime readiness unchecked. It does
-not resolve references, normalize or migrate files, recover quarantine, access
+not resolve references, normalize or rewrite files, recover quarantine, access
 a terminal or change stored state. Use `acs profile validate NAME` for
 selected Skill resolution and `acs doctor` for passive host prerequisites.
 
@@ -127,10 +128,10 @@ Every syntactically valid `--json` invocation writes exactly one compact,
 newline-terminated object to stdout, without prose, color or stderr output.
 Help remains human text; syntax errors exit 1 with contextual stderr usage.
 The output version is independent of stored Profile schemas. For example,
-`acs profile show legacy --json` can return a valid version-1 Profile:
+`acs profile show backend-review --json` can return:
 
 ```json
-{"formatVersion":1,"operation":"show","storage":"present","entries":[{"file":"legacy.json","name":"legacy","status":"valid","storedVersion":1,"target":"devin","categories":[{"id":"skills","schemaVersion":null,"selection":[{"source":"shared-agents","relativePath":"review"}]}],"overlays":[],"workspaceAccess":null,"diagnostic":null}],"diagnostic":null,"checks":{"sources":"unchecked","auth":"unchecked","runtime":"unchecked"}}
+{"formatVersion":1,"operation":"show","storage":"present","entries":[{"file":"backend-review.json","name":"backend-review","status":"valid","storedVersion":1,"target":"common","categories":[{"id":"skills","schemaVersion":1,"selection":[{"source":"shared-agents","relativePath":"review"}]},{"id":"workspace","schemaVersion":1}],"overlays":[{"id":"devin","version":1,"support":"supported"}],"workspaceAccess":"read-only","diagnostic":null}],"diagnostic":null,"checks":{"sources":"unchecked","auth":"unchecked","runtime":"unchecked"}}
 ```
 
 Every response has these stable fields and types:
@@ -150,25 +151,25 @@ Each entry always contains:
   Backslashes and non-ASCII/control bytes use Go string escapes without outer
   quotes; `name` is the validated filename stem or null for an invalid name.
 - `status`: `valid`, `invalid`, `unsupported`, `missing` or `unreadable`;
-  `storedVersion`: integer or null when not safely decoded.
-- `target`: `devin` for valid legacy entries, `common` for valid v3, otherwise
-  null; `workspaceAccess`: `read-only` or `read-write` for valid v3, otherwise null.
+  `storedVersion`: the stored envelope integer (`1`, or `3` for a Profile
+  written by an earlier build), or null when not safely decoded.
+- `target`: `common` for a valid entry, otherwise null; `workspaceAccess`:
+  `read-only` or `read-write` for a valid entry, otherwise null.
 - `categories` and `overlays`: arrays; `diagnostic`: null for a valid entry,
   otherwise the diagnostic object. Invalid/unsupported categories are empty;
   corrupt or unknown payloads are never echoed.
 
-Categories have `id` and `schemaVersion` (stored integer, or null for version-1
-legacy Skills). Select by ID, not array order. Nonempty Skills add `selection`;
+Categories have `id` and `schemaVersion` (stored integer). Select by ID, not array order. Nonempty Skills add `selection`;
 nonempty Instructions add `instructions`. Both hold references with exactly
 `source` and `relativePath` strings. Empty arrays and other category selection
 details are omitted. Skills sort by source then relativePath. Overlays sort by
 ID and contain `id`, `version` and `support` (`supported`, `unsupported` or
 `inactive-unknown`); inspection never selects one for execution.
 
-Supported structures are Devin envelopes 1 and 2 and common envelope 3, with
-independently versioned Skills, Instructions, workspace, paths, exclusions, executables,
-environment, MCP and explicit overlays. Version 2 may have an empty categories
-object. Environment inspection checks logical shape without source/provider
+The supported structure is the common envelope (version 1, or its read alias
+3), with independently versioned Skills, Instructions, workspace, paths,
+exclusions, executables, environment, MCP and explicit overlays. Retired
+pre-common envelopes are `unsupported_content`. Environment inspection checks logical shape without source/provider
 access or exposing source names, secret references or values. Unknown inactive
 overlays are reported without execution. Valid means supported structure, not
 executable or ready.
@@ -243,18 +244,14 @@ selections and exact canonical JSON. Retained unresolved selections need a
 separate `A` warning acknowledgement before Y/Enter commits. Saving them does
 not install Skills or establish authentication/runtime readiness.
 
-Preview shows v1-to-v2 conversion (`skillReferences` to schema-1
-`categories.skills`), missing defaults, sorting, field order, indentation and
-final newline, or supported v2 canonicalization. Even unchanged legacy
-selections require preview. Ordinary legacy mutations remain canonical v2 with
-writable-workspace authority and old placement. Explicit
-[`acs profile migrate NAME`](../reference/common-profile-format.md#explicit-migration-and-outcomes)
-adopts v3 through the same revision-bound Replace transaction and previews
-retained/reduced authority and common/Devin projection paths.
+Preview shows the stored and resulting envelope versions (for example
+`Stored v3 -> v1` for a Profile written by an earlier build), missing defaults,
+sorting, field order, indentation and final newline. Even unchanged selections
+require preview.
 
 Eligibility comes from bounded exact bytes captured with their revision and
 filename identity, not permissive codec normalization. Unknown fields or
-inactive v3 overlays, future content, unsupported targets/categories/sources,
+unknown inactive overlays, future content, unsupported targets/categories/sources,
 duplicate keys, ambiguous structure, unsafe references and identity mismatch
 refuse rewriting without changing bytes, modes or the Profile tree. The commit
 uses exactly the previewed bytes and expected revisions. Later editor changes

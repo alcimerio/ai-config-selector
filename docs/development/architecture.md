@@ -10,9 +10,9 @@ Seatbelt backend. Unsupported hosts have no sandbox backend and fail closed.
 
 ## Domain model
 
-- Profile: stored capability selections. Version 3 separates independently
-  versioned common capabilities from explicit target overlays; legacy v1/v2
-  Profiles retain their Devin binding and category payloads.
+- Profile: stored capability selections. The envelope (version 1; earlier
+  builds wrote the same format as 3, still accepted on read) separates
+  independently versioned common capabilities from explicit target overlays.
 - Category: owns selection schema, discovery, resolution, planning,
   materialization, and optional target verification.
 - Resolved authority plan: ordered contributions, runtime grants, and fixed
@@ -146,8 +146,8 @@ See [generic commands](../guides/generic-run.md) for usage and argv semantics.
 Seatbelt starts with `deny default` and validated canonical path parameters.
 The generated policy grants:
 
-- workspace reads, with writes only when selected (new v3 Profiles default to
-  read-only; legacy v1/v2 remain writable);
+- workspace reads, with writes only when selected (Profiles default to
+  read-only);
 - private Session reads and writes, except protected configuration;
 - explicitly selected path access and executable visibility;
 - minimal macOS runtime, fixed commands, and declared read-only runtime inputs;
@@ -206,12 +206,13 @@ unsandboxed fallback.
 ## Persistence and compatibility
 
 Profiles use mode-0600 files in mode-0700 directories under `~/.acs/profiles`.
-Creation is atomic and refuses replacement. Legacy v1 Profiles are normalized
-in memory without rewriting their files; migration to v3 is explicit. Capability
-schemas evolve independently, and unsupported selected schemas fail resolution.
+Creation is atomic and refuses replacement. Loading normalizes in memory
+without rewriting files; a stored `"version": 3` is read as the current
+envelope and becomes `"version": 1` only through a confirmed mutation. Retired
+pre-common envelopes are unsupported. Capability schemas evolve independently, and unsupported selected schemas fail resolution.
 
 [Portable exchange](../guides/portable-profile-exchange.md) is a separate versioned codec.
-It exports stored v3 intent with symbolic machine-local source, authentication,
+It exports stored Profile intent with symbolic machine-local source, authentication,
 path, executable, and secret-environment bindings, never a resolved authority
 plan or raw local JSON. Passive validation does not discover sources, access
 credentials, create Sessions, or run targets. Complete explicit bindings produce

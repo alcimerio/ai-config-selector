@@ -46,18 +46,16 @@ file-identity guarantee.
 
 ## Profile, environment, and grants
 
-Generic execution selects no target overlay and no named authentication. For
-v3 Profiles it materializes selected common Skills under
+Generic execution selects no target overlay and no named authentication. It
+materializes selected common Skills under
 `$HOME/.acs/common/v1/skills/<source>/<relative-path>` and explicitly selected
 instruction files under `$HOME/.acs/common/v1/instructions/<source>/<relative-path>`
 in the synthetic Session home. It does not create Devin rules paths or apply
 Devin activation semantics. It neither projects target MCP configuration nor
 automatically starts selected MCP servers; their separately selected common
 resource grants still apply. Inactive Devin, Codex, and unknown overlay
-payloads stay inert. Legacy
-v1/v2 Profiles retain their established writable workspace and legacy Skill
-placement; a v3 Profile defaults to read-only unless the user explicitly chose
-coding write.
+payloads stay inert. A Profile's workspace is read-only unless the user
+explicitly chose coding write.
 
 The sandbox applies the resolved Profile workspace authority, explicitly
 selected `common.paths` and `common.executables` grants, the private writable
@@ -67,7 +65,7 @@ external paths keep their own access mode, even when the workspace is read-only.
 ACS does not infer a filesystem or network grant catalog from child arguments.
 Target permission or approval-bypass flags cannot weaken the outer ACS sandbox.
 The child receives synthetic `HOME`, XDG and temporary directories; the fixed
-PATH above; validated terminal/locale variables; and any explicitly selected v3
+PATH above; validated terminal/locale variables; and any explicitly selected
 `common.environment` destinations. Those values are freshly resolved before
 Session creation and apply to the attached command and its descendants only.
 Unselected host configuration, credentials, environment variables, descriptors,

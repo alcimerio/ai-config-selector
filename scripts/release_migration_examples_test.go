@@ -82,7 +82,7 @@ func TestContributorCandidateCompatibilityFailureStopsBeforeWrites(t *testing.T)
 	fixture := newReleaseMigrationFixture(t)
 	blocks := releaseMigrationExamples(t)
 	script := blocks["inputs"] + blocks["install"] + blocks["compatibility"] +
-		"acs profile migrate backend-review\n"
+		"acs profile rename backend-review --name backend-review-next\n"
 	output, err := fixture.run(script, []string{"TEST_FAIL_VALIDATE=1"})
 	if err == nil {
 		t.Fatalf("nonzero compatibility check did not stop strict shell:\n%s", output)
@@ -91,7 +91,7 @@ func TestContributorCandidateCompatibilityFailureStopsBeforeWrites(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(commands), "profile migrate") || strings.Contains(string(commands), "session list") {
+	if strings.Contains(string(commands), "profile rename") || strings.Contains(string(commands), "session list") {
 		t.Fatalf("failed compatibility check reached later operations: %q", commands)
 	}
 	if got, err := os.ReadFile(fixture.profile); err != nil || string(got) != "legacy profile bytes\n" {
@@ -99,31 +99,16 @@ func TestContributorCandidateCompatibilityFailureStopsBeforeWrites(t *testing.T)
 	}
 }
 
-func TestManualMigrationPreviewCancellationPreservesProfile(t *testing.T) {
+func TestManualProfileInspectionAndExport(t *testing.T) {
 	fixture := newReleaseMigrationFixture(t)
 	fixture.installCandidate()
-	block := strings.ReplaceAll(manualExamples(t)["migrate"], `source_bin="/absolute/path/to/compatible-source/acs"`, `source_bin="$TEST_CANDIDATE_BIN/acs"`)
-	command := exec.Command("/bin/bash", "--noprofile", "--norc", "-c", "set +e\n"+block+"status=$?\ntest \"$status\" = 130")
-	command.Env = append(fixture.environment(), "PATH="+filepath.Dir(fixture.knownGood)+":/usr/bin:/bin")
-	output, err := command.CombinedOutput()
-	if err != nil {
-		t.Fatalf("migration cancellation was not observable: %v\n%s", err, output)
-	}
-	if got, err := os.ReadFile(fixture.profile); err != nil || string(got) != "legacy profile bytes\n" {
-		t.Fatalf("cancelled preview changed Profile: %q, %v", got, err)
-	}
-}
-
-func TestManualPostMigrationInspectionAndExport(t *testing.T) {
-	fixture := newReleaseMigrationFixture(t)
-	fixture.installCandidate()
-	block := `source_bin="$TEST_CANDIDATE_BIN/acs"` + "\n" + manualExamples(t)["after-migrate"]
+	block := `source_bin="$TEST_CANDIDATE_BIN/acs"` + "\n" + manualExamples(t)["inspect-export"]
 	command := exec.Command("/bin/bash", "--noprofile", "--norc", "-c", "set -eu\n"+block)
 	command.Dir = fixture.root
 	command.Env = append(fixture.environment(), "PATH="+filepath.Dir(fixture.knownGood)+":/usr/bin:/bin")
 	output, err := command.CombinedOutput()
 	if err != nil {
-		t.Fatalf("post-migration inspection and export failed: %v\n%s", err, output)
+		t.Fatalf("Profile inspection and export failed: %v\n%s", err, output)
 	}
 	exported := filepath.Join(fixture.root, "backend-review.acs-profile.json")
 	if got, err := os.ReadFile(exported); err != nil || string(got) != "sanitized exchange\n" {
@@ -195,7 +180,6 @@ printf 'candidate %s\n' "$*" >> "$TEST_COMMAND_LOG"
 case "$*" in
   version) printf 'acs v1.2.3\n' ;;
   'profile validate backend-review') [ "${TEST_FAIL_VALIDATE:-0}" != 1 ] ;;
-  'profile migrate backend-review') exit 130 ;;
   'profile show backend-review') [ "${TEST_FAIL_SHOW:-0}" != 1 ] ;;
   'profile export backend-review --file backend-review.acs-profile.json')
     [ ! -e backend-review.acs-profile.json ] || exit 1

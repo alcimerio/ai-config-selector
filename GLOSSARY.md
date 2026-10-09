@@ -6,8 +6,7 @@ This glossary names the distinction between publication and its acknowledgment.
 ## Language
 
 **Profile**:
-A stored selection of common capabilities and explicit target overlays, or a
-legacy target-bound selection.
+A stored selection of common capabilities and explicit target overlays.
 
 **Profile transaction**:
 One authorized conditional change to a stored Profile and its local history.

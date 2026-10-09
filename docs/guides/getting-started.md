@@ -56,7 +56,7 @@ Run from a real interactive terminal:
 acs profile create --name first-review
 ```
 
-The builder creates a common v3 Profile without starting a client or requiring
+The builder creates a common Profile without starting a client or requiring
 an account. Select the Devin overlay if you plan to follow the Devin launch
 steps below, the Codex overlay for Codex, or both for shared common selections.
 

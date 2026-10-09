@@ -25,8 +25,9 @@ const safeProcessPath = "/usr/local/bin:/usr/bin:/bin"
 const requiredSandboxNotice = "ACS will not start the requested process without the required sandbox"
 
 // WorkspaceAccess is the bounded common authority granted to the selected
-// workspace. The zero value preserves the writable authority of legacy
-// Profiles and internal callers; new Profiles resolve an explicit value.
+// workspace. The zero value keeps writable authority for internal callers
+// such as contained authentication operations; Profiles always resolve an
+// explicit value.
 type WorkspaceAccess string
 
 const (

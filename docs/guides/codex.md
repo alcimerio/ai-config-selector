@@ -25,7 +25,7 @@ Codex overlay stores only opaque `authRef`, never credentials or arbitrary
 Codex settings. Launch `--auth personal` overrides the reference for one run
 without changing the Profile. Creation may omit `--auth`; that Profile requires
 `--auth REF` on both dry-run and real launch. Unsupported selected overlays fail
-closed; legacy Devin-bound Profiles are not silently upgraded.
+closed and are never silently added.
 
 Dry-run checks stored structure and effective reference syntax only. It does
 not discover sources, access Keychain/providers/status, lock identities, probe

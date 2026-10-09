@@ -14,7 +14,7 @@ applies the policy to its descendants. It verifies the trusted system backend,
 constructs a clean environment and synthetic home, projects selected material,
 and owns process settlement and Session cleanup. There is no unsandboxed fallback.
 
-For new v3 Profiles:
+For Profiles:
 
 - The current workspace is read-only unless you explicitly select coding write
 - The private Session home and temporary storage are writable
@@ -29,9 +29,7 @@ For new v3 Profiles:
   references rather than their values
 - Selected local STDIO MCP servers run within the attached process tree and its authority
 
-Legacy v1/v2 Profiles retain writable-workspace authority. An ordinary edit does
-not silently migrate their placement or authority to v3. Inspect effective
-permissions with `acs explain TARGET --profile NAME` and read the
+Inspect effective permissions with `acs explain TARGET --profile NAME` and read the
 [common capability contract](common-profile-format.md).
 
 ## What remains trusted or outside the boundary
