@@ -80,9 +80,12 @@ func TestSeatbeltVerifiesHostAutomationIsDenied(t *testing.T) {
 		result := seatbeltDenialRunProbe(t, "/bin/launchctl", "submit", "-l", label, "--", "/usr/bin/touch", marker)
 		time.Sleep(2 * time.Second)
 		_, markerErr := os.Stat(marker)
-		listed, _ := seatbeltDenialHostOutput("/bin/launchctl", "list", label)
-		seatbeltDenialEvidence(t, "probe=%s marker_exists=%v job_listed=%v", result, markerErr == nil, strings.Contains(listed, label))
-		if markerErr == nil || strings.Contains(listed, label) {
+		// launchctl list exits zero only when the label is loaded; its error
+		// output also contains the label, so the exit status decides.
+		_, listErr := seatbeltDenialHostOutput("/bin/launchctl", "list", label)
+		listed := listErr == nil
+		seatbeltDenialEvidence(t, "probe=%s marker_exists=%v job_listed=%v", result, markerErr == nil, listed)
+		if markerErr == nil || listed {
 			t.Fatal("sandboxed launchctl submitted a host job")
 		}
 	})
@@ -292,6 +295,7 @@ func TestSeatbeltReportsTerminalInputQueueAfterTargetExit(t *testing.T) {
 func TestSeatbeltReportsAbsentExclusionSpellingVariants(t *testing.T) {
 	skipSeatbeltNativeTestBinaryUnderRace(t)
 	for _, test := range []struct{ name, excluded, variant string }{
+		{name: "control", excluded: ".envrc", variant: "unrelated"},
 		{name: "exact", excluded: ".envrc", variant: ".envrc"},
 		{name: "case-file", excluded: ".envrc", variant: ".ENVRC"},
 		{name: "case-directory", excluded: "secrets", variant: "Secrets/token"},
@@ -311,6 +315,12 @@ func TestSeatbeltReportsAbsentExclusionSpellingVariants(t *testing.T) {
 			outcome := string(readSeatbeltPTYFile(result))
 			_, excludedErr := os.Stat(excluded)
 			seatbeltDenialEvidence(t, "variant_create=%q excluded_path_exists_afterwards=%v", outcome, excludedErr == nil)
+			if test.name == "control" {
+				if outcome != "created" {
+					t.Fatalf("workspace-writable target could not create an unrelated file: %s", outcome)
+				}
+				return
+			}
 			if test.name == "exact" {
 				if outcome == "created" {
 					t.Fatal("sandbox permitted creating an excluded path")
