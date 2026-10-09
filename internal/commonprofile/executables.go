@@ -29,14 +29,14 @@ func (ExecutableContribution) Verify(context.Context, launch.VerificationContext
 func (value ExecutableContribution) ExecutableGrantIntents() []launch.ExecutableGrantIntent {
 	return append([]launch.ExecutableGrantIntent(nil), value.entries...)
 }
-func (ExecutableContribution) SemanticFacts(int, string) authority.Facts { return authority.Facts{} }
+func (ExecutableContribution) SemanticFacts(string) authority.Facts { return authority.Facts{} }
 
 type ExecutablesBinding = category.Binding[ExecutableSelection, ExecutableSelection, ExecutableContribution]
 
 func NewExecutablesBinding() (ExecutablesBinding, error) {
 	return category.Bind(category.Definition[ExecutableSelection, ExecutableSelection, ExecutableContribution]{
 		ID: ExecutablesCapabilityID, SchemaVersion: ExecutablesCapabilityVersion,
-		Empty: executableintent.Empty, LegacyEmpty: executableintent.Empty,
+		Empty: executableintent.Empty, Optional: true,
 		Encode: executableintent.Encode, Decode: executableintent.Decode,
 		Resolve: func(_ context.Context, selection ExecutableSelection) (ExecutableSelection, error) {
 			return executableintent.Canonical(selection)

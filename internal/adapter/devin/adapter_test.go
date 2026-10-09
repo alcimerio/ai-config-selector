@@ -3,8 +3,6 @@ package devin
 import (
 	"context"
 	"fmt"
-	"github.com/alcimerio/ai-config-selector/internal/launch"
-	"github.com/alcimerio/ai-config-selector/internal/skills"
 	"go/parser"
 	"go/token"
 	"os"
@@ -13,6 +11,9 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/alcimerio/ai-config-selector/internal/launch"
+	"github.com/alcimerio/ai-config-selector/internal/skills"
 )
 
 func TestDiscoverGlobalSkillCatalogKeepsSourceIdentityForDuplicateNames(t *testing.T) {

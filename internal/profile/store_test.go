@@ -12,7 +12,6 @@ import (
 	"github.com/alcimerio/ai-config-selector/internal/adapter/devin"
 	"github.com/alcimerio/ai-config-selector/internal/commonprofile"
 	"github.com/alcimerio/ai-config-selector/internal/profile"
-	"github.com/alcimerio/ai-config-selector/internal/profileinspect"
 	"github.com/alcimerio/ai-config-selector/internal/profilerepo"
 	"github.com/alcimerio/ai-config-selector/internal/skills"
 	"golang.org/x/sys/unix"
@@ -93,37 +92,6 @@ func TestMCPReferenceCapabilityRemovalIsRefusedBeforeProfileMutation(t *testing.
 	}
 }
 
-func TestStoreCreateWithRealDevinCodecKeepsLegacyProfileReadable(t *testing.T) {
-	home := t.TempDir()
-	editor, err := devin.NewProfileEditor(home)
-	if err != nil {
-		t.Fatal(err)
-	}
-	candidate := profile.Profile{Version: profile.LegacyCurrentVersion, Name: "legacy", Target: "devin", Categories: map[string]profile.CategoryPayload{
-		"skills": {SchemaVersion: 1, Selection: []byte(`[]`)},
-	}}
-	store := profile.NewStore(filepath.Join(home, ".acs"), editor.Categories())
-	path, err := store.Create(candidate)
-	if err != nil {
-		t.Fatal(err)
-	}
-	contents, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(string(contents), `"workspace"`) || strings.Contains(string(contents), `"version": 3`) {
-		t.Fatalf("legacy Create changed format or inserted a common capability: %s", contents)
-	}
-	result := (profileinspect.Store{Home: home}).Show("legacy")
-	if len(result.Entries) != 1 || result.Entries[0].Status != "valid" {
-		t.Fatalf("successful legacy Create produced unreadable Profile: %#v", result)
-	}
-	loaded, err := store.Load("legacy")
-	if err != nil || loaded.Version != profile.LegacyCurrentVersion || loaded.SourceVersion != profile.LegacyCurrentVersion {
-		t.Fatalf("successful legacy Create cannot Load: %#v %v", loaded, err)
-	}
-}
-
 func TestStoreCreateRejectsCanonicalVersionThreeWithoutRequiredOverlay(t *testing.T) {
 	home := t.TempDir()
 	store := newDevinStore(t, filepath.Join(home, ".acs"))
@@ -147,7 +115,7 @@ func TestStoreLoadUsesRepositoryFileAdmission(t *testing.T) {
 			}
 			path := filepath.Join(profiles, "unsafe.json")
 			outside := filepath.Join(t.TempDir(), "outside")
-			valid := []byte(`{"version":2,"name":"unsafe","target":"devin","categories":{"skills":{"schemaVersion":1,"selection":[]}}}`)
+			valid := []byte(`{"version":3,"name":"unsafe","common":{"skills":{"version":1,"selection":[]},"workspace":{"version":1,"selection":{"access":"read-only"}}},"overlays":{}}`)
 			if err := os.WriteFile(outside, valid, 0o600); err != nil {
 				t.Fatal(err)
 			}
@@ -259,7 +227,7 @@ func TestStoreCreatesAtomicHumanReadableUserOnlyProfileWithoutOverwrite(t *testi
 
 func TestStoreRejectsInvalidNameOnLoad(t *testing.T) {
 	acsHome := t.TempDir()
-	if err := os.WriteFile(filepath.Join(acsHome, "escape.json"), []byte(`{"version":1,"name":"escape","target":"devin","skillReferences":[]}`), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(acsHome, "escape.json"), []byte(`{"version":3,"name":"escape","common":{"skills":{"version":1,"selection":[]},"workspace":{"version":1,"selection":{"access":"read-only"}}},"overlays":{}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	store := newDevinStore(t, acsHome)
@@ -269,73 +237,7 @@ func TestStoreRejectsInvalidNameOnLoad(t *testing.T) {
 	}
 }
 
-func TestStoreLoadsVersionOneProfileAsVersionTwoWithoutRewritingIt(t *testing.T) {
-	acsHome := t.TempDir()
-	profilesDir := filepath.Join(acsHome, "profiles")
-	if err := os.MkdirAll(profilesDir, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	legacy := []byte("{\n  \"version\": 1,\n  \"name\": \"legacy\",\n  \"target\": \"devin\",\n  \"skillReferences\": [\n    {\"source\": \"shared-agents\", \"relativePath\": \"security\"},\n    {\"source\": \"devin-config\", \"relativePath\": \"review\"}\n  ]\n}\n")
-	path := filepath.Join(profilesDir, "legacy.json")
-	if err := os.WriteFile(path, legacy, 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	loaded, err := newDevinStore(t, acsHome).Load("legacy")
-	if err != nil {
-		t.Fatalf("load version-1 Profile: %v", err)
-	}
-	if loaded.Version != profile.LegacyCurrentVersion || loaded.SourceVersion != 1 {
-		t.Fatalf("normalized legacy Profile = %#v", loaded)
-	}
-	references, err := devin.SkillReferences(loaded)
-	if err != nil {
-		t.Fatal(err)
-	}
-	wantReferences := []skills.SkillReference{
-		{Source: "devin-config", RelativePath: "review"},
-		{Source: "shared-agents", RelativePath: "security"},
-	}
-	if !reflect.DeepEqual(references, wantReferences) {
-		t.Fatalf("normalized Skill References = %#v, want %#v", references, wantReferences)
-	}
-	afterLoad, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !reflect.DeepEqual(afterLoad, legacy) {
-		t.Fatalf("loading rewrote the version-1 Profile:\n%s", afterLoad)
-	}
-}
-
-func TestStoreDefaultsAProfileWithoutSkillsToAnEmptySelection(t *testing.T) {
-	acsHome := t.TempDir()
-	profilesDir := filepath.Join(acsHome, "profiles")
-	if err := os.MkdirAll(profilesDir, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(
-		filepath.Join(profilesDir, "before-skills.json"),
-		[]byte(`{"version":2,"name":"before-skills","target":"devin","categories":{}}`),
-		0o600,
-	); err != nil {
-		t.Fatal(err)
-	}
-
-	loaded, err := newDevinStore(t, acsHome).Load("before-skills")
-	if err != nil {
-		t.Fatalf("load Profile without Skills category: %v", err)
-	}
-	payload, exists := loaded.Categories["skills"]
-	if !exists {
-		t.Fatal("normalized Profile does not contain the empty Skills category")
-	}
-	if payload.SchemaVersion != 1 || string(payload.Selection) != "[]" {
-		t.Fatalf("empty Skills payload = %#v, want schema version 1 and []", payload)
-	}
-}
-
-func TestStoreRejectsInvalidVersionTwoSavedIntent(t *testing.T) {
+func TestStoreRejectsInvalidSavedIntent(t *testing.T) {
 	tests := []struct {
 		name          string
 		contents      string
@@ -343,22 +245,22 @@ func TestStoreRejectsInvalidVersionTwoSavedIntent(t *testing.T) {
 	}{
 		{
 			name:          "unknown-category",
-			contents:      `{"version":2,"name":"unknown-category","target":"devin","categories":{"agents":{"schemaVersion":1,"selection":[]}}}`,
+			contents:      `{"version":3,"name":"unknown-category","common":{"agents":{"version":1,"selection":[]},"skills":{"version":1,"selection":[]},"workspace":{"version":1,"selection":{"access":"read-only"}}},"overlays":{}}`,
 			wantErrorText: "Stored Profile",
 		},
 		{
 			name:          "unsupported-category-schema",
-			contents:      `{"version":2,"name":"unsupported-category-schema","target":"devin","categories":{"skills":{"schemaVersion":2,"selection":[]}}}`,
+			contents:      `{"version":3,"name":"unsupported-category-schema","common":{"skills":{"version":2,"selection":[]},"workspace":{"version":1,"selection":{"access":"read-only"}}},"overlays":{}}`,
 			wantErrorText: "Stored Profile",
 		},
 		{
 			name:          "malformed-selection-shape",
-			contents:      `{"version":2,"name":"malformed-selection-shape","target":"devin","categories":{"skills":{"schemaVersion":1,"selection":{}}}}`,
+			contents:      `{"version":3,"name":"malformed-selection-shape","common":{"skills":{"version":1,"selection":{}},"workspace":{"version":1,"selection":{"access":"read-only"}}},"overlays":{}}`,
 			wantErrorText: "Stored Profile",
 		},
 		{
 			name:          "malformed-reference",
-			contents:      `{"version":2,"name":"malformed-reference","target":"devin","categories":{"skills":{"schemaVersion":1,"selection":[{"source":"devin-config"}]}}}`,
+			contents:      `{"version":3,"name":"malformed-reference","common":{"skills":{"version":1,"selection":[{"source":"devin-config"}]},"workspace":{"version":1,"selection":{"access":"read-only"}}},"overlays":{}}`,
 			wantErrorText: "Stored Profile",
 		},
 	}
@@ -370,32 +272,18 @@ func TestStoreRejectsInvalidVersionTwoSavedIntent(t *testing.T) {
 	}
 }
 
-func TestStoreRejectsInvalidVersionOneSavedIntent(t *testing.T) {
+func TestStoreRejectsRemovedEnvelopeVersions(t *testing.T) {
 	tests := []struct {
-		name          string
-		contents      string
-		wantErrorText string
+		name     string
+		contents string
 	}{
-		{
-			name:          "missing-selection",
-			contents:      `{"version":1,"name":"missing-selection","target":"devin"}`,
-			wantErrorText: "Stored Profile",
-		},
-		{
-			name:          "null-selection",
-			contents:      `{"version":1,"name":"null-selection","target":"devin","skillReferences":null}`,
-			wantErrorText: "Stored Profile",
-		},
-		{
-			name:          "malformed-reference",
-			contents:      `{"version":1,"name":"malformed-reference","target":"devin","skillReferences":[{"source":"devin-config"}]}`,
-			wantErrorText: "Stored Profile",
-		},
+		{name: "version-one", contents: `{"version":1,"name":"version-one","target":"devin","skillReferences":[]}`},
+		{name: "version-two", contents: `{"version":2,"name":"version-two","target":"devin","categories":{"skills":{"schemaVersion":1,"selection":[]}}}`},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			assertProfileLoadError(t, test.name, test.contents, test.wantErrorText)
+			assertProfileLoadError(t, test.name, test.contents, "Stored Profile contains unknown or unsupported content")
 		})
 	}
 }

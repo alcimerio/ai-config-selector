@@ -3,12 +3,13 @@ package devin
 import (
 	"context"
 	"errors"
-	"github.com/alcimerio/ai-config-selector/internal/commonprofile"
-	"github.com/alcimerio/ai-config-selector/internal/profile"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/alcimerio/ai-config-selector/internal/commonprofile"
+	"github.com/alcimerio/ai-config-selector/internal/profile"
 
 	"github.com/alcimerio/ai-config-selector/internal/category"
 	"github.com/alcimerio/ai-config-selector/internal/executor"

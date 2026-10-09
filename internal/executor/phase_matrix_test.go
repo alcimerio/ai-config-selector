@@ -135,7 +135,7 @@ func TestRunDevinCarriesExecutableGrantThroughEveryGeneration(t *testing.T) {
 	}
 	sessions := filepath.Join(t.TempDir(), "sessions")
 	contribution := authorityTestExecutableContribution{intents: []launch.ExecutableGrantIntent{{ID: "helper", ReferenceKind: launch.ExecutableReferenceWorkspaceRelative, Path: "bin/helper"}}}
-	plan := authority.New([]authority.Contribution{{ID: "executables", Value: contribution}}, launch.WorkspaceAccessReadOnly, 3, "devin", authority.TargetRequirements{Recipe: authority.RecipeDevin, Executable: "devin", Semantics: authority.DevinSemantics()})
+	plan := authority.New([]authority.Contribution{{ID: "executables", Value: contribution}}, launch.WorkspaceAccessReadOnly, "devin", authority.TargetRequirements{Recipe: authority.RecipeDevin, Executable: "devin", Semantics: authority.DevinSemantics()})
 	sandbox := &phaseMatrixSandbox{}
 	code, err := newExecutor(sandbox).RunDevin(context.Background(), DevinRequest{
 		SessionsDirectory: sessions, WorkingDirectory: workspace, ResolvedPlan: &plan,

@@ -20,7 +20,7 @@ func (codecTestContribution) Verify(context.Context, launch.VerificationContext)
 
 func TestCodecRequiresNoRuntimeAndCannotSupplyExecutionBindings(t *testing.T) {
 	definition := Definition[[]string, []string, codecTestContribution]{
-		ID: "texts", SchemaVersion: 1,
+		ID: "texts", SchemaVersion: 1, Optional: true,
 		Empty: func() []string { return []string{} }, Count: func(values []string) int { return len(values) },
 	}
 	if _, err := Bind(definition); err == nil {
@@ -33,12 +33,12 @@ func TestCodecRequiresNoRuntimeAndCannotSupplyExecutionBindings(t *testing.T) {
 	if _, err := NewRegistry("devin", binding.Registration()); err == nil || !strings.Contains(err.Error(), "codec-only") {
 		t.Fatalf("execution registry accepted codec-only binding: %v", err)
 	}
-	codec, err := NewCodec("devin", []Registration{binding.Registration()})
+	codec, err := NewCodec([]Registration{binding.Registration()})
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := codec.Decode([]byte(`{"version":2,"name":"example","target":"devin","categories":{}}`))
-	if err != nil || string(got.Categories["texts"].Selection) != `[]` {
+	got, err := codec.Decode([]byte(`{"version":3,"name":"example","common":{}}`))
+	if err != nil || string(got.Common["texts"].Selection) != `[]` {
 		t.Fatalf("passive defaults: %+v, %v", got, err)
 	}
 	if !reflect.DeepEqual(codec.registry.requirements, authority.TargetRequirements{}) {
@@ -81,12 +81,12 @@ func TestCodecPreservesValidationWithoutCallingRuntime(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	codec, err := NewCodec("devin", []Registration{binding.Registration()})
+	codec, err := NewCodec([]Registration{binding.Registration()})
 	if err != nil {
 		t.Fatal(err)
 	}
-	candidate := profile.Profile{Version: 2, Name: "example", Target: "devin", Categories: map[string]profile.CategoryPayload{
-		"texts": {SchemaVersion: 1, Selection: json.RawMessage(`["selected"]`)},
+	candidate := profile.Profile{Version: profile.CurrentVersion, Name: "example", Common: map[string]profile.CommonPayload{
+		"texts": {Version: 1, Selection: json.RawMessage(`["selected"]`)},
 	}}
 	_, canonical, err := profile.Canonicalize(codec, candidate)
 	if err != nil {
@@ -112,17 +112,14 @@ func TestCodecRejectsInvalidComposition(t *testing.T) {
 	}
 	for _, test := range []struct {
 		name          string
-		target        string
 		registrations []Registration
-		legacy        []LegacyDecoder
 	}{
-		{name: "missing legacy target"},
-		{name: "invalid registration", target: "devin", registrations: []Registration{{}}},
-		{name: "duplicate registration", target: "devin", registrations: []Registration{binding.Registration(), binding.Registration()}},
-		{name: "invalid legacy decoder", target: "devin", legacy: []LegacyDecoder{{Version: 1}}},
+		{name: "missing registrations"},
+		{name: "invalid registration", registrations: []Registration{{}}},
+		{name: "duplicate registration", registrations: []Registration{binding.Registration(), binding.Registration()}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			if _, err := NewCodec(test.target, test.registrations, test.legacy...); err == nil {
+			if _, err := NewCodec(test.registrations); err == nil {
 				t.Fatal("invalid composition admitted")
 			}
 		})

@@ -10,8 +10,6 @@ func TestProfileEncodingPreservesExistingEnvelopeBytes(t *testing.T) {
 	// This alias represents the encoder before Profile gained MarshalJSON.
 	type previousEncoding Profile
 	for _, candidate := range []Profile{
-		{Version: 1, Name: "legacy-one", Target: "devin"},
-		{Version: 2, Name: "legacy-two", Target: "devin", Categories: map[string]CategoryPayload{"skills": {SchemaVersion: 1, Selection: json.RawMessage(`[]`)}}},
 		{Version: 3, Name: "shared", Common: map[string]CommonPayload{"workspace": {Version: 1, Selection: json.RawMessage(`{"access":"read-only"}`)}}, Overlays: map[string]OverlayPayload{"codex": {Version: 1, AuthRef: "work"}, "devin": {Version: 1}}},
 		{Version: 3, Name: "missing-overlay", Common: map[string]CommonPayload{"workspace": {Version: 1, Selection: json.RawMessage(`{"access":"read-only"}`)}}},
 	} {

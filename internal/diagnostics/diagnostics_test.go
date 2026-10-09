@@ -100,12 +100,12 @@ func writeProfile(t *testing.T, home, body string) {
 }
 func TestValidateStructureAndSelectedSources(t *testing.T) {
 	for _, tc := range []struct{ name, body, status, code string }{
-		{"empty v1", `{"version":1,"name":"example","target":"devin","skillReferences":[]}`, "pass", "valid_structure"},
-		{"empty v2", `{"version":2,"name":"example","target":"devin","categories":{}}`, "pass", "valid_structure"},
+		{"empty", `{"version":3,"name":"example","common":{"skills":{"version":1,"selection":[]},"workspace":{"version":1,"selection":{"access":"read-only"}}},"overlays":{}}`, "pass", "valid_structure"},
+		{"removed envelope", `{"version":2,"name":"example","target":"devin","categories":{}}`, "fail", "unsupported_content"},
 		{"corrupt", `secret`, "fail", "invalid_structure"},
 		{"unsupported", `{"version":99}`, "fail", "unsupported_content"},
-		{"malformed reference", `{"version":1,"name":"example","target":"devin","skillReferences":[{"source":"shared-agents","relativePath":"../private"}]}`, "fail", "invalid_structure"},
-		{"removed", `{"version":1,"name":"example","target":"devin","skillReferences":[{"source":"shared-agents","relativePath":"removed"}]}`, "pass", "valid_structure"},
+		{"malformed reference", `{"version":3,"name":"example","common":{"skills":{"version":1,"selection":[{"source":"shared-agents","relativePath":"../private"}]},"workspace":{"version":1,"selection":{"access":"read-only"}}},"overlays":{}}`, "fail", "invalid_structure"},
+		{"removed", `{"version":3,"name":"example","common":{"skills":{"version":1,"selection":[{"source":"shared-agents","relativePath":"removed"}]},"workspace":{"version":1,"selection":{"access":"read-only"}}},"overlays":{}}`, "pass", "valid_structure"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			home := t.TempDir()
@@ -150,7 +150,7 @@ func TestSelectedDiscoveryPreservesRulesAndIgnoresUnselected(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(home, ".config", "devin", "skills"), nil, 0600); err != nil {
 		t.Fatal(err)
 	}
-	writeProfile(t, home, `{"version":1,"name":"example","target":"devin","skillReferences":[{"source":"shared-agents","relativePath":"selected"}]}`)
+	writeProfile(t, home, `{"version":3,"name":"example","common":{"skills":{"version":1,"selection":[{"source":"shared-agents","relativePath":"selected"}]},"workspace":{"version":1,"selection":{"access":"read-only"}}},"overlays":{}}`)
 	get := func() Result { return Validate("example", func() (string, error) { return home, nil }) }
 	check(t, get(), "profile.sources", "fail", "selected_sources_unresolved")
 	if err := os.Mkdir(filepath.Join(bundle, "SKILL.md"), 0700); err != nil {
@@ -169,7 +169,7 @@ func TestSelectedDiscoveryPreservesRulesAndIgnoresUnselected(t *testing.T) {
 	if !reflect.DeepEqual(first, get()) {
 		t.Fatal("unstable result")
 	}
-	writeProfile(t, home, `{"version":1,"name":"example","target":"devin","skillReferences":[{"source":"shared-agents","relativePath":"./selected"}]}`)
+	writeProfile(t, home, `{"version":3,"name":"example","common":{"skills":{"version":1,"selection":[{"source":"shared-agents","relativePath":"./selected"}]},"workspace":{"version":1,"selection":{"access":"read-only"}}},"overlays":{}}`)
 	check(t, get(), "profile.sources", "fail", "selected_sources_unresolved") // strict identity; no rebinding
 	ref := skills.SkillReference{Source: "shared-agents", RelativePath: "selected"}
 	r := resolveSources(result("profile.validate", ""), []skills.SkillReference{ref}, []skills.SkillBundle{{Reference: ref}, {Reference: ref}})

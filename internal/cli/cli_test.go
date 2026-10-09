@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/alcimerio/ai-config-selector/internal/profilerepo"
 	"io"
 	"os"
 	"path/filepath"
@@ -16,6 +15,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/alcimerio/ai-config-selector/internal/profilerepo"
 
 	codexadapter "github.com/alcimerio/ai-config-selector/internal/adapter/codex"
 	"github.com/alcimerio/ai-config-selector/internal/adapter/devin"
@@ -680,10 +681,10 @@ func TestDryRunPassesConfiguredSessionsDirectoryToPlanner(t *testing.T) {
 	}
 }
 
-func TestDryRunLoadsVersionOneProfileWithoutRewritingIt(t *testing.T) {
+func TestDryRunLoadsStoredProfileWithoutRewritingIt(t *testing.T) {
 	existingHome := t.TempDir()
 	acsHome := filepath.Join(existingHome, ".acs")
-	legacyPath, legacy := writeVersionOneProfile(t, acsHome, "legacy")
+	storedPath, stored := writeStoredProfile(t, acsHome, "legacy")
 	bundlePath := filepath.Join(existingHome, ".config", "devin", "skills", "review")
 	if err := os.MkdirAll(bundlePath, 0o700); err != nil {
 		t.Fatal(err)
@@ -709,12 +710,12 @@ func TestDryRunLoadsVersionOneProfileWithoutRewritingIt(t *testing.T) {
 	}
 
 	if exitCode := application.Run(context.Background(), []string{"devin", "--profile", "legacy", "--dry-run"}); exitCode != 0 {
-		t.Fatalf("version-1 dry run exit code = %d, want 0; stderr: %s", exitCode, stderr.String())
+		t.Fatalf("dry run exit code = %d, want 0; stderr: %s", exitCode, stderr.String())
 	}
-	if !strings.Contains(stdout.String(), "review [devin-config]") {
-		t.Fatalf("version-1 dry run did not resolve the selected Skill Bundle:\n%s", stdout.String())
+	if !strings.Contains(stdout.String(), "devin-config:review") {
+		t.Fatalf("dry run did not resolve the selected Skill Bundle:\n%s", stdout.String())
 	}
-	assertFileContents(t, legacyPath, legacy, "dry run rewrote the version-1 Profile")
+	assertFileContents(t, storedPath, stored, "dry run rewrote the stored Profile")
 }
 
 func TestLaunchDelegatesResolvedProfileAndTerminalToLauncher(t *testing.T) {
@@ -797,10 +798,10 @@ func TestSandboxLaunchDelegatesResolvedProfileAndTerminalToSandboxLauncher(t *te
 	}
 }
 
-func TestLaunchLoadsVersionOneProfileWithoutRewritingIt(t *testing.T) {
+func TestLaunchLoadsStoredProfileWithoutRewritingIt(t *testing.T) {
 	existingHome := t.TempDir()
 	acsHome := filepath.Join(existingHome, ".acs")
-	legacyPath, legacy := writeVersionOneProfile(t, acsHome, "reviews")
+	storedPath, stored := writeStoredProfile(t, acsHome, "reviews")
 	bundlePath := filepath.Join(existingHome, ".config", "devin", "skills", "review")
 	if err := os.MkdirAll(bundlePath, 0o700); err != nil {
 		t.Fatal(err)
@@ -822,12 +823,12 @@ func TestLaunchLoadsVersionOneProfileWithoutRewritingIt(t *testing.T) {
 	}
 
 	if exitCode := application.Run(context.Background(), []string{"devin", "--profile", "reviews"}); exitCode != 0 {
-		t.Fatalf("version-1 launch exit code = %d, want 0", exitCode)
+		t.Fatalf("launch exit code = %d, want 0", exitCode)
 	}
 	if launcher.calls != 1 {
 		t.Fatalf("launcher calls = %d, want 1", launcher.calls)
 	}
-	assertFileContents(t, legacyPath, legacy, "launch rewrote the version-1 Profile")
+	assertFileContents(t, storedPath, stored, "launch rewrote the stored Profile")
 }
 func TestLaunchStrictResolutionFailureDoesNotCreateSession(t *testing.T) {
 	existingHome := t.TempDir()
@@ -1008,7 +1009,7 @@ func TestDryRunRejectsUnknownProfileCategoryBeforeDiscovery(t *testing.T) {
 	}
 	if err := os.WriteFile(
 		filepath.Join(profilesDirectory, "unknown.json"),
-		[]byte(`{"version":2,"name":"unknown","target":"devin","categories":{"agents":{"schemaVersion":1,"selection":[]}}}`),
+		[]byte(`{"version":3,"name":"unknown","common":{"agents":{"version":1,"selection":[]}},"overlays":{"devin":{"version":1}}}`),
 		0o600,
 	); err != nil {
 		t.Fatal(err)
@@ -1025,7 +1026,7 @@ func TestDryRunRejectsUnknownProfileCategoryBeforeDiscovery(t *testing.T) {
 	if exitCode := application.Run(context.Background(), []string{"devin", "--profile", "unknown", "--dry-run"}); exitCode == 0 {
 		t.Fatal("dry run accepted an unknown Profile category")
 	}
-	if !strings.Contains(stderr.String(), `unknown Profile category "agents"`) {
+	if !strings.Contains(stderr.String(), `unknown common capability "agents"`) {
 		t.Fatalf("unknown-category error is unclear: %s", stderr.String())
 	}
 }
@@ -1166,8 +1167,8 @@ func TestCreateProfileSelectsSameNamedSkillBundlesIndependently(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load created Profile: %v", err)
 	}
-	if saved.Version != profile.LegacyCurrentVersion {
-		t.Fatalf("saved generic test Profile version = %d, want %d", saved.Version, profile.LegacyCurrentVersion)
+	if saved.Version != profile.CurrentVersion {
+		t.Fatalf("saved generic test Profile version = %d, want %d", saved.Version, profile.CurrentVersion)
 	}
 	references, err := devin.SkillReferences(saved)
 	if err != nil {
@@ -1453,8 +1454,8 @@ func TestCreateProfilePersistsSummarizesAndCancelsWithMultipleCategories(t *test
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(saved.Categories) != 2 {
-			t.Fatalf("saved categories = %#v", saved.Categories)
+		if len(saved.Common) != 2 {
+			t.Fatalf("saved categories = %#v", saved.Common)
 		}
 	})
 
@@ -1730,14 +1731,14 @@ func (launcher *recordingProfileLauncher) Launch(
 	launcher.terminal = terminal
 	return launcher.exitCode, launcher.err
 }
-func writeVersionOneProfile(t *testing.T, acsHome, name string) (string, []byte) {
+func writeStoredProfile(t *testing.T, acsHome, name string) (string, []byte) {
 	t.Helper()
 	profilesDirectory := filepath.Join(acsHome, "profiles")
 	if err := os.MkdirAll(profilesDirectory, 0o700); err != nil {
 		t.Fatal(err)
 	}
 	contents := []byte(fmt.Sprintf(
-		`{"version":1,"name":%q,"target":"devin","skillReferences":[{"source":"devin-config","relativePath":"review"}]}`,
+		`{"version":3,"name":%q,"common":{"skills":{"version":1,"selection":[{"source":"devin-config","relativePath":"review"}]},"workspace":{"version":1,"selection":{"access":"read-only"}}},"overlays":{"devin":{"version":1}}}`,
 		name,
 	))
 	path := filepath.Join(profilesDirectory, name+".json")

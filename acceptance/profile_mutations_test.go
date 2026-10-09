@@ -91,7 +91,7 @@ func TestPromotedProfileHistoryDiffDeleteAndRestoreArePublicAndPassive(t *testin
 	assertNoSessions(t, home)
 }
 
-const newerMutationProfile = `{"version":2,"name":"old","target":"devin","categories":{"skills":{"schemaVersion":1,"selection":[{"source":"shared-agents","relativePath":"newer"}]}}}`
+const newerMutationProfile = `{"version":3,"name":"old","common":{"skills":{"version":1,"selection":[{"source":"shared-agents","relativePath":"newer"}]},"workspace":{"version":1,"selection":{"access":"read-write"}}},"overlays":{"devin":{"version":1}}}`
 
 // A separate process uses the production transaction boundary while the editor
 // retains its previously captured revision. It never touches the user's home.
@@ -123,7 +123,7 @@ func TestPromotedProfileMutationReloadThenSignalReportsCurrentCancellation(t *te
 			result := runMutationCandidatePTY(t, binary, home, args, func(master *os.File, capture *safeCapture, process *os.Process) {
 				waitForOutput(t, capture, "Profile \"")
 				openProfilePreview(t, master)
-				waitForOutput(t, capture, "Stored v1 -> v2")
+				waitForOutput(t, capture, "Stored v3 -> v3")
 				executable, err := os.Executable()
 				if err != nil {
 					t.Fatal(err)
@@ -164,7 +164,7 @@ func mutationCandidateHome(t *testing.T) (string, string, []byte) {
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		t.Fatal(err)
 	}
-	raw := []byte(`{"version":1,"name":"old","target":"devin","skillReferences":[{"source":"devin-config","relativePath":"lost"}]}`)
+	raw := []byte(`{"version":3,"name":"old","common":{"skills":{"version":1,"selection":[{"source":"devin-config","relativePath":"lost"}]},"workspace":{"version":1,"selection":{"access":"read-write"}}},"overlays":{"devin":{"version":1}}}`)
 	if err := os.WriteFile(path, raw, 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -257,7 +257,7 @@ func TestPromotedProfileMutationSeedPreviewAndCommit(t *testing.T) {
 					writePTY(t, master, "\x1b[D")
 					openProfilePreview(t, master)
 				}
-				waitForOutput(t, capture, "Stored v1 -> v2")
+				waitForOutput(t, capture, "Stored v3 -> v3")
 				writePTY(t, master, "\x1b[F")
 				waitForOutput(t, capture, "acknowledge unresolved")
 				// No generic confirmation may bypass availability acknowledgement.
@@ -275,7 +275,7 @@ func TestPromotedProfileMutationSeedPreviewAndCommit(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !bytes.Contains(stored, []byte(`"version": 2`)) || !bytes.Contains(stored, []byte(`"name": "`+destination+`"`)) || !bytes.Contains(stored, []byte(`"relativePath": "lost"`)) {
+			if !bytes.Contains(stored, []byte(`"version": 3`)) || !bytes.Contains(stored, []byte(`"name": "`+destination+`"`)) || !bytes.Contains(stored, []byte(`"relativePath": "lost"`)) {
 				t.Fatalf("lost stored intention: %s", stored)
 			}
 			if operation == "clone" {
@@ -291,53 +291,6 @@ func TestPromotedProfileMutationSeedPreviewAndCommit(t *testing.T) {
 			}
 			assertNoSessions(t, home)
 		})
-	}
-}
-
-func TestPromotedProfileExplicitMigrationPreservesWorkspaceWriteAndAdoptsCommonPaths(t *testing.T) {
-	binary := promotedBinary(t)
-	home, path, _ := mutationCandidateHome(t)
-	result := runMutationCandidatePTY(t, binary, home, []string{"profile", "migrate", "old"}, func(master *os.File, capture *safeCapture, _ *os.Process) {
-		waitForOutput(t, capture, `Migrate Profile "old"`)
-		openProfilePreview(t, master)
-		waitForOutput(t, capture, "Stored v1 -> v3")
-		for _, marker := range []string{"workspace write is retained", ".acs/common/v1/skills", "Devin projection paths"} {
-			waitForOutput(t, capture, marker)
-		}
-		writePTY(t, master, "\x1b[F", "a", "\r")
-	})
-	if result.exitCode != 0 || !strings.Contains(result.output, "Migrate Profile committed: old") {
-		t.Fatalf("migration result: %d %q", result.exitCode, result.output)
-	}
-	stored, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, fragment := range [][]byte{[]byte(`"version": 3`), []byte(`"common"`), []byte(`"workspace"`), []byte(`"access": "read-write"`), []byte(`"overlays"`), []byte(`"devin"`)} {
-		if !bytes.Contains(stored, fragment) {
-			t.Fatalf("migrated Profile omits %s: %s", fragment, stored)
-		}
-	}
-}
-
-func TestPromotedProfileExplicitMigrationPreviewsSelectedWorkspaceReduction(t *testing.T) {
-	binary := promotedBinary(t)
-	home, path, _ := mutationCandidateHome(t)
-	result := runMutationCandidatePTY(t, binary, home, []string{"profile", "migrate", "old"}, func(master *os.File, capture *safeCapture, _ *os.Process) {
-		waitForOutput(t, capture, `Migrate Profile "old"`)
-		writePTY(t, master, "\x1b[B", "\x1b[B", "\r")
-		waitForOutput(t, capture, "Workspace access")
-		writePTY(t, master, " ", "\x1b[D")
-		openProfilePreview(t, master)
-		waitForOutput(t, capture, "workspace authority is reduced")
-		writePTY(t, master, "\x1b[F", "a", "\r")
-	})
-	if result.exitCode != 0 {
-		t.Fatalf("migration reduction result: %d %q", result.exitCode, result.output)
-	}
-	stored, err := os.ReadFile(path)
-	if err != nil || !bytes.Contains(stored, []byte(`"access": "read-only"`)) {
-		t.Fatalf("migration did not persist the separately selected reduction: %s %v", stored, err)
 	}
 }
 

@@ -147,7 +147,7 @@ func TestNativeDirectInstalledTargetInteractiveLifecycle(t *testing.T) {
 	registry.execution = newCodexExecutionRunner(codexLoginConfig{
 		BinaryPath: binary, SessionsDirectory: registry.sessionsDirectory, WorkingDirectory: workspace, PrivateRoot: privateRoot,
 	}, launch.NewProcessSandbox())
-	plan := authority.New(nil, launch.WorkspaceAccessReadOnly, 3, "codex", authority.TargetRequirements{
+	plan := authority.New(nil, launch.WorkspaceAccessReadOnly, "codex", authority.TargetRequirements{
 		Recipe: authority.RecipeCodex, Executable: binary,
 	}).WithAuthRef(string(name))
 

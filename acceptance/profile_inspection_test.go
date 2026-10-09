@@ -97,11 +97,12 @@ func TestPromotedProfileInspectionMixedReadOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	fixtures := map[string]string{
-		"zeta.json":             `{"version":2,"name":"zeta","target":"devin","categories":{"skills":{"schemaVersion":1,"selection":[{"source":"shared-agents","relativePath":"removed"}]}}}`,
-		"alpha.json":            `{"version":1,"name":"alpha","target":"devin","skillReferences":[{"source":"devin-config","relativePath":"missing"}]}`,
+		"zeta.json":             `{"version":3,"name":"zeta","common":{"skills":{"version":1,"selection":[{"source":"shared-agents","relativePath":"removed"}]},"workspace":{"version":1,"selection":{"access":"read-only"}}},"overlays":{"devin":{"version":1}}}`,
+		"alpha.json":            `{"version":3,"name":"alpha","common":{"skills":{"version":1,"selection":[{"source":"devin-config","relativePath":"missing"}]},"workspace":{"version":1,"selection":{"access":"read-only"}}},"overlays":{"devin":{"version":1}}}`,
 		"broken.json":           `private-corrupt-content`,
 		"future.json":           `{"version":9,"name":"future","target":"devin","secret":"private-unknown-content"}`,
-		"mismatch.json":         `{"version":2,"name":"other","target":"devin","categories":{}}`,
+		"mismatch.json":         `{"version":3,"name":"other","common":{"skills":{"version":1,"selection":[]},"workspace":{"version":1,"selection":{"access":"read-only"}}},"overlays":{}}`,
+		"removed.json":          `{"version":1,"name":"removed","target":"devin","skillReferences":[{"source":"devin-config","relativePath":"private-removed"}]}`,
 		".profile-leftover.tmp": "temporary", "README": "ignored",
 	}
 	for name, body := range fixtures {
@@ -140,7 +141,7 @@ func TestPromotedProfileInspectionMixedReadOnly(t *testing.T) {
 		names = append(names, e.Name)
 		statuses = append(statuses, e.Status)
 	}
-	if result.FormatVersion != 1 || !reflect.DeepEqual(names, []string{"alpha", "broken", "fifo", "future", "link", "mismatch", "zeta"}) || !reflect.DeepEqual(statuses, []string{"valid", "invalid", "invalid", "unsupported", "invalid", "invalid", "valid"}) {
+	if result.FormatVersion != 1 || !reflect.DeepEqual(names, []string{"alpha", "broken", "fifo", "future", "link", "mismatch", "removed", "zeta"}) || !reflect.DeepEqual(statuses, []string{"valid", "invalid", "invalid", "unsupported", "invalid", "invalid", "unsupported", "valid"}) {
 		t.Fatalf("unexpected catalog: %s", out)
 	}
 	if !reflect.DeepEqual(result.Checks, map[string]string{"sources": "unchecked", "auth": "unchecked", "runtime": "unchecked"}) {
@@ -150,7 +151,7 @@ func TestPromotedProfileInspectionMixedReadOnly(t *testing.T) {
 	if out != again {
 		t.Fatal("list output changed")
 	}
-	for _, name := range []string{"alpha", "zeta", "broken", "future", "mismatch", "link", "fifo", "absent", "../private-name"} {
+	for _, name := range []string{"alpha", "zeta", "broken", "future", "mismatch", "removed", "link", "fifo", "absent", "../private-name"} {
 		out, code := runInspection(t, binary, home, "profile", "show", name, "--json")
 		want := 1
 		if name == "alpha" || name == "zeta" {
@@ -166,8 +167,11 @@ func TestPromotedProfileInspectionMixedReadOnly(t *testing.T) {
 		if strings.Contains(out, "private-") || strings.Contains(out, home) {
 			t.Fatal("private contents disclosed")
 		}
-		if name == "alpha" && !strings.Contains(out, `"storedVersion":1`) {
-			t.Fatal("legacy version lost")
+		if name == "alpha" && !strings.Contains(out, `"storedVersion":3`) {
+			t.Fatal("stored version lost")
+		}
+		if name == "removed" && (!strings.Contains(out, `"storedVersion":1`) || !strings.Contains(out, `"code":"unsupported_content"`)) {
+			t.Fatalf("removed envelope not reported as unsupported: %s", out)
 		}
 	}
 	after := snapshotInspectionHome(t, home)
@@ -203,29 +207,25 @@ func TestPromotedProfileInspectionUnicodeIntegrity(t *testing.T) {
 		t.Fatal(err)
 	}
 	expected := map[string]string{}
-	for _, version := range []int{1, 2} {
-		for _, tc := range []struct{ name, encoded, want string }{
-			{"high", `corrupt-\ud800`, ""}, {"low", `corrupt-\udc00`, ""},
-			{"pair", `skill-\ud83d\ude00`, "skill-😀"},
-			{"replacement", `skill-�`, "skill-�"},
-			{"backslash", `skill-\\ud800`, `skill-\ud800`},
-		} {
-			name := fmt.Sprintf("v%d-%s", version, tc.name)
-			expected[name] = tc.want
-			selection := fmt.Sprintf(`[{"source":"shared-agents","relativePath":"%s"}]`, tc.encoded)
-			body := fmt.Sprintf(`{"version":1,"name":%q,"target":"devin","skillReferences":%s}`, name, selection)
-			if version == 2 {
-				body = fmt.Sprintf(`{"version":2,"name":%q,"target":"devin","categories":{"skills":{"schemaVersion":1,"selection":%s}}}`, name, selection)
-			}
-			if err := os.WriteFile(filepath.Join(dir, name+".json"), []byte(body), 0600); err != nil {
-				t.Fatal(err)
-			}
+	for _, tc := range []struct{ name, encoded, want string }{
+		{"high", `corrupt-\ud800`, ""}, {"low", `corrupt-\udc00`, ""},
+		{"pair", `skill-\ud83d\ude00`, "skill-😀"},
+		{"replacement", `skill-�`, "skill-�"},
+		{"backslash", `skill-\\ud800`, `skill-\ud800`},
+	} {
+		name := "profile-" + tc.name
+		expected[name] = tc.want
+		selection := fmt.Sprintf(`[{"source":"shared-agents","relativePath":"%s"}]`, tc.encoded)
+		body := fmt.Sprintf(`{"version":3,"name":%q,"common":{"skills":{"version":1,"selection":%s},"workspace":{"version":1,"selection":{"access":"read-only"}}},"overlays":{"devin":{"version":1}}}`, name, selection)
+		if err := os.WriteFile(filepath.Join(dir, name+".json"), []byte(body), 0600); err != nil {
+			t.Fatal(err)
 		}
 	}
 	before := snapshotInspectionHome(t, home)
 	type entry struct {
 		Name, Status string
 		Categories   []struct {
+			ID        string
 			Selection []struct{ RelativePath string }
 		}
 		Diagnostic *struct{ Code string }
@@ -237,7 +237,7 @@ func TestPromotedProfileInspectionUnicodeIntegrity(t *testing.T) {
 			if e.Status != "invalid" || e.Diagnostic == nil || e.Diagnostic.Code != "invalid_structure" || len(e.Categories) != 0 {
 				t.Errorf("accepted corrupt reference: %+v", e)
 			}
-		} else if e.Status != "valid" || len(e.Categories) != 1 || len(e.Categories[0].Selection) != 1 || e.Categories[0].Selection[0].RelativePath != want {
+		} else if e.Status != "valid" || len(e.Categories) == 0 || e.Categories[0].ID != "skills" || len(e.Categories[0].Selection) != 1 || e.Categories[0].Selection[0].RelativePath != want {
 			t.Errorf("changed valid reference: %+v", e)
 		}
 	}

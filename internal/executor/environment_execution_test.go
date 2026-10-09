@@ -43,7 +43,7 @@ func environmentExecutionPlan(recipe authority.Recipe, executable, source string
 	if recipe == authority.RecipeDevin || recipe == authority.RecipeCodex {
 		overlay = string(recipe)
 	}
-	return authority.New([]authority.Contribution{{ID: "environment", Value: environmentExecutionContribution{intents: []launch.EnvironmentIntent{intent}}}}, launch.WorkspaceAccessReadOnly, 3, overlay, requirements)
+	return authority.New([]authority.Contribution{{ID: "environment", Value: environmentExecutionContribution{intents: []launch.EnvironmentIntent{intent}}}}, launch.WorkspaceAccessReadOnly, overlay, requirements)
 }
 
 func TestEnvironmentMissingRequiredPrecedesSessionAcrossPublicExecutors(t *testing.T) {

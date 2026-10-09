@@ -11,7 +11,6 @@ import (
 	"github.com/alcimerio/ai-config-selector/internal/authority"
 	"github.com/alcimerio/ai-config-selector/internal/category"
 	"github.com/alcimerio/ai-config-selector/internal/launch"
-	"github.com/alcimerio/ai-config-selector/internal/profile"
 )
 
 const (
@@ -21,16 +20,10 @@ const (
 
 type WorkspaceContribution struct{ access launch.WorkspaceAccess }
 
-func (WorkspaceContribution) Plan(context.Context, string, *launch.Plan) error { return nil }
-func (contribution WorkspaceContribution) PlanResolved(ctx context.Context, workingDirectory string, sourceVersion int, _ string, plan *launch.Plan) error {
-	if sourceVersion < profile.CurrentVersion {
-		return nil
-	}
-	return contribution.Plan(ctx, workingDirectory, plan)
-}
+func (WorkspaceContribution) Plan(context.Context, string, *launch.Plan) error         { return nil }
 func (WorkspaceContribution) Materialize(string) error                                 { return nil }
 func (WorkspaceContribution) Verify(context.Context, launch.VerificationContext) error { return nil }
-func (contribution WorkspaceContribution) SemanticFacts(_ int, _ string) authority.Facts {
+func (contribution WorkspaceContribution) SemanticFacts(string) authority.Facts {
 	source := authority.FactSource{Kind: "profile", ID: WorkspaceCapabilityID, Version: WorkspaceCapabilityVersion}
 	effective := []authority.Fact{{ID: "workspace.read", Kind: "filesystem", Value: authority.FactValue{Access: "read", LogicalLocation: "workspace"}, Reason: "common_workspace", Source: source}}
 	if contribution.access == launch.WorkspaceAccessReadWrite {
@@ -44,8 +37,7 @@ type WorkspaceBinding = category.Binding[launch.WorkspaceAccess, launch.Workspac
 func NewWorkspaceBinding() (WorkspaceBinding, error) {
 	return category.Bind(category.Definition[launch.WorkspaceAccess, launch.WorkspaceAccess, WorkspaceContribution]{
 		ID: WorkspaceCapabilityID, SchemaVersion: WorkspaceCapabilityVersion,
-		Empty:       func() launch.WorkspaceAccess { return launch.WorkspaceAccessReadOnly },
-		LegacyEmpty: func() launch.WorkspaceAccess { return launch.WorkspaceAccessReadWrite },
+		Empty: func() launch.WorkspaceAccess { return launch.WorkspaceAccessReadOnly },
 		Encode: func(access launch.WorkspaceAccess) (json.RawMessage, error) {
 			return json.Marshal(struct {
 				Access launch.WorkspaceAccess `json:"access"`

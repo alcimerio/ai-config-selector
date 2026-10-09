@@ -7,11 +7,11 @@ import (
 	"testing"
 )
 
-func TestLaunchCheckSelectsOverlayAndLegacyBinding(t *testing.T) {
+func TestLaunchCheckSelectsOverlay(t *testing.T) {
 	for _, tc := range []struct{ body, target, status, code string }{
-		{`{"version":1,"name":"example","target":"devin","skillReferences":[]}`, "devin", "pass", "legacy_devin_binding"},
-		{`{"version":1,"name":"example","target":"devin","skillReferences":[]}`, "sandbox", "pass", "legacy_common_only"},
-		{`{"version":2,"name":"example","target":"devin","categories":{}}`, "codex", "fail", "legacy_target_mismatch"},
+		{`{"version":1,"name":"example","target":"devin","skillReferences":[]}`, "devin", "unchecked", "structure_required"},
+		{`{"version":2,"name":"example","target":"devin","categories":{}}`, "codex", "unchecked", "structure_required"},
+		{`{"version":3,"name":"example","common":{"skills":{"version":1,"selection":[]},"workspace":{"version":1,"selection":{"access":"read-only"}}},"overlays":{"devin":{"version":1}}}`, "devin", "pass", "selected_overlay_supported"},
 		{`{"version":3,"name":"example","common":{"skills":{"version":1,"selection":[]},"workspace":{"version":1,"selection":{"access":"read-only"}}},"overlays":{"private-unknown":{"version":99,"selection":{"private":"secret"}}}}`, "sandbox", "pass", "common_only"},
 		{`{"version":3,"name":"example","common":{"skills":{"version":1,"selection":[]},"workspace":{"version":1,"selection":{"access":"read-only"}}},"overlays":{}}`, "sandbox", "pass", "common_only"},
 		{`{"version":3,"name":"example","common":{"skills":{"version":1,"selection":[]},"workspace":{"version":1,"selection":{"access":"read-only"}}},"overlays":{}}`, "codex", "fail", "selected_overlay_missing"},

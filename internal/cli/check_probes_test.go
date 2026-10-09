@@ -3,10 +3,11 @@ package cli
 import (
 	"context"
 	"errors"
+	"testing"
+
 	"github.com/alcimerio/ai-config-selector/internal/codexauth"
 	"github.com/alcimerio/ai-config-selector/internal/diagnostics"
 	"github.com/alcimerio/ai-config-selector/internal/launch"
-	"testing"
 )
 
 type checkReadiness struct {

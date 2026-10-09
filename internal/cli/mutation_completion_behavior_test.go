@@ -40,10 +40,10 @@ func (r *completionRepository) Apply(ctx context.Context, request profilerepo.Re
 }
 
 func TestMutationAcknowledgmentFailurePreservesCommit(t *testing.T) {
-	for _, operation := range []string{"edit", "clone", "rename", "delete", "migrate"} {
+	for _, operation := range []string{"edit", "clone", "rename", "delete"} {
 		for _, short := range []bool{false, true} {
 			t.Run(operation+map[bool]string{false: "/error", true: "/short"}[short], func(t *testing.T) {
-				app, base, _, _ := mutationFixture(t, legacyMutationDocument)
+				app, base, _, _ := mutationFixture(t, mutationDocument)
 				repository := &completionRepository{Repository: base}
 				app.Repository = repository
 				writer := &mutationCompletionWriter{short: short}
@@ -88,7 +88,7 @@ func TestMutationAcknowledgmentFailurePreservesCommit(t *testing.T) {
 func TestDeletePreviewFailurePreventsCommit(t *testing.T) {
 	for _, short := range []bool{false, true} {
 		t.Run(map[bool]string{false: "error", true: "short"}[short], func(t *testing.T) {
-			app, base, _, _ := mutationFixture(t, legacyMutationDocument)
+			app, base, _, _ := mutationFixture(t, mutationDocument)
 			repository := &completionRepository{Repository: base}
 			app.Repository = repository
 			writer := &mutationCompletionWriter{short: short}
@@ -96,7 +96,7 @@ func TestDeletePreviewFailurePreventsCommit(t *testing.T) {
 			app.Output, app.ErrorOutput = writer, &stderr
 			code := app.Run(context.Background(), []string{"profile", "delete", "old", "--confirm", "old"})
 			snapshot, err := base.Read(context.Background(), "old")
-			if code != 1 || repository.applies != 0 || writer.calls != 1 || err != nil || !bytes.Equal(snapshot.Bytes, legacyMutationDocument) {
+			if code != 1 || repository.applies != 0 || writer.calls != 1 || err != nil || !bytes.Equal(snapshot.Bytes, mutationDocument) {
 				t.Fatalf("preview failure mutated storage: code=%d applies=%d writes=%d snapshot=%+v err=%v", code, repository.applies, writer.calls, snapshot, err)
 			}
 			if !strings.Contains(stderr.String(), "not committed") || strings.Contains(stderr.String(), "acs profile recover") {

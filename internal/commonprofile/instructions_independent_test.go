@@ -2,14 +2,15 @@ package commonprofile
 
 import (
 	"context"
-	"github.com/alcimerio/ai-config-selector/internal/category"
-	"github.com/alcimerio/ai-config-selector/internal/instructions"
-	"github.com/alcimerio/ai-config-selector/internal/profile"
-	"github.com/alcimerio/ai-config-selector/internal/skills"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/alcimerio/ai-config-selector/internal/category"
+	"github.com/alcimerio/ai-config-selector/internal/instructions"
+	"github.com/alcimerio/ai-config-selector/internal/profile"
+	"github.com/alcimerio/ai-config-selector/internal/skills"
 )
 
 type reviewInstructionProjection struct{ id string }

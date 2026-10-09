@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+
 	"github.com/alcimerio/ai-config-selector/internal/selfupdate"
 )
 

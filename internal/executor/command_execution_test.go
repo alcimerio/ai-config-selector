@@ -14,7 +14,7 @@ import (
 
 func resolvedCommandPlan(t *testing.T) authority.Plan {
 	t.Helper()
-	plan, err := authority.New(nil, launch.WorkspaceAccessReadOnly, 3, "").ForCommand()
+	plan, err := authority.New(nil, launch.WorkspaceAccessReadOnly, "").ForCommand()
 	if err != nil {
 		t.Fatal(err)
 	}

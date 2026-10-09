@@ -11,7 +11,6 @@ import (
 	"github.com/alcimerio/ai-config-selector/internal/category"
 	"github.com/alcimerio/ai-config-selector/internal/instructions"
 	"github.com/alcimerio/ai-config-selector/internal/launch"
-	"github.com/alcimerio/ai-config-selector/internal/profile"
 )
 
 const InstructionsCapabilityID = "instructions"
@@ -56,7 +55,7 @@ func NewInstructionsBinding(resolve func(context.Context, []instructions.Referen
 func instructionsDefinition() category.Definition[[]instructions.Reference, []instructions.Bundle, InstructionsContribution] {
 	return category.Definition[[]instructions.Reference, []instructions.Bundle, InstructionsContribution]{
 		ID: InstructionsCapabilityID, SchemaVersion: InstructionsCapabilityVersion,
-		Empty: func() []instructions.Reference { return []instructions.Reference{} }, LegacyEmpty: func() []instructions.Reference { return []instructions.Reference{} },
+		Empty: func() []instructions.Reference { return []instructions.Reference{} }, Optional: true,
 		Encode: instructions.Encode, Decode: instructions.Decode,
 		ResolveSyntax: func(refs []instructions.Reference) ([]instructions.Bundle, error) {
 			bundles := make([]instructions.Bundle, len(refs))
@@ -70,9 +69,9 @@ func instructionsDefinition() category.Definition[[]instructions.Reference, []in
 }
 
 func (c InstructionsContribution) Plan(ctx context.Context, _ string, plan *launch.Plan) error {
-	return c.PlanResolved(ctx, "", profile.CurrentVersion, c.projection.ID(), plan)
+	return c.PlanResolved(ctx, "", c.projection.ID(), plan)
 }
-func (c InstructionsContribution) PlanResolved(ctx context.Context, _ string, sourceVersion int, overlay string, plan *launch.Plan) error {
+func (c InstructionsContribution) PlanResolved(ctx context.Context, _ string, overlay string, plan *launch.Plan) error {
 	if len(c.selected) == 0 {
 		return nil
 	}
@@ -92,9 +91,9 @@ func (c InstructionsContribution) PlanResolved(ctx context.Context, _ string, so
 	return nil
 }
 func (c InstructionsContribution) Materialize(home string) error {
-	return c.MaterializeResolved(home, profile.CurrentVersion, c.projection.ID())
+	return c.MaterializeResolved(home, c.projection.ID())
 }
-func (c InstructionsContribution) MaterializeResolved(home string, sourceVersion int, overlay string) error {
+func (c InstructionsContribution) MaterializeResolved(home string, overlay string) error {
 	for _, item := range c.selected {
 		dst := filepath.Join(home, ".acs", "common", "v1", "instructions", item.Reference.Source, filepath.FromSlash(item.Reference.RelativePath))
 		if err := os.MkdirAll(filepath.Dir(dst), 0700); err != nil {
@@ -117,7 +116,7 @@ func (c InstructionsContribution) DevinInstructionBundles() []instructions.Bundl
 	}
 	return out
 }
-func (c InstructionsContribution) SemanticFacts(sourceVersion int, overlay string) authority.Facts {
+func (c InstructionsContribution) SemanticFacts(overlay string) authority.Facts {
 	if len(c.selected) == 0 {
 		return authority.Facts{}
 	}

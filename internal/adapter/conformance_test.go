@@ -134,9 +134,8 @@ func TestMaintainedTargetsShareCommonSkillsAndWorkspaceContract(t *testing.T) {
 	}
 }
 
-func TestLegacyProfilesRemainDevinBoundUntilExplicitMigration(t *testing.T) {
+func TestTargetsRejectRemovedEnvelopeVersions(t *testing.T) {
 	home := t.TempDir()
-	writeBundle(t, home, ".config/devin/skills", "review", "legacy review\n")
 	devinTarget, err := devin.New(devin.Config{BinaryPath: "/usr/bin/true", ExistingHomeDir: home})
 	if err != nil {
 		t.Fatal(err)
@@ -145,48 +144,16 @@ func TestLegacyProfilesRemainDevinBoundUntilExplicitMigration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	versionOne := []byte(`{"version":1,"name":"legacy","target":"devin","skillReferences":[{"source":"devin-config","relativePath":"review"}]}`)
-	legacy, err := devinTarget.Categories().Decode(versionOne)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := codexTarget.Categories().Decode(versionOne); err == nil {
-		t.Fatal("Codex accepted a version-1 Devin Profile")
-	}
-	resolved, err := devinTarget.Categories().ResolveFor(context.Background(), legacy, "devin")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if resolved.SourceVersion() != 1 || resolved.WorkspaceAccess() != launch.WorkspaceAccessReadWrite {
-		t.Fatalf("legacy authority = version %d, workspace %q", resolved.SourceVersion(), resolved.WorkspaceAccess())
-	}
-	legacyHome := t.TempDir()
-	if err := resolved.Materialize(legacyHome); err != nil {
-		t.Fatal(err)
-	}
-	assertContents(t, filepath.Join(legacyHome, ".config/devin/skills/review/SKILL.md"), "legacy review\n")
-	assertAbsent(t, filepath.Join(legacyHome, ".acs/common/v1/skills/devin-config/review/SKILL.md"))
-
-	draft, err := devinTarget.Categories().DraftFromProfile(legacy)
-	if err != nil {
-		t.Fatal(err)
-	}
-	versionTwo, err := devinTarget.Categories().NewLegacyProfile("legacy-copy", draft)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if versionTwo.Version != 2 || versionTwo.Target != "devin" {
-		t.Fatalf("legacy rewrite changed binding: %#v", versionTwo)
-	}
-	if _, err := codexTarget.Categories().ResolveFor(context.Background(), versionTwo, "codex"); err == nil {
-		t.Fatal("Codex silently reinterpreted a version-2 Devin Profile")
-	}
-	migrated, err := devinTarget.Categories().NewProfile("migrated", draft)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if migrated.Version != 3 || migrated.Target != "" || len(migrated.Overlays) != 1 || migrated.Overlays["devin"].Version != 1 {
-		t.Fatalf("explicit migration boundary = %#v", migrated)
+	for _, document := range [][]byte{
+		[]byte(`{"version":1,"name":"old","target":"devin","skillReferences":[{"source":"devin-config","relativePath":"review"}]}`),
+		[]byte(`{"version":2,"name":"old","target":"devin","categories":{"skills":{"schemaVersion":1,"selection":[]}}}`),
+	} {
+		if _, err := devinTarget.Categories().Decode(document); err == nil || !strings.Contains(err.Error(), "unsupported schema version") {
+			t.Fatalf("Devin admitted removed envelope %s: %v", document, err)
+		}
+		if _, err := codexTarget.Categories().DecodeNamed("old", document); err == nil {
+			t.Fatalf("Codex admitted removed envelope %s", document)
+		}
 	}
 }
 
@@ -252,7 +219,7 @@ func commonProfile(t *testing.T, name string, references []skills.SkillReference
 	if err != nil {
 		t.Fatal(err)
 	}
-	return profile.Profile{Version: 3, SourceVersion: 3, Name: name,
+	return profile.Profile{Version: 3, Name: name,
 		Common: map[string]profile.CommonPayload{
 			"skills":    {Version: 1, Selection: selection},
 			"workspace": {Version: 1, Selection: workspace},

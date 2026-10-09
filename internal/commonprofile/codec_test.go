@@ -54,8 +54,8 @@ func TestNeutralCodecPreservesAdapterAdmissionAndCanonicalBytes(t *testing.T) {
 		version int
 		valid   bool
 	}{
-		{"v1", `{"version":1,"name":"example","target":"devin","skillReferences":[{"source":"shared-agents","relativePath":"z"},{"source":"devin-config","relativePath":"a"}]}`, 1, true},
-		{"v2", `{"version":2,"name":"example","target":"devin","categories":{"skills":{"schemaVersion":1,"selection":[]}}}`, 2, true},
+		{"removed v1 envelope", `{"version":1,"name":"example","target":"devin","skillReferences":[{"source":"shared-agents","relativePath":"z"},{"source":"devin-config","relativePath":"a"}]}`, 1, false},
+		{"removed v2 envelope", `{"version":2,"name":"example","target":"devin","categories":{"skills":{"schemaVersion":1,"selection":[]}}}`, 2, false},
 		{"v3 defaults", minimalProfile, 3, true},
 		{"v3 all capabilities", completeProfile, 3, true},
 		{"v3 codex only", strings.Replace(minimalProfile, `"devin":{"version":1},`, "", 1), 3, true},
@@ -74,7 +74,6 @@ func TestNeutralCodecPreservesAdapterAdmissionAndCanonicalBytes(t *testing.T) {
 		{"unsafe skill path", strings.Replace(completeProfile, `"relativePath":"review"`, `"relativePath":"../review"`, 1), 3, false},
 		{"dangling MCP reference", strings.Replace(completeProfile, `"executableRef":"server-bin"`, `"executableRef":"missing"`, 1), 3, false},
 		{"invalid instruction source", strings.Replace(completeProfile, `"source":"acs-instructions"`, `"source":"shared-agents"`, 1), 3, false},
-		{"legacy common-only category", `{"version":2,"name":"example","target":"devin","categories":{"workspace":{"schemaVersion":1,"selection":{"access":"read-only"}}}}`, 2, false},
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
@@ -123,14 +122,7 @@ func TestNeutralCodecPreservesAdapterAdmissionAndCanonicalBytes(t *testing.T) {
 			if gotErr != nil {
 				return
 			}
-			if got.SourceVersion != test.version {
-				t.Fatalf("source version=%d want=%d", got.SourceVersion, test.version)
-			}
-			if test.version < 3 {
-				if got.Version != 2 || got.Common != nil || len(got.Categories) != 1 {
-					t.Fatalf("legacy behavior migrated implicitly: %+v", got)
-				}
-			} else if len(got.Common) != len(capabilitycatalog.CommonCapabilities()) {
+			if len(got.Common) != len(capabilitycatalog.CommonCapabilities()) {
 				t.Fatalf("common defaults lost: %+v", got.Common)
 			}
 		})

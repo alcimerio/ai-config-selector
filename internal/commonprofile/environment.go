@@ -24,7 +24,7 @@ type EnvironmentContribution struct{ entries []launch.EnvironmentIntent }
 func (EnvironmentContribution) Plan(context.Context, string, *launch.Plan) error         { return nil }
 func (EnvironmentContribution) Materialize(string) error                                 { return nil }
 func (EnvironmentContribution) Verify(context.Context, launch.VerificationContext) error { return nil }
-func (EnvironmentContribution) SemanticFacts(int, string) authority.Facts                { return authority.Facts{} }
+func (EnvironmentContribution) SemanticFacts(string) authority.Facts                     { return authority.Facts{} }
 func (value EnvironmentContribution) EnvironmentIntents() []launch.EnvironmentIntent {
 	return append([]launch.EnvironmentIntent(nil), value.entries...)
 }
@@ -34,7 +34,7 @@ type EnvironmentBinding = category.Binding[EnvironmentSelection, EnvironmentSele
 func NewEnvironmentBinding() (EnvironmentBinding, error) {
 	return category.Bind(category.Definition[EnvironmentSelection, EnvironmentSelection, EnvironmentContribution]{
 		ID: EnvironmentCapabilityID, SchemaVersion: EnvironmentCapabilityVersion,
-		Empty: environmentintent.Empty, LegacyEmpty: environmentintent.Empty,
+		Empty: environmentintent.Empty, Optional: true,
 		Encode: environmentintent.Encode, Decode: environmentintent.Decode,
 		Resolve: func(_ context.Context, selection EnvironmentSelection) (EnvironmentSelection, error) {
 			return environmentintent.Canonical(selection)

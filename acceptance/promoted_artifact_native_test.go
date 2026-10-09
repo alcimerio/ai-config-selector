@@ -835,8 +835,6 @@ func assertPromotedArtifactEffectiveExplanation(t *testing.T) {
 		}
 		assertNoSessions(t, home)
 	}
-	writeVersionTwoProfile(t, home, "reviews-v2")
-	assertPromotedArtifactLegacyExplanations(t, binary, home, path, workspace, helper)
 	assertPromotedArtifactInactiveOverlayExplanations(t, binary, home, path, workspace)
 	assertPromotedArtifactExplanationFailuresArePlanless(t, binary, home, path, workspace)
 	assertPromotedArtifactRunDigestMeaning(t, binary, home, path, workspace, helper)
@@ -981,49 +979,6 @@ func assertPromotedArtifactCodexAuthDigestMeaning(t *testing.T, binary, home, pa
 	}
 	if fact, found := nativeExplanationFactByID(overrideFacts, "codex.authentication"); !found || fact.Reason != "one_run_override" {
 		t.Fatalf("one-run auth binding origin missing: %#v", overrideFacts)
-	}
-}
-
-func assertPromotedArtifactLegacyExplanations(t *testing.T, binary, home, path, workspace, helper string) {
-	t.Helper()
-	for _, profileName := range []string{"reviews", "reviews-v2"} {
-		for _, invocation := range [][]string{
-			{"explain", "sandbox", "--profile", profileName, "--json"},
-			{"explain", "devin", "--profile", profileName, "--json"},
-			{"explain", "run", "--profile", profileName, "--json", "--", helper},
-		} {
-			command := exec.Command(binary, invocation...)
-			command.Dir, command.Env = workspace, nativeCandidateEnvironment(home, path, nil)
-			output, err := command.CombinedOutput()
-			if err != nil {
-				t.Fatalf("legacy %s %q: %v; output=%s", profileName, invocation, err, output)
-			}
-			var result struct {
-				Profile struct{ Compatibility string } `json:"profile"`
-				Plan    struct {
-					Requested   []nativeExplanationFact `json:"requested"`
-					TargetAdded []nativeExplanationFact `json:"targetAdded"`
-				} `json:"plan"`
-			}
-			if err := json.Unmarshal(output, &result); err != nil {
-				t.Fatalf("decode legacy explanation: %v; output=%s", err, output)
-			}
-			workspaceFact, found := nativeExplanationFactByID(result.Plan.Requested, "common.workspace")
-			if result.Profile.Compatibility != "legacy" || !found || workspaceFact.Value.Access != "read-write" || workspaceFact.Reason != "legacy_compatibility_default" {
-				t.Fatalf("legacy compatibility authority is incomplete: %#v output=%s", result, output)
-			}
-			if !nativeExplanationHasFact(result.Plan.TargetAdded, "skills.target-projection") {
-				t.Fatalf("legacy target placement missing: %s", output)
-			}
-			assertNoSessions(t, home)
-		}
-		codex := exec.Command(binary, "explain", "codex", "--profile", profileName, "--auth", explanationLegacyAuthRef, "--json")
-		codex.Dir, codex.Env = workspace, nativeCandidateEnvironment(home, path, nil)
-		output, err := codex.CombinedOutput()
-		if err == nil || !bytes.Contains(output, []byte(`"plan":null`)) || !bytes.Contains(output, []byte(`"code":"profile_load_failed"`)) || bytes.Contains(output, []byte(explanationLegacyAuthRef)) || bytes.Contains(output, []byte(home)) {
-			t.Fatalf("legacy Codex failure is unsafe or reinterpreted: err=%v output=%s", err, output)
-		}
-		assertNoSessions(t, home)
 	}
 }
 
@@ -1503,7 +1458,7 @@ func assertPromotedArtifactFilesystemGrants(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(home) })
 	writeSkillBundle(t, home, "review")
-	writeVersionOneProfile(t, home, "reviews")
+	writeVersionThreeProfile(t, home, "reviews", "read-write")
 	credential := filepath.Join(home, ".local", "share", "devin", "credentials.toml")
 	if err := os.MkdirAll(filepath.Dir(credential), 0o700); err != nil {
 		t.Fatal(err)
@@ -2775,10 +2730,10 @@ func TestPromotedArtifactSharedTargetConformance(t *testing.T) {
 		assertNoSessions(t, home)
 	}
 
-	legacy := exec.Command(binary, "codex", "--profile", "reviews", "--auth", explanationStoredAuthRef, "--dry-run")
-	legacy.Env, legacy.Dir = nativeCandidateEnvironment(home, path, nil), workspace
-	if output, err := legacy.CombinedOutput(); err == nil || !strings.Contains(string(output), "unsupported schema version 1") {
-		t.Fatalf("installed Codex reinterpreted legacy Devin Profile: err=%v output=%s", err, output)
+	devinOnly := exec.Command(binary, "codex", "--profile", "reviews", "--auth", explanationStoredAuthRef, "--dry-run")
+	devinOnly.Env, devinOnly.Dir = nativeCandidateEnvironment(home, path, nil), workspace
+	if output, err := devinOnly.CombinedOutput(); err == nil || !strings.Contains(string(output), `selected target overlay "codex" is missing`) {
+		t.Fatalf("installed Codex reinterpreted a Devin-only Profile: err=%v output=%s", err, output)
 	}
 	contents, err := os.ReadFile(globalAuth)
 	if err != nil || string(contents) != "global-auth-sentinel\n" {
@@ -3034,7 +2989,8 @@ func assertPromotedArtifactSandboxShell(t *testing.T) {
 	assertNoSessions(t, home)
 
 	commands := "set -eu\n" +
-		"test -f \"$HOME/.config/devin/skills/review/SKILL.md\"\n" +
+		"test -f \"$HOME/.acs/common/v1/skills/devin-config/review/SKILL.md\"\n" +
+		"test ! -e \"$HOME/.config/devin/skills/review/SKILL.md\"\n" +
 		"test ! -e \"$HOME/.local/share/devin/credentials.toml\"\n" +
 		"printf allowed > ./sandbox-workspace-proof\n" +
 		"if cat " + strconv.Quote(outFile) + " >/dev/null 2>&1; then exit 71; fi\n" +

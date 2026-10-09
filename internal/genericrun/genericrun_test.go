@@ -42,7 +42,7 @@ func (pathContribution) Verify(context.Context, launch.VerificationContext) erro
 
 func TestPlanLaunchValidatesButHidesExecutableArgumentsAndLegacyPaths(t *testing.T) {
 	privatePath := filepath.Join(t.TempDir(), "private-skill")
-	resolved := authority.New([]authority.Contribution{{ID: "test", Value: pathContribution(privatePath)}}, launch.WorkspaceAccessReadOnly, 2, "")
+	resolved := authority.New([]authority.Contribution{{ID: "test", Value: pathContribution(privatePath)}}, launch.WorkspaceAccessReadOnly, "")
 	fake := &recordingExecutor{}
 	target := &Target{executor: fake}
 	workingDirectory := t.TempDir()
@@ -110,7 +110,7 @@ func TestLaunchReturnsCanonicalEnvironmentFailuresWithoutPrivateWrapper(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	resolved, err := authority.New([]authority.Contribution{{ID: "test", Value: pathContribution("")}}, launch.WorkspaceAccessReadOnly, 2, "").ForCommandIntent(string(command.Form()), command.ArgumentCount())
+	resolved, err := authority.New([]authority.Contribution{{ID: "test", Value: pathContribution("")}}, launch.WorkspaceAccessReadOnly, "").ForCommandIntent(string(command.Form()), command.ArgumentCount())
 	if err != nil {
 		t.Fatal(err)
 	}

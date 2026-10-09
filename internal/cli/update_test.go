@@ -3,9 +3,10 @@ package cli
 import (
 	"bytes"
 	"context"
-	"github.com/alcimerio/ai-config-selector/internal/selfupdate"
 	"strings"
 	"testing"
+
+	"github.com/alcimerio/ai-config-selector/internal/selfupdate"
 )
 
 func TestUpdateHelpAndGrammarBeforeDependencies(t *testing.T) {

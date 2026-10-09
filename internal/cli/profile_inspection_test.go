@@ -67,7 +67,7 @@ func TestInspectionNeverUsesLaunchOrAuthenticationBoundaries(t *testing.T) {
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "example.json"), []byte(`{"version":1,"name":"example","target":"devin","skillReferences":[{"source":"shared-agents","relativePath":"removed"}]}`), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "example.json"), []byte(`{"version":3,"name":"example","common":{"skills":{"version":1,"selection":[{"source":"shared-agents","relativePath":"removed"}]},"workspace":{"version":1,"selection":{"access":"read-only"}}},"overlays":{"devin":{"version":1}}}`), 0600); err != nil {
 		t.Fatal(err)
 	}
 	for _, args := range []string{"profile list", "profile list --json", "profile show example", "profile show --json example", "profile show absent --json", "profile show ../private --json", "profile show example --help"} {
@@ -121,7 +121,7 @@ func TestInspectionHumanGuidanceAndControlEscaping(t *testing.T) {
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "example.json"), []byte(`{"version":1,"name":"example","target":"devin","skillReferences":[{"source":"shared-agents","relativePath":"skill\u001b[31m\n"}]}`), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "example.json"), []byte(`{"version":3,"name":"example","common":{"skills":{"version":1,"selection":[{"source":"shared-agents","relativePath":"skill\u001b[31m\n"}]},"workspace":{"version":1,"selection":{"access":"read-only"}}},"overlays":{"devin":{"version":1}}}`), 0600); err != nil {
 		t.Fatal(err)
 	}
 	out.Reset()

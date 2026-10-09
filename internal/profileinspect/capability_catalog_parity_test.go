@@ -41,7 +41,7 @@ func TestCommonCatalogConsumersAgreeOnEveryCapabilitySubset(t *testing.T) {
 					want = false
 				}
 			}
-			if got := capabilitycatalog.SupportsCommonV3(ids); got != want {
+			if got := capabilitycatalog.SupportsCommonCatalog(ids); got != want {
 				t.Fatalf("catalog admission = %v, want %v", got, want)
 			}
 			assertCatalogAdmission(t, registry, candidate, want, "invalid_structure", "unsupported common capability")
@@ -60,8 +60,12 @@ func TestCommonCatalogConsumersAgreeOnEveryCapabilitySubset(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got := created.Version == profile.CurrentVersion; got != want {
-				t.Fatalf("active registry v3 support = %v, want %v", got, want)
+			encoded, err := json.Marshal(created)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := profileinspect.InspectBytes("example", encoded).Status == "valid"; got != want {
+				t.Fatalf("subset registry Profile passive admission = %v, want %v", got, want)
 			}
 		})
 	}

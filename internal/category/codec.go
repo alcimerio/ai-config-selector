@@ -14,17 +14,17 @@ type Codec struct {
 }
 
 // NewCodec assembles a passive view of the same capability registrations used
-// by execution registries. legacyTarget is only the historical v1/v2 envelope
-// target; version-3 common intent and inactive overlays remain provider-neutral.
-func NewCodec(legacyTarget string, registrations []Registration, legacyDecoders ...LegacyDecoder) (*Codec, error) {
-	if legacyTarget == "" {
-		return nil, errors.New("Profile codec legacy target is required")
+// by execution registries. Common intent and inactive overlays are
+// provider-neutral, so the codec selects no target.
+func NewCodec(registrations []Registration) (*Codec, error) {
+	if len(registrations) == 0 {
+		return nil, errors.New("Profile codec requires capability registrations")
 	}
 	passive := append([]Registration(nil), registrations...)
 	for i := range passive {
 		passive[i].resolve, passive[i].resolveSyntax, passive[i].contribute = nil, nil, nil
 	}
-	registry, err := newRegistry(legacyTarget, passive, legacyDecoders...)
+	registry, err := newRegistry("common", passive)
 	if err != nil {
 		return nil, err
 	}

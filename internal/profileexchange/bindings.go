@@ -151,7 +151,7 @@ func bindDocument(admitted admittedDocument, bindingData []byte, name string, re
 		return result
 	}
 	encodedWorkspace, _ := json.Marshal(workspaceSelection{Access: doc.Profile.Common.Workspace.Selection.Access})
-	candidate := profile.Profile{Version: profile.CurrentVersion, SourceVersion: profile.CurrentVersion, Name: name, Common: map[string]profile.CommonPayload{
+	candidate := profile.Profile{Version: profile.CurrentVersion, Name: name, Common: map[string]profile.CommonPayload{
 		"skills": {Version: 1, Selection: encodedSkills}, "workspace": {Version: 1, Selection: encodedWorkspace},
 	}, Overlays: overlays}
 	if doc.ExchangeVersion >= 2 {

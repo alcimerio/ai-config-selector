@@ -14,7 +14,6 @@ import (
 	"github.com/alcimerio/ai-config-selector/internal/authority"
 	"github.com/alcimerio/ai-config-selector/internal/category"
 	"github.com/alcimerio/ai-config-selector/internal/launch"
-	"github.com/alcimerio/ai-config-selector/internal/profile"
 	"github.com/alcimerio/ai-config-selector/internal/skillmaterial"
 	"github.com/alcimerio/ai-config-selector/internal/skills"
 	"golang.org/x/text/cases"
@@ -133,37 +132,25 @@ func DecodeSkillSelection(selection json.RawMessage) ([]skills.SkillReference, e
 }
 
 func (contribution SkillsContribution) Plan(ctx context.Context, _ string, plan *launch.Plan) error {
-	return contribution.PlanResolved(ctx, "", profile.LegacyCurrentVersion, contribution.projection.ID(), plan)
+	return contribution.PlanResolved(ctx, "", contribution.projection.ID(), plan)
 }
-func (contribution SkillsContribution) PlanResolved(ctx context.Context, _ string, sourceVersion int, overlay string, plan *launch.Plan) error {
-	title := "Selected common Skill Bundles:"
-	if sourceVersion < profile.CurrentVersion {
-		title = "Selected global Skill Bundles managed by ACS:"
-	}
-	section := launch.PlanSection{Title: title, Items: make([]launch.PlanItem, 0, len(contribution.selected))}
+func (contribution SkillsContribution) PlanResolved(ctx context.Context, _ string, overlay string, plan *launch.Plan) error {
+	section := launch.PlanSection{Title: "Selected common Skill Bundles:", Items: make([]launch.PlanItem, 0, len(contribution.selected))}
 	for _, bundle := range contribution.selected {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
 		label := bundle.DisplayName
-		details := []launch.PlanDetail{{Label: "identity", Value: string(bundle.Reference.Source) + ":" + bundle.Reference.RelativePath}}
-		if sourceVersion < profile.CurrentVersion {
-			label = fmt.Sprintf("%s [%s]", bundle.DisplayName, bundle.Reference.Source)
-			details = []launch.PlanDetail{{Label: "source", Value: bundle.BundlePath}}
-		}
-		if sourceVersion >= profile.CurrentVersion {
-			details = append(details, launch.PlanDetail{Label: "common", Value: commonDestination(filepath.Join("<session>", "home"), bundle.Reference)})
+		details := []launch.PlanDetail{
+			{Label: "identity", Value: string(bundle.Reference.Source) + ":" + bundle.Reference.RelativePath},
+			{Label: "common", Value: commonDestination(filepath.Join("<session>", "home"), bundle.Reference)},
 		}
 		if overlay == contribution.projection.ID() {
 			_, destination, err := contribution.projection.Destination(filepath.Join("<session>", "home"), bundle.Reference)
 			if err != nil {
 				return err
 			}
-			projectionLabel := "target projection"
-			if sourceVersion < profile.CurrentVersion {
-				projectionLabel = "Session"
-			}
-			details = append(details, launch.PlanDetail{Label: projectionLabel, Value: destination})
+			details = append(details, launch.PlanDetail{Label: "target projection", Value: destination})
 		}
 		section.Items = append(section.Items, launch.PlanItem{Label: label, Details: details})
 	}
@@ -171,12 +158,9 @@ func (contribution SkillsContribution) PlanResolved(ctx context.Context, _ strin
 	return nil
 }
 func (contribution SkillsContribution) Materialize(sessionHome string) error {
-	return contribution.projection.Materialize(sessionHome, contribution.selected)
+	return contribution.MaterializeResolved(sessionHome, contribution.projection.ID())
 }
-func (contribution SkillsContribution) MaterializeResolved(sessionHome string, sourceVersion int, overlay string) error {
-	if sourceVersion < profile.CurrentVersion {
-		return contribution.projection.Materialize(sessionHome, contribution.selected)
-	}
+func (contribution SkillsContribution) MaterializeResolved(sessionHome string, overlay string) error {
 	materialized := make([]skills.SkillBundle, 0, len(contribution.selected))
 	for _, bundle := range contribution.selected {
 		destination := commonDestination(sessionHome, bundle.Reference)
@@ -194,10 +178,10 @@ func (SkillsContribution) Verify(context.Context, launch.VerificationContext) er
 func (contribution SkillsContribution) DevinExpectedCatalog() []skills.SkillReference {
 	return append([]skills.SkillReference(nil), contribution.expected...)
 }
-func (contribution SkillsContribution) SemanticFacts(sourceVersion int, overlay string) authority.Facts {
+func (contribution SkillsContribution) SemanticFacts(overlay string) authority.Facts {
 	profileSource := authority.FactSource{Kind: "profile", ID: SkillsCapabilityID, Version: SkillsCapabilityVersion}
 	facts := authority.Facts{Requested: []authority.Fact{{ID: "common.skills", Kind: "capability", Value: authority.FactValue{Mode: "selected-exact-identities"}, Reason: "stored_selection", Source: profileSource}}}
-	if sourceVersion < profile.CurrentVersion || overlay == contribution.projection.ID() {
+	if overlay == contribution.projection.ID() {
 		facts.TargetAdded = append(facts.TargetAdded, authority.Fact{ID: "skills.target-projection", Kind: "target-projection", Value: authority.FactValue{Mode: "selected-material"}, Reason: "registered_projection", Source: authority.FactSource{Kind: "target", ID: contribution.projection.ID(), Version: contribution.projection.Version()}})
 	}
 	selected := append([]skills.SkillBundle(nil), contribution.selected...)
@@ -213,7 +197,7 @@ func (contribution SkillsContribution) SemanticFacts(sourceVersion int, overlay 
 		source := profileSource
 		facts.Requested = append(facts.Requested, authority.Fact{ID: "skills.selected." + identityText, Kind: "skill", Value: authority.FactValue{Identity: identity}, Reason: "stored_selection", Source: source})
 		facts.Effective = append(facts.Effective, authority.Fact{ID: "skills.common." + identityText, Kind: "material", Value: authority.FactValue{Identity: identity, LogicalLocation: "session-home/common-skills"}, Reason: "selected_common_material", Source: source})
-		if sourceVersion < profile.CurrentVersion || overlay == contribution.projection.ID() {
+		if overlay == contribution.projection.ID() {
 			if _, destination, err := contribution.projection.Destination(filepath.Join("<session>", "home"), bundle.Reference); err == nil {
 				logical := strings.TrimPrefix(filepath.ToSlash(destination), "<session>/home/")
 				facts.TargetAdded = append(facts.TargetAdded, authority.Fact{ID: "skills.projection." + identityText, Kind: "target-projection", Value: authority.FactValue{Identity: identity, LogicalLocation: "session-home/" + logical}, Reason: "selected_target_projection", Source: authority.FactSource{Kind: "target", ID: contribution.projection.ID(), Version: contribution.projection.Version()}})

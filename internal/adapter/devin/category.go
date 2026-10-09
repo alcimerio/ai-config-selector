@@ -30,7 +30,7 @@ func NewSkillsProfile(name string, references []skills.SkillReference) profile.P
 	paths, _ := json.Marshal(commonprofile.PathSelection{Entries: []commonprofile.PathEntry{}})
 	executables, _ := commonprofile.EncodeExecutableSelection(commonprofile.ExecutableSelection{Entries: []commonprofile.ExecutableEntry{}})
 	environment, _ := commonprofile.EncodeEnvironmentSelection(commonprofile.EnvironmentSelection{Entries: []commonprofile.EnvironmentEntry{}})
-	return profile.Profile{Version: profile.CurrentVersion, SourceVersion: profile.CurrentVersion, Name: name,
+	return profile.Profile{Version: profile.CurrentVersion, Name: name,
 		Common: map[string]profile.CommonPayload{
 			commonprofile.SkillsCapabilityID:      {Version: commonprofile.SkillsCapabilityVersion, Selection: selection},
 			commonprofile.WorkspaceCapabilityID:   {Version: commonprofile.WorkspaceCapabilityVersion, Selection: workspace},
@@ -83,16 +83,12 @@ func (devinInstructionProjection) Materialize(home string, selected []instructio
 }
 
 func SkillReferences(candidate profile.Profile) ([]skills.SkillReference, error) {
-	payload, exists := candidate.Categories[commonprofile.SkillsCapabilityID]
-	if candidate.Version == profile.CurrentVersion {
-		common, commonExists := candidate.Common[commonprofile.SkillsCapabilityID]
-		payload, exists = profile.CategoryPayload{SchemaVersion: common.Version, Selection: common.Selection}, commonExists
-	}
+	payload, exists := candidate.Common[commonprofile.SkillsCapabilityID]
 	if !exists {
 		return []skills.SkillReference{}, nil
 	}
-	if payload.SchemaVersion != commonprofile.SkillsCapabilityVersion {
-		return nil, fmt.Errorf("Skills capability uses unsupported version %d", payload.SchemaVersion)
+	if payload.Version != commonprofile.SkillsCapabilityVersion {
+		return nil, fmt.Errorf("Skills capability uses unsupported version %d", payload.Version)
 	}
 	references, err := commonprofile.DecodeSkillSelection(payload.Selection)
 	if err != nil {
@@ -169,7 +165,7 @@ func newCategoryRegistry(adapter *Adapter) (*category.Registry, commonprofile.Sk
 		ProtectedPaths:          []string{filepath.Join(adapter.existingHomeDir, ".acs"), filepath.Join(adapter.existingHomeDir, ".codex"), filepath.Join(adapter.existingHomeDir, credentialsRelativePath)},
 		ProtectedPathIDs:        []string{"acs-private", "codex-private", "devin-credential"},
 		Semantics:               authority.DevinSemantics(),
-	}, bindings.Registrations(), commonprofile.LegacyDecoders()...)
+	}, bindings.Registrations())
 	if err != nil {
 		return nil, commonprofile.SkillsBinding{}, commonprofile.InstructionsBinding{}, commonprofile.WorkspaceBinding{}, commonprofile.PathsBinding{}, commonprofile.ExecutablesBinding{}, commonprofile.EnvironmentBinding{}, err
 	}

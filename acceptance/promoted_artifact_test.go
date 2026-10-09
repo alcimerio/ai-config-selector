@@ -64,7 +64,6 @@ func TestPromotedArtifactUpdaterHelpAndRejectedSyntaxArePassive(t *testing.T) {
 const (
 	explanationStoredAuthRef   = "private-stored-auth-canary"
 	explanationOverrideAuthRef = "private-auth-canary"
-	explanationLegacyAuthRef   = "private-legacy-auth"
 	explanationInactiveAuthRef = "private-inactive-auth"
 	explanationFirstAuthRef    = "private-auth-first"
 	explanationSecondAuthRef   = "private-auth-second"
@@ -72,7 +71,7 @@ const (
 )
 
 func TestExplanationFixtureAuthReferencesUseProductionGrammar(t *testing.T) {
-	for _, reference := range []string{explanationStoredAuthRef, explanationOverrideAuthRef, explanationLegacyAuthRef, explanationInactiveAuthRef, explanationFirstAuthRef, explanationSecondAuthRef, explanationRunAuthRef} {
+	for _, reference := range []string{explanationStoredAuthRef, explanationOverrideAuthRef, explanationInactiveAuthRef, explanationFirstAuthRef, explanationSecondAuthRef, explanationRunAuthRef} {
 		if _, err := codexauth.ParseCredentialRef(reference); err != nil {
 			t.Errorf("fixture auth reference %q: %v", reference, err)
 		}
@@ -301,7 +300,7 @@ exit 23
 	if err != nil {
 		t.Fatalf("promoted dry run failed: %v", err)
 	}
-	for _, want := range []string{"Dry run for Profile \"reviews\"", "review [devin-config]", "No Session was created and Devin was not started."} {
+	for _, want := range []string{"Dry run for Profile \"reviews\"", "identity: devin-config:review", "No Session was created and Devin was not started."} {
 		if !strings.Contains(string(dryOutput), want) {
 			t.Errorf("dry-run output omits %q", want)
 		}
@@ -570,7 +569,7 @@ func prepareRuntimeHome(t *testing.T) (string, string) {
 	t.Helper()
 	home := realTemporaryDirectory(t)
 	writeSkillBundle(t, home, "review")
-	writeVersionOneProfile(t, home, "reviews")
+	writeVersionThreeProfile(t, home, "reviews", "read-write")
 	credential := filepath.Join(home, ".local", "share", "devin", "credentials.toml")
 	if err := os.MkdirAll(filepath.Dir(credential), 0o700); err != nil {
 		t.Fatal(err)
@@ -666,30 +665,6 @@ func waitExitCode(t *testing.T, command *exec.Cmd, timeout time.Duration, output
 		t.Fatal("promoted artifact timed out")
 	}
 	return -1
-}
-
-func writeVersionOneProfile(t *testing.T, home, name string) {
-	t.Helper()
-	directory := filepath.Join(home, ".acs", "profiles")
-	if err := os.MkdirAll(directory, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	contents := fmt.Sprintf(`{"version":1,"name":%q,"target":"devin","skillReferences":[{"source":"devin-config","relativePath":"review"}]}`, name)
-	if err := os.WriteFile(filepath.Join(directory, name+".json"), []byte(contents), 0o600); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func writeVersionTwoProfile(t *testing.T, home, name string) {
-	t.Helper()
-	directory := filepath.Join(home, ".acs", "profiles")
-	if err := os.MkdirAll(directory, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	contents := fmt.Sprintf(`{"version":2,"name":%q,"target":"devin","categories":{"skills":{"schemaVersion":1,"selection":[{"source":"devin-config","relativePath":"review"}]}}}`, name)
-	if err := os.WriteFile(filepath.Join(directory, name+".json"), []byte(contents), 0o600); err != nil {
-		t.Fatal(err)
-	}
 }
 
 func writeVersionThreeProfile(t *testing.T, home, name, workspaceAccess string) {

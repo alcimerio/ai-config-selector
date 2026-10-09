@@ -59,8 +59,8 @@ func TestCodexGeneratedConfigurationConsumesTypedTargetSemantics(t *testing.T) {
 	if bytes.Equal(baselineConfig, changedConfig) || !bytes.Contains(changedConfig, []byte(`approval_policy = "on-request"`)) {
 		t.Fatalf("generated file did not consume typed approval decision: baseline=%q changed=%q", baselineConfig, changedConfig)
 	}
-	baselinePlan := authority.New(nil, launch.WorkspaceAccessReadOnly, 3, "codex", authority.TargetRequirements{Recipe: authority.RecipeCodex, ExecutableRequirementID: "codex", Semantics: baseline})
-	changedPlan := authority.New(nil, launch.WorkspaceAccessReadOnly, 3, "codex", authority.TargetRequirements{Recipe: authority.RecipeCodex, ExecutableRequirementID: "codex", Semantics: changed})
+	baselinePlan := authority.New(nil, launch.WorkspaceAccessReadOnly, "codex", authority.TargetRequirements{Recipe: authority.RecipeCodex, ExecutableRequirementID: "codex", Semantics: baseline})
+	changedPlan := authority.New(nil, launch.WorkspaceAccessReadOnly, "codex", authority.TargetRequirements{Recipe: authority.RecipeCodex, ExecutableRequirementID: "codex", Semantics: changed})
 	if baselinePlan.AuthorityDigest() == changedPlan.AuthorityDigest() {
 		t.Fatal("typed generated-configuration change did not change authority digest")
 	}
@@ -80,7 +80,7 @@ func TestEveryCodexConfigurationDecisionChangesDigestArgumentsAndGeneratedFile(t
 	if err != nil {
 		t.Fatal(err)
 	}
-	baselinePlan := authority.New(nil, launch.WorkspaceAccessReadOnly, 3, "codex", authority.TargetRequirements{Recipe: authority.RecipeCodex, ExecutableRequirementID: "codex", Semantics: baseline})
+	baselinePlan := authority.New(nil, launch.WorkspaceAccessReadOnly, "codex", authority.TargetRequirements{Recipe: authority.RecipeCodex, ExecutableRequirementID: "codex", Semantics: baseline})
 	for index, decision := range baseline.Configuration {
 		t.Run(decision.ID, func(t *testing.T) {
 			changed := baseline.Clone()
@@ -100,7 +100,7 @@ func TestEveryCodexConfigurationDecisionChangesDigestArgumentsAndGeneratedFile(t
 			if bytes.Equal(changedConfig, baselineConfig) {
 				t.Fatal("typed decision did not change generated Codex configuration file")
 			}
-			changedPlan := authority.New(nil, launch.WorkspaceAccessReadOnly, 3, "codex", authority.TargetRequirements{Recipe: authority.RecipeCodex, ExecutableRequirementID: "codex", Semantics: changed})
+			changedPlan := authority.New(nil, launch.WorkspaceAccessReadOnly, "codex", authority.TargetRequirements{Recipe: authority.RecipeCodex, ExecutableRequirementID: "codex", Semantics: changed})
 			if changedPlan.AuthorityDigest() == baselinePlan.AuthorityDigest() {
 				t.Fatal("typed decision did not change semantic authority digest")
 			}
@@ -181,7 +181,7 @@ func TestInteractiveCodexTerminationAfterVersionCannotStartAttachedTarget(t *tes
 		time.Sleep(50 * time.Millisecond)
 	}}}
 	registry.execution = newCodexExecutionRunner(codexLoginConfig{BinaryPath: binary, SessionsDirectory: sessionsDirectory, WorkingDirectory: registry.workingDirectory}, sandbox)
-	plan := authority.New(nil, launch.WorkspaceAccessReadOnly, 3, "codex", authority.TargetRequirements{Recipe: authority.RecipeCodex, Executable: binary}).WithAuthRef("work")
+	plan := authority.New(nil, launch.WorkspaceAccessReadOnly, "codex", authority.TargetRequirements{Recipe: authority.RecipeCodex, Executable: binary}).WithAuthRef("work")
 	if code, err := registry.ExecuteCodex(context.Background(), CodexRequest{ResolvedPlan: &plan}); code != 1 || !errors.Is(err, ErrCodexFailed) {
 		t.Fatalf("canceled execution = (%d, %v)", code, err)
 	}
@@ -216,7 +216,7 @@ func TestInteractiveCodexReplaysTerminationAcceptedDuringAttachedPreparation(t *
 		time.Sleep(50 * time.Millisecond)
 	}}}
 	registry.execution = newCodexExecutionRunner(codexLoginConfig{BinaryPath: binary, SessionsDirectory: sessionsDirectory, WorkingDirectory: registry.workingDirectory}, sandbox)
-	plan := authority.New(nil, launch.WorkspaceAccessReadOnly, 3, "codex", authority.TargetRequirements{Recipe: authority.RecipeCodex, Executable: binary}).WithAuthRef("work")
+	plan := authority.New(nil, launch.WorkspaceAccessReadOnly, "codex", authority.TargetRequirements{Recipe: authority.RecipeCodex, Executable: binary}).WithAuthRef("work")
 	if code, err := registry.ExecuteCodex(context.Background(), CodexRequest{ResolvedPlan: &plan}); code != 0 || err != nil {
 		t.Fatalf("signaled attached execution = (%d, %v)", code, err)
 	}
@@ -255,7 +255,7 @@ func TestInteractiveCodexResizeDuringStartCannotDisplaceTermination(t *testing.T
 		}
 	}}}
 	registry.execution = newCodexExecutionRunner(codexLoginConfig{BinaryPath: binary, SessionsDirectory: sessionsDirectory, WorkingDirectory: registry.workingDirectory}, sandbox)
-	plan := authority.New(nil, launch.WorkspaceAccessReadOnly, 3, "codex", authority.TargetRequirements{Recipe: authority.RecipeCodex, Executable: binary}).WithAuthRef("work")
+	plan := authority.New(nil, launch.WorkspaceAccessReadOnly, "codex", authority.TargetRequirements{Recipe: authority.RecipeCodex, Executable: binary}).WithAuthRef("work")
 	if code, err := registry.ExecuteCodex(context.Background(), CodexRequest{ResolvedPlan: &plan}); code != 0 || err != nil {
 		t.Fatalf("signaled Start execution = (%d, %v)", code, err)
 	}
@@ -339,7 +339,7 @@ func TestInteractiveCodexProjectsExclusiveAuthBeforeSelectedSkills(t *testing.T)
 		observedSkill = len(entries) == 1
 	}}}
 	registry.execution = newCodexExecutionRunner(codexLoginConfig{BinaryPath: binary, SessionsDirectory: sessionsDirectory, WorkingDirectory: registry.workingDirectory}, sandbox)
-	plan := authority.New([]authority.Contribution{{ID: "strict-codex-skill", Value: strictCodexSkillMaterializer{observedAuth: &observedAuth}}}, launch.WorkspaceAccessReadOnly, 3, "codex", authority.TargetRequirements{Recipe: authority.RecipeCodex, Executable: binary}).WithAuthRef("work")
+	plan := authority.New([]authority.Contribution{{ID: "strict-codex-skill", Value: strictCodexSkillMaterializer{observedAuth: &observedAuth}}}, launch.WorkspaceAccessReadOnly, "codex", authority.TargetRequirements{Recipe: authority.RecipeCodex, Executable: binary}).WithAuthRef("work")
 	if code, err := registry.ExecuteCodex(context.Background(), CodexRequest{ResolvedPlan: &plan}); code != 0 || err != nil {
 		t.Fatalf("execution = (%d, %v)", code, err)
 	}
@@ -360,7 +360,7 @@ func TestInteractiveCodexMaterializationFailureCleansProjectedAuthBeforeRelease(
 	observedAuth := false
 	sandbox := &executionSandbox{version: SupportedCodexVersion}
 	registry.execution = newCodexExecutionRunner(codexLoginConfig{BinaryPath: binary, SessionsDirectory: sessionsDirectory, WorkingDirectory: registry.workingDirectory}, sandbox)
-	plan := authority.New([]authority.Contribution{{ID: "failing-codex-skill", Value: strictCodexSkillMaterializer{observedAuth: &observedAuth, failure: errors.New("materialization failure")}}}, launch.WorkspaceAccessReadOnly, 3, "codex", authority.TargetRequirements{Recipe: authority.RecipeCodex, Executable: binary}).WithAuthRef("work")
+	plan := authority.New([]authority.Contribution{{ID: "failing-codex-skill", Value: strictCodexSkillMaterializer{observedAuth: &observedAuth, failure: errors.New("materialization failure")}}}, launch.WorkspaceAccessReadOnly, "codex", authority.TargetRequirements{Recipe: authority.RecipeCodex, Executable: binary}).WithAuthRef("work")
 	if code, err := registry.ExecuteCodex(context.Background(), CodexRequest{ResolvedPlan: &plan}); code != 1 || !errors.Is(err, ErrCodexFailed) {
 		t.Fatalf("execution = (%d, %v)", code, err)
 	}
@@ -427,7 +427,7 @@ func TestInteractiveCodexBindsOneIdentityBeforeSessionAndUsesFixedRecipe(t *test
 				t.Fatal(err)
 			}
 			exclusions := exclusionMaterial{intents: []launch.PathExclusionIntent{{ID: "hidden", Type: launch.PathTypeDirectory, ReferenceKind: launch.PathReferenceWorkspaceRelative, Path: "hidden"}}}
-			plan := authority.New([]authority.Contribution{{ID: "test", Value: executionMaterializer{}}, {ID: "exclusions", Value: exclusions}}, launch.WorkspaceAccessReadOnly, 3, "codex", authority.TargetRequirements{Recipe: authority.RecipeCodex, Executable: binary}).WithAuthRef("work")
+			plan := authority.New([]authority.Contribution{{ID: "test", Value: executionMaterializer{}}, {ID: "exclusions", Value: exclusions}}, launch.WorkspaceAccessReadOnly, "codex", authority.TargetRequirements{Recipe: authority.RecipeCodex, Executable: binary}).WithAuthRef("work")
 			exitCode, err := registry.ExecuteCodex(context.Background(), CodexRequest{ResolvedPlan: &plan})
 			if err != nil || exitCode != 0 {
 				t.Fatalf("execution = (%d, %v)", exitCode, err)
@@ -490,7 +490,7 @@ func TestInteractiveCodexFailsBeforeExecutableAndSessionForMissingIdentity(t *te
 		ID: "selected", Access: launch.PathAccessReadWrite, Type: launch.PathTypeFile,
 		ReferenceKind: launch.PathReferenceLocalAbsolute, Path: selected,
 	}}}
-	plan := authority.New([]authority.Contribution{{ID: "paths", Value: materializer}}, launch.WorkspaceAccessReadOnly, 3, "codex", authority.TargetRequirements{Recipe: authority.RecipeCodex, Executable: "missing-codex"}).WithAuthRef("work")
+	plan := authority.New([]authority.Contribution{{ID: "paths", Value: materializer}}, launch.WorkspaceAccessReadOnly, "codex", authority.TargetRequirements{Recipe: authority.RecipeCodex, Executable: "missing-codex"}).WithAuthRef("work")
 	if _, err := registry.ExecuteCodex(context.Background(), CodexRequest{ResolvedPlan: &plan}); err == nil || !strings.Contains(err.Error(), ErrIdentityNotFound.Error()) {
 		t.Fatalf("missing identity error = %v", err)
 	}
@@ -520,7 +520,7 @@ func TestInteractiveCodexUsesResolvedAuthorityInsteadOfRunnerScalarInputs(t *tes
 	if err := os.WriteFile(runtime, []byte("runtime"), 0o400); err != nil {
 		t.Fatal(err)
 	}
-	plan := authority.New(nil, launch.WorkspaceAccessReadOnly, 3, "codex", authority.TargetRequirements{Recipe: authority.RecipeCodex, Executable: binary, RuntimeInputs: []string{runtime}}).WithAuthRef("work")
+	plan := authority.New(nil, launch.WorkspaceAccessReadOnly, "codex", authority.TargetRequirements{Recipe: authority.RecipeCodex, Executable: binary, RuntimeInputs: []string{runtime}}).WithAuthRef("work")
 	if code, err := registry.ExecuteCodex(context.Background(), CodexRequest{ResolvedPlan: &plan}); code != 0 || err != nil {
 		t.Fatalf("execution = (%d, %v)", code, err)
 	}
@@ -598,7 +598,7 @@ func TestInteractiveCodexResolvesBareExecutableBeforeProtectingWritableGrants(t 
 				ID: "selected", Access: launch.PathAccessReadWrite, Type: test.pathType,
 				ReferenceKind: launch.PathReferenceLocalAbsolute, Path: test.selected,
 			}}}
-			plan := authority.New([]authority.Contribution{{ID: "paths", Value: materializer}}, launch.WorkspaceAccessReadOnly, 3, "codex", authority.TargetRequirements{
+			plan := authority.New([]authority.Contribution{{ID: "paths", Value: materializer}}, launch.WorkspaceAccessReadOnly, "codex", authority.TargetRequirements{
 				Recipe: authority.RecipeCodex, Executable: "codex", Semantics: authority.CodexSemantics(),
 			}).WithAuthRef("work")
 			code, runErr := registry.ExecuteCodex(context.Background(), CodexRequest{ResolvedPlan: &plan})
@@ -660,7 +660,7 @@ func TestInteractiveCodexResolvesBareExecutableBeforeProtectingWritableGrants(t 
 			ID: "selected", Access: launch.PathAccessReadWrite, Type: launch.PathTypeFile,
 			ReferenceKind: launch.PathReferenceLocalAbsolute, Path: targetB,
 		}}}
-		plan := authority.New([]authority.Contribution{{ID: "paths", Value: materializer}}, launch.WorkspaceAccessReadOnly, 3, "codex", authority.TargetRequirements{
+		plan := authority.New([]authority.Contribution{{ID: "paths", Value: materializer}}, launch.WorkspaceAccessReadOnly, "codex", authority.TargetRequirements{
 			Recipe: authority.RecipeCodex, Executable: "codex", Semantics: authority.CodexSemantics(),
 		}).WithAuthRef("work")
 		if code, err := registry.ExecuteCodex(context.Background(), CodexRequest{ResolvedPlan: &plan}); code != 1 || !errors.Is(err, ErrUnsupportedVersion) {
@@ -681,7 +681,7 @@ func TestInteractiveCodexResolvesBareExecutableBeforeProtectingWritableGrants(t 
 		ID: "selected", Access: launch.PathAccessReadWrite, Type: launch.PathTypeFile,
 		ReferenceKind: launch.PathReferenceLocalAbsolute, Path: filepath.Join(root, "selected"),
 	}}}
-	plan := authority.New([]authority.Contribution{{ID: "paths", Value: materializer}}, launch.WorkspaceAccessReadOnly, 3, "codex", authority.TargetRequirements{
+	plan := authority.New([]authority.Contribution{{ID: "paths", Value: materializer}}, launch.WorkspaceAccessReadOnly, "codex", authority.TargetRequirements{
 		Recipe: authority.RecipeCodex, Executable: "missing-codex", Semantics: authority.CodexSemantics(),
 	}).WithAuthRef("work")
 	if code, err := registry.ExecuteCodex(context.Background(), CodexRequest{ResolvedPlan: &plan}); code != 1 || !errors.Is(err, ErrUnsupportedVersion) || len(sandbox.requests) != 0 {
@@ -707,7 +707,7 @@ func TestInteractiveCodexCarriesExecutableGrantThroughVersionAndAttachedGenerati
 	sandbox := &fakeLoginSandbox{version: SupportedCodexVersion}
 	registry.execution = newCodexExecutionRunner(codexLoginConfig{BinaryPath: binary, SessionsDirectory: sessionsDirectory, WorkingDirectory: registry.workingDirectory}, sandbox)
 	contribution := authorityTestExecutableContribution{intents: []launch.ExecutableGrantIntent{{ID: "helper", ReferenceKind: launch.ExecutableReferenceWorkspaceRelative, Path: "bin/helper"}}}
-	plan := authority.New([]authority.Contribution{{ID: "executables", Value: contribution}}, launch.WorkspaceAccessReadOnly, 3, "codex", authority.TargetRequirements{Recipe: authority.RecipeCodex, Executable: binary, Semantics: authority.CodexSemantics()}).WithAuthRef("work")
+	plan := authority.New([]authority.Contribution{{ID: "executables", Value: contribution}}, launch.WorkspaceAccessReadOnly, "codex", authority.TargetRequirements{Recipe: authority.RecipeCodex, Executable: binary, Semantics: authority.CodexSemantics()}).WithAuthRef("work")
 	if code, err := registry.ExecuteCodex(context.Background(), CodexRequest{ResolvedPlan: &plan}); err != nil || code != 0 {
 		t.Fatalf("ExecuteCodex=(%d, %v)", code, err)
 	}
@@ -733,7 +733,7 @@ func TestInteractiveCodexRunsRegisteredVerificationBeforeAnyTargetProcess(t *tes
 	sandbox := &executionSandbox{version: SupportedCodexVersion}
 	registry.execution = newCodexExecutionRunner(codexLoginConfig{BinaryPath: binary, SessionsDirectory: sessionsDirectory, WorkingDirectory: registry.workingDirectory}, sandbox)
 	verified := false
-	plan := authority.New([]authority.Contribution{{ID: "rejecting", Value: projectedVerificationMaterializer{verified: &verified}}}, launch.WorkspaceAccessReadOnly, 3, "codex", authority.TargetRequirements{Recipe: authority.RecipeCodex, Executable: binary}).WithAuthRef("work")
+	plan := authority.New([]authority.Contribution{{ID: "rejecting", Value: projectedVerificationMaterializer{verified: &verified}}}, launch.WorkspaceAccessReadOnly, "codex", authority.TargetRequirements{Recipe: authority.RecipeCodex, Executable: binary}).WithAuthRef("work")
 	if code, err := registry.ExecuteCodex(context.Background(), CodexRequest{ResolvedPlan: &plan}); code != 1 || !errors.Is(err, ErrCodexFailed) {
 		t.Fatalf("execution = (%d, %v)", code, err)
 	}
@@ -766,7 +766,7 @@ func TestInteractiveCodexCommitsOnlySuccessfulSameIdentityRefresh(t *testing.T) 
 		return os.WriteFile(filepath.Join(home, ".codex", "auth.json"), refreshed, 0o600)
 	}}
 	registry.execution = newCodexExecutionRunner(codexLoginConfig{BinaryPath: binary, SessionsDirectory: sessionsDirectory, WorkingDirectory: registry.workingDirectory}, sandbox)
-	plan := authority.New(nil, launch.WorkspaceAccessReadWrite, 3, "codex", authority.TargetRequirements{Recipe: authority.RecipeCodex, Executable: binary}).WithAuthRef("work")
+	plan := authority.New(nil, launch.WorkspaceAccessReadWrite, "codex", authority.TargetRequirements{Recipe: authority.RecipeCodex, Executable: binary}).WithAuthRef("work")
 	if code, err := registry.ExecuteCodex(context.Background(), CodexRequest{ResolvedPlan: &plan}); err != nil || code != 0 {
 		t.Fatalf("execution = (%d, %v)", code, err)
 	}
@@ -801,7 +801,7 @@ func TestInteractiveCodexFailedRunCannotReplaceIdentityAndFailedStartIsNotWaited
 				return os.WriteFile(filepath.Join(home, ".codex", "auth.json"), changed, 0o600)
 			}}
 			registry.execution = newCodexExecutionRunner(codexLoginConfig{BinaryPath: binary, SessionsDirectory: sessionsDirectory, WorkingDirectory: registry.workingDirectory}, sandbox)
-			plan := authority.New(nil, launch.WorkspaceAccessReadWrite, 3, "codex", authority.TargetRequirements{Recipe: authority.RecipeCodex, Executable: binary}).WithAuthRef("work")
+			plan := authority.New(nil, launch.WorkspaceAccessReadWrite, "codex", authority.TargetRequirements{Recipe: authority.RecipeCodex, Executable: binary}).WithAuthRef("work")
 			if code, err := registry.ExecuteCodex(context.Background(), CodexRequest{ResolvedPlan: &plan}); err == nil || code == 0 {
 				t.Fatalf("failed execution = (%d, %v)", code, err)
 			}
@@ -825,7 +825,7 @@ func TestInteractiveCodexRejectsOverflowingVersionBeforeInteractiveProcess(t *te
 	}
 	sandbox := &executionSandbox{version: strings.Repeat("x", maximumVersionOutputSize+1)}
 	registry.execution = newCodexExecutionRunner(codexLoginConfig{BinaryPath: binary, SessionsDirectory: sessionsDirectory, WorkingDirectory: registry.workingDirectory}, sandbox)
-	plan := authority.New(nil, launch.WorkspaceAccessReadOnly, 3, "codex", authority.TargetRequirements{Recipe: authority.RecipeCodex, Executable: binary}).WithAuthRef("work")
+	plan := authority.New(nil, launch.WorkspaceAccessReadOnly, "codex", authority.TargetRequirements{Recipe: authority.RecipeCodex, Executable: binary}).WithAuthRef("work")
 	if code, err := registry.ExecuteCodex(context.Background(), CodexRequest{ResolvedPlan: &plan}); code != 1 || !errors.Is(err, ErrUnsupportedVersion) {
 		t.Fatalf("execution = (%d, %v)", code, err)
 	}

@@ -4,10 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"github.com/alcimerio/ai-config-selector/internal/commonprofile"
-	"github.com/alcimerio/ai-config-selector/internal/profilerepo"
 	"strings"
 	"testing"
+
+	"github.com/alcimerio/ai-config-selector/internal/commonprofile"
+	"github.com/alcimerio/ai-config-selector/internal/profilerepo"
 )
 
 func TestProfileRestorePreservesCurrentExclusionBindingAndWorkspaceIntent(t *testing.T) {

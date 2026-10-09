@@ -3,6 +3,7 @@ package cli
 import (
 	"encoding/json"
 	"fmt"
+
 	"github.com/alcimerio/ai-config-selector/internal/diagnostics"
 )
 

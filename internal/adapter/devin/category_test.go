@@ -8,7 +8,9 @@ import (
 	"testing"
 
 	"github.com/alcimerio/ai-config-selector/internal/adapter/devin"
+	"github.com/alcimerio/ai-config-selector/internal/launch"
 	"github.com/alcimerio/ai-config-selector/internal/profile"
+	"github.com/alcimerio/ai-config-selector/internal/skills"
 )
 
 func TestCategoryRegistryNormalizesResolvesPlansAndMaterializesSkills(t *testing.T) {
@@ -29,15 +31,19 @@ func TestCategoryRegistryNormalizesResolvesPlansAndMaterializesSkills(t *testing
 	if err := os.MkdirAll(profilesDirectory, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	legacy := []byte(`{"version":1,"name":"reviews","target":"devin","skillReferences":[{"source":"devin-config","relativePath":"review"}]}`)
-	legacyPath := filepath.Join(profilesDirectory, "reviews.json")
-	if err := os.WriteFile(legacyPath, legacy, 0o600); err != nil {
+	store := profile.NewStore(acsHome, adapter.Categories())
+	path, err := store.Create(devin.NewSkillsProfile("reviews", []skills.SkillReference{{Source: devin.GlobalSourceDevinConfig, RelativePath: "review"}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored, err := os.ReadFile(path)
+	if err != nil {
 		t.Fatal(err)
 	}
 
-	loaded, err := profile.NewStore(acsHome, adapter.Categories()).Load("reviews")
+	loaded, err := store.Load("reviews")
 	if err != nil {
-		t.Fatalf("load legacy Profile: %v", err)
+		t.Fatalf("load Profile: %v", err)
 	}
 	resolved, err := adapter.Categories().Resolve(context.Background(), loaded)
 	if err != nil {
@@ -47,26 +53,40 @@ func TestCategoryRegistryNormalizesResolvesPlansAndMaterializesSkills(t *testing
 	if err != nil {
 		t.Fatalf("plan Profile: %v", err)
 	}
-	if len(plan.Sections) != 2 || plan.Sections[0].Title != "Resolved execution authority:" || len(plan.Sections[1].Items) != 1 || plan.Sections[1].Items[0].Details[0].Value != bundlePath {
-		t.Fatalf("selected global Skill plan = %#v", plan.Sections)
+	if len(plan.Sections) < 2 || plan.Sections[0].Title != "Resolved execution authority:" {
+		t.Fatalf("plan sections = %#v", plan.Sections)
+	}
+	var skillsSection *launch.PlanSection
+	for index := range plan.Sections {
+		if plan.Sections[index].Title == "Selected common Skill Bundles:" {
+			skillsSection = &plan.Sections[index]
+		}
+	}
+	if skillsSection == nil || len(skillsSection.Items) != 1 || skillsSection.Items[0].Details[0].Value != "devin-config:review" {
+		t.Fatalf("selected common Skill plan = %#v", plan.Sections)
 	}
 
 	sessionHome := filepath.Join(t.TempDir(), "home")
 	if err := resolved.Materialize(sessionHome); err != nil {
 		t.Fatalf("materialize Profile: %v", err)
 	}
-	copied, err := os.ReadFile(filepath.Join(sessionHome, ".config", "devin", "skills", "review", "SKILL.md"))
+	for _, copiedPath := range []string{
+		filepath.Join(sessionHome, ".acs", "common", "v1", "skills", "devin-config", "review", "SKILL.md"),
+		filepath.Join(sessionHome, ".config", "devin", "skills", "review", "SKILL.md"),
+	} {
+		copied, err := os.ReadFile(copiedPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(copied) != "# review\n" {
+			t.Fatalf("copied Skill manifest %s = %q", copiedPath, copied)
+		}
+	}
+	afterLoad, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(copied) != "# review\n" {
-		t.Fatalf("copied Skill manifest = %q", copied)
-	}
-	afterLoad, err := os.ReadFile(legacyPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(afterLoad, legacy) {
-		t.Fatalf("legacy Profile was rewritten: %s", afterLoad)
+	if !bytes.Equal(afterLoad, stored) {
+		t.Fatalf("Profile was rewritten: %s", afterLoad)
 	}
 }

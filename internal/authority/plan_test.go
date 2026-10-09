@@ -13,7 +13,7 @@ func TestPlanOwnsImmutableRequirementsAndSanitizedAuthorityExplanation(t *testin
 	requirements := TargetRequirements{
 		Recipe: RecipeDevin, Executable: "/private/target", RuntimeInputs: []string{"/private/runtime"}, RuntimeInputIDs: []string{"target-runtime"}, ExistingHomeDirectory: "/private/home",
 	}
-	plan := New(nil, launch.WorkspaceAccessReadOnly, 3, "devin", requirements)
+	plan := New(nil, launch.WorkspaceAccessReadOnly, "devin", requirements)
 	requirements.RuntimeInputs[0] = "/changed"
 
 	resolved := plan.Requirements()
@@ -43,8 +43,8 @@ func TestAuthorityManifestIsCanonicalAndContainsIntrinsicNativeGrants(t *testing
 	for left, right := 0, len(secondSemantics.Configuration)-1; left < right; left, right = left+1, right-1 {
 		secondSemantics.Configuration[left], secondSemantics.Configuration[right] = secondSemantics.Configuration[right], secondSemantics.Configuration[left]
 	}
-	first := New(nil, launch.WorkspaceAccessReadOnly, 3, "codex", TargetRequirements{Recipe: RecipeCodex, ExecutableRequirementID: "codex-cli-0.149.1", RuntimeInputIDs: []string{"runtime-b", "runtime-a"}, RuntimeInputs: []string{"/private/b", "/private/a"}, Semantics: firstSemantics})
-	second := New(nil, launch.WorkspaceAccessReadOnly, 3, "codex", TargetRequirements{Recipe: RecipeCodex, ExecutableRequirementID: "codex-cli-0.149.1", RuntimeInputIDs: []string{"runtime-a", "runtime-b"}, RuntimeInputs: []string{"/elsewhere/a", "/elsewhere/b"}, Semantics: secondSemantics})
+	first := New(nil, launch.WorkspaceAccessReadOnly, "codex", TargetRequirements{Recipe: RecipeCodex, ExecutableRequirementID: "codex-cli-0.149.1", RuntimeInputIDs: []string{"runtime-b", "runtime-a"}, RuntimeInputs: []string{"/private/b", "/private/a"}, Semantics: firstSemantics})
+	second := New(nil, launch.WorkspaceAccessReadOnly, "codex", TargetRequirements{Recipe: RecipeCodex, ExecutableRequirementID: "codex-cli-0.149.1", RuntimeInputIDs: []string{"runtime-a", "runtime-b"}, RuntimeInputs: []string{"/elsewhere/a", "/elsewhere/b"}, Semantics: secondSemantics})
 	if first.AuthorityDigest() != second.AuthorityDigest() {
 		t.Fatal("registration or local-binding order changed canonical semantic digest")
 	}
@@ -95,16 +95,16 @@ func factByID(t *testing.T, facts []Fact, id string) Fact {
 }
 
 func TestAuthorityDigestTracksSemanticAuthorityButNotPrivateBindings(t *testing.T) {
-	base := New(nil, launch.WorkspaceAccessReadOnly, 3, "codex", TargetRequirements{
+	base := New(nil, launch.WorkspaceAccessReadOnly, "codex", TargetRequirements{
 		Recipe: RecipeCodex, Executable: "/private/one/codex", RuntimeInputs: []string{"/private/runtime"}, RuntimeInputIDs: []string{"codex-runtime"},
 	}).WithAuthRef("first")
-	sameSemantics := New(nil, launch.WorkspaceAccessReadOnly, 3, "codex", TargetRequirements{
+	sameSemantics := New(nil, launch.WorkspaceAccessReadOnly, "codex", TargetRequirements{
 		Recipe: RecipeCodex, Executable: "/other/private/codex", RuntimeInputs: []string{"/other/runtime"}, RuntimeInputIDs: []string{"codex-runtime"},
 	}).WithAuthRef("second")
 	if base.AuthorityDigest() != sameSemantics.AuthorityDigest() {
 		t.Fatal("private local bindings changed semantic authority digest")
 	}
-	writable := New(nil, launch.WorkspaceAccessReadWrite, 3, "codex", base.Requirements()).WithAuthRef("first")
+	writable := New(nil, launch.WorkspaceAccessReadWrite, "codex", base.Requirements()).WithAuthRef("first")
 	if base.AuthorityDigest() == writable.AuthorityDigest() {
 		t.Fatal("workspace authority did not change digest")
 	}
@@ -114,7 +114,7 @@ func TestAuthorityDigestTracksSemanticAuthorityButNotPrivateBindings(t *testing.
 }
 
 func TestAuthorityDigestTracksEveryRuntimeAuthorityFieldAndIgnoresSetOrder(t *testing.T) {
-	base := New(nil, launch.WorkspaceAccessReadOnly, 3, "")
+	base := New(nil, launch.WorkspaceAccessReadOnly, "")
 	mutations := []struct {
 		name   string
 		mutate func(*launch.RuntimeAuthority)
@@ -163,7 +163,7 @@ func TestAuthorityDigestTracksEveryRuntimeAuthorityFieldAndIgnoresSetOrder(t *te
 }
 
 func TestCommandDigestIncludesSelectionFormAndCount(t *testing.T) {
-	base := New(nil, launch.WorkspaceAccessReadOnly, 3, "", TargetRequirements{
+	base := New(nil, launch.WorkspaceAccessReadOnly, "", TargetRequirements{
 		Recipe: RecipeShell, ProtectedPaths: []string{"/private/profile-state"}, ProtectedPathIDs: []string{"profile-state"},
 	})
 	abs, err := base.ForCommandIntent("absolute path (hidden)", 2)
@@ -187,7 +187,7 @@ func TestCommandDigestIncludesSelectionFormAndCount(t *testing.T) {
 func TestPlanDeepCopiesTargetSemanticsAndExplanationPointers(t *testing.T) {
 	semantics := CodexSemantics()
 	requirements := TargetRequirements{Recipe: RecipeCodex, ExecutableRequirementID: "codex-cli", Semantics: semantics}
-	plan := New(nil, launch.WorkspaceAccessReadOnly, 3, "codex", requirements)
+	plan := New(nil, launch.WorkspaceAccessReadOnly, "codex", requirements)
 
 	semantics.Configuration[0].Mode = "mutated"
 	semantics.Unsupported[0].Mode = "mutated"
@@ -204,7 +204,7 @@ func TestPlanDeepCopiesTargetSemanticsAndExplanationPointers(t *testing.T) {
 		t.Fatalf("returned requirements alias captured target semantics: %#v", got)
 	}
 	devinSemantics := DevinSemantics()
-	devinPlan := New(nil, launch.WorkspaceAccessReadOnly, 3, "devin", TargetRequirements{Recipe: RecipeDevin, ExecutableRequirementID: "devin-cli", Semantics: devinSemantics})
+	devinPlan := New(nil, launch.WorkspaceAccessReadOnly, "devin", TargetRequirements{Recipe: RecipeDevin, ExecutableRequirementID: "devin-cli", Semantics: devinSemantics})
 	devinSemantics.Preflights[0].Mode = "mutated"
 	devinSemantics.Inheritance[0].LogicalRoots[0] = "mutated"
 	devinReturned := devinPlan.Requirements()
@@ -214,7 +214,7 @@ func TestPlanDeepCopiesTargetSemanticsAndExplanationPointers(t *testing.T) {
 		t.Fatalf("Devin preflight/inheritance slices alias captured plan: %#v", got)
 	}
 
-	command, err := New(nil, launch.WorkspaceAccessReadOnly, 3, "").ForCommandIntent("absolute path (hidden)", 2)
+	command, err := New(nil, launch.WorkspaceAccessReadOnly, "").ForCommandIntent("absolute path (hidden)", 2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -262,8 +262,8 @@ func TestAuthorityDigestTracksEveryTypedTargetSemanticAndShippedValidationReject
 			baseline := test.base()
 			changed := baseline.Clone()
 			test.mutate(&changed)
-			baselinePlan := New(nil, launch.WorkspaceAccessReadOnly, 3, string(test.recipe), TargetRequirements{Recipe: test.recipe, ExecutableRequirementID: string(test.recipe) + "-cli", Semantics: baseline})
-			changedPlan := New(nil, launch.WorkspaceAccessReadOnly, 3, string(test.recipe), TargetRequirements{Recipe: test.recipe, ExecutableRequirementID: string(test.recipe) + "-cli", Semantics: changed})
+			baselinePlan := New(nil, launch.WorkspaceAccessReadOnly, string(test.recipe), TargetRequirements{Recipe: test.recipe, ExecutableRequirementID: string(test.recipe) + "-cli", Semantics: baseline})
+			changedPlan := New(nil, launch.WorkspaceAccessReadOnly, string(test.recipe), TargetRequirements{Recipe: test.recipe, ExecutableRequirementID: string(test.recipe) + "-cli", Semantics: changed})
 			if baselinePlan.AuthorityDigest() == changedPlan.AuthorityDigest() {
 				t.Fatal("typed target semantic mutation was absent from authority digest")
 			}

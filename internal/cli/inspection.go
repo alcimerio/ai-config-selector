@@ -74,15 +74,11 @@ func (app App) inspectProfiles(inv invocation) int {
 				fmt.Fprintf(app.Output, "    overlay %s: version %d; execution support: %s\n", safeTerminalText(overlay.ID), *overlay.Version, safeTerminalText(overlay.Support))
 			}
 			for _, category := range entry.Categories {
-				schema := "legacy (no category envelope)"
-				if category.SchemaVersion != nil {
-					schema = fmt.Sprint(*category.SchemaVersion)
-				}
 				summary := "configured"
 				if count, counted := category.SelectionCount(); counted {
 					summary = fmt.Sprintf("%d selected", count)
 				}
-				fmt.Fprintf(app.Output, "    %s: %s; stored category version: %s\n", safeTerminalText(category.ID), summary, schema)
+				fmt.Fprintf(app.Output, "    %s: %s; stored category version: %d\n", safeTerminalText(category.ID), summary, *category.SchemaVersion)
 				if operation == "show" {
 					for _, reference := range category.Selection {
 						fmt.Fprintf(app.Output, "      %s: %s\n", safeTerminalText(string(reference.Source)), safeTerminalText(reference.RelativePath))
