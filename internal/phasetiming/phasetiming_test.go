@@ -29,3 +29,22 @@ func TestEnabledReportsPhaseAndDuration(t *testing.T) {
 		t.Fatalf("timing line = %q", got)
 	}
 }
+
+func TestSinceProcessStartReportsElapsedSinceInitialization(t *testing.T) {
+	var buffer bytes.Buffer
+	clock := func() time.Time { return processStarted.Add(2500 * time.Microsecond) }
+	restore := setForTest(&buffer, true, clock)
+	defer restore()
+	SinceProcessStart("acs.startup-to-launch")
+	got := buffer.String()
+	if !strings.HasPrefix(got, "acs timing: acs.startup-to-launch") || !strings.Contains(got, "2.5 ms") {
+		t.Fatalf("timing line = %q", got)
+	}
+	buffer.Reset()
+	restoreDisabled := setForTest(&buffer, false, clock)
+	defer restoreDisabled()
+	SinceProcessStart("acs.startup-to-launch")
+	if buffer.Len() != 0 {
+		t.Fatalf("disabled timing wrote %q", buffer.String())
+	}
+}

@@ -20,6 +20,9 @@ var (
 	output  io.Writer = os.Stderr
 	enabled           = os.Getenv(EnvironmentKey) == "1"
 	now               = time.Now
+	// processStarted approximates ACS process start: package initialization
+	// runs before main, after the runtime and linked packages are loaded.
+	processStarted = time.Now()
 )
 
 // Start begins timing a phase and returns the function that reports it.
@@ -30,11 +33,30 @@ func Start(phase string) func() {
 	}
 	started := now()
 	return func() {
-		elapsed := now().Sub(started)
 		mutex.Lock()
-		defer mutex.Unlock()
-		fmt.Fprintf(output, "acs timing: %-36s %9.1f ms\n", phase, float64(elapsed.Microseconds())/1000)
+		clock := now
+		mutex.Unlock()
+		report(phase, clock().Sub(started))
 	}
+}
+
+// SinceProcessStart reports a phase that began when the ACS process started
+// (package initialization), for example everything before the first launch
+// step. It does nothing when timing is disabled.
+func SinceProcessStart(phase string) {
+	if !Enabled() {
+		return
+	}
+	mutex.Lock()
+	started, clock := processStarted, now
+	mutex.Unlock()
+	report(phase, clock().Sub(started))
+}
+
+func report(phase string, elapsed time.Duration) {
+	mutex.Lock()
+	defer mutex.Unlock()
+	fmt.Fprintf(output, "acs timing: %-36s %9.1f ms\n", phase, float64(elapsed.Microseconds())/1000)
 }
 
 // Enabled reports whether timing output is active.
