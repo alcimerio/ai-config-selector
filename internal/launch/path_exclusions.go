@@ -18,13 +18,20 @@ type PathExclusionIntent struct {
 }
 
 // FilesystemExclusion keeps captured paths and identities private to launch.
-// The parent of an absent leaf is captured so missing ancestors cannot redirect
-// a later creation. Both logical and canonical names remain denied.
+// For an absent path, the nearest existing ancestor is captured and the first
+// missing component must stay absent until startup, so a host-created link
+// cannot redirect the denied name. Once started, the native policy denies the
+// excluded name and guards every ancestor, including missing ones, so the
+// Session can neither create the excluded path nor plant a link above it.
+// Both logical and canonical names remain denied.
 type FilesystemExclusion struct {
 	ID                string
 	path, logicalPath string
-	witness           FilesystemGrant
-	exists            bool
+	// firstMissing is the logical path of the highest absent component when
+	// the excluded path does not exist at capture time.
+	firstMissing string
+	witness      FilesystemGrant
+	exists       bool
 }
 
 func ResolveFilesystemExclusions(intents []PathExclusionIntent, workspace, sessions string) (resolved []FilesystemExclusion, failure error) {
@@ -67,22 +74,25 @@ func ResolveFilesystemExclusions(intents []PathExclusionIntent, workspace, sessi
 			logical = filepath.Join(workspacePath, filepath.FromSlash(logical))
 		}
 		kind := PathType(entry.Type)
-		captured := logical
-		exists := true
-		if _, err := os.Lstat(logical); errors.Is(err, os.ErrNotExist) {
-			exists = false
-			captured = filepath.Dir(logical)
-			kind = PathTypeDirectory
-		} else if err != nil {
+		captured, firstMissing, err := nearestExistingAncestor(logical)
+		if err != nil {
 			return nil, exclusionFailure(entry.ID, "path is unavailable")
+		}
+		exists := firstMissing == ""
+		if !exists {
+			kind = PathTypeDirectory
 		}
 		canonical, witness, identity, err := inspectGrantPath(captured, kind, PathAccessReadOnly)
 		if err != nil {
-			return nil, exclusionFailure(entry.ID, "path has missing ancestors, an unsafe link, or the wrong type")
+			return nil, exclusionFailure(entry.ID, "path has an unsafe link or the wrong type")
 		}
 		path := canonical
 		if !exists {
-			path = filepath.Join(canonical, filepath.Base(logical))
+			remainder, err := filepath.Rel(captured, logical)
+			if err != nil || remainder == "." || !filepath.IsLocal(remainder) {
+				return nil, exclusionFailure(entry.ID, "path is unavailable")
+			}
+			path = filepath.Join(canonical, remainder)
 		}
 		if entry.Reference.Kind == string(PathReferenceWorkspaceRelative) && !withinOrEqual(workspacePath, path) {
 			return nil, exclusionFailure(entry.ID, "path escapes its workspace")
@@ -101,9 +111,32 @@ func ResolveFilesystemExclusions(intents []PathExclusionIntent, workspace, sessi
 			grant.workspacePath = workspacePath
 			grant.workspaceIdentity = workspaceIdentity
 		}
-		result = append(result, FilesystemExclusion{ID: entry.ID, path: path, logicalPath: logical, witness: grant, exists: exists})
+		result = append(result, FilesystemExclusion{ID: entry.ID, path: path, logicalPath: logical, firstMissing: firstMissing, witness: grant, exists: exists})
 	}
 	return result, nil
+}
+
+// nearestExistingAncestor returns logical itself when it exists. Otherwise it
+// returns the closest existing ancestor and the highest missing component below
+// it. Only absence continues the walk; any other failure, including an existing
+// non-directory ancestor, is reported to the caller.
+func nearestExistingAncestor(logical string) (existing, firstMissing string, err error) {
+	current := filepath.Clean(logical)
+	for {
+		_, err := os.Lstat(current)
+		if err == nil {
+			return current, firstMissing, nil
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return "", "", err
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return "", "", err
+		}
+		firstMissing = current
+		current = parent
+	}
 }
 
 type exclusionError struct{ id, reason string }
@@ -121,9 +154,14 @@ func revalidateFilesystemExclusions(exclusions []FilesystemExclusion, workspace,
 			return nil, exclusionFailure(entry.ID, "captured path identity changed")
 		}
 		if !entry.exists {
-			// A host creation between capture and Start invalidates the capture. Once
-			// started, the fixed literal/subtree policy denies target-side creation.
-			if _, err := os.Lstat(entry.logicalPath); !errors.Is(err, os.ErrNotExist) {
+			// A host creation between capture and Start invalidates the capture,
+			// including creation of a missing ancestor. Once started, the fixed
+			// literal/subtree policy and the ancestor guards deny target-side
+			// creation of the excluded path and of its missing ancestors.
+			if entry.firstMissing == "" {
+				return nil, errors.New("invalid exclusion witness")
+			}
+			if _, err := os.Lstat(entry.firstMissing); !errors.Is(err, os.ErrNotExist) {
 				return nil, exclusionFailure(entry.ID, "absent path changed before startup")
 			}
 		}

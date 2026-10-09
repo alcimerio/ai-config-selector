@@ -219,9 +219,13 @@ unlink or replacement. Ordinary sibling writes remain available when granted.
 The parent directory can still reveal the excluded name in its listing.
 
 ACS captures the existing workspace and path identities before Session
-allocation and revalidates them before preparation and startup. An absent final
-component is allowed only when its existing direct parent can be safely
-captured. Missing ancestors, wrong existing types, unsafe links and observed
+allocation and revalidates them before preparation and startup. An absent path,
+including one with missing ancestors such as `build/secrets` before `build/`
+exists, is anchored at its nearest existing ancestor; the highest missing
+component must stay absent until startup. Inside the Session, the excluded name
+stays denied and its missing ancestors are guarded like existing ones, so the
+Session cannot create them (for example, it cannot create `build/` in that case).
+Wrong existing types, an existing file above the path, unsafe links and observed
 identity changes fail closed. The policy is fixed for each Session; changing the
 Profile affects later launches.
 
