@@ -191,6 +191,9 @@ with Devin, [interactive Codex](docs/guides/codex.md#interactive-launch) for its
 ACS-owned named login, and [target conformance](docs/reference/shared-target-conformance.md)
 for integration differences.
 
+To start from a ready-made Profile instead of the builder, see the
+[example Profiles](examples/README.md).
+
 ## Common commands
 
 | Task | Command |

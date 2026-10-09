@@ -1,0 +1,58 @@
+{
+  "version": 3,
+  "name": "review-readonly",
+  "common": {
+    "environment": {
+      "version": 1,
+      "selection": {
+        "entries": []
+      }
+    },
+    "exclusions": {
+      "version": 1,
+      "selection": {
+        "entries": []
+      }
+    },
+    "executables": {
+      "version": 1,
+      "selection": {
+        "entries": []
+      }
+    },
+    "instructions": {
+      "version": 1,
+      "selection": []
+    },
+    "mcp": {
+      "version": 1,
+      "selection": {
+        "servers": []
+      }
+    },
+    "paths": {
+      "version": 1,
+      "selection": {
+        "entries": []
+      }
+    },
+    "skills": {
+      "version": 1,
+      "selection": []
+    },
+    "workspace": {
+      "version": 1,
+      "selection": {
+        "access": "read-only"
+      }
+    }
+  },
+  "overlays": {
+    "codex": {
+      "version": 1
+    },
+    "devin": {
+      "version": 1
+    }
+  }
+}
