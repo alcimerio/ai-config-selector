@@ -7,6 +7,7 @@ import (
 	"github.com/alcimerio/ai-config-selector/internal/capabilitycatalog"
 	"github.com/alcimerio/ai-config-selector/internal/codexauthresource"
 	"github.com/alcimerio/ai-config-selector/internal/environmentintent"
+	"github.com/alcimerio/ai-config-selector/internal/exclusionintent"
 	"github.com/alcimerio/ai-config-selector/internal/executableintent"
 	"github.com/alcimerio/ai-config-selector/internal/instructions"
 	"github.com/alcimerio/ai-config-selector/internal/mcpintent"
@@ -94,6 +95,20 @@ func decodeVersionThree(entry Entry, envelope map[string]json.RawMessage) Entry 
 			return entry.failed("invalid_structure")
 		}
 		entry.Categories = append(entry.Categories, countedCategory("paths", pathsVersion, len(selectedPaths.Entries)))
+	}
+	if payload, exists := common["exclusions"]; exists {
+		version, selection, code := decodeCommonPayload(payload)
+		if code != "" || version != 1 {
+			if code == "" {
+				code = "unsupported_content"
+			}
+			return entry.failed(code)
+		}
+		exclusions, err := exclusionintent.Decode(selection)
+		if err != nil {
+			return entry.failed("invalid_structure")
+		}
+		entry.Categories = append(entry.Categories, countedCategory("exclusions", version, len(exclusions.Entries)))
 	}
 	if executablesPayload, exists := common["executables"]; exists {
 		executablesVersion, executableSelection, code := decodeCommonPayload(executablesPayload)

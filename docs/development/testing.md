@@ -63,6 +63,19 @@ Production queries prohibit authentication UI. Deterministic tests cover locked
 or unavailable providers; live locked-Keychain and direct ACL probes remain
 supplemental because macOS can present access-control UI.
 
+## Native filesystem exclusion evidence
+
+The shared candidate gate runs focused integrated exclusion checks. Generic
+commands exercise denied reads, writes, creation, listing, rename, unlink,
+replacement, symlink aliases and child processes in both workspace modes, while
+allowed neighbors remain usable. The locked Devin target checks single-bundle
+and whole-root catalog omission. Each reviewed Codex pair also exercises real
+catalog discovery through the registered ACS recipe, a fixed app-server
+trampoline, synthetic identity and disposable Keychain. These checks send no
+model request and use no account credentials. They establish catalog and native
+pathname enforcement, not model behavior, content-wide secrecy or disappearance
+of excluded names from parent listings.
+
 ## Optional authenticated smoke
 
 Authenticated Devin and Codex checks are supplemental observations. They must

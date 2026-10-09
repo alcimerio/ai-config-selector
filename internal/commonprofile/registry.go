@@ -26,6 +26,7 @@ type Bindings struct {
 	Skills       SkillsBinding
 	Instructions InstructionsBinding
 	Workspace    WorkspaceBinding
+	Exclusions   ExclusionsBinding
 	Paths        PathsBinding
 	Executables  ExecutablesBinding
 	Environment  EnvironmentBinding
@@ -35,7 +36,7 @@ type Bindings struct {
 func (bindings Bindings) Registrations() []category.Registration {
 	return []category.Registration{
 		bindings.Skills.Registration(), bindings.Instructions.Registration(),
-		bindings.Workspace.Registration(), bindings.Paths.Registration(),
+		bindings.Workspace.Registration(), bindings.Paths.Registration(), bindings.Exclusions.Registration(),
 		bindings.Executables.Registration(), bindings.Environment.Registration(),
 		bindings.MCP.Registration(),
 	}
@@ -62,6 +63,9 @@ func newBindings(skills SkillsBinding, instructions InstructionsBinding) (Bindin
 		return Bindings{}, err
 	}
 	if bindings.Paths, err = NewPathsBinding(); err != nil {
+		return Bindings{}, err
+	}
+	if bindings.Exclusions, err = NewExclusionsBinding(); err != nil {
 		return Bindings{}, err
 	}
 	if bindings.Executables, err = NewExecutablesBinding(); err != nil {

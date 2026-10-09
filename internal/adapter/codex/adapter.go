@@ -103,6 +103,10 @@ func New(config Config) (*Adapter, error) {
 	if err != nil {
 		return nil, err
 	}
+	exclusionsEditor, err := builder.RegisterExclusionsEditor(bindings.Exclusions)
+	if err != nil {
+		return nil, err
+	}
 	executablesEditor, err := builder.RegisterExecutablesEditor(bindings.Executables)
 	if err != nil {
 		return nil, err
@@ -115,7 +119,7 @@ func New(config Config) (*Adapter, error) {
 	if err != nil {
 		return nil, err
 	}
-	a.editors, err = builder.NewEditorRegistry(a.categories, skillsEditor, instructionsEditor, workspaceEditor, pathsEditor, executablesEditor, environmentEditor, mcpEditor)
+	a.editors, err = builder.NewEditorRegistry(a.categories, skillsEditor, instructionsEditor, workspaceEditor, pathsEditor, exclusionsEditor, executablesEditor, environmentEditor, mcpEditor)
 	if err != nil {
 		return nil, err
 	}

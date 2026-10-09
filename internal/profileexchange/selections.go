@@ -4,12 +4,13 @@ import (
 	"encoding/json"
 
 	"github.com/alcimerio/ai-config-selector/internal/commonprofile"
+	"github.com/alcimerio/ai-config-selector/internal/exclusionintent"
 	"github.com/alcimerio/ai-config-selector/internal/launch"
 	"github.com/alcimerio/ai-config-selector/internal/mcpintent"
 )
 
 type commonSelectionBytes struct {
-	paths, executables, environment, mcp json.RawMessage
+	paths, executables, environment, mcp, exclusions json.RawMessage
 }
 
 // bindCommonSelections checks capability shape, canonical semantics, and MCP
@@ -38,6 +39,31 @@ func bindCommonSelections(doc document, bindings bindingDocument) (commonSelecti
 	encodedPaths, err := commonprofile.EncodePathSelection(commonprofile.PathSelection{Entries: localPathEntries})
 	if err != nil {
 		return commonSelectionBytes{}, CodeBindingInvalid
+	}
+	var encodedExclusions json.RawMessage
+	if doc.Profile.Common.Exclusions != nil {
+		selection := exclusionintent.Empty()
+		for _, entry := range doc.Profile.Common.Exclusions.Selection {
+			ref := exclusionintent.Reference{Kind: entry.Reference.Kind, Path: entry.Reference.Path}
+			switch entry.Reference.Kind {
+			case "workspace-relative":
+				if entry.Reference.PathBinding != "" || entry.Reference.RelativePath != "" {
+					return commonSelectionBytes{}, CodeInvalidStructure
+				}
+			case "bound":
+				if entry.Reference.Path != "" || entry.Reference.PathBinding == "" || entry.Reference.RelativePath != "" {
+					return commonSelectionBytes{}, CodeInvalidStructure
+				}
+				ref = exclusionintent.Reference{Kind: "local-absolute", Path: bindings.Paths[entry.Reference.PathBinding]}
+			default:
+				return commonSelectionBytes{}, CodeInvalidStructure
+			}
+			selection.Entries = append(selection.Entries, exclusionintent.Entry{ID: entry.ID, Type: exclusionintent.Type(entry.Type), Reference: ref})
+		}
+		encodedExclusions, err = commonprofile.EncodeExclusionSelection(selection)
+		if err != nil {
+			return commonSelectionBytes{}, CodeBindingInvalid
+		}
 	}
 	localExecutableEntries := make([]commonprofile.ExecutableEntry, 0, len(doc.Profile.Common.Executables.Selection))
 	for _, entry := range doc.Profile.Common.Executables.Selection {
@@ -108,5 +134,5 @@ func bindCommonSelections(doc document, bindings bindingDocument) (commonSelecti
 			return commonSelectionBytes{}, CodeInvalidStructure
 		}
 	}
-	return commonSelectionBytes{paths: encodedPaths, executables: encodedExecutables, environment: encodedEnvironment, mcp: encodedMCP}, CodeValid
+	return commonSelectionBytes{paths: encodedPaths, exclusions: encodedExclusions, executables: encodedExecutables, environment: encodedEnvironment, mcp: encodedMCP}, CodeValid
 }

@@ -66,6 +66,7 @@ type Adapter struct {
 	instructionsCategory commonprofile.InstructionsBinding
 	workspaceCategory    commonprofile.WorkspaceBinding
 	pathsCategory        commonprofile.PathsBinding
+	exclusionsCategory   commonprofile.ExclusionsBinding
 	executablesCategory  commonprofile.ExecutablesBinding
 	environmentCategory  commonprofile.EnvironmentBinding
 	mcpCategory          commonprofile.MCPBinding
@@ -229,4 +230,8 @@ func cleanBundleRelativePath(path string) (string, error) {
 
 func diagnosticIdentity(reference SkillReference) string {
 	return devinruntime.DiagnosticIdentity(reference)
+}
+
+func (adapter *Adapter) SetExclusionSelection(draft *category.Draft, selection commonprofile.ExclusionSelection) error {
+	return category.SetSelection(draft, adapter.exclusionsCategory, selection)
 }

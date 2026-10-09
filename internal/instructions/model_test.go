@@ -41,6 +41,14 @@ func TestResolveCapturesOwnedBoundedBytesAndRejectsLinks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
+	if got[0].SourcePath != path {
+		t.Fatalf("origin=%q", got[0].SourcePath)
+	}
+	encoded, err := json.Marshal(got)
+	if err != nil || strings.Contains(string(encoded), path) {
+		t.Fatalf("private origin serialized: %s %v", encoded, err)
+	}
 	if string(got[0].Content) != string(original) {
 		t.Fatalf("captured bytes changed: %q", got[0].Content)
 	}

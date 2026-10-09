@@ -15,6 +15,7 @@ var commonCapabilities = []CommonCapability{
 	{ID: "skills", Version: 1, Required: true},
 	{ID: "workspace", Version: 1, Required: true},
 	{ID: "paths", Version: 1},
+	{ID: "exclusions", Version: 1},
 	{ID: "executables", Version: 1},
 	{ID: "environment", Version: 1},
 	{ID: "instructions", Version: 1},

@@ -139,3 +139,11 @@ func (c InstructionsContribution) Expected() ([]instructions.Bundle, error) {
 func (c InstructionsContribution) String() string {
 	return fmt.Sprintf("%d selected instruction bundles", len(c.selected))
 }
+
+func (c InstructionsContribution) MaterialOrigins() []string {
+	result := make([]string, 0, len(c.selected))
+	for _, bundle := range c.selected {
+		result = append(result, bundle.SourcePath)
+	}
+	return result
+}

@@ -19,7 +19,11 @@ func (a *Adapter) PlanLaunch(ctx context.Context, workingDirectory string, resol
 	if err != nil {
 		return launch.Plan{}, err
 	}
-	if err := a.planProjectSkills(ctx, workingDirectory, &plan); err != nil {
+	exclusions, err := resolved.ResolveFilesystemExclusions(workingDirectory, filepath.Join(a.existingHomeDir, ".acs", "sessions"))
+	if err != nil {
+		return launch.Plan{}, err
+	}
+	if err := a.planProjectSkills(ctx, workingDirectory, &plan, exclusions); err != nil {
 		return launch.Plan{}, err
 	}
 	plan.Sections = append(plan.Sections, launch.PlanSection{Title: "Workspace instruction discovery retained for Devin:", Items: []launch.PlanItem{{Label: "AGENTS.md and project rule files remain workspace-owned and are not copied into the Profile or Session home."}, {Label: "Devin's workspace root can vary with repository boundaries; rules-list rows require exact source classification."}}})
@@ -80,9 +84,9 @@ func (a *Adapter) planSelectedSkills(ctx context.Context, selected []skills.Skil
 	return nil
 }
 
-func (a *Adapter) planProjectSkills(ctx context.Context, workingDirectory string, plan *launch.Plan) error {
+func (a *Adapter) planProjectSkills(ctx context.Context, workingDirectory string, plan *launch.Plan, supplied ...[]launch.FilesystemExclusion) error {
 	projectSection := launch.PlanSection{
-		Title: "Project-local Skill Bundles inherited by Devin (not managed by ACS):",
+		Title: "Project-local Skill Bundles:",
 	}
 	for _, relativeRoot := range devinruntime.ProjectSourceDirectories() {
 		root := filepath.Join(workingDirectory, relativeRoot)
@@ -107,7 +111,12 @@ func (a *Adapter) planProjectSkills(ctx context.Context, workingDirectory string
 				continue
 			}
 			projectSection.Items = append(projectSection.Items, launch.PlanItem{
-				Label: entry.Name() + " " + bundlePath,
+				Label: func() string {
+					if len(supplied) != 0 && launch.PathExcluded(supplied[0], bundlePath) {
+						return entry.Name() + " [excluded by Profile]"
+					}
+					return entry.Name() + " " + bundlePath
+				}(),
 			})
 		}
 	}

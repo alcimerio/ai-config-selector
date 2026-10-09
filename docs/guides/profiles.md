@@ -40,12 +40,19 @@ or authentication lookup is required. A Codex overlay created here has no
 target-specific builders remain available, including `--auth` on Codex creation.
 Existing Profiles are never overwritten or silently migrated.
 
+The **Excluded paths** editor adds, edits and deletes entries by ID, type,
+reference kind and path. For repository Skills, select the actual root such as
+`.agents/skills` or `.devin/skills` with a workspace-relative directory entry.
+Local absolute entries use your machine's binding. See the
+[exclusion contract](../reference/common-profile-format.md#filesystem-exclusions)
+for source conflicts, absent paths and pathname limits.
+
 ## Declarative creation
 
 `acs profile create --file FILE [--dry-run]` accepts one explicit JSON file whose
 document supplies the Profile name. Standard input and implicit file selection
 are unsupported. Creation accepts only the supported version-3 representation:
-common `skills`, optional `instructions`, `workspace`, `paths`, `executables`,
+common `skills`, optional `instructions`, `workspace`, `paths`, `exclusions`, `executables`,
 `environment`, reference-only `mcp`, and supported version-1 `devin` and `codex`
 overlays. [MCP references](mcp-profiles.md) must bind to selected executable,
 path and environment entries. Future envelopes, legacy v1/v2 input, duplicate
@@ -91,7 +98,7 @@ uncertain result.
 inspects one Profile even if selected Skills disappeared. Both accept `--json`.
 Use `acs help profile` for [command grammar](../reference/cli.md#grammar).
 
-Human output reports counts for stored Skills, instructions, path grants,
+Human output reports counts for stored Skills, instructions, path grants, exclusions,
 executables, environment entries and MCP servers. Workspace access is shown
 as a configured mode rather than a selection count. Counts do not resolve
 references or establish runtime access; use
@@ -159,7 +166,7 @@ ID and contain `id`, `version` and `support` (`supported`, `unsupported` or
 `inactive-unknown`); inspection never selects one for execution.
 
 Supported structures are Devin envelopes 1 and 2 and common envelope 3, with
-independently versioned Skills, Instructions, workspace, paths, executables,
+independently versioned Skills, Instructions, workspace, paths, exclusions, executables,
 environment, MCP and explicit overlays. Version 2 may have an empty categories
 object. Environment inspection checks logical shape without source/provider
 access or exposing source names, secret references or values. Unknown inactive

@@ -20,6 +20,10 @@ For new v3 Profiles:
 - The private Session home and temporary storage are writable
 - Explicit path selections add bounded filesystem access; a directory grant
   covers its descendants and reachable hard links
+- [Filesystem exclusions](common-profile-format.md#filesystem-exclusions) deny
+  reads and writes to selected paths and subtrees, with ancestor mutation guards;
+  parent listings, existing external hard links and independent copies remain
+  outside this pathname boundary
 - Executable selections add visibility; they are not an exclusive command allowlist
 - Explicit environment selections are resolved at launch; Profile files retain
   references rather than their values

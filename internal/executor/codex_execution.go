@@ -33,7 +33,7 @@ func newCodexExecutionRunner(config codexLoginConfig, sandbox launch.ProcessSand
 	return &codexExecutionRunner{config: config, sandbox: sandbox}
 }
 
-func (runner *codexExecutionRunner) prepare(ctx context.Context, access launch.WorkspaceAccess, requirements authority.TargetRequirements, runtimeAuthority launch.RuntimeAuthority, filesystemGrants []launch.FilesystemGrant, executableGrants []launch.ExecutableGrant, pinned *pinnedExecutable, requiresEnvironment bool) (*containedOperationPreparation, error) {
+func (runner *codexExecutionRunner) prepare(ctx context.Context, access launch.WorkspaceAccess, requirements authority.TargetRequirements, runtimeAuthority launch.RuntimeAuthority, filesystemGrants []launch.FilesystemGrant, executableGrants []launch.ExecutableGrant, pinned *pinnedExecutable, requiresEnvironment bool, exclusions ...[]launch.FilesystemExclusion) (*containedOperationPreparation, error) {
 	if runner == nil {
 		return nil, ErrCodexFailed
 	}
@@ -43,6 +43,9 @@ func (runner *codexExecutionRunner) prepare(ctx context.Context, access launch.W
 	config := runner.config
 	config.BinaryPath = requirements.Executable
 	config.RuntimeInputs = append([]string(nil), requirements.RuntimeInputs...)
+	if len(exclusions) != 0 {
+		config.filesystemExclusions = append([]launch.FilesystemExclusion(nil), exclusions[0]...)
+	}
 	if runner.beforeSnapshotHook != nil {
 		runner.beforeSnapshotHook()
 	}
@@ -213,10 +216,11 @@ func (runner *codexExecutionRunner) run(ctx context.Context, config codexLoginCo
 		SessionDirectory: created.RootDirectory(), SessionHome: created.HomeDirectory(), TemporaryDirectory: created.TemporaryDirectory(),
 		Executable: config.BinaryPath, RuntimeInputs: config.RuntimeInputs, RuntimeProbePaths: config.RuntimeProbePaths,
 		RecoveryProofChallenge: proof, Arguments: targetArguments, Terminal: terminal, RuntimeAuthority: runtimeAuthority,
-		FilesystemGrants:   filesystemGrants,
-		ExecutableGrants:   executableGrants,
-		SessionProtections: sessionProtections,
-		Environment:        environment,
+		FilesystemGrants:     filesystemGrants,
+		FilesystemExclusions: config.filesystemExclusions,
+		ExecutableGrants:     executableGrants,
+		SessionProtections:   sessionProtections,
+		Environment:          environment,
 	})
 	if err != nil {
 		cancelReservation()
@@ -255,6 +259,10 @@ func (service *CodexAuthService) ExecuteCodex(ctx context.Context, request Codex
 	supervisor := newDevinSignalSupervisor(cancelPreflight)
 	defer supervisor.stop()
 	requirements := request.ResolvedPlan.Requirements()
+	exclusions, err := request.ResolvedPlan.ResolveFilesystemExclusions(service.workingDirectory, service.sessionsDirectory)
+	if err != nil {
+		return 1, err
+	}
 	filesystemGrants, err := request.ResolvedPlan.ResolveFilesystemGrantsForPreflight(service.workingDirectory, service.sessionsDirectory)
 	if err != nil {
 		return 1, ErrCodexFailed
@@ -295,7 +303,7 @@ func (service *CodexAuthService) ExecuteCodex(ctx context.Context, request Codex
 	access := request.ResolvedPlan.WorkspaceAccess()
 	runtimeAuthority := request.ResolvedPlan.RuntimeAuthority()
 	requiresEnvironment := len(request.ResolvedPlan.EnvironmentIntents()) != 0
-	preparation, err := service.execution.prepare(preflightContext, access, requirements, runtimeAuthority, filesystemGrants, executableGrants, operationExecutable, requiresEnvironment)
+	preparation, err := service.execution.prepare(preflightContext, access, requirements, runtimeAuthority, filesystemGrants, executableGrants, operationExecutable, requiresEnvironment, exclusions)
 	if err != nil {
 		if preflightContext.Err() != nil {
 			return 1, ErrCodexFailed

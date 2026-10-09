@@ -33,6 +33,7 @@ func admitDocument(data []byte) (admittedDocument, Code) {
 	executablesPresent := exchangeCommonFieldPresent(data, "executables")
 	environmentPresent := exchangeCommonFieldPresent(data, "environment")
 	instructionsPresent := exchangeCommonFieldPresent(data, "instructions")
+	exclusionsPresent := exchangeCommonFieldPresent(data, "exclusions")
 	mcpPresent := exchangeCommonFieldPresent(data, "mcp")
 	executableRequirementsPresent := exchangeRequirementsFieldPresent(data, "executables")
 	environmentRequirementsPresent := exchangeRequirementsFieldPresent(data, "environment")
@@ -66,6 +67,9 @@ func admitDocument(data []byte) (admittedDocument, Code) {
 	}
 	if doc.ExchangeVersion == ExchangeVersion && !validExchangeEnvironmentSourceShapes(data) {
 		return admittedDocument{}, CodeInvalidStructure
+	}
+	if exclusionsPresent && (doc.ExchangeVersion != ExchangeVersion || doc.Profile.Common.Exclusions == nil || doc.Profile.Common.Exclusions.Version != 1 || doc.Profile.Common.Exclusions.Selection == nil || len(doc.Profile.Common.Exclusions.Selection) > 128) {
+		return admittedDocument{}, CodeUnsupportedContent
 	}
 	if mcpPresent {
 		if doc.ExchangeVersion != ExchangeVersion || doc.Profile.Common.MCP == nil || doc.Profile.Common.MCP.Version != commonprofile.MCPCapabilityVersion {

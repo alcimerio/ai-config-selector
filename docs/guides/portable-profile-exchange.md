@@ -26,7 +26,7 @@ explicit local regular file; stdin and remote URLs are not supported.
 ## Export format and output
 
 Exchange version 3 supports common Skills v1, optional Instructions v1,
-workspace v1, paths v1, executables v1, environment v1, reference-only MCP v1,
+workspace v1, paths v1, optional exclusions v1, executables v1, environment v1, reference-only MCP v1,
 and the supported Devin v1 and Codex v1 overlays. MCP server IDs, transport, ordered typed argv
 references, declared input/environment references, and disabled tool names are
 carried without resolved host values. Local executable, path and secret
@@ -161,6 +161,16 @@ local value. Import requires exactly one absolute local value for every path
 symbol, validates shape and completeness without opening it, and stores the
 resulting local-absolute reference. Existence, supported anchors, identity,
 type, and native enforcement are checked only by an actual launch.
+
+
+Exchange v3 optionally carries `common.exclusions` version 1 with a
+selection array of `id`, `type` and `reference` entries. Workspace-relative references
+remain portable. Each local-absolute exclusion uses a deterministic `path-N`
+symbol in the same path requirement and binding namespace as grants, after grant
+symbols; its host path is omitted. Import validates the full exclusion schema
+and complete bindings without opening paths. Missing older v3 exclusion data
+defaults empty; present null or malformed data and exclusions in exchange v1/v2
+are rejected. Binding conflicts and actual native enforcement are launch checks.
 
 Fixed-search executable names and workspace-relative executable paths remain
 portable. Export replaces each local-absolute executable with a deterministic
