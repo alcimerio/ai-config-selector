@@ -899,6 +899,9 @@ func buildSeatbeltPolicy(request validatedProcessRequest) (string, []string, err
 	// Explicit denials override workspace, runtime and selected path grants.
 	var exclusionRules strings.Builder
 	seenExclusionPaths := map[string]bool{}
+	// Exclusions in one workspace share most ancestors; each guard is emitted
+	// once so N exclusions do not repeat the same literal denials N times.
+	seenExclusionAncestors := map[string]bool{}
 	for index, exclusion := range request.filesystemExclusions {
 		for aliasIndex, path := range []string{exclusion.logicalPath, exclusion.path} {
 			if seenExclusionPaths[path] {
@@ -909,6 +912,10 @@ func buildSeatbeltPolicy(request validatedProcessRequest) (string, []string, err
 			definitions = append(definitions, "-D"+name+"="+path)
 			fmt.Fprintf(&exclusionRules, "\n(deny file-read* file-write* (literal (param %q)) (subpath (param %q)))", name, name)
 			for ancestorIndex, ancestor := range seatbeltPathAncestors(path) {
+				if seenExclusionAncestors[ancestor] {
+					continue
+				}
+				seenExclusionAncestors[ancestor] = true
 				ancestorName := name + "_ANCESTOR_" + strconv.Itoa(ancestorIndex)
 				definitions = append(definitions, "-D"+ancestorName+"="+ancestor)
 				fmt.Fprintf(&exclusionRules, "\n(deny file-write* (literal (param %q)))", ancestorName)

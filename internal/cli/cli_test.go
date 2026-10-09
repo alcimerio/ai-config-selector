@@ -502,7 +502,7 @@ func TestSandboxDryRunPlansResolvedProfileWithoutCreatingSession(t *testing.T) {
 			t.Errorf("sandbox dry-run output does not contain %q:\n%s", detail, stdout.String())
 		}
 	}
-	if strings.Contains(stdout.String(), "Project-local Skill Bundles:") || strings.Contains(stdout.String(), "project-review") {
+	if strings.Contains(stdout.String(), "Project-local Skill Bundles inherited by Devin") || strings.Contains(stdout.String(), "project-review") {
 		t.Fatalf("sandbox dry run contains Devin-only project inheritance:\n%s", stdout.String())
 	}
 	if _, err := os.Stat(filepath.Join(acsHome, "sessions")); !os.IsNotExist(err) {
@@ -559,7 +559,7 @@ func TestDryRunReportsResolvedGlobalAndInheritedProjectSkillBundlesWithoutCreati
 		"identity: devin-config:review",
 		"common: <session>/home/.acs/common/v1/skills/devin-config/review",
 		"target projection: <session>/home/.config/devin/skills/review",
-		"Project-local Skill Bundles:",
+		"Project-local Skill Bundles inherited by Devin (not managed by ACS):",
 		"project-review " + projectBundle,
 		"No Session was created and Devin was not started.",
 	} {

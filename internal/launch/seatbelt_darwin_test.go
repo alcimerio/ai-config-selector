@@ -145,6 +145,55 @@ func TestSeatbeltPolicyIsDefaultDenyAndUsesParametersForValidatedPaths(t *testin
 	}
 }
 
+func TestSeatbeltPolicyDeniesExclusionsAndGuardsSharedAncestorsOnce(t *testing.T) {
+	request := validatedProcessRequest{
+		workspace:        "/private/tmp/workspace",
+		sessionDirectory: "/private/tmp/session",
+		sessionHome:      "/private/tmp/session/home",
+		executable:       "/usr/bin/true",
+		filesystemExclusions: []FilesystemExclusion{
+			{ID: "a", path: "/private/tmp/workspace/build/out/secrets", logicalPath: "/tmp/workspace/build/out/secrets"},
+			{ID: "b", path: "/private/tmp/workspace/build/keys", logicalPath: "/private/tmp/workspace/build/keys"},
+		},
+	}
+	policy, definitions, err := buildSeatbeltPolicy(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	values := map[string]int{}
+	names := map[string]string{}
+	for _, definition := range definitions {
+		name, value, ok := strings.Cut(strings.TrimPrefix(definition, "-D"), "=")
+		if !ok || !strings.HasPrefix(name, "PROFILE_EXCLUSION_") {
+			continue
+		}
+		if _, duplicate := names[name]; duplicate {
+			t.Fatalf("duplicate parameter %q", name)
+		}
+		names[name] = value
+		if strings.Contains(name, "_ANCESTOR_") {
+			values[value]++
+		}
+	}
+	for _, ancestor := range []string{"/private/tmp/workspace/build/out", "/private/tmp/workspace/build", "/private/tmp/workspace", "/private/tmp", "/private", "/tmp/workspace/build/out", "/tmp/workspace/build", "/tmp/workspace", "/tmp", "/"} {
+		if values[ancestor] != 1 {
+			t.Fatalf("ancestor %q guarded %d times, want once: %#v", ancestor, values[ancestor], definitions)
+		}
+	}
+	for name, value := range names {
+		rule := `(deny file-write* (literal (param "` + name + `")))`
+		if !strings.Contains(name, "_ANCESTOR_") {
+			rule = `(deny file-read* file-write* (literal (param "` + name + `")) (subpath (param "` + name + `")))`
+		}
+		if !strings.Contains(policy, rule) {
+			t.Fatalf("policy is missing %s for %q", rule, value)
+		}
+	}
+	if len(names) != 3+len(values) {
+		t.Fatalf("exclusion parameters = %#v", names)
+	}
+}
+
 func TestSeatbeltPolicyKeepsValidSessionRootsProtectedWithoutExtraProtections(t *testing.T) {
 	request := validatedProcessRequest{
 		workspace:        "/private/tmp/workspace",
