@@ -39,6 +39,17 @@ case "$devin_archive" in /*) ;; *) fail "Devin archive path must be absolute" ;;
 [ -f "$devin_archive" ] && [ ! -L "$devin_archive" ] || fail "checksum-locked Devin archive is unavailable or unsafe"
 [ "$sandbox_backend" = "available" ] || fail "native sandbox backend must be available"
 
+# The unfiltered source and race suites run by default. Pull request and main
+# validation may declare them covered because the required Verify (macOS)
+# check runs the identical commands on the same commit and runner image.
+# Release validation never sets this and always runs them here.
+broad_suites="${ACS_NATIVE_BROAD_SUITES:-run}"
+case "$broad_suites" in
+  run|covered-by-macos-verify) ;;
+  *) fail "ACS_NATIVE_BROAD_SUITES must be run or covered-by-macos-verify" ;;
+esac
+unset ACS_NATIVE_BROAD_SUITES
+
 # The caller supplies these values as positional inputs. Do not let ambient
 # fixture flags broaden the unfiltered source and race suites.
 unset ACS_PROMOTED_VERSION ACS_PROMOTED_BINARY ACS_PROMOTED_SANDBOX_BACKEND
@@ -144,7 +155,11 @@ run_auth_test ./internal/codexauthresource -run '^TestCodexPublicProductionMCPPr
 
 # These broad suites deliberately remain unfiltered so new restoration, Session
 # recovery and installed-artifact coverage enters the release gate automatically.
-go test -v ./...
+if [ "$broad_suites" = run ]; then
+  go test -v ./...
+else
+  printf '%s\n' "run native candidate gates: unfiltered source suite covered by Verify (macOS) on this commit"
+fi
 
 require_test ./acceptance TestPromotedArtifactSharedTargetConformance
 run_acceptance_test ./acceptance -run '^TestPromotedArtifactSharedTargetConformance$' -count=1 -v
@@ -174,7 +189,11 @@ require_test ./acceptance TestPromotedArtifactNativeContainmentContract
 run_acceptance_test ./acceptance -run '^TestPromotedArtifactNativeContainmentContract$/^generic_literal_command_uses_candidate_containment$' -count=1 -v
 run_acceptance_test ./acceptance -run '^TestPromotedArtifactNativeContainmentContract$/^effective_explanation_is_linked_and_narrowly_observed$' -count=1 -v
 
-go test -race ./...
+if [ "$broad_suites" = run ]; then
+  go test -race ./...
+else
+  printf '%s\n' "run native candidate gates: unfiltered race suite covered by Verify (macOS) on this commit"
+fi
 
 require_test ./acceptance TestPromotedProfileRecoveryNeedsNoLaunchDependencies
 run_acceptance_test ./acceptance -run '^TestPromotedProfileRecoveryNeedsNoLaunchDependencies$' -count=1 -v

@@ -1,0 +1,65 @@
+name: Set up Go on macOS
+description: >-
+  Restore the go.mod toolchain from the Actions cache, set it up without
+  setup-go's own cache, and restore (never save) one shared Go build cache
+  family. Only the Verify (macOS) jobs on main save these caches.
+
+inputs:
+  cache-family:
+    description: Go build cache family to restore, unit or race.
+    required: false
+    default: unit
+
+outputs:
+  cache-key:
+    description: Exact key a designated writer saves for this commit.
+    value: ${{ steps.keys.outputs.key }}
+
+runs:
+  using: composite
+  steps:
+    - name: Resolve Go version and cache keys
+      id: keys
+      shell: bash
+      env:
+        CACHE_FAMILY: ${{ inputs.cache-family }}
+        DEPENDENCIES: ${{ hashFiles('go.sum') }}
+      run: |
+        case "$CACHE_FAMILY" in
+          unit|race) ;;
+          *) echo "unsupported Go cache family: $CACHE_FAMILY" >&2; exit 1 ;;
+        esac
+        version="$(sed -n 's/^go \([0-9][0-9.]*\)$/\1/p' go.mod)"
+        if [[ -z "$version" ]]; then
+          echo "go.mod has no exact go directive" >&2
+          exit 1
+        fi
+        prefix="go-${CACHE_FAMILY}-macos-${RUNNER_ARCH}-${version}-${DEPENDENCIES}-"
+        {
+          echo "version=$version"
+          echo "prefix=$prefix"
+          echo "key=${prefix}${GITHUB_SHA}"
+        } >>"$GITHUB_OUTPUT"
+
+    # Go releases newer than the actions/go-versions manifest are otherwise
+    # downloaded from go.dev by every job.
+    - name: Cache Go toolchain
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ runner.tool_cache }}/go/${{ steps.keys.outputs.version }}
+        key: go-toolchain-${{ runner.os }}-${{ runner.arch }}-${{ steps.keys.outputs.version }}
+
+    - name: Set up Go
+      uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      with:
+        go-version-file: go.mod
+        cache: false
+
+    - name: Restore Go build and module caches
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: |
+          ~/Library/Caches/go-build
+          ~/go/pkg/mod
+        key: ${{ steps.keys.outputs.key }}
+        restore-keys: ${{ steps.keys.outputs.prefix }}
