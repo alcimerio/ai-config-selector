@@ -166,7 +166,13 @@ func NewTracker(sessionsDirectory, root, target string) (*Tracker, error) {
 		return nil, errors.New("track ACS Session: coordination failed")
 	}
 	defer closeLocked(allocation)
-	_ = store.pruneRemovedLocked()
+	// Retention is maintenance, not an allocation precondition. Running it on
+	// every Session start puts a registry walk, up to a page of strict record
+	// reads and a durable cursor publication (two full syncs on macOS) on the
+	// interactive startup path. Bound it to one pass per retention interval.
+	if store.retentionDue() {
+		_ = store.pruneRemovedLocked()
+	}
 	var id string
 	for attempt := 0; attempt < 8; attempt++ {
 		idBytes := make([]byte, 16)
@@ -1172,6 +1178,28 @@ func (store Store) bindStorage(create bool) (Store, error) {
 }
 
 const retentionCursorName = ".retention-cursor.json"
+
+// retentionCheckInterval bounds how often Session allocation runs retention.
+// Removed records are retained for RemovedRetention (30 days), so delaying a
+// pass by at most this interval cannot change which records are kept.
+const retentionCheckInterval = 10 * time.Minute
+
+// retentionDue reports whether allocation should run a retention pass. The
+// cursor's modification time is advisory only, exactly like its contents: a
+// missing, special, stale or future-dated cursor makes the pass due, so
+// tampering can only cause an earlier pass, never suppress retention for
+// longer than retentionCheckInterval after the clock passes the timestamp.
+func (store Store) retentionDue() bool {
+	if store.storage == nil || store.storage.base == nil || store.storage.base.validate() != nil {
+		return true
+	}
+	info, err := os.Lstat(filepath.Join(store.storage.base.path, retentionCursorName))
+	if err != nil || !info.Mode().IsRegular() {
+		return true
+	}
+	age := store.now().Sub(info.ModTime())
+	return age < -time.Minute || age >= retentionCheckInterval
+}
 
 type retentionCursor struct {
 	Version int    `json:"version"`
