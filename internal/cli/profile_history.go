@@ -696,13 +696,26 @@ func (app App) profileRestore(ctx context.Context, r historyRepository, selector
 		expectedSourceLineage = selected.LineageID
 	}
 	out, err := r.Apply(ctx, profilerepo.HistoryRequest{Request: request, Operation: "restore", Lineage: requestedLineage, ExpectedSourceLineage: expectedSourceLineage})
-	if err != nil || out.State != profilerepo.Committed || out.RecoveryRequired {
-		return app.restoreApplyError(inv, out, err)
+	completion := appliedProfile(out, err)
+	if completion.err != nil {
+		return app.restoreApplyError(inv, completion)
 	}
 	if out.History == nil || out.History.LineageID == "" || out.History.EventID == "" {
 		return app.historyError(inv, 1, "committed_inspection_failed", "restore committed, but its transaction-bound history identity is unavailable; do not retry")
 	}
-	return app.writeSimpleHistory(inv, map[string]any{"schemaVersion": 1, "operation": "profile.restore", "status": "committed", "lineageId": out.History.LineageID, "sourceLineageId": selected.LineageID, "eventId": out.History.EventID, "selectedEventId": selected.EventID, "destination": destination})
+	receipt, err := json.Marshal(map[string]any{"schemaVersion": 1, "operation": "profile.restore", "status": "committed", "lineageId": out.History.LineageID, "sourceLineageId": selected.LineageID, "eventId": out.History.EventID, "selectedEventId": selected.EventID, "destination": destination})
+	if err != nil {
+		return app.restoreApplyError(inv, profileCompletion{outcome: out, err: err})
+	}
+	if !inv.json {
+		receipt = []byte(safeTerminalText(string(receipt)))
+	}
+	if err := completion.acknowledge(app.Output, append(receipt, '\n')); err != nil {
+		// A failed stdout cannot deliver another JSON object. Use stderr once
+		// and retain the committed outcome rather than replaying the restore.
+		return app.fail("restore committed; reporting failed. Inspect stored Profiles before deciding what to do; do not retry")
+	}
+	return 0
 }
 
 func bindingDecisionStatus(decision string) string {
@@ -931,17 +944,4 @@ func preserveCurrentRestoreBindings(candidate *profile.Profile, current profile.
 		}
 	}
 	return needs, nil
-}
-
-func (app App) restoreApplyError(inv historyInvocation, outcome profilerepo.Outcome, err error) int {
-	switch {
-	case outcome.State == profilerepo.Unknown || outcome.RecoveryRequired || outcome.State == profilerepo.Committed:
-		return app.historyError(inv, 1, "recovery_required", "restore outcome requires repository recovery or inspection")
-	case errors.Is(err, profilerepo.ErrConflict):
-		return app.historyError(inv, 1, "conflict", "restore destination or expected revision changed; nothing was committed")
-	case errors.Is(err, context.Canceled):
-		return app.historyError(inv, 1, "cancelled", "restore was cancelled before commit")
-	default:
-		return app.historyError(inv, 1, "not_committed", "restore was not committed")
-	}
 }

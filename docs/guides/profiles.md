@@ -294,7 +294,10 @@ repository lock. Preparation and cancellation create no locks or journals.
 A committed-with-error result exits nonzero and reports that publication
 committed but cleanup or reporting failed. If the transaction settled and only
 output/terminal reporting failed, inspect the committed Profile; repository
-recovery is unnecessary. Cleanup failure can require recovery independently of
+recovery is unnecessary. Creation, import, and mutation acknowledgments return
+exit 1 on a failed or incomplete output write without replaying the transaction.
+An explicitly confirmed deletion stops before publication if its preview cannot
+be written completely. Cleanup failure can require recovery independently of
 commitment. `Unknown` means publication may have occurred: do not blindly retry.
 Neither uncertainty nor a known commit becomes ordinary cancellation after
 Ctrl+C or terminal failure.

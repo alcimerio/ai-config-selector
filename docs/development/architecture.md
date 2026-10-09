@@ -32,7 +32,7 @@ plan's public inspection commands.
 
 | Package | Responsibility |
 | --- | --- |
-| `internal/cli` | Public grammar, Profile loading, terminal streams, exit codes, and composition of planners and launchers |
+| `internal/cli` | Public grammar, Profile loading, Profile completion, terminal streams, exit codes, and composition of planners and launchers |
 | `internal/category` | Registry and ordered contribution protocol |
 | `internal/commonprofile` | Common capability codecs, defaults, and materialization |
 | `internal/authority` | Immutable semantic authority plan and digest |
@@ -51,6 +51,18 @@ process handles and Session leases, and applies the cleanup policy. The
 authentication resource package imports neither executor nor Session/process
 packages. The executor acquires its authority through typed operations and owns
 all process work. Credential projection is separate from generic Profile materialization.
+
+### Profile completion
+
+The CLI's `profile_completion.go` module owns outcome precedence, checked
+acknowledgment delivery, and recovery guidance. A failed or partial output write
+returns failure while preserving the persistence owner's outcome. Completion
+never retries a transaction or rechecks cancellation after settlement. Restore
+receipts retain the exact returned history identity; explicit recovery permits a
+clean `not_committed` result. The repository owns publication and recovery, and
+the Builder owns terminal shutdown and in-flight save settlement.
+
+See the [Profile transaction glossary](../../GLOSSARY.md) for these terms.
 
 ## Command flows
 

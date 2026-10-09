@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"path/filepath"
 
@@ -236,14 +235,5 @@ func (app App) importProfile(ctx context.Context, inv invocation, codec exchange
 		return app.fail("import Profile: destination condition is invalid")
 	}
 	outcome, applyErr := app.Repository.Apply(ctx, profilerepo.HistoryRequest{Request: profilerepo.CreateRequest{Name: candidate.Name, Expected: expected, Bytes: canonical}, Operation: "import"})
-	if applyErr != nil || outcome.State != profilerepo.Committed || outcome.RecoveryRequired {
-		if applyErr == nil {
-			applyErr = errors.New("Profile transaction requires outcome inspection")
-		}
-		return app.profileCreateError(candidate.Name, "import Profile", &profilerepo.OutcomeError{Outcome: outcome, Err: applyErr})
-	}
-	if _, err := fmt.Fprintf(app.Output, "Imported Profile %q. Bindings are complete; source availability, authentication, and runtime remain unchecked.\n", candidate.Name); err != nil {
-		return app.profileCreateError(candidate.Name, "import Profile", &profilerepo.OutcomeError{Outcome: profilerepo.Outcome{State: profilerepo.Committed}, Err: err})
-	}
-	return 0
+	return app.completeProfile("import Profile", appliedProfile(outcome, applyErr), fmt.Sprintf("Imported Profile %q. Bindings are complete; source availability, authentication, and runtime remain unchecked.\n", candidate.Name), creationCompletion)
 }
