@@ -126,10 +126,12 @@ func TestMacOSGoCachesHaveOneWriterPerFamily(t *testing.T) {
 	}
 	promoted := readRepositoryFile(t, "..", ".github/workflows/promoted-artifacts.yml")
 	research := readRepositoryFile(t, "..", ".github/workflows/native-transport-research.yml")
+	benchmark := readRepositoryFile(t, "..", ".github/workflows/macos-session-benchmark.yml")
 	for name, block := range map[string]string{
 		"native":    nativeRequiredWorkflowJob(t, promoted, "native"),
 		"seatbelt":  nativeRequiredWorkflowJob(t, macos, "seatbelt-zombie-stress"),
 		"transport": nativeRequiredWorkflowJob(t, research, "transport-probes"),
+		"benchmark": nativeRequiredWorkflowJob(t, benchmark, "benchmark"),
 	} {
 		if !strings.Contains(block, "uses: ./.github/actions/setup-go-macos") ||
 			strings.Contains(block, "actions/setup-go@") ||

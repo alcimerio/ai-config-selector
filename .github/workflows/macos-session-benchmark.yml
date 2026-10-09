@@ -1,0 +1,133 @@
+name: macOS Session benchmark
+
+# Manual only: measures real Seatbelt Devin Sessions with a synthetic target.
+# It never runs on pull requests, pushes or a schedule, uses no secrets or
+# accounts, and is not a required check.
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Branch, tag or commit of ACS to benchmark
+        required: true
+        default: main
+        type: string
+      iterations:
+        description: Measured launches per configuration (1-200)
+        required: true
+        default: "10"
+        type: string
+      compare_ref:
+        description: Optional second branch, tag or commit benchmarked in the same run
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-session-benchmark
+  cancel-in-progress: false
+
+jobs:
+  benchmark:
+    name: Session benchmark (darwin/arm64)
+    runs-on: macos-26
+    timeout-minutes: 60
+
+    steps:
+      - name: Check out benchmark harness
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Check out benchmarked ref
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.ref }}
+          path: bench-src/primary
+
+      - name: Check out comparison ref
+        if: ${{ inputs.compare_ref != '' }}
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.compare_ref }}
+          path: bench-src/compare
+
+      - name: Set up Go
+        uses: ./.github/actions/setup-go-macos
+
+      - name: Build harness and acs
+        env:
+          COMPARE_REF: ${{ inputs.compare_ref }}
+        run: |
+          set -euo pipefail
+          bin="$RUNNER_TEMP/bench-bin"
+          mkdir -p "$bin"
+          go build -trimpath -o "$bin/sessionbench" ./tools/sessionbench
+          (cd bench-src/primary && go build -trimpath -o "$bin/acs-primary" ./cmd/acs)
+          if [[ -n "$COMPARE_REF" ]]; then
+            (cd bench-src/compare && go build -trimpath -o "$bin/acs-compare" ./cmd/acs)
+          fi
+
+      - name: Run benchmark
+        env:
+          PRIMARY_REF: ${{ inputs.ref }}
+          COMPARE_REF: ${{ inputs.compare_ref }}
+          ITERATIONS: ${{ inputs.iterations }}
+        run: |
+          set -euo pipefail
+          bin="$RUNNER_TEMP/bench-bin"
+          results="$RUNNER_TEMP/bench-results"
+          mkdir -p "$results"
+          {
+            echo "primary_ref=$PRIMARY_REF"
+            echo "primary_commit=$(git -C bench-src/primary rev-parse HEAD)"
+            if [[ -n "$COMPARE_REF" ]]; then
+              echo "compare_ref=$COMPARE_REF"
+              echo "compare_commit=$(git -C bench-src/compare rev-parse HEAD)"
+            fi
+            echo "harness_commit=$GITHUB_SHA"
+            echo "iterations=$ITERATIONS"
+            echo "macos=$(sw_vers -productVersion) ($(sw_vers -buildVersion))"
+            echo "model=$(sysctl -n hw.model) cpus=$(sysctl -n hw.ncpu) arch=$(uname -m)"
+          } >"$results/environment.txt"
+          arguments=(run --primary-acs "$bin/acs-primary" --primary-ref "$PRIMARY_REF"
+            --iterations "$ITERATIONS" --skill-files 0,20 --warmup 1 --out "$results/runs.jsonl")
+          if [[ -n "$COMPARE_REF" ]]; then
+            arguments+=(--compare-acs "$bin/acs-compare" --compare-ref "$COMPARE_REF")
+          fi
+          "$bin/sessionbench" "${arguments[@]}"
+
+      - name: Summarize
+        if: ${{ always() }}
+        run: |
+          set -euo pipefail
+          results="$RUNNER_TEMP/bench-results"
+          if [[ ! -s "$results/runs.jsonl" ]]; then
+            echo "No benchmark runs were recorded." >>"$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          "$RUNNER_TEMP/bench-bin/sessionbench" summarize --in "$results/runs.jsonl" --csv "$results/runs.csv" >"$results/summary.md"
+          {
+            echo "## macOS Session benchmark"
+            echo
+            echo "Real Seatbelt \`acs devin\` Sessions with a synthetic Devin target (no account, credential or network). One selected Skill bundle with \`SKILL.md\` plus 0 or 20 extra files. Phases come from \`ACS_DEBUG_TIMING=1\`; a phase that runs several times per launch is summed per launch. \`bench.start-to-target\` is from \`acs\` exec to the target's interactive start, \`bench.target-to-exit\` from there to \`acs\` exit."
+            echo
+            echo '```text'
+            cat "$results/environment.txt"
+            echo '```'
+            echo
+            cat "$results/summary.md"
+          } >>"$GITHUB_STEP_SUMMARY"
+
+      - name: Upload raw results
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: macos-session-benchmark-${{ github.run_id }}
+          path: ${{ runner.temp }}/bench-results
+          if-no-files-found: warn
+          retention-days: 30
