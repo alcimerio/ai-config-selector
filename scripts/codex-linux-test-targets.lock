@@ -1,0 +1,5 @@
+# version|os|arch|sha256|url
+0.149.1|linux|amd64|e24fb784c7d71140d67afb620f56e9137496cf7f6c9e19217fa3666dcf306278|https://github.com/openai/codex/releases/download/rust-v0.149.1/codex-x86_64-unknown-linux-musl.tar.gz
+0.149.1|linux|amd64|62fa2c3e5d4bc58720bd72b2ee2ab8636e1aaa9d8236ddae41a1cce628b59aeb|https://github.com/openai/codex/releases/download/rust-v0.149.1/codex-code-mode-host-x86_64-unknown-linux-musl.tar.gz
+0.156.0|linux|amd64|3d49d9af25a5168cfc51e50e520ab238b23083c259ae7c14f89b007cb2545c7b|https://github.com/openai/codex/releases/download/rust-v0.156.0/codex-x86_64-unknown-linux-musl.tar.gz
+0.156.0|linux|amd64|8383c79b0b6b4f77f01a1ca548fe1d550ad96a6e91b9fc1180bb69a449cae53b|https://github.com/openai/codex/releases/download/rust-v0.156.0/codex-code-mode-host-x86_64-unknown-linux-musl.tar.gz

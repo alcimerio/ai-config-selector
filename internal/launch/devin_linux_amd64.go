@@ -28,6 +28,12 @@ func linuxDevinRuntime(executable string) ([]linuxRuntimeFile, error) {
 }
 
 func linuxVerifyDevinELF(file *os.File, size int64, digest string) error {
+	return linuxVerifyLockedELF(file, size, digest)
+}
+
+// Shared byte/ELF validation for the explicitly locked large static targets.
+// The ordinary command runtime limit remains 64 MiB.
+func linuxVerifyLockedELF(file *os.File, size int64, digest string) error {
 	var before, after unix.Stat_t
 	if unix.Fstat(int(file.Fd()), &before) != nil || before.Mode&unix.S_IFMT != unix.S_IFREG || before.Size != size {
 		return errLinuxRecipe
