@@ -54,6 +54,7 @@ func TestMacOSVerificationBudgetPreservesBoundedGates(t *testing.T) {
 	aggregate := nativeRequiredWorkflowJob(t, workflow, "verify")
 	for _, required := range []string{
 		"    name: Verify (macOS)\n",
+		"    permissions: {}\n",
 		"    needs: [verify-unit, verify-race]\n",
 		"    if: ${{ always() }}\n",
 		"          UNIT_RESULT: ${{ needs.verify-unit.result }}\n",

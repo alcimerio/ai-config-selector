@@ -161,6 +161,7 @@ jobs:
 
   verify:
     name: Verify (macOS)
+    permissions: {}
     needs: [verify-unit, verify-race]
     # Keep the required context stable while the normal and race suites run
     # in parallel. Inspect unsuccessful dependencies instead of skipping this
