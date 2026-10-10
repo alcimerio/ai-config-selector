@@ -564,8 +564,13 @@ proposal, not GitHub issue numbers. Split implementation further if review grows
     pending full native qualification.
 12. **Lock and qualify Linux Devin.** Scope: manifest/digest rows, target installer,
     bundle dependencies, exact credential/Skills/MCP preflights. Depends: 11.
-    Accept: both planned architectures have verified bytes and native conformance;
+    Accept: amd64 has verified bytes and native conformance; arm64 is explicitly
+    deferred to its later native qualification gate;
     no broader host credential copy or PATH-based backend trust.
+    The [experimental Devin target](linux-devin-target.md) records verified amd64
+    bytes, bounded runtime inputs and the native preflight harness. Production
+    admission stays closed; complete native and protected-MCP qualification are
+    still required.
 13. **Lock and qualify Linux Codex pairs.** Scope: exact reviewed CLI/companion
     pairs, provider projection and fixed execution recipe. Depends: 10,11.
     Accept: each admitted version passes synthetic login/status/interactive,
