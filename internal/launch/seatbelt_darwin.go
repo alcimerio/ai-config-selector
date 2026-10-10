@@ -106,6 +106,11 @@ func (backend *seatbeltBackend) prepare(ctx context.Context, request validatedPr
 	if err != nil {
 		return nil, sandboxError(SandboxSetupFailed, err)
 	}
+	sessionProcesses, identityPolicy, err := newSeatbeltSessionProcesses()
+	if err != nil {
+		return nil, sandboxError(SandboxSetupFailed, err)
+	}
+	policy += identityPolicy
 	supervisor, err := os.Executable()
 	if err != nil {
 		return nil, sandboxError(SandboxSetupFailed, err)
@@ -201,6 +206,10 @@ func (backend *seatbeltBackend) prepare(ctx context.Context, request validatedPr
 		cleanupDone:  make(chan struct{}), cleanupUnproven: make(chan struct{}), supervised: true, control: control,
 		helperControl: helperControl, statusControl: statusControl, proxyStatus: proxyStatus,
 		challenge: challenge, environmentProjection: request.environmentProjection,
+		sessionProcesses: sessionProcesses,
+	}
+	if len(request.recoveryProofChallenge) > 0 {
+		process.recoveryRoot = request.sessionDirectory
 	}
 	command.Cancel = process.cancel
 	command.WaitDelay = time.Second
@@ -266,6 +275,9 @@ type seatbeltProcess struct {
 	environmentProjection     *environmentresource.Lease
 	supervisorStarted         atomic.Bool
 	startupDeadline           time.Duration
+	sessionProcesses          *seatbeltSessionProcesses
+	sessionIdentityVerified   bool
+	recoveryRoot              string
 }
 
 func (process *seatbeltProcess) Start() error {
@@ -293,9 +305,18 @@ func (process *seatbeltProcess) Start() error {
 		if writeErr := process.startSupervisor(); writeErr != nil {
 			process.closeControl()
 			process.closeStatusControl()
+			// No untrusted target is released until the policy identity has
+			// been checked. Also settle it when the start write was partial.
+			cleanupErr := process.settleSession()
+			_ = process.signalProcessGroup(process.stableProcessGroup(), syscall.SIGKILL)
 			terminalErr := process.restoreForegroundTerminal()
-			process.quarantineUnprovenCleanup()
 			process.reapStartedSupervisor()
+			if cleanupErr == nil {
+				process.awaitRetainedLeader()
+				process.markCleanupDone()
+			} else {
+				process.quarantineUnprovenCleanup()
+			}
 			return errors.Join(sandboxError(SandboxProcessStartFailed, writeErr), terminalErr)
 		}
 		process.supervisorStarted.Store(true)
@@ -367,6 +388,9 @@ func (process *seatbeltProcess) startSupervisor() error {
 	if ready[0] != seatbeltSupervisorReady {
 		return errors.New("invalid Seatbelt supervisor readiness")
 	}
+	if err := process.verifySessionIdentity(); err != nil {
+		return err
+	}
 	var protocol bytes.Buffer
 	defer func() { clear(protocol.Bytes()) }()
 	if process.environmentProjection == nil || process.environmentProjection.Empty() {
@@ -414,16 +438,33 @@ func (process *seatbeltProcess) waitForSupervisorProof() error {
 	if proofErr == nil {
 		proofErr = validateSeatbeltCleanupProof(proof, process.challenge)
 	}
-	if proofErr == nil {
+	var cleanupErr error
+	if process.sessionProcesses != nil {
+		cleanupErr = process.settleSession()
+	}
+	if proofErr == nil && cleanupErr == nil {
 		proofErr = process.writeTargetStatus(proof)
 	}
 	process.closeStatusControl()
+	if cleanupErr != nil {
+		// The direct child is a trusted, unsandboxed status proxy. Do not
+		// leave Wait blocked on it when Session cleanup is inconclusive.
+		_ = process.command.Process.Kill()
+	}
 	waitErr := <-waitDone
 	terminalErr := process.restoreForegroundTerminal()
 	if proofErr == nil {
 		proofErr = matchSeatbeltProofStatus(proof, waitErr)
 	}
+	if cleanupErr != nil {
+		process.quarantineUnprovenCleanup()
+		return errors.Join(sandboxError(SandboxProcessWaitFailed, errSandboxSessionCleanupUnproven), terminalErr)
+	}
 	if proofErr != nil {
+		if process.sessionProcesses != nil {
+			process.markCleanupDone()
+			return errors.Join(sandboxError(SandboxProcessWaitFailed, errSandboxSessionCleanupRecovered), terminalErr)
+		}
 		process.quarantineUnprovenCleanup()
 		return errors.Join(waitErr, sandboxError(SandboxProcessWaitFailed, proofErr), terminalErr)
 	}
@@ -749,8 +790,8 @@ func (process *seatbeltProcess) quarantineCleanup() {
 	quarantine(process)
 }
 
-// quarantineUnprovenCleanup records a supervised process whose cleanup proof
-// was lost. Its target tree runs in a process group ACS cannot prove empty, so
+// quarantineUnprovenCleanup records a supervised process whose cleanup could
+// not be verified. Until the Session can be proven empty,
 // cleanupDone deliberately never closes and the Session stays retained for
 // durable recovery. Closing cleanupUnproven lets waiters fail immediately
 // instead of sitting out the full bounded cleanup wait for nothing.

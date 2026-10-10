@@ -2265,7 +2265,7 @@ func seatbeltTestDescriptorIdentityForFD(fd int) (seatbeltTestDescriptorIdentity
 	return seatbeltTestDescriptorIdentity{device: uint64(stat.Dev), inode: stat.Ino}, nil
 }
 
-func TestSeatbeltHelperAttackKeepsCleanupQuarantined(t *testing.T) {
+func TestSeatbeltSupervisorLossReleasesVerifiedSession(t *testing.T) {
 	skipSeatbeltNativeTestBinaryUnderRace(t)
 	request := seatbeltTestRequest(t)
 	session, err := CreateSession(request.sessionsDirectory)
@@ -2300,15 +2300,18 @@ func TestSeatbeltHelperAttackKeepsCleanupQuarantined(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := retained.Wait(); err == nil {
-		t.Fatal("supervisor attack unexpectedly produced cleanup proof")
+		t.Fatal("supervisor loss unexpectedly returned a target result")
 	}
 	select {
 	case <-retained.(ProcessCleanup).CleanupDone():
-		t.Fatal("supervisor death released cleanup quarantine")
 	default:
+		t.Fatal("parent did not complete cleanup after supervisor loss")
 	}
-	if _, err := os.Stat(session.RootDir); err != nil {
-		t.Fatalf("quarantined Session was released after supervisor death: %v", err)
+	if err := AwaitRetainedSessionCleanup(retained); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(session.RootDir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("verified Session was not removed after supervisor loss: %v", err)
 	}
 }
 
@@ -5156,6 +5159,18 @@ func TestSeatbeltHelperProcess(t *testing.T) {
 	}
 	arguments := os.Args[separator+1:]
 	switch arguments[0] {
+	case "verify-policy-retained":
+		library, err := purego.Dlopen("/usr/lib/libsandbox.dylib", purego.RTLD_NOW|purego.RTLD_LOCAL)
+		if err != nil {
+			os.Exit(90)
+		}
+		var initialize func(string, uint64, *uintptr) int32
+		purego.RegisterLibFunc(&initialize, library, "sandbox_init")
+		var message uintptr
+		if initialize("(version 1)(deny default)", 0, &message) == 0 {
+			os.Exit(91)
+		}
+		os.Exit(0)
 	case "environment-transport-target":
 		if len(arguments) != 2 && len(arguments) != 5 {
 			os.Exit(126)
