@@ -67,7 +67,8 @@ func TestNativeRealStoreInstalledTargetComposition(t *testing.T) {
 	if err := os.Mkdir(authDirectory, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(authDirectory, "auth.json"), compositionAuth(t), 0o600); err != nil {
+	auth := codexauthresource.UseTestIdentityForComposition(t, store)
+	if err := os.WriteFile(filepath.Join(authDirectory, "auth.json"), auth, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := binding.MarkRecoverable(context.Background()); err != nil {

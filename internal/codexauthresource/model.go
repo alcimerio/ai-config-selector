@@ -29,6 +29,7 @@ var (
 	ErrUnsupportedAuth       = errors.New("unsupported Codex authentication data")
 	ErrStatusFailed          = errors.New("contained Codex authentication status failed")
 	ErrProjectedAuthInvalid  = errors.New("projected Codex authentication changed identity or became invalid")
+	ErrIdentityUnverified    = errors.New("Codex authentication identity could not be verified; credentials were not saved")
 	ErrBindingQuarantined    = errors.New("Codex authentication binding is quarantined")
 
 	credentialRefPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
@@ -78,8 +79,9 @@ const MaximumAuthJSONSize = maximumAuthJSONSize
 // ClearBytes erases a temporary credential buffer after a durable operation.
 func ClearBytes(value []byte) { clearBytes(value) }
 
-// ValidateAuthJSON validates credential bytes and returns secret-free identity
-// metadata. Callers never receive decoded token fields.
+// ValidateAuthJSON checks the schema of trusted, stored credential bytes and
+// returns secret-free metadata. It does not authenticate an ID token. Store
+// separately verifies tokens before importing credentials from a Session.
 func ValidateAuthJSON(name CredentialRef, contents []byte) (IdentityMetadata, error) {
 	return validateAuthJSON(name, contents)
 }
