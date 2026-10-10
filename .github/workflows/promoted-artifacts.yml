@@ -302,6 +302,7 @@ jobs:
 
   native-required:
     name: Native darwin/arm64
+    permissions: {}
     needs: [candidate, native]
     # Keep the required context stable while each reviewed target runs separately.
     # Inspect unsuccessful dependencies instead of skipping this required check.
