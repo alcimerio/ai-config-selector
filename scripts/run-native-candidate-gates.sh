@@ -212,6 +212,8 @@ go test ./internal/profilerepo -run '^(TestNativeVolumeAliasPolicy|TestIndepende
 # Each disposable Keychain gets a fresh process for native framework state.
 require_test ./internal/codexauthresource TestNativeKeychainCredentialFreeContract
 run_auth_test ./internal/codexauthresource -run '^TestNativeKeychainCredentialFreeContract$' -count=1
+require_test ./internal/codexauthresource TestNativeKeychainDeniedReadFailsPromptly
+run_auth_test ./internal/codexauthresource -run '^TestNativeKeychainDeniedReadFailsPromptly$' -count=1
 require_test ./internal/codexauthresource TestNativeRealStoreInstalledTargetComposition
 run_auth_test ./internal/codexauthresource -run '^TestNativeRealStoreInstalledTargetComposition$' -count=1 -v
 require_test ./internal/executor TestNativeInstalledTargetContainedStatusWithoutCredentials

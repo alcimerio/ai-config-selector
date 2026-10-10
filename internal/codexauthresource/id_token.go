@@ -18,11 +18,12 @@ import (
 )
 
 const (
-	openAIIssuer    = "https://auth.openai.com"
-	openAIJWKSURL   = openAIIssuer + "/.well-known/jwks.json"
-	codexClientID   = "app_EMoamEEZ73f0CkXaXp7hrann"
-	maximumJWKSSize = 64 * 1024
-	jwksCacheTTL    = time.Hour
+	openAIIssuer     = "https://auth.openai.com"
+	openAIJWKSURL    = openAIIssuer + "/.well-known/jwks.json"
+	codexClientID    = "app_EMoamEEZ73f0CkXaXp7hrann"
+	maximumJWKSSize  = 64 * 1024
+	jwksCacheTTL     = time.Hour
+	jwksFetchTimeout = 5 * time.Second
 )
 
 // Keys are shared by imports through this Store, but never persisted alongside
@@ -199,13 +200,17 @@ func parseJWKS(data []byte) (map[string]*rsa.PublicKey, error) {
 }
 
 func fetchOpenAIJWKS(ctx context.Context) ([]byte, error) {
+	// Bound the whole exchange, including DNS, TLS and reading a stalled body,
+	// even when the caller has no deadline. Never fall back to unverified claims.
+	ctx, cancel := context.WithTimeout(ctx, jwksFetchTimeout)
+	defer cancel()
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, openAIJWKSURL, nil)
 	if err != nil {
 		return nil, err
 	}
 	request.Header.Set("Accept", "application/json")
 	client := &http.Client{
-		Timeout:       10 * time.Second,
+		Timeout:       jwksFetchTimeout,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}
 	response, err := client.Do(request)

@@ -85,7 +85,7 @@ int main(int argc,char **argv){char **out=calloc((size_t)argc+4,sizeof(char*)); 
 	if err := os.WriteFile(source, []byte(program), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if output, err := exec.Command("/usr/bin/clang", "-Os", source, "-o", filepath.Join(tools, "codex")).CombinedOutput(); err != nil {
+	if output, err := nativeCommand(t, "/usr/bin/clang", "-Os", source, "-o", filepath.Join(tools, "codex")).CombinedOutput(); err != nil {
 		t.Fatalf("compile trampoline: %v %s", err, output)
 	}
 	if err := os.Mkdir(filepath.Join(workspace, ".git"), 0700); err != nil {
@@ -120,7 +120,7 @@ int main(int argc,char **argv){char **out=calloc((size_t)argc+4,sizeof(char*)); 
 			if err := os.WriteFile(file, document, 0600); err != nil {
 				t.Fatal(err)
 			}
-			create := exec.Command(candidate, "profile", "create", "--file", file)
+			create := nativeCommand(t, candidate, "profile", "create", "--file", file)
 			create.Dir = workspace
 			create.Env = nativeCandidateEnvironment(home, tools)
 			if output, err := create.CombinedOutput(); err != nil {
@@ -155,7 +155,7 @@ func installedExclusionCatalog(t *testing.T, candidate, home, tools, workspace, 
 		t.Fatal(err)
 	}
 	defer term.Restore(terminal.Fd(), state)
-	command := exec.Command(candidate, "codex", "--profile", profile)
+	command := nativeCommandWithTimeout(t, 3*time.Minute, candidate, "codex", "--profile", profile)
 	command.Dir = workspace
 	command.Env = nativeCandidateEnvironment(home, tools)
 	command.Stdin, command.Stdout, command.Stderr = terminal, terminal, terminal

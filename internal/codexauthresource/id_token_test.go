@@ -13,6 +13,8 @@ import (
 	"io"
 	"math/big"
 	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -383,11 +385,68 @@ func TestFetchOpenAIJWKSUsesFixedEndpointAndBoundsResponse(t *testing.T) {
 				if request.URL.String() != openAIJWKSURL || request.Method != http.MethodGet || request.Header.Get("Authorization") != "" {
 					t.Fatal("unexpected JWKS request")
 				}
+				deadline, ok := request.Context().Deadline()
+				if !ok || time.Until(deadline) <= 0 || time.Until(deadline) > jwksFetchTimeout {
+					t.Fatal("JWKS request has no bounded deadline")
+				}
 				return &http.Response{StatusCode: test.status, Header: http.Header{"Location": []string{"https://example.invalid"}}, Body: io.NopCloser(strings.NewReader(test.body)), Request: request}, nil
 			})
 			_, err := fetchOpenAIJWKS(context.Background())
 			if (err == nil) != test.ok {
 				t.Fatalf("fetch error = %v, want success=%t", err, test.ok)
+			}
+		})
+	}
+}
+
+func TestJWKSFetchTimeoutFailsClosed(t *testing.T) {
+	token := signTestIDToken(t, testSigningKey(t), "test-key", testIdentityClaims())
+	for _, phase := range []string{"headers", "body"} {
+		t.Run(phase, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if phase == "body" {
+					w.WriteHeader(http.StatusOK)
+					w.(http.Flusher).Flush()
+				}
+				<-r.Context().Done()
+			}))
+			defer server.Close()
+			endpoint, err := url.Parse(server.URL)
+			if err != nil {
+				t.Fatal(err)
+			}
+			original := http.DefaultTransport
+			transport := &http.Transport{}
+			defer transport.CloseIdleConnections()
+			defer func() { http.DefaultTransport = original }()
+			calls := 0
+			http.DefaultTransport = jwksRoundTripper(func(r *http.Request) (*http.Response, error) {
+				calls++
+				// Only this test transport redirects the fixed issuer to loopback.
+				request := r.Clone(r.Context())
+				request.URL.Scheme, request.URL.Host = endpoint.Scheme, endpoint.Host
+				return transport.RoundTrip(request)
+			})
+			// Exercise the production bound with no caller deadline for a stalled
+			// body, and an earlier caller deadline while awaiting headers.
+			ctx := context.Background()
+			limit := jwksFetchTimeout
+			if phase == "headers" {
+				var cancel context.CancelFunc
+				limit = 100 * time.Millisecond
+				ctx, cancel = context.WithTimeout(ctx, limit)
+				defer cancel()
+			}
+			started := time.Now()
+			_, err = newIDTokenVerifier(fetchOpenAIJWKS).verify(ctx, token)
+			if !errors.Is(err, ErrIdentityUnverified) || calls != 1 {
+				t.Fatalf("stalled JWKS: err=%v, requests=%d", err, calls)
+			}
+			if elapsed := time.Since(started); elapsed > limit+2*time.Second {
+				t.Fatalf("stalled JWKS exceeded its bound: %v", elapsed)
+			}
+			if strings.Contains(err.Error(), token) {
+				t.Fatal("JWKS failure disclosed credentials")
 			}
 		})
 	}

@@ -34,6 +34,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -252,7 +253,7 @@ func runNativeInstalledACSLockedCodexFixtureWithAgent(t *testing.T, agentPresent
 			versionReady: ready, versionRelease: filepath.Join(workspace, ".acs-codex-missing-environment-release"), expectEnvironment: true,
 		})
 		before := installedSessionSnapshot(t, candidate, home, tools, workspace)
-		command := exec.Command(candidate, "codex", "--profile", "environment")
+		command := nativeCommandWithTimeout(t, 3*time.Minute, candidate, "codex", "--profile", "environment")
 		command.Dir = workspace
 		command.Env = removeNativeCodexEnvironmentName(nativeCandidateEnvironment(home, tools), "ACS_NATIVE_CODEX_TOKEN")
 		output, err := command.CombinedOutput()
@@ -403,7 +404,7 @@ func prepareInstalledSyntheticIdentity(t *testing.T, candidate, home, tools, wor
 	}
 	defer master.Close()
 	defer terminal.Close()
-	command := exec.Command(candidate, "codex", "auth", "login", "--name", name)
+	command := nativeCommand(t, candidate, "codex", "auth", "login", "--name", name)
 	command.Dir = workspace
 	command.Env = nativeCandidateEnvironment(home, tools)
 	command.Stdin, command.Stdout, command.Stderr = terminal, terminal, terminal
@@ -458,19 +459,20 @@ func prepareInstalledSyntheticIdentity(t *testing.T, candidate, home, tools, wor
 			t.Fatalf("installed ACS synthetic login omitted %q; terminal=%q", witness, output.String())
 		}
 	}
-	codexauthresource.SeedTestIdentityForComposition(t, name)
+	codexauthresource.SeedTestIdentityForComposition(t, name, candidate)
 }
 
 func configureInstalledCandidateKeychainContext(t *testing.T, home, tools string) {
 	t.Helper()
-	parentDefault, parentDefaultOK := queryNativeKeychainSelection(nil, "default-keychain")
-	parentSearch, parentSearchOK := queryNativeKeychainSelection(nil, "list-keychains")
+	useUnavailableInstalledJWKS(t)
+	parentDefault, parentDefaultOK := queryNativeKeychainSelection(t, nil, "default-keychain")
+	parentSearch, parentSearchOK := queryNativeKeychainSelection(t, nil, "list-keychains")
 	if !parentDefaultOK || !parentSearchOK {
 		t.Fatal("isolated parent Keychain selection is unavailable")
 	}
 	fixtureEnvironment := nativeCandidateEnvironment(home, tools)
-	fixtureDefaultBefore, fixtureDefaultBeforeOK := queryNativeKeychainSelection(fixtureEnvironment, "default-keychain")
-	fixtureSearchBefore, fixtureSearchBeforeOK := queryNativeKeychainSelection(fixtureEnvironment, "list-keychains")
+	fixtureDefaultBefore, fixtureDefaultBeforeOK := queryNativeKeychainSelection(t, fixtureEnvironment, "default-keychain")
+	fixtureSearchBefore, fixtureSearchBeforeOK := queryNativeKeychainSelection(t, fixtureEnvironment, "list-keychains")
 	t.Logf(
 		"synthetic HOME Keychain selection before setup: default-match=%t search-list-match=%t",
 		fixtureDefaultBeforeOK && fixtureDefaultBefore == parentDefault,
@@ -487,14 +489,14 @@ func configureInstalledCandidateKeychainContext(t *testing.T, home, tools string
 		{"list-keychains", "-d", "user", "-s", keychain},
 		{"default-keychain", "-d", "user", "-s", keychain},
 	} {
-		command := exec.Command("/usr/bin/security", arguments...)
+		command := nativeCommand(t, "/usr/bin/security", arguments...)
 		command.Env = fixtureEnvironment
 		if _, err := command.CombinedOutput(); err != nil {
 			t.Fatal("configure synthetic HOME to use the disposable Keychain")
 		}
 	}
-	fixtureDefaultAfter, fixtureDefaultAfterOK := queryNativeKeychainSelection(fixtureEnvironment, "default-keychain")
-	fixtureSearchAfter, fixtureSearchAfterOK := queryNativeKeychainSelection(fixtureEnvironment, "list-keychains")
+	fixtureDefaultAfter, fixtureDefaultAfterOK := queryNativeKeychainSelection(t, fixtureEnvironment, "default-keychain")
+	fixtureSearchAfter, fixtureSearchAfterOK := queryNativeKeychainSelection(t, fixtureEnvironment, "list-keychains")
 	defaultMatches := fixtureDefaultAfterOK && fixtureDefaultAfter == parentDefault
 	searchMatches := fixtureSearchAfterOK && fixtureSearchAfter == parentSearch
 	t.Logf("synthetic HOME Keychain selection after setup: default-match=%t search-list-match=%t", defaultMatches, searchMatches)
@@ -503,8 +505,34 @@ func configureInstalledCandidateKeychainContext(t *testing.T, home, tools string
 	}
 }
 
-func queryNativeKeychainSelection(environment []string, operation string) (string, bool) {
-	command := exec.Command("/usr/bin/security", operation, "-d", "user")
+// Route the installed binary's real, fixed JWKS request through a local proxy
+// which refuses the CONNECT. No test signing key or alternate issuer is ever
+// trusted by production. A signed fixture login must reach this path and fail
+// closed; the separately verified seed uses the test-only verifier and ACL.
+func useUnavailableInstalledJWKS(t *testing.T) {
+	t.Helper()
+	var requests atomic.Int64
+	proxy := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodConnect || r.Host != "auth.openai.com:443" {
+			t.Errorf("unexpected installed JWKS proxy request: %s %s", r.Method, r.Host)
+		} else {
+			requests.Add(1)
+		}
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	proxy.Config.ReadHeaderTimeout = time.Second
+	proxy.Start()
+	t.Cleanup(func() {
+		proxy.Close()
+		if !t.Failed() && requests.Load() == 0 {
+			t.Error("installed ACS did not attempt the fixed JWKS endpoint for the signed fixture login")
+		}
+	})
+	t.Setenv("ACS_NATIVE_JWKS_PROXY", proxy.URL)
+}
+
+func queryNativeKeychainSelection(t *testing.T, environment []string, operation string) (string, bool) {
+	command := nativeCommand(t, "/usr/bin/security", operation, "-d", "user")
 	if environment != nil {
 		command.Env = environment
 	}
@@ -517,6 +545,9 @@ func queryNativeKeychainSelection(environment []string, operation string) (strin
 
 func nativeCandidateEnvironment(home, tools string) []string {
 	environment := []string{"HOME=" + home, "PATH=" + tools + ":/usr/bin:/bin", "LANG=C", "LC_ALL=C", "TERM=xterm", "COLORTERM=truecolor"}
+	if proxy := os.Getenv("ACS_NATIVE_JWKS_PROXY"); proxy != "" {
+		environment = append(environment, "HTTPS_PROXY="+proxy)
+	}
 	for _, name := range []string{"ACS_NATIVE_CODEX_MODE", "ACS_NATIVE_CODEX_TOKEN", "ACS_NATIVE_CODEX_UNSELECTED"} {
 		if value, present := os.LookupEnv(name); present {
 			environment = append(environment, name+"="+value)
@@ -543,7 +574,7 @@ func removeNativeCodexEnvironmentName(environment []string, name string) []strin
 
 func assertInstalledIdentityVisible(t *testing.T, candidate, home, tools, workspace, name string) {
 	t.Helper()
-	command := exec.Command(candidate, "codex", "auth", "list")
+	command := nativeCommand(t, candidate, "codex", "auth", "list")
 	command.Dir = workspace
 	command.Env = nativeCandidateEnvironment(home, tools)
 	output, err := command.CombinedOutput()
@@ -557,7 +588,7 @@ func assertInstalledIdentityVisible(t *testing.T, candidate, home, tools, worksp
 
 func assertInstalledIdentityStatus(t *testing.T, candidate, home, tools, workspace, name string) {
 	t.Helper()
-	command := exec.Command(candidate, "codex", "auth", "status", "--name", name)
+	command := nativeCommand(t, candidate, "codex", "auth", "status", "--name", name)
 	command.Dir, command.Env = workspace, nativeCandidateEnvironment(home, tools)
 	output, err := command.CombinedOutput()
 	if err != nil || !bytes.Contains(output, []byte(name)) || !bytes.Contains(output, []byte("authenticated")) {
@@ -576,7 +607,7 @@ func runInstalledCodexPTY(t *testing.T, candidate, home, tools, workspace, profi
 	if err := pty.Setsize(master, &pty.Winsize{Rows: 40, Cols: 120}); err != nil {
 		t.Fatal(err)
 	}
-	command := exec.Command(candidate, "codex", "--profile", profile)
+	command := nativeCommandWithTimeout(t, 3*time.Minute, candidate, "codex", "--profile", profile)
 	command.Dir = workspace
 	command.Env = nativeCandidateEnvironment(home, tools)
 	command.Stdin, command.Stdout, command.Stderr = terminal, terminal, terminal
@@ -763,7 +794,7 @@ func runInstalledCodexRecovery(t *testing.T, candidate, home, tools, workspace, 
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
 	for {
-		command := exec.Command(candidate, "codex", "auth", "recover", "--name", name)
+		command := nativeCommand(t, candidate, "codex", "auth", "recover", "--name", name)
 		command.Dir = workspace
 		command.Env = nativeCandidateEnvironment(home, tools)
 		output, err := command.CombinedOutput()
@@ -797,7 +828,7 @@ type installedRecoverableSession struct {
 
 func installedSessionSnapshot(t *testing.T, candidate, home, tools, workspace string) map[string]installedPublicSession {
 	t.Helper()
-	command := exec.Command(candidate, "session", "list", "--json")
+	command := nativeCommand(t, candidate, "session", "list", "--json")
 	command.Dir, command.Env = workspace, nativeCandidateEnvironment(home, tools)
 	output, err := command.Output()
 	if err != nil {
@@ -850,7 +881,7 @@ func inspectInstalledRecoverableSession(t *testing.T, candidate, home, tools, wo
 	if item.State != "active" && item.State != "settling" && item.State != "retryable" {
 		t.Fatalf("recoverable public Session state = %q; all Sessions = %+v", item.State, before)
 	}
-	inspect := exec.Command(candidate, "session", "inspect", item.ID, "--json")
+	inspect := nativeCommand(t, candidate, "session", "inspect", item.ID, "--json")
 	inspect.Dir, inspect.Env = workspace, nativeCandidateEnvironment(home, tools)
 	inspected, err := inspect.Output()
 	if err != nil || !bytes.Contains(inspected, []byte(`"id":"`+item.ID+`"`)) || bytes.Contains(inspected, []byte("rootToken")) || bytes.Contains(inspected, []byte("challenge")) {
@@ -871,7 +902,7 @@ func runConcurrentInstalledRecoveries(t *testing.T, candidate, home, tools, work
 		arguments := append([]string(nil), arguments...)
 		go func() {
 			<-start
-			command := exec.Command(candidate, arguments...)
+			command := nativeCommand(t, candidate, arguments...)
 			command.Dir, command.Env = workspace, nativeCandidateEnvironment(home, tools)
 			output, err := command.CombinedOutput()
 			results <- result{output: output, err: err}
@@ -891,7 +922,7 @@ func runConcurrentInstalledRecoveries(t *testing.T, candidate, home, tools, work
 	runInstalledCodexRecovery(t, candidate, home, tools, workspace, name)
 	deadline := time.Now().Add(10 * time.Second)
 	for {
-		command := exec.Command(candidate, "session", "recover", publicID)
+		command := nativeCommand(t, candidate, "session", "recover", publicID)
 		command.Dir, command.Env = workspace, nativeCandidateEnvironment(home, tools)
 		output, err := command.CombinedOutput()
 		if err == nil && bytes.Contains(output, []byte("removed")) {
@@ -906,7 +937,7 @@ func runConcurrentInstalledRecoveries(t *testing.T, candidate, home, tools, work
 
 func assertInstalledSessionRemoved(t *testing.T, candidate, home, tools, workspace string, recoverable installedRecoverableSession) {
 	t.Helper()
-	command := exec.Command(candidate, "session", "inspect", recoverable.id, "--json")
+	command := nativeCommand(t, candidate, "session", "inspect", recoverable.id, "--json")
 	command.Dir, command.Env = workspace, nativeCandidateEnvironment(home, tools)
 	output, err := command.Output()
 	if err != nil || !bytes.Contains(output, []byte(`"state":"removed"`)) || bytes.Contains(output, []byte("rootToken")) || bytes.Contains(output, []byte("challenge")) {
@@ -1084,6 +1115,7 @@ func observeNativeCodexPhase(t *testing.T, candidate, home, tools, workspace, re
 	context, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	recover := exec.CommandContext(context, candidate, "session", "recover", capability.ID, "--json")
+	recover.WaitDelay = time.Second
 	recover.Dir, recover.Env = workspace, nativeCandidateEnvironment(home, tools)
 	output, err := recover.CombinedOutput()
 	if context.Err() != nil {
@@ -1886,7 +1918,7 @@ func (fixture *nativeResponsesFixture) assertLiveDescendant(t *testing.T) {
 	if err := syscall.Kill(pid, 0); err != nil {
 		t.Fatalf("controlled descendant pid %d was not live before teardown: %v", pid, err)
 	}
-	command, err := exec.Command("/bin/ps", "-p", strconv.Itoa(pid), "-o", "comm=").Output()
+	command, err := nativeCommand(t, "/bin/ps", "-p", strconv.Itoa(pid), "-o", "comm=").Output()
 	if err != nil || filepath.Base(strings.TrimSpace(string(command))) != "sleep" {
 		t.Fatalf("controlled descendant pid %d identity=%q err=%v, want sleep", pid, command, err)
 	}
@@ -1900,7 +1932,7 @@ func (fixture *nativeResponsesFixture) assertLiveDescendant(t *testing.T) {
 		if err != nil || foregroundPID < 2 || foregroundPID == pid || readErr != nil || string(ready) != strconv.Itoa(foregroundPID) || syscall.Kill(foregroundPID, 0) != nil {
 			t.Fatal("running foreground identity/readiness does not match live process")
 		}
-		command, err := exec.Command("/bin/ps", "-p", strconv.Itoa(foregroundPID), "-o", "comm=").Output()
+		command, err := nativeCommand(t, "/bin/ps", "-p", strconv.Itoa(foregroundPID), "-o", "comm=").Output()
 		if err != nil || filepath.Base(strings.TrimSpace(string(command))) != "sleep" {
 			t.Fatal("running foreground helper identity differs")
 		}
@@ -2532,7 +2564,7 @@ int main(int argc, char **argv) {
 		t.Fatal("prepare fixed Codex trampoline replacement")
 	}
 	defer os.Remove(replacementPath)
-	if output, err := exec.Command("/usr/bin/clang", "-Os", source, "-o", replacementPath).CombinedOutput(); err != nil {
+	if output, err := nativeCommand(t, "/usr/bin/clang", "-Os", source, "-o", replacementPath).CombinedOutput(); err != nil {
 		t.Fatalf("compile fixed Codex trampoline: %v: %s", err, output)
 	}
 	if err := os.Chmod(replacementPath, 0o500); err != nil {
@@ -2545,7 +2577,7 @@ int main(int argc, char **argv) {
 
 func buildSyntheticLoginTarget(t *testing.T, destination string) {
 	t.Helper()
-	auth := compositionAuth(t)
+	auth := codexauthresource.SignedTestAuthForComposition(t)
 	encoded := make([]string, len(auth))
 	for index, value := range auth {
 		encoded[index] = strconv.Itoa(int(value))
@@ -2561,6 +2593,11 @@ int main(int argc, char **argv) {
   for (int i = 1; i < argc; i++) {
     if (strcmp(argv[i], "--version") == 0) { puts("codex-cli 0.149.1"); return 0; }
   }
+	/* Status observes the projected identity; it must not replace it with the
+	   deliberately untrusted login fixture and trigger a refresh import. */
+	for (int i = 1; i + 1 < argc; i++) {
+		if (strcmp(argv[i], "login") == 0 && strcmp(argv[i + 1], "status") == 0) return 0;
+	}
 	if (getenv("ACS_NATIVE_CODEX_MODE") || getenv("ACS_NATIVE_CODEX_TOKEN") || getenv("ACS_NATIVE_CODEX_UNSELECTED") || getenv("PROFILE_CODEX_MODE") || getenv("PROFILE_CODEX_TOKEN")) return 14;
   fputs("synthetic-login-target:started\n", stderr);
   fflush(stderr);
@@ -2579,8 +2616,31 @@ int main(int argc, char **argv) {
 	if err := os.WriteFile(source, []byte(program), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if output, err := exec.Command("/usr/bin/clang", "-Os", source, "-o", destination).CombinedOutput(); err != nil {
+	if output, err := nativeCommand(t, "/usr/bin/clang", "-Os", source, "-o", destination).CombinedOutput(); err != nil {
 		t.Fatalf("compile synthetic login target: %v: %s", err, output)
+	}
+}
+
+func TestSyntheticLoginStatusPreservesProjectedCredentials(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "codex")
+	buildSyntheticLoginTarget(t, target)
+	if err := os.Mkdir(filepath.Join(root, ".codex"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, ".codex", "auth.json")
+	before := []byte("projected-credential-sentinel")
+	if err := os.WriteFile(path, before, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	command := nativeCommand(t, target, "-c", `cli_auth_credentials_store="file"`, "login", "status")
+	command.Env = []string{"HOME=" + root, "PATH=/usr/bin:/bin"}
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("synthetic status: %v; output=%q", err, output)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatalf("synthetic status changed projected credentials: %v", err)
 	}
 }
 
@@ -2729,7 +2789,7 @@ func restoreDeletedNativeCodexProfile(t *testing.T, candidate, home, tools, work
 		t.Fatal(err)
 	}
 	run := func(args ...string) []byte {
-		command := exec.Command(candidate, args...)
+		command := nativeCommand(t, candidate, args...)
 		command.Dir, command.Env = workspace, nativeCandidateEnvironment(home, tools)
 		output, err := command.CombinedOutput()
 		if err != nil {
@@ -2939,7 +2999,7 @@ func assertLockedCodexIdentity(t *testing.T, archivePath, installedPath string) 
 	if err != nil || !bytes.Equal(member, installed) {
 		t.Fatal("installed Codex bytes differ from the independently extracted locked member")
 	}
-	if output, err := exec.Command(installedPath, "--version").Output(); err != nil || strings.TrimSpace(string(output)) != "codex-cli "+version {
+	if output, err := nativeCommand(t, installedPath, "--version").Output(); err != nil || strings.TrimSpace(string(output)) != "codex-cli "+version {
 		t.Fatal("installed Codex member reports an unsupported version")
 	}
 }

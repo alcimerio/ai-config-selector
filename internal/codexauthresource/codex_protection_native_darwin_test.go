@@ -4,6 +4,7 @@ package codexauthresource_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -62,7 +63,10 @@ func runCodexProtectionWitness(args []string) {
 	if _, err := os.Stat(companion); err != nil {
 		os.Exit(80)
 	}
-	command := exec.Command(companion)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	command := exec.CommandContext(ctx, companion)
+	command.WaitDelay = time.Second
 	command.Env = append(os.Environ(), "ACS_CODEX_COMPANION_RECEIPT="+filepath.Join(workspace, ".codex-companion-receipt"))
 	if err := command.Run(); err != nil {
 		os.Exit(81)
@@ -202,7 +206,7 @@ func TestCodexPublicProductionMCPProtection(t *testing.T) {
 	writeNativeMCPServer(t, filepath.Join(workspace, "native-mcp-server.sh"))
 	writeCodexProtectionProfile(t, home, "codex-protection")
 	before := installedSessionSnapshot(t, candidate, home, tools, workspace)
-	command := exec.Command(candidate, "codex", "--profile", "codex-protection")
+	command := nativeCommandWithTimeout(t, 3*time.Minute, candidate, "codex", "--profile", "codex-protection")
 	command.Dir = workspace
 	command.Env = append(nativeCandidateEnvironment(home, tools), "ACS_NATIVE_MCP_ARGUMENT=argument")
 	output := &nativeDiagnosticSink{}
