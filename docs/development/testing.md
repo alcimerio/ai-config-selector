@@ -67,6 +67,65 @@ it does not allocate an ACS Session. Landlock ABI availability and a probe
 seccomp filter do not establish the full containment contract. Linux production
 launch admission stays disabled. See the [diagnostic probe scope](../guides/diagnostics.md#experimental-linux-capability-probes).
 
+### Native Linux containment CI (roadmap item 14)
+
+The separate [Native Linux workflow](../../.github/workflows/linux-native.yml)
+runs on `ubuntu-24.04` amd64 with `ACS_LINUX_NATIVE_REQUIRED=1` and
+`CGO_ENABLED=0`. It records `uname`, the Landlock ABI, user/mount/PID namespace
+sysctls (including `kernel.apparmor_restrict_unprivileged_userns`), AppArmor/LSM
+observations, and cgroup membership, ownership and controls before setup.
+The read-only `TestNativeLinuxHostEvidence` can pass on an unsuitable host;
+only the subsequent mandatory probes establish prerequisites.
+
+[The gate script](../../scripts/run-linux-native-gates.sh) requests
+`systemd-run --user --scope --property=Delegate=yes` and records evidence again
+inside that scope. It requires kernel 6.12+, Ubuntu 24.04, Landlock ABI 6+,
+unprivileged user/mount/PID namespaces, seccomp, trusted system `/usr/bin/bwrap`,
+and an owned delegated cgroup v2 domain. The cgroup probe must place and kill a
+helper, prove empty membership and remove its child. WSL and containers are
+rejected. Missing delegation, old kernels and any other missing prerequisite
+**fail the job**; there is no successful skip or weaker fallback.
+
+After prerequisites pass, the script installs checksum-locked Linux Devin and
+both reviewed Codex CLI/companion pairs without running them uncontained. It
+runs the Linux probe, launch, file-provider and executor suites. Every selected
+test, including subtests, must avoid skips, and the named containment and denial
+tests must report a pass; an empty or renamed suite cannot qualify the platform.
+Job logs include host evidence and failures; per-suite logs remain in
+`$RUNNER_TEMP/acs-linux-native/*.log` for the job's lifetime. No account
+credentials are used.
+
+The hosted runner's mutable kernel and user-manager delegation have **not been
+qualified**. Keep `Native Linux containment (amd64, qualification pending)`
+**out of required branch-protection checks** while this gap remains. Its failure
+must stay visible rather than using `continue-on-error`, ignoring test status,
+or globally disabling AppArmor's userns restrictions. If the hosted runner
+cannot satisfy the floor or delegation, provision a dedicated ephemeral
+self-hosted amd64 runner, or a native amd64 Ubuntu 24.04 HWE VM on a host with
+nested virtualization. Boot kernel 6.12+ with Landlock enabled, install system
+Bubblewrap with an appropriate AppArmor profile, and provision the runner user's
+systemd manager and `Delegate=yes` scope (or a reviewed delegated domain slice).
+Run the same gate and retain its real evidence before promoting the check to
+required status. Do not substitute a container or run the tests as root.
+
+The native assertions cover filesystem/syscall denials and allowed controls,
+TTY input restoration, fork/setsid containment, owner/supervisor loss,
+authenticated cleanup and credential-free target preflights. Provider lifecycle
+and failure-injection fixtures also run, but their modeled settlement is not
+independent native process proof. This job is a normal, static Go build; it
+does not claim race-instrumented native evidence. The existing macOS normal,
+race and release gates remain separate and unchanged. Production Linux launch
+admission and Linux release publication remain disabled pending the remaining
+qualification and activation work.
+
+### Native arm64 deferred (roadmap item 15)
+
+Linux arm64 remains unsupported and unpublished until a **native arm64** runner
+passes the same containment, denial, terminal, target and cleanup gates, together
+with the minimum/disabled-feature and filesystem qualification matrix. The
+portable arm64 cross-build is compilation evidence only. QEMU or other emulator
+results do not count as native evidence and cannot close item 15.
+
 ## Native named-authentication evidence
 
 The promoted-artifact workflow fetches both [reviewed target pairs](../reference/target-compatibility.md)
