@@ -2,7 +2,7 @@
 
 [Documentation index](../docs/README.md) · [Profiles](../docs/guides/profiles.md) · [Security model](../docs/reference/security-model.md)
 
-Each file in [profiles/](profiles/) is a complete version-3 Profile for
+Each file in [profiles/](profiles/) is a complete Profile for
 [declarative creation](../docs/guides/profiles.md#declarative-creation). The
 files are in canonical form, contain no machine-specific paths, credentials or
 named logins, and are checked in CI with the same codec as

@@ -39,12 +39,16 @@ func TestMacOSSessionBenchmarkWorkflowIsManualAndIsolated(t *testing.T) {
 		"--skill-files 0,20",
 		">>\"$GITHUB_STEP_SUMMARY\"",
 		"actions/upload-artifact@",
+		// Short SHAs are resolved with git; actions/checkout accepts only
+		// branches, tags and full SHAs.
+		"fetch-depth: 0",
+		"rev-parse --verify --quiet --end-of-options",
 	} {
 		if !strings.Contains(job, required) {
 			t.Errorf("benchmark job omits %q", required)
 		}
 	}
-	for _, forbidden := range []string{"secrets.", "actions/cache/save@", "actions/setup-go@", "pull_request", "schedule:", "ACS_TEST_DEVIN_BINARY", "install-devin-test-target", "install-codex-test-target"} {
+	for _, forbidden := range []string{"ref: ${{ inputs.", "secrets.", "actions/cache/save@", "actions/setup-go@", "pull_request", "schedule:", "ACS_TEST_DEVIN_BINARY", "install-devin-test-target", "install-codex-test-target"} {
 		if strings.Contains(workflow, forbidden) {
 			t.Errorf("benchmark workflow contains %q", forbidden)
 		}
