@@ -84,7 +84,7 @@ func New(locksDirectory, quarantineDirectory string) (*Store, error) {
 	if locks.initErr != nil || markers.initErr != nil {
 		return nil, ErrProviderUnavailable
 	}
-	return &Store{provider: newKeychainProvider(), locks: locks, markers: markers, verifier: newIDTokenVerifier(fetchOpenAIJWKS)}, nil
+	return &Store{provider: newPlatformProvider(), locks: locks, markers: markers, verifier: newIDTokenVerifier(fetchOpenAIJWKS)}, nil
 }
 
 func (store *Store) acquire(ctx context.Context, name CredentialRef, allowMarker bool) (*Binding, error) {

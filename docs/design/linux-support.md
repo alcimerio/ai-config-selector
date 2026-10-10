@@ -541,6 +541,14 @@ proposal, not GitHub issue numbers. Split implementation further if review grows
    provider factory, explicit durable choice and provider conformance fixtures.
    Depends: 3; production integration waits for 8. Accept: unavailable provider
    fails closed, no Keychain regression and no silent plaintext fallback.
+   The selection foundation uses `acs codex auth provider --select file` or
+   `--select secret-service` on Linux. It records only the choice in
+   `$XDG_CONFIG_HOME/acs/credential-provider.json` (default
+   `~/.config/acs/credential-provider.json`), with a 0700 ACS directory and a
+   0600 file. Repeating the same choice is idempotent; switching is refused
+   pending a migration design. Neither Linux provider is implemented by this
+   step, and Linux launches remain disabled. macOS continues to use Keychain
+   without consulting the Linux selection file.
 10. **Implement the chosen Linux credential provider.** Scope: one selected
     provider per PR; file/XDG hardening or Secret Service, then the optional second
     provider in a follow-up. Depends: 9,8. Accept: atomic identity operations,
