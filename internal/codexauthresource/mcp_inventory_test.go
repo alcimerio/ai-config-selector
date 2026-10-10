@@ -133,8 +133,7 @@ func nativeMCPInventoryHasType(body, wantType string) (bool, error) {
 		}
 	}
 	count := 0
-	var visit func([]any) error
-	visit = func(items []any) error {
+	visit := func(items []any) error {
 		for _, raw := range items {
 			entry, ok := raw.(map[string]any)
 			if !ok {

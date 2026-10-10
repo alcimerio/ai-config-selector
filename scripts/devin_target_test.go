@@ -91,7 +91,7 @@ func TestInstallerRetainsVerifiedArchiveAndCleansFailures(t *testing.T) {
 		t.Fatal(err)
 	}
 	fixture := archiveSource
-	run := func(mode string, output string) (error, string) {
+	run := func(mode string, output string) (string, error) {
 		cmd := exec.Command("sh", "install-devin-test-target.sh", lock, root, output)
 		cmd.Dir = "."
 		cmd.Env = append(os.Environ(), "PATH="+stub+":"+os.Getenv("PATH"), "TEST_ARCHIVE="+fixture, "INSTALL_MODE="+mode)
@@ -99,13 +99,13 @@ func TestInstallerRetainsVerifiedArchiveAndCleansFailures(t *testing.T) {
 		if err != nil {
 			t.Logf("installer %s output: %s", mode, outputBytes)
 		}
-		return err, string(outputBytes)
+		return string(outputBytes), err
 	}
 	successOutput := filepath.Join(root, "success", "bin", "devin")
 	if err := os.MkdirAll(filepath.Dir(successOutput), 0700); err != nil {
 		t.Fatal(err)
 	}
-	if err, _ := run("ok", successOutput); err != nil {
+	if _, err := run("ok", successOutput); err != nil {
 		t.Fatal(err)
 	}
 	archive := filepath.Join(root, "devin-3000.10.21-darwin-arm64.tar.gz")
@@ -129,7 +129,7 @@ func TestInstallerRetainsVerifiedArchiveAndCleansFailures(t *testing.T) {
 			"fail-download":    "locked archive download failed",
 			"corrupt-download": "archive digest did not match the lock",
 		}[mode]
-		if err, output := run(mode, out); err == nil || !strings.Contains(output, wantError) {
+		if output, err := run(mode, out); err == nil || !strings.Contains(output, wantError) {
 			t.Fatalf("%s failure=%v output=%q want=%q", mode, err, output, wantError)
 		}
 		temporary, err := filepath.Glob(filepath.Join(root, ".devin-target.*"))
@@ -143,7 +143,7 @@ func TestInstallerRetainsVerifiedArchiveAndCleansFailures(t *testing.T) {
 	if err := os.WriteFile(archive, []byte("caller-owned"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err, output := run("ok", filepath.Join(root, "refused", "devin")); err == nil || !strings.Contains(output, "archive destination already exists") {
+	if output, err := run("ok", filepath.Join(root, "refused", "devin")); err == nil || !strings.Contains(output, "archive destination already exists") {
 		t.Fatalf("existing archive refusal=%v output=%q", err, output)
 	}
 	if data, err := os.ReadFile(archive); err != nil || string(data) != "caller-owned" {
@@ -157,7 +157,7 @@ func TestInstallerRetainsVerifiedArchiveAndCleansFailures(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = os.Remove(archive)
-	if err, output := run("ok", outputPath); err == nil || !strings.Contains(output, "output path already exists") {
+	if output, err := run("ok", outputPath); err == nil || !strings.Contains(output, "output path already exists") {
 		t.Fatalf("existing output refusal=%v output=%q", err, output)
 	}
 	if data, err := os.ReadFile(outputPath); err != nil || string(data) != "caller-binary" {

@@ -116,7 +116,7 @@ jobs:
             echo "model=$(sysctl -n hw.model) cpus=$(sysctl -n hw.ncpu) arch=$(uname -m)"
           } >"$results/environment.txt"
           arguments=(run --primary-acs "$bin/acs-primary" --primary-ref "$PRIMARY_REF"
-            --iterations "$ITERATIONS" --skill-files 0,20 --warmup 1 --out "$results/runs.jsonl")
+            --iterations "$ITERATIONS" --skill-files "0,20" --warmup 1 --out "$results/runs.jsonl")
           if [[ -n "$COMPARE_REF" ]]; then
             arguments+=(--compare-acs "$bin/acs-compare" --compare-ref "$COMPARE_REF")
           fi
