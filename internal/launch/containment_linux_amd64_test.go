@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -27,12 +28,23 @@ func linuxTestSocketpair(t *testing.T) (*os.File, *os.File) {
 	return a, b
 }
 
-func linuxTestByte(t *testing.T, f *os.File, want byte) {
+func linuxTestByte(t *testing.T, f *os.File, want byte, diagnostics ...func() string) {
 	t.Helper()
-	var b [1]byte
-	if _, err := io.ReadFull(f, b[:]); err != nil || b[0] != want {
-		t.Fatalf("protocol byte: %q, %v; want %q", b, err, want)
+	if err := linuxReadTestByte(f, want, diagnostics...); err != nil {
+		t.Fatal(err)
 	}
+}
+
+func linuxReadTestByte(reader io.Reader, want byte, diagnostics ...func() string) error {
+	var b [1]byte
+	if _, err := io.ReadFull(reader, b[:]); err != nil || b[0] != want {
+		message := fmt.Sprintf("protocol byte: %q, %v; want %q", b, err, want)
+		for _, diagnostic := range diagnostics {
+			message += "\n" + diagnostic()
+		}
+		return errors.New(message)
+	}
+	return nil
 }
 
 func linuxTestWrite(t *testing.T, f *os.File, data ...byte) {
@@ -85,6 +97,71 @@ func TestLinuxSessionProtocolGatesAndPreservesStatus(t *testing.T) {
 }
 
 func statusString(status unix.WaitStatus) string { return strconv.FormatUint(uint64(status), 10) }
+
+func TestLinuxSessionReportsExitOnlyAfterProvenCleanup(t *testing.T) {
+	for _, failure := range []string{"", "no-target", "protocol", "unsettled", "terminal", "proof", "owner"} {
+		t.Run(failure, func(t *testing.T) {
+			cleanup := linuxCleanupFixture(t)
+			challenge := append([]byte(nil), cleanup.challenge...)
+			owner, client := linuxTestSocketpair(t)
+			result := linuxSessionResult{Status: 42 << 8, Exited: true, Settled: true}
+			var runErr error
+			switch failure {
+			case "no-target":
+				result.Exited = false
+			case "protocol":
+				runErr = errLinuxContainment
+			case "unsettled":
+				result.Settled = false
+			case "terminal":
+				file, err := os.Open("/dev/null")
+				if err != nil {
+					t.Fatal(err)
+				}
+				cleanup.terminal = &linuxTerminalState{file: file, group: unix.Getpgrp()}
+			case "proof":
+				if err := os.Mkdir(filepath.Join(cleanup.lease.RootDir, sessionCleanupProofFile), 0700); err != nil {
+					t.Fatal(err)
+				}
+			case "owner":
+				_ = client.Close()
+			}
+			type outcome struct {
+				result linuxSessionResult
+				err    error
+			}
+			done := make(chan outcome, 1)
+			go func() {
+				result, err := linuxFinishSession(owner, cleanup, result, runErr)
+				done <- outcome{result, err}
+			}()
+			if failure != "owner" {
+				data, err := io.ReadAll(client)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if failure == "" {
+					if string(data) != "X" {
+						t.Fatalf("missing final settlement report: %q", data)
+					}
+					if proven, err := VerifySessionCleanupProof(cleanup.lease.RootDir, challenge); err != nil || !proven {
+						t.Fatalf("owner received completion before durable proof: %t %v", proven, err)
+					}
+				} else if len(data) != 0 {
+					t.Fatalf("failed or unexecuted Session reported completion: %q", data)
+				}
+			}
+			got := <-done
+			if got.result.Status != result.Status || got.result.Exited != result.Exited {
+				t.Fatalf("target result changed: %+v", got.result)
+			}
+			wantSettled := failure != "unsettled" && failure != "terminal" && failure != "proof"
+			if got.result.Settled != wantSettled || (got.err == nil) != (failure == "" || failure == "no-target") {
+				t.Fatalf("cleanup result: %+v %v", got.result, got.err)
+			}
+		})
+	}
+}
 
 func TestLinuxSessionRejectsNonCgroupDelegationWithoutArtifacts(t *testing.T) {
 	base := t.TempDir()

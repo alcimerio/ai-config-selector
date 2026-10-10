@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -24,6 +25,13 @@ import (
 func TestLinuxContainmentHelper(t *testing.T) {
 	mode := os.Args[len(os.Args)-1]
 	switch mode {
+	case "acs-containment-ready":
+		if _, err := os.NewFile(3, "ready").Write([]byte{'R'}); err != nil {
+			t.Fatal(err)
+		}
+		for {
+			time.Sleep(time.Hour)
+		}
 	case "acs-containment-idle":
 		for {
 			time.Sleep(time.Hour)
@@ -43,7 +51,12 @@ func TestLinuxContainmentHelper(t *testing.T) {
 		transport := os.NewFile(3, "transport")
 		w, env, err := linuxReadTransport(transport)
 		_ = transport.Close()
-		if err != nil || linuxRunContainedInit(w, env, os.NewFile(4, "report"), os.NewFile(5, "control")) != nil {
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "contained init: read launch transport:", err)
+			os.Exit(125)
+		}
+		if err := linuxRunContainedInit(w, env, os.NewFile(4, "report"), os.NewFile(5, "control")); err != nil {
+			fmt.Fprintln(os.Stderr, err)
 			os.Exit(125)
 		}
 	case "acs-containment-supervisor":
@@ -119,6 +132,9 @@ func TestLinuxContainmentHelper(t *testing.T) {
 		result, runErr := linuxSuperviseSession(ctx, owner, linuxSupervisedCommand{
 			command: prepared.command, status: status, control: gate, childEnds: []*os.File{report, control}, cleanup: cleanup,
 		})
+		if runErr != nil {
+			fmt.Fprintf(os.Stderr, "Session supervisor: result=%+v error=%v\n", result, runErr)
+		}
 		data, _ := json.Marshal(struct {
 			Result linuxSessionResult
 			Failed bool
@@ -189,33 +205,41 @@ func TestLinuxContainmentTarget(t *testing.T) {
 	}
 }
 
-func linuxNativeWaitFile(t *testing.T, path string) {
+func linuxNativeWaitFile(t *testing.T, path string, diagnostics ...func() string) {
 	t.Helper()
 	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
 		if _, err := os.Stat(path); err == nil {
 			return
 		}
 	}
+	for _, diagnostic := range diagnostics {
+		t.Log(diagnostic())
+	}
 	t.Fatalf("missing native marker %s", filepath.Base(path))
 }
 
-func linuxNativeStartHelper(t *testing.T, mode string, files []*os.File, env []string) (*exec.Cmd, int) {
+func linuxNativeStartHelper(t *testing.T, mode string, files []*os.File, env []string) (*linuxNativeProcess, int) {
 	t.Helper()
 	fd := -1
 	cmd := exec.Command("/proc/self/exe", "-test.run=^TestLinuxContainmentHelper$", "--", mode)
 	cmd.Env = append([]string{"LANG=C", "LC_ALL=C"}, env...)
 	cmd.ExtraFiles = files
 	cmd.SysProcAttr = &syscall.SysProcAttr{PidFD: &fd}
-	if err := cmd.Start(); err != nil {
-		t.Fatal(err)
-	}
+	process := linuxNativeStartCommand(t, cmd, func() string {
+		for _, value := range env {
+			if root, ok := strings.CutPrefix(value, "ACS_TEST_ROOT="); ok {
+				return linuxNativeReadLogs(filepath.Join(root, "target-log"))
+			}
+		}
+		return ""
+	})
 	if fd < 0 {
 		_ = cmd.Process.Kill()
-		_ = cmd.Wait()
+		_ = process.Wait()
 		linuxNativeUnavailable(t, "atomic CLONE_PIDFD")
 	}
-	t.Cleanup(func() { _ = unix.PidfdSendSignal(fd, unix.SIGKILL, nil, 0); _ = cmd.Wait(); _ = unix.Close(fd) })
-	return cmd, fd
+	t.Cleanup(func() { _ = unix.PidfdSendSignal(fd, unix.SIGKILL, nil, 0); _ = process.Wait(); _ = unix.Close(fd) })
+	return process, fd
 }
 
 func TestLinuxNativePidfdDoesNotSignalUnrelatedProcess(t *testing.T) {
@@ -245,6 +269,65 @@ func TestLinuxNativePidfdDoesNotSignalUnrelatedProcess(t *testing.T) {
 	if err := unix.PidfdSendSignal(other, 0, nil, 0); err != nil {
 		t.Fatal("unrelated process was killed")
 	}
+}
+
+// Regresses pre-start cgroup.kill followed by CLONE_INTO_CGROUP on Linux 6.17:
+// the Session child must survive allocation's kill preflight and reach userland.
+func TestLinuxNativeSessionCgroupStartup(t *testing.T) {
+	parent, err := linuxprobe.OpenDelegatedCgroup()
+	if err != nil {
+		linuxNativeUnavailable(t, "owned cgroup delegation")
+	}
+	g, err := linuxCreateSessionCgroup(parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	removed := false
+	t.Cleanup(func() {
+		defer g.close()
+		if !removed {
+			_ = g.terminate()
+			if err := g.remove(); err != nil {
+				t.Errorf("cleanup regression cgroup: %v", err)
+			}
+		}
+	})
+	ready, report := linuxTestSocketpair(t)
+	pidfd := -1
+	cmd := exec.Command("/proc/self/exe", "-test.run=^TestLinuxContainmentHelper$", "--", "acs-containment-ready")
+	cmd.ExtraFiles = []*os.File{report}
+	cmd.SysProcAttr = &syscall.SysProcAttr{UseCgroupFD: true, CgroupFD: int(g.directory.Fd()), PidFD: &pidfd}
+	process := linuxNativeStartCommand(t, cmd)
+	defer func() {
+		if pidfd >= 0 {
+			_ = unix.Close(pidfd)
+		}
+	}()
+	_ = report.Close()
+	linuxTestByte(t, ready, 'R', process.diagnostics)
+	if pidfd < 0 || g.contains(cmd.Process.Pid) != nil {
+		t.Fatal("ready helper lacks atomic pidfd/cgroup membership")
+	}
+	if empty, err := g.empty(); err != nil || empty {
+		t.Fatalf("live helper missing from cgroup: empty=%t error=%v", empty, err)
+	}
+	if err := g.terminate(); err != nil {
+		t.Fatal(err)
+	}
+	if err := process.Wait(); err == nil {
+		t.Fatal("cgroup.kill did not terminate helper")
+	}
+	status := cmd.ProcessState.Sys().(syscall.WaitStatus)
+	if !status.Signaled() || status.Signal() != syscall.SIGKILL {
+		t.Fatalf("cgroup.kill exit: %v", status)
+	}
+	if dead, err := linuxPidfdDead(pidfd); err != nil || !dead {
+		t.Fatalf("cgroup.kill pidfd: dead=%t error=%v", dead, err)
+	}
+	if err := g.remove(); err != nil {
+		t.Fatal(err)
+	}
+	removed = true
 }
 
 func TestLinuxNativeContainedInitGateSignalsAndExit(t *testing.T) {
@@ -373,14 +456,14 @@ func linuxNativeSessionScenario(t *testing.T, scenario string) {
 	_, unrelated := linuxNativeStartHelper(t, "acs-containment-idle", nil, nil)
 	supervisor, supervisorFD := linuxNativeStartHelper(t, "acs-containment-supervisor", []*os.File{server}, []string{"ACS_TEST_ROOT=" + root, "ACS_TEST_SCENARIO=" + scenario})
 	_ = server.Close()
-	var owner *exec.Cmd
+	var owner *linuxNativeProcess
 	ownerFD := -1
 	if scenario == "owner-loss" {
 		owner, ownerFD = linuxNativeStartHelper(t, "acs-containment-owner", []*os.File{client}, []string{"ACS_TEST_ROOT=" + root})
 		_ = client.Close()
-		linuxNativeWaitFile(t, filepath.Join(root, "owner-ready"))
+		linuxNativeWaitFile(t, filepath.Join(root, "owner-ready"), supervisor.diagnostics, owner.diagnostics)
 	} else {
-		linuxTestByte(t, client, 'R')
+		linuxTestByte(t, client, 'R', supervisor.diagnostics)
 	}
 	var group string
 	for name := range readGroups() {
@@ -432,7 +515,7 @@ func linuxNativeSessionScenario(t *testing.T, scenario string) {
 	if scenario != "abort" {
 		if owner == nil {
 			linuxTestWrite(t, client, 'S')
-			linuxTestByte(t, client, 'E')
+			linuxTestByte(t, client, 'E', supervisor.diagnostics)
 		}
 		linuxNativeWaitFile(t, filepath.Join(base, "output", "target-ready"))
 		for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(10 * time.Millisecond) {
@@ -489,6 +572,7 @@ func linuxNativeSessionScenario(t *testing.T, scenario string) {
 		_ = client.Close()
 	case "signal-and-forks":
 		linuxTestWrite(t, client, byte(unix.SIGTERM))
+		linuxTestByte(t, client, 'X', supervisor.diagnostics)
 	case "owner-loss":
 		// The last owner endpoint disappears through actual process death.
 		if err := unix.PidfdSendSignal(ownerFD, unix.SIGKILL, nil, 0); err != nil {
@@ -524,7 +608,7 @@ func linuxNativeSessionScenario(t *testing.T, scenario string) {
 		return
 	}
 	if err := supervisor.Wait(); err != nil {
-		t.Fatal(err)
+		t.Fatalf("%v\n%s", err, supervisor.diagnostics())
 	}
 	data, err := os.ReadFile(filepath.Join(root, "result"))
 	if err != nil {

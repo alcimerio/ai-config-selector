@@ -75,6 +75,7 @@ export ACS_TEST_CODEX_LINUX_ROOT="$gate_root/codex"
 run_suite containment ./internal/launch '^TestLinux' \
   TestLinuxNativeRestrictionControls TestLinuxNativeSetupFailuresNeverExec \
   TestLinuxNativeBwrapComposition TestLinuxNativePidfdDoesNotSignalUnrelatedProcess \
+  TestLinuxNativeSessionCgroupStartup \
   TestLinuxNativeContainedInitGateSignalsAndExit TestLinuxNativeMissingDelegationRefusesAllocation \
   TestLinuxNativeSessionContainment TestLinuxNativeCleanupRestoresTTYAndFlushesPendingInput \
   TestLinuxNativeRecipeStartupAndLiteralArguments TestLinuxNativeRecipeInteractiveShell \

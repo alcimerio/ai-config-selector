@@ -95,6 +95,13 @@ Job logs include host evidence and failures; per-suite logs remain in
 `$RUNNER_TEMP/acs-linux-native/*.log` for the job's lifetime. No account
 credentials are used.
 
+If a Session supervisor exits before the readiness byte `R`, the assertion now
+includes its exit status, captured stderr/stdout and failing setup stage. This
+also includes Bubblewrap/contained-init logs (or PTY output for interactive
+cases). `TestLinuxNativeSessionCgroupStartup` checks that the kill preflight
+leaves a fresh cgroup that can start a helper, then verifies kill and settlement.
+See the [Linux 6.17 startup investigation](../design/linux-session-containment.md#ownership-and-start-gate).
+
 The hosted runner's mutable kernel and user-manager delegation have **not been
 qualified**. Keep `Native Linux containment (amd64, qualification pending)`
 **out of required branch-protection checks** while this gap remains. Its failure

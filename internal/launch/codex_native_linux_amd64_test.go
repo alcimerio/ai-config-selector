@@ -80,7 +80,7 @@ func TestLinuxNativeCodexPairs(t *testing.T) {
 				cmd.Env = []string{"LANG=C", "LC_ALL=C", "ACS_TEST_CODEX_MODE=" + mode, "ACS_TEST_ROOT=" + root,
 					"ACS_TEST_CODEX_VERSION=" + pair.Version, "ACS_TEST_CODEX_LINUX_ROOT=" + installed}
 				cmd.ExtraFiles = []*os.File{client}
-				var diagnostics bytes.Buffer
+				var diagnostics linuxRecipeOutput
 				cmd.Stdout, cmd.Stderr = &diagnostics, &diagnostics
 				var master, slave *os.File
 				if mode == "interactive" {
@@ -96,14 +96,13 @@ func TestLinuxNativeCodexPairs(t *testing.T) {
 					cmd.Stdin, cmd.Stdout, cmd.Stderr = slave, slave, slave
 					cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true, Ctty: 0}
 				}
-				if err := cmd.Start(); err != nil {
-					t.Fatal(err)
-				}
-				defer func() { _ = cmd.Process.Kill(); _ = cmd.Wait() }()
+				process := linuxNativeStartCommand(t, cmd, diagnostics.String, func() string {
+					return linuxNativeReadLogs(filepath.Join(root, "output")) + linuxNativePTYDiagnostics(master)
+				})
 				_ = client.Close()
-				linuxTestByte(t, owner, 'R')
+				linuxTestByte(t, owner, 'R', process.diagnostics)
 				linuxTestWrite(t, owner, 'S')
-				linuxTestByte(t, owner, 'E')
+				linuxTestByte(t, owner, 'E', process.diagnostics)
 				if master != nil {
 					ready := []unix.PollFd{{Fd: int32(master.Fd()), Events: unix.POLLIN}}
 					if n, err := unix.Poll(ready, 10000); err != nil || n != 1 || ready[0].Revents&unix.POLLIN == 0 {
@@ -122,9 +121,9 @@ func TestLinuxNativeCodexPairs(t *testing.T) {
 					// request. Full model interaction is a later native gate.
 					linuxTestWrite(t, owner, byte(unix.SIGTERM))
 				}
-				linuxTestByte(t, owner, 'X')
-				if err := cmd.Wait(); err != nil {
-					t.Fatal("contained Codex qualification failed; inspect retained state")
+				linuxTestByte(t, owner, 'X', process.diagnostics)
+				if err := process.Wait(); err != nil {
+					t.Fatalf("contained Codex qualification failed; retained %s: %v\n%s", root, err, process.diagnostics())
 				}
 				if err := os.RemoveAll(root); err != nil {
 					t.Fatal(err)
@@ -156,6 +155,7 @@ func TestLinuxCodexSupervisorHelper(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(root, "host", "config"))
 	t.Setenv("XDG_DATA_HOME", filepath.Join(root, "host", "data"))
 	t.Setenv("XDG_STATE_HOME", filepath.Join(root, "host", "state"))
+	t.Setenv("CODEX_HOME", filepath.Join(root, "host", "codex-override"))
 	must(codexauthresource.SelectProvider(codexauthresource.ProviderFile))
 	store, err := codexauthresource.New(filepath.Join(root, "locks"), filepath.Join(root, "markers"))
 	must(err)
@@ -197,9 +197,18 @@ func TestLinuxCodexSupervisorHelper(t *testing.T) {
 	if strings.HasPrefix(mode, "status-") {
 		operation = "status"
 	}
+	decoys := map[string][]byte{}
 	if mode == "mcp" {
-		write(filepath.Join(work, ".codex", "config.toml"), []byte("[mcp_servers.project]\ncommand = \"/unselected-project-server\"\n"))
-		write(filepath.Join(home, ".codex", "config.toml"), []byte("[mcp_servers.session]\ncommand = \"/unselected-session-server\"\n"))
+		for path, name := range map[string]string{
+			filepath.Join(work, ".codex", "config.toml"):                 "project",
+			filepath.Join(home, ".codex", "config.toml"):                 "session",
+			filepath.Join(home, ".config", "codex", "config.toml"):       "xdg",
+			filepath.Join(root, "host", ".codex", "config.toml"):         "host",
+			filepath.Join(root, "host", "codex-override", "config.toml"): "override",
+		} {
+			decoys[path] = []byte("[mcp_servers." + name + "]\ncommand = \"/unselected-" + name + "-server\"\n")
+			write(path, decoys[path])
+		}
 	}
 	binary := filepath.Join(linuxCodexTestRoot(t), os.Getenv("ACS_TEST_CODEX_VERSION"), "codex")
 	f := linuxNativeFixture{base: root, wire: linuxLaunchWire{Home: home, Temporary: tmp, Directory: work, Executable: binary}}
@@ -264,6 +273,12 @@ func TestLinuxCodexSupervisorHelper(t *testing.T) {
 	}
 	if bytes.Contains(data, []byte("synthetic-access")) || bytes.Contains(data, []byte("synthetic-refresh")) {
 		t.Fatal("Codex printed credential bytes")
+	}
+	for path, original := range decoys {
+		current, err := os.ReadFile(path)
+		if err != nil || !bytes.Equal(current, original) {
+			t.Fatal("Codex changed an unselected configuration source")
+		}
 	}
 	global, err := os.ReadFile(filepath.Join(root, "host", ".codex", "auth.json"))
 	must(err)
