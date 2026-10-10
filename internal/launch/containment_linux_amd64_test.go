@@ -170,6 +170,10 @@ func TestLinuxSessionProtocolRejectsLostOwnerAndInvalidTransitions(t *testing.T)
 func TestLinuxSettlementRequiresEveryIndependentFact(t *testing.T) {
 	for _, failure := range []string{"", "kill", "wait", "pidfd", "live-leader", "reap", "live-child", "events", "populated", "remove"} {
 		t.Run(failure, func(t *testing.T) {
+			cleanup := linuxCleanupFixture(t)
+			if err := cleanup.lease.Remove(); err != nil {
+				t.Fatal(err)
+			}
 			waited := make(chan struct{})
 			if failure != "wait" {
 				close(waited)
@@ -201,6 +205,12 @@ func TestLinuxSettlementRequiresEveryIndependentFact(t *testing.T) {
 					return failure != "populated", nil
 				},
 				remove: func() error {
+					if _, err := os.Stat(cleanup.lease.RootDir); err != nil {
+						t.Fatal("Session deleted before cgroup settlement")
+					}
+					if proven, err := VerifySessionCleanupProof(cleanup.lease.RootDir, cleanup.challenge); err != nil || proven {
+						t.Fatal("proof published before cgroup removal")
+					}
 					if failure == "remove" {
 						return unix.EBUSY
 					}
@@ -211,6 +221,19 @@ func TestLinuxSettlementRequiresEveryIndependentFact(t *testing.T) {
 			err := linuxSettleSession(ops, waited, time.Now().Add(-time.Second))
 			if (err == nil) != (failure == "") || removed != (failure == "") {
 				t.Fatalf("cleanup err=%v removed=%t", err, removed)
+			}
+			finishErr := cleanup.finish(err == nil)
+			if failure == "" {
+				if finishErr != nil {
+					t.Fatal(finishErr)
+				}
+				if _, err := os.Stat(cleanup.lease.RootDir); !os.IsNotExist(err) {
+					t.Fatal("settled Session was not deleted")
+				}
+			} else if !errors.Is(finishErr, errLinuxSettlement) {
+				t.Fatal("failed settlement released Session")
+			} else if _, err := os.Stat(cleanup.lease.RootDir); err != nil {
+				t.Fatal("failed settlement deleted Session")
 			}
 		})
 	}

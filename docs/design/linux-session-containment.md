@@ -49,11 +49,11 @@ kill of the original command is only best effort after such a failure. It cannot
 turn an unsettled result into success. The caller must retain its Session when
 `Settled` is false, including when a valid target exit status was received.
 
-This is an in-memory supervisor primitive. Durable, challenge-bound recovery,
-boot/generation identity, Session lease integration, and terminal restoration
-remain roadmap item 8. In particular, abrupt loss of the outer supervisor cannot
-produce successful settlement evidence. Bubblewrap's parent-death behavior is
-defense in depth and is not accepted as cleanup proof.
+The supervisor now requires the [authenticated cleanup owner](linux-cleanup-recovery.md)
+from roadmap item 8. It binds the cgroup before start and publishes durable proof
+only after settlement and terminal restoration. Abrupt loss of the outer
+supervisor cannot produce successful settlement evidence. Bubblewrap's
+parent-death behavior is defense in depth and is not accepted as cleanup proof.
 
 ## Evidence and remaining qualification
 

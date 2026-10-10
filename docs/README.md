@@ -47,6 +47,7 @@ Devin and the fixed sandbox shell start in [Get started](guides/getting-started.
 - [Linux filesystem compiler](design/linux-filesystem-plan.md): pure mount/Landlock planning, rejection gates and remaining native proof
 - [Sealed Linux launcher](design/linux-sealed-launcher.md): test-only Bubblewrap, Landlock and seccomp boundary; production Linux remains disabled
 - [Linux Session containment](design/linux-session-containment.md): delegated cgroups, pidfds, gated supervision and remaining native qualification
+- [Linux cleanup and recovery](design/linux-cleanup-recovery.md): authenticated settlement, retained leases, quarantine and terminal restoration
 
 [Release-note sources](releases/) are reviewed version-specific records consumed
 by publication. Use [GitHub Releases](https://github.com/alcimerio/ai-config-selector/releases)
