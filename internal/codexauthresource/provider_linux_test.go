@@ -92,7 +92,7 @@ func TestLinuxProviderChoiceIsExplicitAndDurable(t *testing.T) {
 }
 
 func TestLinuxProviderFactoryNeverFallsBack(t *testing.T) {
-	for _, id := range []ProviderID{"", ProviderFile, ProviderSecretService} {
+	for _, id := range []ProviderID{"", ProviderSecretService} {
 		t.Run(string(id), func(t *testing.T) {
 			providerTestConfig(t)
 			if id != "" {

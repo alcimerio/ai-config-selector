@@ -44,10 +44,13 @@ func providerConfigDirectory() (string, error) {
 }
 
 func newCredentialProvider(id ProviderID) credentialProvider {
+	if id == ProviderFile {
+		return newFileCredentialProvider()
+	}
 	if id != ProviderFile && id != ProviderSecretService {
 		return unavailableProvider{err: ErrProviderChoice}
 	}
-	// Roadmap item 10 implements these providers after containment integration.
-	// A durable choice alone never enables a plaintext or desktop-bus backend.
+	// Secret Service has no implementation or fallback. Linux launch admission
+	// remains independently closed, including when file storage is selected.
 	return unavailableProvider{err: ErrProviderUnavailable}
 }
