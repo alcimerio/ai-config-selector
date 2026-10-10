@@ -43,6 +43,7 @@ Devin and the fixed sandbox shell start in [Get started](guides/getting-started.
 - [Testing](development/testing.md): native/portable checks, dependency scanning, authenticated smoke and research harnesses
 - [Releasing](development/releasing.md): tag preparation, immutable publication and candidate verification
 - [Native transport research](development/native-transport-research.md): opt-in probes and evidence limits
+- [Linux support design](design/linux-support.md): proposed security contract and staged implementation; Linux execution remains unsupported
 
 [Release-note sources](releases/) are reviewed version-specific records consumed
 by publication. Use [GitHub Releases](https://github.com/alcimerio/ai-config-selector/releases)
