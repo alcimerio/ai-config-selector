@@ -21,6 +21,7 @@ jobs:
       source-commit: ${{ steps.identity.outputs.source_commit }}
       tag-object: ${{ steps.identity.outputs.tag_object }}
       artifact-name: ${{ steps.artifact-name.outputs.name }}
+      linux-artifact-name: ${{ steps.artifact-name.outputs.linux_name }}
       target-artifact-name: ${{ steps.artifact-name.outputs.target_name }}
 
     steps:
@@ -62,6 +63,7 @@ jobs:
         shell: bash
         run: |
           echo "name=release-candidate-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" >>"$GITHUB_OUTPUT"
+          echo "linux_name=linux-candidate-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" >>"$GITHUB_OUTPUT"
           echo "target_name=release-codex-target-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" >>"$GITHUB_OUTPUT"
 
       - name: Upload the exact candidate artifact set
@@ -69,6 +71,15 @@ jobs:
         with:
           name: ${{ steps.artifact-name.outputs.name }}
           path: dist/release-candidate
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+
+      - name: Upload separate Linux candidate set (never published)
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.artifact-name.outputs.linux_name }}
+          path: dist/linux-candidate
           if-no-files-found: error
           compression-level: 0
           retention-days: 1
@@ -335,3 +346,15 @@ jobs:
             "${{ needs.candidate.outputs.tag-object }}" \
             dist/release-candidate \
             "docs/releases/$GITHUB_REF_NAME.md"
+
+  linux-candidate:
+    name: Stage Linux amd64 candidate only
+    needs: candidate
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    uses: ./.github/workflows/linux-candidate.yml
+    with:
+      artifact-name: ${{ needs.candidate.outputs.linux-artifact-name }}
+      version: ${{ github.ref_name }}

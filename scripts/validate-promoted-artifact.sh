@@ -6,7 +6,7 @@ LC_ALL=C
 export LC_ALL
 
 if [ "$#" -ne 5 ]; then
-  printf '%s\n' "usage: scripts/validate-promoted-artifact.sh <vMAJOR.MINOR.PATCH> <darwin> <arm64> <candidate-directory> <install-directory>" >&2
+  printf '%s\n' "usage: scripts/validate-promoted-artifact.sh <vMAJOR.MINOR.PATCH> <darwin|linux> <arm64|amd64> <candidate-directory> <install-directory>" >&2
   exit 2
 fi
 
@@ -36,6 +36,9 @@ acs_is_release_version "$candidate_version" || fail "candidate version is not a 
 
 case "$target_os/$target_arch" in
   darwin/arm64) ;;
+  linux/amd64)
+    exec sh "$(dirname "$0")/validate-linux-candidate.sh" "$candidate_version" "$candidate_directory" "$install_directory"
+    ;;
   *) fail "unsupported validation target" ;;
 esac
 

@@ -40,6 +40,9 @@ type Config struct {
 	APIBase                  string
 	Executable               string
 	PlatformOS, PlatformArch string
+	// CandidateDirectory selects an explicit local linux/amd64 candidate set.
+	// It is only used by the staging tool; production CLI updates never set it.
+	CandidateDirectory string
 }
 
 type Result struct {
@@ -107,6 +110,9 @@ func Run(ctx context.Context, current, pin string, check bool, cfg Config) (Resu
 	}
 	if cfg.PlatformArch == "" {
 		cfg.PlatformArch = runtime.GOARCH
+	}
+	if cfg.CandidateDirectory != "" {
+		return runLinuxCandidate(ctx, current, pin, check, cfg)
 	}
 	if cfg.PlatformOS != "darwin" || cfg.PlatformArch != "arm64" {
 		return out, errors.New("updates require macOS 26 on Apple Silicon")
