@@ -48,6 +48,16 @@ jobs:
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y bubblewrap
 
+      # Ubuntu 24.04 restricts unprivileged user namespaces through AppArmor by
+      # default (recorded above). This CI-only relaxation lets the containment
+      # contract itself be exercised; how ACS satisfies the restriction on a
+      # stock host (shipped AppArmor profile vs. documented admin step) is an
+      # open maintainer decision tracked in #191, and production stays disabled.
+      - name: Relax AppArmor user-namespace restriction (CI host only)
+        run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          printf 'apparmor_restrict_unprivileged_userns relaxed to 0 for this job only\n' >> "$GITHUB_STEP_SUMMARY"
+
       - name: Require delegated native containment and denial suites
         run: bash scripts/run-linux-native-gates.sh "${RUNNER_TEMP}/acs-linux-native"
 
