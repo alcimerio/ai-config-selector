@@ -54,6 +54,7 @@ return 2); consult their contextual help and
 | Run Devin | `acs devin --profile NAME` | [Target conformance](shared-target-conformance.md) |
 | Run Codex | `acs codex --profile NAME [--auth REF]` | [Interactive Codex](../guides/codex.md#interactive-launch) |
 | Manage named login | `acs codex auth login --name REF` | [Codex authentication](../guides/codex.md#named-authentication) |
+| Inspect or select credential provider | `acs codex auth provider [--select file\|secret-service\|keychain]` | Explicit durable choice; Linux launches remain unavailable |
 | Open a sandbox shell | `acs sandbox --profile NAME` | [Get started](../guides/getting-started.md) |
 | Run literal argv | `acs run --profile NAME -- COMMAND [ARG...]` | [Generic run](../guides/generic-run.md) |
 | Inspect / recover a Session | `acs session list`, `acs session inspect ID`, `acs session recover ID` | [Session operations](../guides/session-operations.md) |
@@ -63,6 +64,34 @@ Use `--help` before copying a mutation or recovery command. Remove `--dry-run`
 only when you intend that command's documented change. Declarative creation and
 import save without interactive confirmation. Deletion, restore and pruning have
 their own confirmation requirements.
+
+`acs codex auth provider` reports the selected provider. On Linux,
+`--select file` explicitly opts into private plaintext-at-rest credential storage;
+`--select secret-service` selects the future, unavailable desktop keyring provider.
+There is no automatic fallback. This command does not enable Linux launches or
+contained login/status operations.
+The choice is stored in `$XDG_CONFIG_HOME/acs/credential-provider.json`, defaulting
+to `~/.config/acs/credential-provider.json`. The ACS directory must be 0700 and
+the file 0600; unsafe ownership, symlinks, relative XDG paths and malformed records
+are rejected. Repeating a choice succeeds; switching providers is refused.
+macOS continues to use Keychain, independently of Linux configuration.
+
+The Linux file backend stores each identity under
+`$XDG_STATE_HOME/acs/credentials/` (default `~/.local/state/acs/credentials/`).
+The ACS and credentials directories must be owned by the current user with mode
+0700; each credential must be a single-link regular file with mode 0600.
+Unsafe existing permissions are rejected, not repaired. Parent directories must
+be trusted and cannot be symlinks. Reads are bounded, and writes use a private
+temporary, file sync, atomic rename and directory sync under a process-shared
+lock. It needs no desktop bus or GUI. These permissions do not isolate credentials
+from root or unrestricted processes running as the same user.
+
+The backend reuses the existing identity, refresh and quarantine contract.
+Interrupted writes may leave private `.credential-*` temporary files. They are
+never promoted or listed as identities. A failed directory sync is an uncertain
+commit and preserves quarantine; a successful rename alone is not durability
+proof. File deletion is logical removal, not secure erasure. Native Linux launch
+integration and Secret Service remain follow-up work.
 
 ## What each check proves
 
