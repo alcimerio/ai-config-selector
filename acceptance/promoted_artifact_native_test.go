@@ -3724,7 +3724,6 @@ func runFakeDevinSkills() {
 		catalog = append(catalog, map[string]string{"name": "delivery", "provider": "Agents", "base_dir": filepath.Join(os.Getenv("HOME"), ".agents", "skills", "delivery")})
 	}
 	_ = json.NewEncoder(os.Stdout).Encode(catalog)
-	return
 }
 
 func runFakeDevinAuthentication() {

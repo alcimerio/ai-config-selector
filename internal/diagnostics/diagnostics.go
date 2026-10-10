@@ -125,7 +125,7 @@ func Validate(name string, home func() (string, error)) Result {
 }
 func validateEntry(ctx context.Context, name string, home func() (string, error)) (Result, profileinspect.Entry, string) {
 	r := result("profile.validate", "")
-	inspected := profileinspect.Unavailable("show")
+	var inspected profileinspect.Result
 	directory := ""
 	if profile.ValidateName(name) != nil {
 		inspected = profileinspect.Store{}.Show(name)

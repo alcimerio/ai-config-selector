@@ -328,7 +328,8 @@ func extract(raw []byte) ([]byte, error) {
 		if e != nil {
 			return nil, errors.New("archive tar is malformed")
 		}
-		if h.Name != "acs" && h.Name != "README.md" && h.Name != "LICENSE" || seen[h.Name] || h.Typeflag != tar.TypeReg && h.Typeflag != tar.TypeRegA || h.Size < 0 || h.Size > 128<<20 {
+		// tar.Reader normalizes legacy regular-file headers to TypeReg.
+		if h.Name != "acs" && h.Name != "README.md" && h.Name != "LICENSE" || seen[h.Name] || h.Typeflag != tar.TypeReg || h.Size < 0 || h.Size > 128<<20 {
 			return nil, errors.New("archive contains unsafe entries")
 		}
 		seen[h.Name] = true

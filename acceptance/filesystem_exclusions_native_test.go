@@ -177,7 +177,6 @@ func TestPromotedArtifactNativeFilesystemExclusionCatalogs(t *testing.T) {
 				entries = append(entries, exclusionEntry("common", "directory", ".agents/skills"), exclusionEntry("native", "directory", ".devin/skills"))
 			}
 			home := exclusionCandidateHome(t, binary, workspace, "read-only", entries)
-			got := []string{}
 			want := []string{"excluded_fixture", "permitted_fixture"}
 			if scenario == "bundle" {
 				want = []string{"permitted_fixture"}
@@ -195,7 +194,7 @@ func TestPromotedArtifactNativeFilesystemExclusionCatalogs(t *testing.T) {
 			if err := json.Unmarshal(output, &rows); err != nil {
 				t.Fatalf("catalog JSON: %v %s", err, output)
 			}
-			got = nil
+			var got []string
 			for _, row := range rows {
 				if strings.HasSuffix(row.Name, "_fixture") {
 					got = append(got, row.Name)

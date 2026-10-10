@@ -273,7 +273,7 @@ func (s *devinScreen) approvalOnceMenu(server, tool string) bool {
 				return false
 			}
 			var fg, bg color.Color
-			attrs := c.Style.Attrs & 0
+			var attrs uint8
 			switch {
 			case i == 0 && (x == 1 || x == 2):
 				fg = ansi.IndexedColor(78)

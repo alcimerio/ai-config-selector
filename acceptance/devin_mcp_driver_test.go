@@ -270,14 +270,14 @@ func (d *devinDriver) fail(err error) {
 func (d *devinDriver) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if err := devinRequestMetadata(r); err != nil {
 		d.fail(err)
-		http.Error(w, "secret serialization", 409)
+		http.Error(w, "secret serialization", http.StatusConflict)
 		return
 	}
 
 	d.mu.Lock()
 	if d.failure != nil || d.phase == "" || d.ended {
 		d.mu.Unlock()
-		http.Error(w, "fixture phase unavailable", 409)
+		http.Error(w, "fixture phase unavailable", http.StatusConflict)
 		return
 	}
 	phase := d.phase
@@ -294,7 +294,7 @@ func (d *devinDriver) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer func() { d.mu.Lock(); d.active--; d.mu.Unlock() }()
 	if over {
 		d.fail(errors.New("phase HTTP request cap"))
-		http.Error(w, "request cap", 429)
+		http.Error(w, "request cap", http.StatusTooManyRequests)
 		return
 	}
 	if r.Method != "POST" || r.URL.RawQuery != "" || r.ContentLength < 0 || r.ContentLength > 1<<20 || len(r.TransferEncoding) > 0 {
@@ -310,7 +310,7 @@ func (d *devinDriver) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := devinRejectSecret(body); err != nil {
 		d.fail(err)
-		http.Error(w, "secret serialization", 409)
+		http.Error(w, "secret serialization", http.StatusConflict)
 		return
 	}
 	d.mu.Lock()
@@ -323,7 +323,7 @@ func (d *devinDriver) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	d.mu.Unlock()
 	if over {
 		d.fail(errors.New("aggregate HTTP cap"))
-		http.Error(w, "aggregate cap", 429)
+		http.Error(w, "aggregate cap", http.StatusTooManyRequests)
 		return
 	}
 	status := 501
@@ -348,20 +348,20 @@ func (d *devinDriver) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case devinModel:
 		if phase != "attached" || r.Header.Get("Content-Type") != "application/connect+proto" {
 			d.fail(errors.New("model outside attached phase or wrong type"))
-			http.Error(w, "model refused", 403)
+			http.Error(w, "model refused", http.StatusForbidden)
 			return
 		}
 		d.mu.Lock()
 		if d.models != d.modelWrites {
 			d.mu.Unlock()
 			d.fail(errors.New("overlapping model request"))
-			http.Error(w, "ordering", 409)
+			http.Error(w, "ordering", http.StatusConflict)
 			return
 		}
 		if d.submissionRequired && !d.submitAuthorized {
 			d.mu.Unlock()
 			d.fail(errors.New("model before completed Enter"))
-			http.Error(w, "submission", 409)
+			http.Error(w, "submission", http.StatusConflict)
 			return
 		}
 		d.models++
@@ -369,7 +369,7 @@ func (d *devinDriver) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		d.mu.Unlock()
 		if n > 4 {
 			d.fail(errors.New("model turn cap"))
-			http.Error(w, "model cap", 429)
+			http.Error(w, "model cap", http.StatusTooManyRequests)
 			return
 		}
 		if n == 1 {
@@ -401,7 +401,7 @@ func (d *devinDriver) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 			if d.serverProof == nil || (n < 4 && d.listingProof == nil) {
 				d.fail(errors.New("independent proof validator absent"))
-				http.Error(w, "proof", 409)
+				http.Error(w, "proof", http.StatusConflict)
 				return
 			}
 			if n < 4 {
@@ -411,13 +411,13 @@ func (d *devinDriver) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 			if e != nil {
 				d.fail(e)
-				http.Error(w, "result proof", 409)
+				http.Error(w, "result proof", http.StatusConflict)
 				return
 			}
 
 			if e = d.serverProof(n - 1); e != nil {
 				d.fail(e)
-				http.Error(w, "server proof", 409)
+				http.Error(w, "server proof", http.StatusConflict)
 				return
 			}
 		}
