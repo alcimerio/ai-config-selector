@@ -1,5 +1,7 @@
 # Restoring Linux support
 
+[Documentation index](../README.md)
+
 Status: proposed; no Linux runtime or release support is added by this document.
 Research baseline: `c5477ebb4b0115b83617cd15c1966eeb34256256`, 2026-10-09.
 Repository citations use `path:line` at that commit unless a historical ref is
