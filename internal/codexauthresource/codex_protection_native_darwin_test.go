@@ -186,7 +186,7 @@ func TestCodexPublicProductionMCPProtection(t *testing.T) {
 	}
 	configureInstalledCandidateKeychainContext(t, home, tools)
 	buildSyntheticLoginTarget(t, filepath.Join(tools, "codex"))
-	runInstalledSyntheticLogin(t, candidate, home, tools, workspace, "interactive-coding")
+	prepareInstalledSyntheticIdentity(t, candidate, home, tools, workspace, "interactive-coding")
 	assertInstalledIdentityStatus(t, candidate, home, tools, workspace, "interactive-coding")
 	os.Remove(filepath.Join(tools, "codex"))
 	executable, err := os.Executable()

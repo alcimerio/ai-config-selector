@@ -50,7 +50,7 @@ func TestNativeInstalledACSFilesystemExclusionCatalog(t *testing.T) {
 	}
 	configureInstalledCandidateKeychainContext(t, home, tools)
 	buildSyntheticLoginTarget(t, filepath.Join(tools, "codex"))
-	runInstalledSyntheticLogin(t, candidate, home, tools, workspace, "exclusion-fixture")
+	prepareInstalledSyntheticIdentity(t, candidate, home, tools, workspace, "exclusion-fixture")
 	runtimeRoot := filepath.Join(home, "targets")
 	if err := os.Mkdir(runtimeRoot, 0700); err != nil {
 		t.Fatal(err)

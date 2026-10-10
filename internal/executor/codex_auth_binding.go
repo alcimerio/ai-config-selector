@@ -98,6 +98,9 @@ func (registry *CodexAuthService) Status(ctx context.Context, value string) (Ide
 				return result, ErrBindingQuarantined
 			}
 			result.Disposition = DiscardedProjection
+			if errors.Is(err, codexauthresource.ErrIdentityUnverified) {
+				return result, err
+			}
 			return result, ErrProjectedAuthInvalid
 		}
 		_ = created.PreserveForRecovery()
@@ -188,6 +191,7 @@ func (registry *CodexAuthService) Recover(ctx context.Context, value string) (Bi
 	}
 	defer binding.Release()
 	disposition := codexauthresource.DiscardedProjection
+	var projectionErr error
 	remove := func() (bool, error) {
 		recoverSession := launch.RecoverSession
 		if binding.Prepared() {
@@ -214,7 +218,11 @@ func (registry *CodexAuthService) Recover(ctx context.Context, value string) (Bi
 		if !binding.Prepared() {
 			finalized, err := binding.FinalizeRecovery(ctx, recovered.RootDir)
 			if err != nil {
-				return false, ErrBindingQuarantined
+				if finalized == codexauthresource.DiscardedProjection && errors.Is(err, codexauthresource.ErrProjectedAuthInvalid) {
+					projectionErr = err
+				} else {
+					return false, ErrBindingQuarantined
+				}
 			}
 			disposition = finalized
 		}
@@ -230,5 +238,5 @@ func (registry *CodexAuthService) Recover(ctx context.Context, value string) (Bi
 		}
 		return QuarantinedUncertain, ErrBindingQuarantined
 	}
-	return BindingDisposition(disposition), nil
+	return BindingDisposition(disposition), projectionErr
 }

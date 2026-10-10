@@ -125,9 +125,9 @@ func runNativeInstalledACSLockedCodexFixtureWithAgent(t *testing.T, agentPresent
 	buildSyntheticLoginTarget(t, filepath.Join(tools, "codex"))
 	loginNames := []string{identities["coding"], identities["readonly"], identities["recovery"]}
 	for _, identityName := range loginNames {
-		if !t.Run("installed ACS synthetic login transaction "+identityName, func(t *testing.T) {
+		if !t.Run("installed ACS rejects unverified login "+identityName, func(t *testing.T) {
 			before := installedSessionSnapshot(t, candidate, home, tools, workspace)
-			runInstalledSyntheticLogin(t, candidate, home, tools, workspace, identityName)
+			prepareInstalledSyntheticIdentity(t, candidate, home, tools, workspace, identityName)
 			assertInstalledIdentityVisible(t, candidate, home, tools, workspace, identityName)
 			assertInstalledIdentityStatus(t, candidate, home, tools, workspace, identityName)
 			assertNewRemovedInstalledSessions(t, candidate, home, tools, workspace, before, "codex-auth")
@@ -395,7 +395,7 @@ func assertNativeCodexPathGrantOutput(t *testing.T, fixture *nativeResponsesFixt
 	}
 }
 
-func runInstalledSyntheticLogin(t *testing.T, candidate, home, tools, workspace, name string) {
+func prepareInstalledSyntheticIdentity(t *testing.T, candidate, home, tools, workspace, name string) {
 	t.Helper()
 	master, terminal, err := pty.Open()
 	if err != nil {
@@ -450,14 +450,15 @@ func runInstalledSyntheticLogin(t *testing.T, candidate, home, tools, workspace,
 	if timedOut {
 		t.Fatalf("installed ACS synthetic login timed out after corrected Keychain selection; terminal=%q; settlement=%v", output.String(), runErr)
 	}
-	if runErr != nil {
-		t.Fatalf("installed ACS synthetic login failed: %v; terminal=%q", runErr, output.String())
+	if runErr == nil {
+		t.Fatalf("installed ACS accepted unverified synthetic login; terminal=%q", output.String())
 	}
-	for _, witness := range []string{"synthetic-login-target:started", "synthetic-login-target:auth-written", `Stored Codex authentication identity "` + name + `".`} {
+	for _, witness := range []string{"synthetic-login-target:started", "synthetic-login-target:auth-written", "credentials were not saved"} {
 		if !strings.Contains(output.String(), witness) {
 			t.Fatalf("installed ACS synthetic login omitted %q; terminal=%q", witness, output.String())
 		}
 	}
+	codexauthresource.SeedTestIdentityForComposition(t, name)
 }
 
 func configureInstalledCandidateKeychainContext(t *testing.T, home, tools string) {

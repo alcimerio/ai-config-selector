@@ -3,7 +3,6 @@ package codexauthresource
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"errors"
 	"os"
 	"path/filepath"
@@ -322,7 +321,7 @@ func TestRecoveryFinalizationCommitsOnlySameIdentityEligibleRefresh(t *testing.T
 	marker := quarantineMarker{Version: recordVersion, Name: name, SessionID: filepath.Base(created.RootDirectory()), Phase: quarantineRecoverable, ProofChallenge: testCleanupProofChallenge, RefreshAllowed: true}
 	markers := &testMarkers{marker: marker, exists: true}
 	provider := &testProvider{exists: true, record: credentialRecord{Metadata: metadata, Auth: original}}
-	binding := &RecoveryBinding{store: &Store{provider: provider, markers: markers}, name: name, lock: &testLock{}, marker: marker}
+	binding := &RecoveryBinding{store: &Store{provider: provider, markers: markers, verifier: newTestIDTokenVerifier(t)}, name: name, lock: &testLock{}, marker: marker}
 	disposition, err := binding.FinalizeRecovery(context.Background(), created.RootDirectory())
 	if err != nil || disposition != CommittedSameIdentityRefresh || provider.replaceCalls != 1 || !bytes.Equal(provider.record.Auth, refreshed) {
 		t.Fatalf("recovery finalization = (%q, %v), replacements = %d", disposition, err, provider.replaceCalls)
@@ -363,7 +362,7 @@ func TestStatusProjectionCommitsOnlyEligibleSameIdentityRefresh(t *testing.T) {
 	}
 	provider := &testProvider{exists: true, record: credentialRecord{Metadata: metadata, Auth: original}}
 	markers := &testMarkers{}
-	store := &Store{provider: provider, locks: testLocker{&testLock{}}, markers: markers}
+	store := &Store{provider: provider, locks: testLocker{&testLock{}}, markers: markers, verifier: newTestIDTokenVerifier(t)}
 	binding, _, err := store.AcquireStatus(context.Background(), "work")
 	if err != nil {
 		t.Fatal(err)
@@ -434,7 +433,7 @@ func TestStatusFinalizationPreservesLastValidRecordOnInvalidOrFailedReplacement(
 		t.Run(test.name, func(t *testing.T) {
 			provider := &testProvider{exists: true, record: credentialRecord{Metadata: metadata, Auth: append([]byte(nil), original...)}, replaceErr: test.replaceErr}
 			markers := &testMarkers{}
-			store := &Store{provider: provider, locks: testLocker{&testLock{}}, markers: markers}
+			store := &Store{provider: provider, locks: testLocker{&testLock{}}, markers: markers, verifier: newTestIDTokenVerifier(t)}
 			binding, _, err := store.AcquireStatus(context.Background(), "work")
 			if err != nil {
 				t.Fatal(err)
@@ -466,7 +465,7 @@ func TestStatusFinalizationPreservesLastValidRecordOnInvalidOrFailedReplacement(
 func TestCommitLoginReadsOnlyProtectedSessionProjection(t *testing.T) {
 	name, _ := ParseCredentialRef("work")
 	provider := &testProvider{}
-	store := &Store{provider: provider, locks: testLocker{&testLock{}}, markers: &testMarkers{}}
+	store := &Store{provider: provider, locks: testLocker{&testLock{}}, markers: &testMarkers{}, verifier: newTestIDTokenVerifier(t)}
 	binding, err := store.AcquireLogin(context.Background(), string(name))
 	if err != nil {
 		t.Fatal(err)
@@ -544,7 +543,7 @@ func TestCommitLoginRejectsUnprotectedPublishedSession(t *testing.T) {
 func TestCommitLoginUsesCreateOnlyAndPreservesProviderErrorIdentity(t *testing.T) {
 	name, _ := ParseCredentialRef("work")
 	provider := &testProvider{createErr: ErrIdentityExists}
-	store := &Store{provider: provider, locks: testLocker{&testLock{}}, markers: &testMarkers{}}
+	store := &Store{provider: provider, locks: testLocker{&testLock{}}, markers: &testMarkers{}, verifier: newTestIDTokenVerifier(t)}
 	binding, err := store.AcquireLogin(context.Background(), string(name))
 	if err != nil {
 		t.Fatal(err)
@@ -638,8 +637,7 @@ func writeTestSessionAuth(t *testing.T) (string, []byte) {
 	if err := os.MkdirAll(directory, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	claims := base64.RawURLEncoding.EncodeToString([]byte(`{"sub":"user"}`))
-	auth := []byte(`{"auth_mode":"chatgpt","tokens":{"id_token":"a.` + claims + `.c","access_token":"access","refresh_token":"refresh"}}`)
+	auth := testChatGPTAuthJSON(t, "user", "workspace")
 	if err := os.WriteFile(filepath.Join(directory, "auth.json"), auth, 0o600); err != nil {
 		t.Fatal(err)
 	}

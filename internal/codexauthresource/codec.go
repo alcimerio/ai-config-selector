@@ -37,6 +37,14 @@ type idTokenClaims struct {
 }
 
 func validateAuthJSON(name CredentialRef, contents []byte) (IdentityMetadata, error) {
+	metadata, err := validateAuthJSONWith(name, contents, parseIDToken)
+	if err != nil {
+		return IdentityMetadata{}, ErrUnsupportedAuth
+	}
+	return metadata, nil
+}
+
+func validateAuthJSONWith(name CredentialRef, contents []byte, claimsFor func(string) (idTokenClaims, error)) (IdentityMetadata, error) {
 	if len(contents) == 0 || len(contents) > maximumAuthJSONSize {
 		return IdentityMetadata{}, ErrUnsupportedAuth
 	}
@@ -101,9 +109,9 @@ func validateAuthJSON(name CredentialRef, contents []byte) (IdentityMetadata, er
 		return IdentityMetadata{}, ErrUnsupportedAuth
 	}
 
-	claims, err := parseIDToken(tokens.IDToken)
+	claims, err := claimsFor(tokens.IDToken)
 	if err != nil {
-		return IdentityMetadata{}, ErrUnsupportedAuth
+		return IdentityMetadata{}, err
 	}
 	userID := claims.Subject
 	workspace := ""
@@ -115,11 +123,10 @@ func validateAuthJSON(name CredentialRef, contents []byte) (IdentityMetadata, er
 		}
 		workspace = claims.Auth.ChatGPTAccountID
 	}
-	if tokens.AccountID != nil && *tokens.AccountID != "" {
-		if workspace != "" && workspace != *tokens.AccountID {
+	if tokens.AccountID != nil {
+		if workspace != *tokens.AccountID {
 			return IdentityMetadata{}, ErrUnsupportedAuth
 		}
-		workspace = *tokens.AccountID
 	}
 	if userID == "" {
 		return IdentityMetadata{}, ErrUnsupportedAuth

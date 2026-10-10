@@ -42,6 +42,7 @@ type Store struct {
 	provider credentialProvider
 	locks    identityLocker
 	markers  bindingQuarantine
+	verifier *idTokenVerifier
 }
 
 // Binding retains one identity lock and, for Status, the validated durable
@@ -83,7 +84,7 @@ func New(locksDirectory, quarantineDirectory string) (*Store, error) {
 	if locks.initErr != nil || markers.initErr != nil {
 		return nil, ErrProviderUnavailable
 	}
-	return &Store{provider: newKeychainProvider(), locks: locks, markers: markers}, nil
+	return &Store{provider: newKeychainProvider(), locks: locks, markers: markers, verifier: newIDTokenVerifier(fetchOpenAIJWKS)}, nil
 }
 
 func (store *Store) acquire(ctx context.Context, name CredentialRef, allowMarker bool) (*Binding, error) {
@@ -485,9 +486,15 @@ func (binding *RecoveryBinding) FinalizeRecovery(ctx context.Context, root strin
 		return DiscardedProjection, nil
 	}
 	defer ClearBytes(projected)
-	metadata, err := ValidateAuthJSON(binding.name, projected)
-	if err != nil || metadata != record.Metadata || bytes.Equal(projected, record.Auth) {
+	if bytes.Equal(projected, record.Auth) {
 		return DiscardedProjection, nil
+	}
+	metadata, err := binding.store.verifyAuthJSON(ctx, binding.name, projected)
+	if err != nil {
+		return DiscardedProjection, errors.Join(ErrProjectedAuthInvalid, err)
+	}
+	if metadata != record.Metadata {
+		return DiscardedProjection, ErrProjectedAuthInvalid
 	}
 	if err := binding.store.provider.Replace(ctx, credentialRecord{Metadata: metadata, Auth: projected}); err != nil {
 		return QuarantinedUncertain, ErrBindingQuarantined
@@ -542,7 +549,7 @@ func (binding *Binding) CommitLogin(ctx context.Context, root string) (IdentityM
 		return IdentityMetadata{}, ErrUnsupportedAuth
 	}
 	defer ClearBytes(auth)
-	metadata, err := ValidateAuthJSON(binding.name, auth)
+	metadata, err := binding.store.verifyAuthJSON(ctx, binding.name, auth)
 	if err != nil {
 		return IdentityMetadata{}, err
 	}
@@ -570,12 +577,15 @@ func (binding *Binding) FinalizeStatus(ctx context.Context, root string) (Bindin
 		return DiscardedProjection, ErrProjectedAuthInvalid
 	}
 	defer ClearBytes(projected)
-	metadata, err := ValidateAuthJSON(binding.name, projected)
-	if err != nil || metadata != binding.record.Metadata {
-		return DiscardedProjection, ErrProjectedAuthInvalid
-	}
 	if bytes.Equal(projected, binding.record.Auth) {
 		return DiscardedProjection, nil
+	}
+	metadata, err := binding.store.verifyAuthJSON(ctx, binding.name, projected)
+	if err != nil {
+		return DiscardedProjection, errors.Join(ErrProjectedAuthInvalid, err)
+	}
+	if metadata != binding.record.Metadata {
+		return DiscardedProjection, ErrProjectedAuthInvalid
 	}
 	if err := binding.store.provider.Replace(ctx, credentialRecord{Metadata: metadata, Auth: projected}); err != nil {
 		return QuarantinedUncertain, ErrBindingQuarantined
