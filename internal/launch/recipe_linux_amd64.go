@@ -83,6 +83,12 @@ func linuxCompileRecipe(admission linuxRecipeAdmission, kind linuxRecipeKind, re
 	if err != nil {
 		return linuxRecipe{}, err
 	}
+	if kind == linuxCodexRecipe {
+		request, err = linuxCodexConfigurationRequest(request, tree)
+		if err != nil {
+			return linuxRecipe{}, err
+		}
+	}
 	var denied []string
 	for _, exclusion := range request.filesystemExclusions {
 		denied = append(denied, exclusion.path, exclusion.logicalPath)
@@ -106,12 +112,18 @@ func linuxCompileRecipe(admission linuxRecipeAdmission, kind linuxRecipeKind, re
 	if err != nil {
 		return linuxRecipe{}, errors.Join(errLinuxRecipe, err)
 	}
+	if kind == linuxCodexRecipe {
+		linuxAddCodexConfiguration(&plan, request.sessionHome)
+	}
 	if linuxAddRuntimeAliases(&plan, files, denied) != nil {
 		return linuxRecipe{}, errLinuxRecipe
 	}
 	wire := linuxLaunchWire{Version: 1, Executable: executable,
 		Argv: append([]string{executable}, request.arguments...), Home: request.sessionHome,
 		Temporary: request.temporaryDirectory, Directory: request.workspace}
+	if kind == linuxCodexRecipe {
+		wire.CodexHome = filepath.Join(request.sessionHome, ".codex")
+	}
 	for _, rule := range plan.rules {
 		wire.Rules = append(wire.Rules, linuxWireRule{rule.path, rule.access})
 	}

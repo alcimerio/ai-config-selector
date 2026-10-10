@@ -41,12 +41,8 @@ func linuxSuperviseSession(ctx context.Context, owner *os.File, child linuxSuper
 		return result, linuxStepError(errLinuxSettlement, "missing Session cleanup", nil)
 	}
 	defer func() {
-		if err := child.cleanup.finish(result.Settled); err != nil {
-			result.Settled = false
-			resultErr = errors.Join(resultErr, linuxStepError(errLinuxSettlement, "publish Session cleanup proof", err))
-		}
+		result, resultErr = linuxFinishSession(owner, child.cleanup, result, resultErr)
 	}()
-	defer owner.Close()
 	defer child.status.Close()
 	defer child.control.Close()
 	// These may have arrived through ExtraFiles in this supervisor. Only the
@@ -145,6 +141,23 @@ func linuxSuperviseSession(ctx context.Context, owner *os.File, child linuxSuper
 	}
 	result.Status, result.Exited = status, true
 	return result, nil
+}
+
+// The contained init's X reports only target exit. The owner must not receive
+// its final X until the entire cgroup is settled, the terminal is restored, and
+// the authenticated cleanup proof is durable. Keep the owner open until then.
+func linuxFinishSession(owner *os.File, cleanup *linuxSessionCleanup, result linuxSessionResult, resultErr error) (linuxSessionResult, error) {
+	defer owner.Close()
+	if err := cleanup.finish(result.Settled); err != nil {
+		result.Settled = false
+		resultErr = errors.Join(resultErr, linuxStepError(errLinuxSettlement, "publish Session cleanup proof", err))
+	}
+	if resultErr == nil && result.Exited && result.Settled {
+		if _, err := owner.Write([]byte{'X'}); err != nil {
+			resultErr = linuxStepError(errLinuxContainment, "write owner settlement report", err)
+		}
+	}
+	return result, resultErr
 }
 
 func linuxBecomeSubreaper() error {
@@ -250,6 +263,7 @@ func linuxSessionProtocol(ctx context.Context, owner, status, control *os.File, 
 				state = 3
 				timer.Stop()
 			case m.code == 'X' && state == 3 && linuxTerminalStatus(m.status):
+				// The supervisor reports completion to the owner after cleanup.
 				return m.status, nil
 			default:
 				return 0, failure(fmt.Sprintf("unexpected contained-init byte %q", m.code), nil)

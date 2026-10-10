@@ -44,6 +44,15 @@ actual target wait status. Interrupt, terminate, hangup, quit, and window-change
 signals travel through this private channel to the target's pidfd. Bubblewrap's
 encoded shell exit code is not used to reconstruct target signal status.
 
+The init's `X` frame ends target-status collection; it is not forwarded as a
+settlement report. The outer supervisor keeps the owner channel open through
+cgroup cleanup, terminal restoration and durable proof publication, then sends
+the owner's final `X` byte. Failed settlement or proof publication closes the
+channel without that success byte. Previously the status reader consumed `X`
+and returned without any final owner report, so successful recipe helpers exited
+zero while their callers received EOF. The direct-init and result-file tests did
+not assert this outer report; recipe and target qualification now share it.
+
 ## Settlement and failure
 
 Target completion, owner-channel EOF, cancellation, malformed frames, and setup

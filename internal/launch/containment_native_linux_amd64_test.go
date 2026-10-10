@@ -572,6 +572,7 @@ func linuxNativeSessionScenario(t *testing.T, scenario string) {
 		_ = client.Close()
 	case "signal-and-forks":
 		linuxTestWrite(t, client, byte(unix.SIGTERM))
+		linuxTestByte(t, client, 'X', supervisor.diagnostics)
 	case "owner-loss":
 		// The last owner endpoint disappears through actual process death.
 		if err := unix.PidfdSendSignal(ownerFD, unix.SIGKILL, nil, 0); err != nil {
