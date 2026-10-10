@@ -1,0 +1,52 @@
+name: Bug report
+description: Report an ACS bug on macOS.
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not paste secrets, email addresses, private paths, environment values,
+        Session contents, target output, or generated Seatbelt policy. Use
+        synthetic examples and sanitized text.
+
+        For vulnerabilities, follow [SECURITY.md](https://github.com/alcimerio/ai-config-selector/blob/main/SECURITY.md#reporting-a-vulnerability)
+        to report privately. Do not include vulnerability details in a public issue.
+
+  - type: input
+    id: acs-version
+    attributes:
+      label: ACS version
+      description: The output of `acs version`, or the commit for a source build.
+    validations:
+      required: true
+
+  - type: input
+    id: macos-version
+    attributes:
+      label: macOS version
+      description: Include the macOS version and architecture, such as macOS 26 on Apple Silicon.
+    validations:
+      required: true
+
+  - type: input
+    id: agent
+    attributes:
+      label: Agent
+      description: Agent name and version, or generic command if no agent is involved.
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Give numbered steps using synthetic data and sanitized command arguments.
+    validations:
+      required: true
+
+  - type: textarea
+    id: behavior
+    attributes:
+      label: Expected and actual behavior
+      description: Describe what you expected and what happened. Include only sanitized errors.
+    validations:
+      required: true

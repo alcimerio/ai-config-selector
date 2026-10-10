@@ -197,7 +197,8 @@ func verifyArchive(path, goos, goarch, version string) error {
 			return fmt.Errorf("duplicate entry %q", header.Name)
 		}
 		seen[header.Name] = true
-		if header.Typeflag != tar.TypeReg && header.Typeflag != tar.TypeRegA {
+		// tar.Reader normalizes legacy regular-file headers to TypeReg.
+		if header.Typeflag != tar.TypeReg {
 			return fmt.Errorf("entry %q is not a regular file", header.Name)
 		}
 		if header.Uid != 0 || header.Gid != 0 || (header.Uname != "" && header.Uname != "root") || (header.Gname != "" && header.Gname != "root") {

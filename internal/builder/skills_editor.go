@@ -277,9 +277,9 @@ func bundleMatch(bundle skills.SkillBundle, query string) (int, int, bool) {
 }
 
 func fuzzyScore(value, query string) (int, bool) {
-	valueRunes, queryRunes := []rune(strings.ToLower(value)), []rune(strings.ToLower(query))
+	valueRunes := []rune(strings.ToLower(value))
 	position, score := 0, 0
-	for _, character := range queryRunes {
+	for _, character := range strings.ToLower(query) {
 		next := -1
 		for index := position; index < len(valueRunes); index++ {
 			if valueRunes[index] == character {

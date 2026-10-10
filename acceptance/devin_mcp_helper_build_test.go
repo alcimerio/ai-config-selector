@@ -69,7 +69,7 @@ func goLinkerFlags(values map[string]string, keys []string) ([]string, error) {
 func TestBuildDevinResearchHelpersAcceptGoLinkerQuotedValues(t *testing.T) {
 	for _, relative := range []string{"devin-native-mcp-server", "devin-trampoline"} {
 		t.Run(relative, func(t *testing.T) {
-			values := map[string]string{}
+			var values map[string]string
 			if relative == "devin-native-mcp-server" {
 				values = map[string]string{
 					"forbiddenPath": filepath.Join(t.TempDir(), `ordinary path with spaces`),

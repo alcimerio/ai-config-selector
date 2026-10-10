@@ -43,7 +43,7 @@ jobs:
         run: |
           status=0
           pids=()
-          for shard in 1 2 3 4; do
+          for _ in 1 2 3 4; do
             go test -count=50 ./internal/launch \
               -run '^TestSeatbeltConvergesAcrossForkingAndZombieDescendants/zombie-parent$' &
             pids+=("$!")
@@ -161,6 +161,7 @@ jobs:
 
   verify:
     name: Verify (macOS)
+    permissions: {}
     needs: [verify-unit, verify-race]
     # Keep the required context stable while the normal and race suites run
     # in parallel. Inspect unsuccessful dependencies instead of skipping this
