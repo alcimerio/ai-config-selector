@@ -130,6 +130,12 @@ func linuxRunRecipe(ctx context.Context, admission linuxRecipeAdmission, recipe 
 	if !admission.experimental {
 		return result, unsupportedPlatformError("linux")
 	}
+	step := "validate Session cleanup"
+	defer func() {
+		if resultErr != nil {
+			resultErr = linuxStepError(errLinuxRecipe, "recipe: "+step, resultErr)
+		}
+	}()
 	if cleanup == nil || cleanup.lease == nil || cleanup.lease.RootDir != recipe.session {
 		return result, errLinuxSettlement
 	}
@@ -142,47 +148,62 @@ func linuxRunRecipe(ctx context.Context, admission linuxRecipeAdmission, recipe 
 			resultErr = errors.Join(resultErr, cleanupErr)
 		}
 	}()
+	step = "validate helper and launch transport"
 	if owner == nil || helper == nil || recipe.wire.validate() != nil {
 		return result, errLinuxRecipe
 	}
 	// Auth must come exclusively from the selected file projection. The initial
 	// Codex recipe admits no environment overrides (including API tokens,
 	// CODEX_HOME, proxy endpoints, or a desktop bus).
+	step = "validate Codex environment"
 	if recipe.codex && (env == nil || !env.Empty()) {
 		return result, errLinuxRecipe
 	}
+	step = "validate stdio mode"
 	interactive, err := linuxRecipeStdioMode(stdio)
 	if err != nil || interactive != recipe.interactive {
 		return result, errLinuxRecipe
 	}
-	if !linuxprobe.Probe(ctx).PrerequisitesPassed() {
-		return result, errLinuxRecipe
+	step = "probe native prerequisites"
+	if report := linuxprobe.Probe(ctx); !report.PrerequisitesPassed() {
+		var failures []error
+		for _, check := range report.Checks {
+			if check.Status != "pass" {
+				failures = append(failures, errors.New(check.ID+": "+check.Code))
+			}
+		}
+		return result, errors.Join(failures...)
 	}
 	if recipe.interactive {
+		step = "configure terminal"
 		terminal, err := linuxRecipeTerminal(stdio, cleanup.terminal)
 		if err != nil {
 			return result, err
 		}
 		recipe.wire.Terminal = terminal
 	}
+	step = "create status pipe"
 	status, report, err := os.Pipe()
 	if err != nil {
 		return result, errLinuxRecipe
 	}
 	defer status.Close()
 	defer report.Close()
+	step = "create control pipe"
 	control, gate, err := os.Pipe()
 	if err != nil {
 		return result, errLinuxRecipe
 	}
 	defer control.Close()
 	defer gate.Close()
+	step = "prepare Bubblewrap"
 	prepared, err := linuxPrepareBwrap(ctx, recipe.plan, recipe.wire, env, helper, report, control, stdio, helperArgs)
 	if err != nil {
 		return result, err
 	}
 	defer prepared.close()
 	supervised = true
+	step = "supervise Session"
 	return linuxSuperviseSession(ctx, owner, linuxSupervisedCommand{
 		command: prepared.command, status: status, control: gate,
 		childEnds: []*os.File{report, control}, cleanup: cleanup,

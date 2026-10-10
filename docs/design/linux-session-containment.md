@@ -18,6 +18,17 @@ and requires empty membership and a working kill control before starting a child
 Missing delegation rejects the launch. No existing processes are migrated and no
 systemd-owned ancestor is modified. Child cgroup creation is disabled at the leaf.
 
+The kill preflight uses a disposable sibling, which is removed before allocating
+the fresh Session leaf. It never writes `cgroup.kill` in the leaf before placing
+the child there. In the [Linux 6.17 implementation](https://github.com/torvalds/linux/blob/v6.17/kernel/cgroup/cgroup.c),
+even killing an empty cgroup increments its kill sequence. `cgroup_css_set_fork`
+can capture the source cgroup's sequence before selecting the destination, and
+`cgroup_post_fork` compares it to the destination's sequence. A pre-killed leaf
+can therefore cause the atomically placed child to receive SIGKILL before exec.
+The prerequisite probe and the earlier Bubblewrap composition fixture placed
+their children before killing, so they did not exercise this startup failure.
+The separate preflight preserves the real kill check without reusing that group.
+
 The reviewed Bubblewrap command starts atomically with `CLONE_INTO_CGROUP` and
 `CLONE_PIDFD`. There is no numeric-PID placement interval or process-group
 fallback. Bubblewrap supplies PID 1 and a private `/proc`; the trusted helper
@@ -70,6 +81,29 @@ uses the real system Bubblewrap, compiled filesystem plan, Landlock/seccomp, and
 per-Session delegation. It exercises fork/setsid and double-fork descendants,
 membership, owner process death, unrelated-process survival, and cgroup removal
 after completion or pre-start abort.
+
+`TestLinuxNativeSessionCgroupStartup` separately requires a helper to reach
+readiness after the real allocation/kill preflight with atomic cgroup placement
+and a pidfd. It then checks membership, cgroup kill, SIGKILL status, pidfd death,
+empty membership and removal. This regression still requires native delegation;
+unit tests are not evidence that it passes on the qualification runner.
+
+Native protocol assertions collect the supervisor's completed exit status and
+stderr/stdout, including the contained helper's log or PTY output. Setup errors
+identify the allocation, cleanup-binding, clone, membership or protocol step and
+preserve syscall errors. The raw restricted child sends only a fixed stage code
+and errno on its private failure channel; it still exits without entering Go or
+executing the target. EOF before `R` now includes these diagnostics rather than
+hiding the helper's error behind the protocol mismatch.
+
+For the #191 runner evidence, an empty scope `cgroup.subtree_control` does not
+trigger the [no-internal-process constraint](https://docs.kernel.org/admin-guide/cgroup-v2.html#no-internal-process-constraint):
+that constraint applies when distributing domain controllers. The Session uses
+core membership/kill controls and does not enable controllers or move the scope's
+existing processes. The passed probes also exercised user namespaces, pidfds and
+Bubblewrap; redirected stdio and static helpers have their own passing primitive
+tests. Those observations narrow the investigation but do not replace a rerun
+of the complete Session tests on the affected host.
 
 Run with `CGO_ENABLED=0 go test ./internal/launch -run 'LinuxNative' -v`.
 Unavailable native prerequisites skip with a reason only when

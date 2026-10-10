@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"debug/elf"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -483,13 +484,17 @@ func linuxRunNativeFixture(t *testing.T, f linuxNativeFixture, mode string, comp
 	} else if mode == "" && start == 'S' {
 		_ = cmd.Process.Kill()
 	}
+	var boundaryErr error
+	if n == 1 && receipt[0] == 'E' {
+		boundaryErr = linuxReadRestrictedFailure(statusRead)
+	}
 	waitErr := cmd.Wait()
 	_, _ = output.Seek(0, io.SeekStart)
 	data, _ := io.ReadAll(io.LimitReader(output, 16384))
 	if mode == "" && start == 'S' && (n != 0 || readErr != io.EOF) {
 		t.Fatalf("missing sealed/exec receipt: n=%d err=%v output=%s", n, readErr, data)
 	}
-	return string(data), waitErr
+	return string(data), errors.Join(waitErr, boundaryErr)
 }
 
 func TestLinuxNativeRestrictionControls(t *testing.T) {
@@ -538,6 +543,13 @@ func TestLinuxNativeSetupFailuresNeverExec(t *testing.T) {
 			data, err := linuxRunNativeFixture(t, f, helperMode, false, false, start)
 			if err == nil {
 				t.Fatalf("setup failure succeeded: %s", data)
+			}
+			if step := map[string]string{
+				"-bad-landlock": "landlock_restrict_self", "-bad-seccomp": "seccomp",
+				"-deny-prctl": "PR_SET_NO_NEW_PRIVS", "-deny-capset": "capset",
+				"-deny-close-range": "close_range", "-deny-dup3": "dup3 status",
+			}[mode]; step != "" && !strings.Contains(err.Error(), "restricted child: "+step) {
+				t.Fatalf("setup failure lost its syscall stage: %v", err)
 			}
 			if _, err := os.Stat(filepath.Join(f.base, "output", "started")); !os.IsNotExist(err) {
 				t.Fatal("untrusted target started during failed setup")

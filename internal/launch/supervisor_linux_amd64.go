@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -37,12 +38,12 @@ type linuxSupervisedCommand struct {
 // wide. There is deliberately no production CLI entry point or backend yet.
 func linuxSuperviseSession(ctx context.Context, owner *os.File, child linuxSupervisedCommand) (result linuxSessionResult, resultErr error) {
 	if child.cleanup == nil {
-		return result, errLinuxSettlement
+		return result, linuxStepError(errLinuxSettlement, "missing Session cleanup", nil)
 	}
 	defer func() {
-		if child.cleanup.finish(result.Settled) != nil {
+		if err := child.cleanup.finish(result.Settled); err != nil {
 			result.Settled = false
-			resultErr = errors.Join(resultErr, errLinuxSettlement)
+			resultErr = errors.Join(resultErr, linuxStepError(errLinuxSettlement, "publish Session cleanup proof", err))
 		}
 	}()
 	defer owner.Close()
@@ -59,8 +60,11 @@ func linuxSuperviseSession(ctx context.Context, owner *os.File, child linuxSuper
 		}
 	}
 	defer closeChildEnds()
-	if child.command.Process != nil || child.command.SysProcAttr != nil || linuxBecomeSubreaper() != nil {
-		return result, errLinuxContainment
+	if child.command.Process != nil || child.command.SysProcAttr != nil {
+		return result, linuxStepError(errLinuxContainment, "supervisor requires an unstarted command without process attributes", nil)
+	}
+	if err := linuxBecomeSubreaper(); err != nil {
+		return result, err
 	}
 	g, err := linuxNewSessionCgroup()
 	if err != nil {
@@ -70,9 +74,9 @@ func linuxSuperviseSession(ctx context.Context, owner *os.File, child linuxSuper
 		return result, err
 	}
 	defer g.close()
-	if child.cleanup.bindCgroup(g) != nil {
+	if err := child.cleanup.bindCgroup(g); err != nil {
 		_ = g.remove()
-		return result, errLinuxSettlement
+		return result, linuxStepError(errLinuxSettlement, "bind Session cleanup to cgroup", err)
 	}
 	pidfd := -1
 	child.command.SysProcAttr = &syscall.SysProcAttr{UseCgroupFD: true, CgroupFD: int(g.directory.Fd()), PidFD: &pidfd}
@@ -86,15 +90,22 @@ func linuxSuperviseSession(ctx context.Context, owner *os.File, child linuxSuper
 		} else {
 			resultErr = errLinuxSettlement
 		}
-		return result, errors.Join(errLinuxContainment, resultErr)
+		return result, errors.Join(linuxStepError(errLinuxContainment, "start Bubblewrap with CLONE_INTO_CGROUP and CLONE_PIDFD", err), resultErr)
 	}
 	closeChildEnds()
 	waited := make(chan struct{})
+	var waitErr error
 	go func() {
-		_ = child.command.Wait()
+		waitErr = child.command.Wait()
 		close(waited)
 	}()
 	defer func() {
+		exitedBeforeCleanup := false
+		select {
+		case <-waited:
+			exitedBeforeCleanup = true
+		default:
+		}
 		_ = child.control.Close()
 		result.Settled = linuxSettleSession(linuxSettlementOps{
 			kill: g.terminate, empty: g.empty, remove: g.remove,
@@ -111,13 +122,21 @@ func linuxSuperviseSession(ctx context.Context, owner *os.File, child linuxSuper
 		if pidfd >= 0 {
 			_ = unix.Close(pidfd)
 		}
+		if resultErr != nil {
+			select {
+			case <-waited:
+				resultErr = fmt.Errorf("%w; Bubblewrap reaped before cleanup=%t; exit=%v; wait=%v", resultErr, exitedBeforeCleanup, child.command.ProcessState, waitErr)
+			default:
+				resultErr = fmt.Errorf("%w; Bubblewrap exit unavailable after cleanup", resultErr)
+			}
+		}
 	}()
 	if pidfd < 0 {
-		return result, errLinuxContainment
+		return result, linuxStepError(errLinuxContainment, "CLONE_PIDFD returned no pidfd", nil)
 	}
 	status, err := linuxSessionProtocol(ctx, owner, child.status, child.control, func() error {
 		if err := unix.PidfdSendSignal(pidfd, 0, nil, 0); err != nil {
-			return errLinuxContainment
+			return linuxStepError(errLinuxContainment, "verify Bubblewrap pidfd before readiness", err)
 		}
 		return g.contains(child.command.Process.Pid)
 	})
@@ -129,12 +148,12 @@ func linuxSuperviseSession(ctx context.Context, owner *os.File, child linuxSuper
 }
 
 func linuxBecomeSubreaper() error {
-	if unix.Prctl(unix.PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) != nil {
-		return errLinuxContainment
+	if err := unix.Prctl(unix.PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0); err != nil {
+		return linuxStepError(errLinuxContainment, "PR_SET_CHILD_SUBREAPER", err)
 	}
 	var enabled int32
-	if unix.Prctl(unix.PR_GET_CHILD_SUBREAPER, uintptr(unsafe.Pointer(&enabled)), 0, 0, 0) != nil || enabled != 1 {
-		return errLinuxContainment
+	if err := unix.Prctl(unix.PR_GET_CHILD_SUBREAPER, uintptr(unsafe.Pointer(&enabled)), 0, 0, 0); err != nil || enabled != 1 {
+		return linuxStepError(errLinuxContainment, "verify PR_GET_CHILD_SUBREAPER", err)
 	}
 	return nil
 }
@@ -195,32 +214,36 @@ func linuxSessionProtocol(ctx context.Context, owner, status, control *os.File, 
 	timer := time.NewTimer(linuxContainmentTimeout)
 	defer timer.Stop()
 	state := 0 // preparing, ready, authorized, executing
+	failure := func(step string, cause error) error {
+		stage := []string{"before readiness R", "awaiting start S", "awaiting exec E", "executing"}[state]
+		return linuxStepError(errLinuxContainment, "Session protocol "+stage+": "+step, cause)
+	}
 	for {
 		select {
 		case <-ctx.Done():
-			return 0, errLinuxContainment
+			return 0, failure("context canceled", ctx.Err())
 		case <-timer.C:
-			return 0, errLinuxContainment
+			return 0, failure("timeout", context.DeadlineExceeded)
 		case m := <-requests:
 			if m.err != nil {
-				return 0, errLinuxContainment // owner loss, including before start
+				return 0, failure("read owner", m.err) // owner loss, including before start
 			}
 			if m.code == 'S' && state == 1 {
 				state = 2
 			} else if _, ok := linuxForwardedSignal(m.code); !ok || state != 3 {
-				return 0, errLinuxContainment
+				return 0, failure(fmt.Sprintf("unexpected owner byte %q", m.code), nil)
 			}
 			if _, err := control.Write([]byte{m.code}); err != nil {
-				return 0, errLinuxContainment
+				return 0, failure("write contained-init control", err)
 			}
 		case m := <-reports:
 			if m.err != nil {
-				return 0, errLinuxContainment
+				return 0, failure("read contained-init status", m.err)
 			}
 			switch {
 			case m.code == 'R' && state == 0:
-				if member() != nil {
-					return 0, errLinuxContainment
+				if err := member(); err != nil {
+					return 0, failure("verify cgroup membership", err)
 				}
 				state = 1
 			case m.code == 'E' && state == 2:
@@ -229,10 +252,10 @@ func linuxSessionProtocol(ctx context.Context, owner, status, control *os.File, 
 			case m.code == 'X' && state == 3 && linuxTerminalStatus(m.status):
 				return m.status, nil
 			default:
-				return 0, errLinuxContainment
+				return 0, failure(fmt.Sprintf("unexpected contained-init byte %q", m.code), nil)
 			}
 			if _, err := owner.Write([]byte{m.code}); err != nil {
-				return 0, errLinuxContainment
+				return 0, failure("write owner", err)
 			}
 		}
 	}

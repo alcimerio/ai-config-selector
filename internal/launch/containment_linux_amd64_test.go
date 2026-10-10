@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -27,12 +28,23 @@ func linuxTestSocketpair(t *testing.T) (*os.File, *os.File) {
 	return a, b
 }
 
-func linuxTestByte(t *testing.T, f *os.File, want byte) {
+func linuxTestByte(t *testing.T, f *os.File, want byte, diagnostics ...func() string) {
 	t.Helper()
-	var b [1]byte
-	if _, err := io.ReadFull(f, b[:]); err != nil || b[0] != want {
-		t.Fatalf("protocol byte: %q, %v; want %q", b, err, want)
+	if err := linuxReadTestByte(f, want, diagnostics...); err != nil {
+		t.Fatal(err)
 	}
+}
+
+func linuxReadTestByte(reader io.Reader, want byte, diagnostics ...func() string) error {
+	var b [1]byte
+	if _, err := io.ReadFull(reader, b[:]); err != nil || b[0] != want {
+		message := fmt.Sprintf("protocol byte: %q, %v; want %q", b, err, want)
+		for _, diagnostic := range diagnostics {
+			message += "\n" + diagnostic()
+		}
+		return errors.New(message)
+	}
+	return nil
 }
 
 func linuxTestWrite(t *testing.T, f *os.File, data ...byte) {

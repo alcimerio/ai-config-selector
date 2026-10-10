@@ -186,9 +186,11 @@ func linuxPrepareBwrap(ctx context.Context, plan linuxFilesystemPlan, wire linux
 func linuxPrepareBwrapWith(ctx context.Context, plan linuxFilesystemPlan, wire linuxLaunchWire, env *environmentresource.Lease,
 	helper, status, gate *os.File, stdio [3]*os.File, helperArgs []string, openBwrap func() (*os.File, error)) (_ *linuxBwrapLaunch, resultErr error) {
 	p := &linuxBwrapLaunch{}
+	step := "validate filesystem plan and transport"
 	defer func() {
 		if resultErr != nil {
 			p.close()
+			resultErr = linuxStepError(errLinuxSeal, "prepare Bubblewrap: "+step, resultErr)
 		}
 	}()
 	if helper == nil || status == nil || gate == nil || wire.validate() != nil || plan.handledAccess != linuxHandledFilesystem || plan.scoped != 3 ||
@@ -211,23 +213,27 @@ func linuxPrepareBwrapWith(ctx context.Context, plan linuxFilesystemPlan, wire l
 		wire.Rules = append(wire.Rules, linuxWireRule{path, linuxReadFile | linuxWriteFile})
 	}
 	wire.Rules = append(wire.Rules, linuxWireRule{"/dev/pts", linuxReadTree | linuxWriteFile | unix.LANDLOCK_ACCESS_FS_IOCTL_DEV})
+	step = "seal launch transport"
 	transport, err := linuxWriteTransport(wire, env)
 	if err != nil {
 		return nil, err
 	}
 	p.owned = append(p.owned, transport)
+	step = "open trusted system Bubblewrap"
 	bwrap, err := openBwrap()
 	if err != nil {
-		return nil, errLinuxSeal
+		return nil, err
 	}
 	p.owned = append(p.owned, bwrap)
 	var filter bytes.Buffer
 	_ = binary.Write(&filter, binary.LittleEndian, linuxSeccompFilterForSetup(wire.Terminal != nil))
+	step = "seal setup seccomp filter"
 	seccomp, err := linuxSealedMemfd(filter.Bytes())
 	if err != nil {
 		return nil, err
 	}
 	p.owned = append(p.owned, seccomp)
+	step = "pin stdio"
 	pins, err := linuxPinStdio(stdio)
 	if err != nil {
 		return nil, err
@@ -239,6 +245,7 @@ func linuxPrepareBwrapWith(ctx context.Context, plan linuxFilesystemPlan, wire l
 		"--disable-userns", "--die-with-parent", "--new-session", "--cap-drop", "ALL", "--clearenv",
 		"--tmpfs", "/", "--dev", "/dev", "--proc", "/proc", "--ro-bind", "/proc/self/fd/8", "/.acs-launcher"}
 	for i, mount := range plan.mounts {
+		step = "pin mount " + mount.destination
 		if mount.kind == linuxMountSealRoot || i == 0 && mount.kind == linuxMountDirectory && mount.destination == "/" {
 			continue
 		}

@@ -1,6 +1,7 @@
 package launch
 
 import (
+	"fmt"
 	"runtime"
 	"strings"
 	"unsafe"
@@ -28,13 +29,17 @@ func linuxForkExec(config *linuxExecBoundary) (pid uintptr, errno unix.Errno)
 func linuxLandlockRuleset(rules []linuxLandlockRule) (int, error) {
 	abi, _, errno := unix.Syscall(unix.SYS_LANDLOCK_CREATE_RULESET, 0, 0, unix.LANDLOCK_CREATE_RULESET_VERSION)
 	if errno != 0 || abi < 6 {
-		return -1, errLinuxSeal
+		var cause error
+		if errno != 0 {
+			cause = errno
+		}
+		return -1, linuxStepError(errLinuxSeal, "query Landlock ABI (requires >=6)", cause)
 	}
 	attr := unix.LandlockRulesetAttr{Access_fs: linuxHandledFilesystem,
 		Scoped: unix.LANDLOCK_SCOPE_ABSTRACT_UNIX_SOCKET | unix.LANDLOCK_SCOPE_SIGNAL}
 	fd, _, errno := unix.Syscall(unix.SYS_LANDLOCK_CREATE_RULESET, uintptr(unsafe.Pointer(&attr)), unsafe.Sizeof(attr), 0)
 	if errno != 0 {
-		return -1, errLinuxSeal
+		return -1, linuxStepError(errLinuxSeal, "landlock_create_ruleset", errno)
 	}
 	ok := false
 	defer func() {
@@ -42,7 +47,7 @@ func linuxLandlockRuleset(rules []linuxLandlockRule) (int, error) {
 			_ = unix.Close(int(fd))
 		}
 	}()
-	for _, rule := range rules {
+	for i, rule := range rules {
 		if !linuxCanonicalPlanPath(rule.path) || rule.access == 0 || rule.access & ^uint64(linuxHandledFilesystem) != 0 {
 			return -1, errLinuxSeal
 		}
@@ -50,14 +55,14 @@ func linuxLandlockRuleset(rules []linuxLandlockRule) (int, error) {
 			Flags: unix.O_PATH | unix.O_CLOEXEC, Resolve: unix.RESOLVE_NO_SYMLINKS | unix.RESOLVE_NO_MAGICLINKS,
 		})
 		if err != nil {
-			return -1, errLinuxSeal
+			return -1, linuxStepError(errLinuxSeal, fmt.Sprintf("open Landlock rule %d (%s)", i, rule.path), err)
 		}
 		pathAttr := unix.LandlockPathBeneathAttr{Allowed_access: rule.access, Parent_fd: int32(pathFD)}
 		_, _, errno = unix.Syscall6(unix.SYS_LANDLOCK_ADD_RULE, fd, unix.LANDLOCK_RULE_PATH_BENEATH,
 			uintptr(unsafe.Pointer(&pathAttr)), 0, 0, 0)
 		_ = unix.Close(pathFD)
 		if errno != 0 {
-			return -1, errLinuxSeal
+			return -1, linuxStepError(errLinuxSeal, fmt.Sprintf("landlock_add_rule %d (%s)", i, rule.path), errno)
 		}
 	}
 	ok = true
@@ -109,26 +114,26 @@ func linuxStartRestrictedTerminal(rules []linuxLandlockRule, path string, args, 
 	rulesetCopy, err := unix.FcntlInt(uintptr(ruleset), unix.F_DUPFD_CLOEXEC, 128)
 	_ = unix.Close(ruleset)
 	if err != nil {
-		return -1, errLinuxSeal
+		return -1, linuxStepError(errLinuxSeal, "duplicate Landlock ruleset", err)
 	}
 	ruleset = rulesetCopy
 	defer unix.Close(ruleset)
 	// Reserve disjoint copies before the child remaps status/gate onto 3/4.
 	statusCopy, err := unix.FcntlInt(uintptr(status), unix.F_DUPFD_CLOEXEC, 128)
 	if err != nil {
-		return -1, errLinuxSeal
+		return -1, linuxStepError(errLinuxSeal, "duplicate restricted status pipe", err)
 	}
 	defer unix.Close(statusCopy)
 	gateCopy, err := unix.FcntlInt(uintptr(gate), unix.F_DUPFD_CLOEXEC, 128)
 	if err != nil {
-		return -1, errLinuxSeal
+		return -1, linuxStepError(errLinuxSeal, "duplicate restricted start pipe", err)
 	}
 	defer unix.Close(gateCopy)
 	terminalCopy := -1
 	if terminal >= 0 {
 		terminalCopy, err = unix.FcntlInt(uintptr(terminal), unix.F_DUPFD_CLOEXEC, 128)
 		if err != nil {
-			return -1, errLinuxSeal
+			return -1, linuxStepError(errLinuxSeal, "duplicate private terminal", err)
 		}
 		defer unix.Close(terminalCopy)
 	}
@@ -142,7 +147,7 @@ func linuxStartRestrictedTerminal(rules []linuxLandlockRule, path string, args, 
 	runtime.KeepAlive(envp)
 	runtime.KeepAlive(filter)
 	if errno != 0 {
-		return -1, errLinuxSeal
+		return -1, linuxStepError(errLinuxSeal, "fork restricted child", errno)
 	}
 	return int(pid), nil
 }

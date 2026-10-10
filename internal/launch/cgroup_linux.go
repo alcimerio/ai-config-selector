@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"strconv"
@@ -16,6 +17,15 @@ import (
 var errLinuxContainment = errors.New("Linux Session containment failed")
 var errLinuxSettlement = errors.New("Linux Session cleanup unproven; retain quarantine")
 
+// Keep both the fail-closed category and the underlying syscall available to
+// callers. Setup diagnostics must never include argv or environment values.
+func linuxStepError(category error, step string, cause error) error {
+	if cause == nil {
+		return fmt.Errorf("%w: %s", category, step)
+	}
+	return fmt.Errorf("%w: %s: %w", category, step, cause)
+}
+
 // Only the dedicated, trusted outer supervisor owns these descriptors. Neither
 // the target nor the namespace helper may inherit cgroup migration handles.
 type linuxSessionCgroup struct {
@@ -27,7 +37,7 @@ type linuxSessionCgroup struct {
 func linuxNewSessionCgroup() (*linuxSessionCgroup, error) {
 	parent, err := linuxprobe.OpenDelegatedCgroup()
 	if err != nil {
-		return nil, errLinuxContainment
+		return nil, linuxStepError(errLinuxContainment, "open delegated cgroup", err)
 	}
 	return linuxCreateSessionCgroup(parent)
 }
@@ -35,6 +45,31 @@ func linuxNewSessionCgroup() (*linuxSessionCgroup, error) {
 // Takes ownership of an already verified delegation descriptor. There is no
 // path or environment override, and no fallback to a process group.
 func linuxCreateSessionCgroup(parent *os.File) (_ *linuxSessionCgroup, resultErr error) {
+	probe, err := linuxAllocateSessionCgroup(parent)
+	if err != nil {
+		return nil, err
+	}
+	defer probe.close()
+	// A kill write changes the kernel's kill sequence even on an empty group.
+	// Linux 6.17's CLONE_INTO_CGROUP path can compare the parent's sequence with
+	// the destination's and SIGKILL a new child before exec. Exercise the real
+	// kill control on a disposable sibling; never reuse a killed group to start
+	// the Session. Placement remains atomic and settlement still requires kill.
+	killErr := probe.terminate()
+	if err := probe.remove(); err != nil {
+		return nil, errors.Join(killErr, linuxStepError(errLinuxSettlement, "remove kill-preflight cgroup", err))
+	}
+	if killErr != nil {
+		return nil, linuxStepError(errLinuxContainment, "preflight cgroup.kill", killErr)
+	}
+	fd, err := unix.FcntlInt(probe.parent.Fd(), unix.F_DUPFD_CLOEXEC, 3)
+	if err != nil {
+		return nil, linuxStepError(errLinuxContainment, "pin delegation after kill preflight", err)
+	}
+	return linuxAllocateSessionCgroup(os.NewFile(uintptr(fd), "acs-delegated-cgroup"))
+}
+
+func linuxAllocateSessionCgroup(parent *os.File) (_ *linuxSessionCgroup, resultErr error) {
 	g := &linuxSessionCgroup{parent: parent}
 	defer func() {
 		if resultErr != nil {
@@ -42,21 +77,26 @@ func linuxCreateSessionCgroup(parent *os.File) (_ *linuxSessionCgroup, resultErr
 		}
 	}()
 	var fs unix.Statfs_t
-	if parent == nil || unix.Fstatfs(int(parent.Fd()), &fs) != nil || fs.Type != unix.CGROUP2_SUPER_MAGIC {
-		return nil, errLinuxContainment
+	if parent == nil {
+		return nil, linuxStepError(errLinuxContainment, "missing delegated cgroup", nil)
+	}
+	if err := unix.Fstatfs(int(parent.Fd()), &fs); err != nil || fs.Type != unix.CGROUP2_SUPER_MAGIC {
+		return nil, linuxStepError(errLinuxContainment, "verify cgroup v2 filesystem", err)
 	}
 	var random [16]byte
 	if _, err := rand.Read(random[:]); err != nil {
-		return nil, errLinuxContainment
+		return nil, linuxStepError(errLinuxContainment, "generate cgroup name", err)
 	}
 	g.name = "acs-session-" + hex.EncodeToString(random[:])
-	if unix.Mkdirat(int(parent.Fd()), g.name, 0700) != nil {
-		return nil, errLinuxContainment
+	if err := unix.Mkdirat(int(parent.Fd()), g.name, 0700); err != nil {
+		return nil, linuxStepError(errLinuxContainment, "create Session cgroup", err)
 	}
 	// Until a child starts, only this freshly created empty directory can exist.
 	defer func() {
-		if resultErr != nil && unix.Unlinkat(int(parent.Fd()), g.name, unix.AT_REMOVEDIR) != nil {
-			resultErr = errors.Join(resultErr, errLinuxSettlement)
+		if resultErr != nil {
+			if err := unix.Unlinkat(int(parent.Fd()), g.name, unix.AT_REMOVEDIR); err != nil {
+				resultErr = errors.Join(resultErr, linuxStepError(errLinuxSettlement, "remove incomplete cgroup", err))
+			}
 		}
 	}()
 	fd, err := unix.Openat2(int(parent.Fd()), g.name, &unix.OpenHow{
@@ -64,12 +104,12 @@ func linuxCreateSessionCgroup(parent *os.File) (_ *linuxSessionCgroup, resultErr
 		Resolve: unix.RESOLVE_BENEATH | unix.RESOLVE_NO_SYMLINKS | unix.RESOLVE_NO_XDEV,
 	})
 	if err != nil {
-		return nil, errLinuxContainment
+		return nil, linuxStepError(errLinuxContainment, "open Session cgroup", err)
 	}
 	g.directory = os.NewFile(uintptr(fd), "acs-session-cgroup")
 	var stat unix.Stat_t
-	if unix.Fstat(fd, &stat) != nil {
-		return nil, errLinuxContainment
+	if err := unix.Fstat(fd, &stat); err != nil {
+		return nil, linuxStepError(errLinuxContainment, "stat Session cgroup", err)
 	}
 	g.device, g.inode = uint64(stat.Dev), stat.Ino
 	for _, item := range []struct {
@@ -83,7 +123,7 @@ func linuxCreateSessionCgroup(parent *os.File) (_ *linuxSessionCgroup, resultErr
 	} {
 		control, err := unix.Openat(fd, item.name, item.mode|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
 		if err != nil {
-			return nil, errLinuxContainment
+			return nil, linuxStepError(errLinuxContainment, "open "+item.name, err)
 		}
 		*item.file = os.NewFile(uintptr(control), item.name)
 	}
@@ -91,37 +131,41 @@ func linuxCreateSessionCgroup(parent *os.File) (_ *linuxSessionCgroup, resultErr
 	// descriptor sealing must also deny all access to cgroup migration controls.
 	depth, err := unix.Openat(fd, "cgroup.max.depth", unix.O_WRONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
 	if err != nil {
-		return nil, errLinuxContainment
+		return nil, linuxStepError(errLinuxContainment, "open cgroup.max.depth", err)
 	}
 	n, err := unix.Write(depth, []byte("0"))
 	_ = unix.Close(depth)
 	if err != nil || n != 1 {
-		return nil, errLinuxContainment
+		return nil, linuxStepError(errLinuxContainment, "write cgroup.max.depth=0", err)
 	}
-	if empty, err := g.empty(); err != nil || !empty || g.terminate() != nil {
-		return nil, errLinuxContainment
+	if empty, err := g.empty(); err != nil || !empty {
+		return nil, linuxStepError(errLinuxContainment, "verify new cgroup is empty", err)
 	}
 	return g, nil
 }
 
 func (g *linuxSessionCgroup) identity() error {
 	var named, pinned unix.Stat_t
-	if unix.Fstatat(int(g.parent.Fd()), g.name, &named, unix.AT_SYMLINK_NOFOLLOW) != nil ||
-		unix.Fstat(int(g.directory.Fd()), &pinned) != nil ||
-		uint64(named.Dev) != g.device || named.Ino != g.inode || named.Mode&unix.S_IFMT != unix.S_IFDIR ||
+	if err := unix.Fstatat(int(g.parent.Fd()), g.name, &named, unix.AT_SYMLINK_NOFOLLOW); err != nil {
+		return linuxStepError(errLinuxSettlement, "stat named cgroup", err)
+	}
+	if err := unix.Fstat(int(g.directory.Fd()), &pinned); err != nil {
+		return linuxStepError(errLinuxSettlement, "stat pinned cgroup", err)
+	}
+	if uint64(named.Dev) != g.device || named.Ino != g.inode || named.Mode&unix.S_IFMT != unix.S_IFDIR ||
 		uint64(pinned.Dev) != g.device || pinned.Ino != g.inode || pinned.Nlink == 0 {
-		return errLinuxSettlement
+		return linuxStepError(errLinuxSettlement, "cgroup identity changed", nil)
 	}
 	return nil
 }
 
 func linuxReadCgroupControl(file *os.File) (string, error) {
 	if _, err := file.Seek(0, io.SeekStart); err != nil {
-		return "", errLinuxSettlement
+		return "", linuxStepError(errLinuxSettlement, "seek "+file.Name(), err)
 	}
 	data, err := io.ReadAll(io.LimitReader(file, 65537))
 	if err != nil || len(data) > 65536 {
-		return "", errLinuxSettlement
+		return "", linuxStepError(errLinuxSettlement, "read "+file.Name(), err)
 	}
 	return string(data), nil
 }
@@ -172,7 +216,7 @@ func (g *linuxSessionCgroup) contains(pid int) error {
 			return nil
 		}
 	}
-	return errLinuxContainment
+	return linuxStepError(errLinuxContainment, "leader absent from cgroup.procs", nil)
 }
 
 func (g *linuxSessionCgroup) terminate() error {
@@ -181,7 +225,7 @@ func (g *linuxSessionCgroup) terminate() error {
 	}
 	n, err := g.kill.WriteAt([]byte("1"), 0)
 	if err != nil || n != 1 {
-		return errLinuxSettlement
+		return linuxStepError(errLinuxSettlement, "write cgroup.kill=1", err)
 	}
 	return nil
 }
@@ -190,8 +234,8 @@ func (g *linuxSessionCgroup) remove() error {
 	if empty, err := g.empty(); err != nil || !empty {
 		return errLinuxSettlement
 	}
-	if unix.Unlinkat(int(g.parent.Fd()), g.name, unix.AT_REMOVEDIR) != nil {
-		return errLinuxSettlement
+	if err := unix.Unlinkat(int(g.parent.Fd()), g.name, unix.AT_REMOVEDIR); err != nil {
+		return linuxStepError(errLinuxSettlement, "remove empty cgroup", err)
 	}
 	return nil
 }
