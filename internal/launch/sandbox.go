@@ -222,6 +222,14 @@ func sandboxError(category SandboxErrorCategory, cause error) error {
 	return result
 }
 
+func unsupportedPlatformError(operatingSystem string) *SandboxError {
+	remediation := ""
+	if operatingSystem == "linux" {
+		remediation = "Linux sandbox backend is not available yet; ACS never runs targets unsandboxed; see docs/design/linux-support.md"
+	}
+	return newSandboxError(SandboxUnsupportedPlatform, remediation)
+}
+
 // Platform identifies the host properties relevant to the supported sandbox
 // contract. Unsupported operating systems are rejected without host probes.
 type Platform struct {
@@ -239,7 +247,7 @@ func ValidatePlatform(platform Platform) error {
 		supported = platform.Architecture == "arm64" && releaseLine(platform.Release, "26")
 	}
 	if !supported {
-		return sandboxError(SandboxUnsupportedPlatform, nil)
+		return unsupportedPlatformError(platform.OS)
 	}
 	return nil
 }
@@ -274,7 +282,7 @@ func CurrentPlatform() (Platform, error) {
 		}
 		platform.Release = strings.TrimSpace(string(output))
 	default:
-		return Platform{}, sandboxError(SandboxUnsupportedPlatform, nil)
+		return Platform{}, unsupportedPlatformError(runtime.GOOS)
 	}
 	return platform, nil
 }
@@ -496,7 +504,7 @@ func (sandbox *nativeProcessSandbox) selectedBackend(ctx context.Context) (sandb
 	}
 	platform, err := sandbox.cachedPlatformLocked()
 	if err != nil {
-		return nil, sandboxError(SandboxUnsupportedPlatform, err)
+		return nil, unsupportedPlatformError(runtime.GOOS)
 	}
 	if err := ValidatePlatform(platform); err != nil {
 		return nil, err
@@ -521,7 +529,7 @@ func (sandbox *nativeProcessSandbox) Readiness(ctx context.Context) (SandboxRead
 	if err != nil {
 		readiness.Backend = "None"
 		readiness.Platform = "Unknown platform"
-		readiness.Failure = newSandboxError(SandboxUnsupportedPlatform, "")
+		readiness.Failure = unsupportedPlatformError(runtime.GOOS)
 		return readiness, nil
 	}
 	readiness.Backend = nativeBackendName(platform.OS)
@@ -652,7 +660,7 @@ func (sandbox *nativeProcessSandbox) Prepare(ctx context.Context, request Proces
 func (sandbox *nativeProcessSandbox) checkEnvironmentTransport() error {
 	platform, err := sandbox.cachedPlatform()
 	if err != nil {
-		return sandboxError(SandboxUnsupportedPlatform, err)
+		return unsupportedPlatformError(runtime.GOOS)
 	}
 	if err := ValidatePlatform(platform); err != nil {
 		return err
