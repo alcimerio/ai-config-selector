@@ -531,6 +531,9 @@ proposal, not GitHub issue numbers. Split implementation further if review grows
    lease/quarantine lifecycle, timeout/cancel and TTY restore. Depends: 7. Accept:
    empty-cgroup/reaping proof precedes deletion, lost proof retains state, stale
    generation is rejected, and pending TTY input cannot reach the resumed shell.
+   The [initial cleanup and recovery implementation](linux-cleanup-recovery.md)
+   records authenticated generation binding, quarantine and terminal restoration;
+   production Linux admission remains closed pending full native qualification.
 
 ### Stack 4 — credentials
 

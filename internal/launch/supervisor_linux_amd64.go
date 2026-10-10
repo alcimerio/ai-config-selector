@@ -16,8 +16,8 @@ import (
 
 const linuxContainmentTimeout = 5 * time.Second
 
-// This is an in-memory result, NOT a durable recovery proof. The next layer
-// must retain its Session unless Settled is true, even when the target exited.
+// Settled includes durable, authenticated cleanup publication. A target exit
+// alone never permits Session deletion or credential finalization.
 type linuxSessionResult struct {
 	Status  unix.WaitStatus
 	Exited  bool
@@ -29,12 +29,22 @@ type linuxSupervisedCommand struct {
 	status    *os.File // namespace helper -> outer supervisor
 	control   *os.File // outer supervisor -> namespace helper
 	childEnds []*os.File
+	cleanup   *linuxSessionCleanup
 }
 
 // Must run in a dedicated re-executed supervisor, outside the target cgroup
 // and PID namespace. It must own no unrelated children: subreaping is process
 // wide. There is deliberately no production CLI entry point or backend yet.
 func linuxSuperviseSession(ctx context.Context, owner *os.File, child linuxSupervisedCommand) (result linuxSessionResult, resultErr error) {
+	if child.cleanup == nil {
+		return result, errLinuxSettlement
+	}
+	defer func() {
+		if child.cleanup.finish(result.Settled) != nil {
+			result.Settled = false
+			resultErr = errors.Join(resultErr, errLinuxSettlement)
+		}
+	}()
 	defer owner.Close()
 	defer child.status.Close()
 	defer child.control.Close()
@@ -54,13 +64,24 @@ func linuxSuperviseSession(ctx context.Context, owner *os.File, child linuxSuper
 	}
 	g, err := linuxNewSessionCgroup()
 	if err != nil {
+		// No child has been started. An allocation with uncertain cleanup
+		// still quarantines, even though it cannot contain target processes.
+		result.Settled = !errors.Is(err, errLinuxSettlement)
 		return result, err
 	}
 	defer g.close()
+	if child.cleanup.bindCgroup(g) != nil {
+		_ = g.remove()
+		return result, errLinuxSettlement
+	}
 	pidfd := -1
 	child.command.SysProcAttr = &syscall.SysProcAttr{UseCgroupFD: true, CgroupFD: int(g.directory.Fd()), PidFD: &pidfd}
 	if err := child.command.Start(); err != nil {
-		if g.remove() == nil {
+		if pidfd >= 0 {
+			_ = unix.Close(pidfd)
+		}
+		reaped, reapErr := linuxReapChildren()
+		if reapErr == nil && reaped && g.remove() == nil {
 			result.Settled = true
 		} else {
 			resultErr = errLinuxSettlement

@@ -1,6 +1,7 @@
 package launch
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"encoding/json"
@@ -82,9 +83,41 @@ func TestLinuxContainmentHelper(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer prepared.close()
+		session, err := CreateProtectedSession(filepath.Join(root, "sessions"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		challenge := bytes.Repeat([]byte{0x91}, RecoveryProofChallengeSize)
+		if PrepareSessionCleanupProof(session.RootDir, challenge) != nil {
+			t.Fatal("prepare cleanup challenge")
+		}
+		cleanup, err := linuxPrepareCleanup(session, challenge, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if os.WriteFile(filepath.Join(root, "session-root"), []byte(session.RootDir), 0600) != nil {
+			t.Fatal("record Session location")
+		}
 		owner := os.NewFile(3, "owner")
-		result, runErr := linuxSuperviseSession(context.Background(), owner, linuxSupervisedCommand{
-			command: prepared.command, status: status, control: gate, childEnds: []*os.File{report, control},
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		if os.Getenv("ACS_TEST_SCENARIO") == "cancel" {
+			go func() {
+				for {
+					if _, err := os.Stat(filepath.Join(root, "cancel")); err == nil {
+						cancel()
+						return
+					}
+					select {
+					case <-ctx.Done():
+						return
+					case <-time.After(time.Millisecond):
+					}
+				}
+			}()
+		}
+		result, runErr := linuxSuperviseSession(ctx, owner, linuxSupervisedCommand{
+			command: prepared.command, status: status, control: gate, childEnds: []*os.File{report, control}, cleanup: cleanup,
 		})
 		data, _ := json.Marshal(struct {
 			Result linuxSessionResult
@@ -309,7 +342,7 @@ func TestLinuxNativeSessionContainment(t *testing.T) {
 		}
 		linuxNativeUnavailable(t, strings.Join(missing, ", "))
 	}
-	for _, scenario := range []string{"abort", "signal-and-forks", "owner-loss"} {
+	for _, scenario := range []string{"abort", "signal-and-forks", "owner-loss", "cancel", "supervisor-loss"} {
 		t.Run(scenario, func(t *testing.T) { linuxNativeSessionScenario(t, scenario) })
 	}
 }
@@ -338,7 +371,7 @@ func linuxNativeSessionScenario(t *testing.T, scenario string) {
 	server, client := linuxTestSocketpair(t)
 	// An unrelated process remains alive across all Session cleanup paths.
 	_, unrelated := linuxNativeStartHelper(t, "acs-containment-idle", nil, nil)
-	supervisor, _ := linuxNativeStartHelper(t, "acs-containment-supervisor", []*os.File{server}, []string{"ACS_TEST_ROOT=" + root})
+	supervisor, supervisorFD := linuxNativeStartHelper(t, "acs-containment-supervisor", []*os.File{server}, []string{"ACS_TEST_ROOT=" + root, "ACS_TEST_SCENARIO=" + scenario})
 	_ = server.Close()
 	var owner *exec.Cmd
 	ownerFD := -1
@@ -462,6 +495,33 @@ func linuxNativeSessionScenario(t *testing.T, scenario string) {
 			t.Fatal(err)
 		}
 		_ = owner.Wait()
+	case "cancel":
+		if err := os.WriteFile(filepath.Join(root, "cancel"), nil, 0600); err != nil {
+			t.Fatal(err)
+		}
+	case "supervisor-loss":
+		if err := unix.PidfdSendSignal(supervisorFD, unix.SIGKILL, nil, 0); err != nil {
+			t.Fatal(err)
+		}
+		if err := supervisor.Wait(); err == nil {
+			t.Fatal("killed supervisor reported success")
+		}
+		sessionRoot, err := os.ReadFile(filepath.Join(root, "session-root"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		recovered, exists, err := RecoverSession(filepath.Dir(string(sessionRoot)), filepath.Base(string(sessionRoot)))
+		if err != nil || !exists {
+			t.Fatalf("lost supervisor did not retain Session: %t, %v", exists, err)
+		}
+		defer recovered.Preserve()
+		if proven, err := VerifySessionCleanupProof(recovered.RootDir, bytes.Repeat([]byte{0x91}, RecoveryProofChallengeSize)); err != nil || proven {
+			t.Fatalf("lost supervisor forged proof: %t, %v", proven, err)
+		}
+		if err := unix.PidfdSendSignal(unrelated, 0, nil, 0); err != nil {
+			t.Fatal("unrelated process was killed")
+		}
+		return
 	}
 	if err := supervisor.Wait(); err != nil {
 		t.Fatal(err)
@@ -486,6 +546,21 @@ func linuxNativeSessionScenario(t *testing.T, scenario string) {
 	}
 	if readGroups()[group] {
 		t.Fatal("Session cgroup leaked")
+	}
+	sessionRoot, err := os.ReadFile(filepath.Join(root, "session-root"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	recovered, exists, err := RecoverSession(filepath.Dir(string(sessionRoot)), filepath.Base(string(sessionRoot)))
+	if err != nil || !exists {
+		t.Fatalf("recover settled Session: exists=%t err=%v", exists, err)
+	}
+	defer recovered.Preserve()
+	if proven, err := VerifySessionCleanupProof(recovered.RootDir, bytes.Repeat([]byte{0x91}, RecoveryProofChallengeSize)); err != nil || !proven {
+		t.Fatalf("native settlement proof: proven=%t err=%v", proven, err)
+	}
+	if err := recovered.Remove(); err != nil {
+		t.Fatal(err)
 	}
 	for _, memberFD := range memberPidfds {
 		if dead, err := linuxPidfdDead(memberFD); err != nil || !dead {

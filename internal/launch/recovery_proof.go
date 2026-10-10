@@ -64,7 +64,7 @@ func recordSessionCleanupProof(sessionRoot string, challenge []byte) error {
 
 // VerifySessionCleanupProof validates evidence written only after the native
 // supervisor has proved that the contained process tree is gone.
-func VerifySessionCleanupProof(sessionRoot string, challenge []byte) (bool, error) {
+func verifyLegacySessionCleanupProof(sessionRoot string, challenge []byte) (bool, error) {
 	if len(challenge) != RecoveryProofChallengeSize {
 		return false, errors.New("invalid Session cleanup proof challenge")
 	}
