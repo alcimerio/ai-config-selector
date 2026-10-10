@@ -18,6 +18,17 @@ import (
 
 var errCgroupCleanup = errors.New("probe cgroup cleanup could not be proven")
 
+// OpenDelegatedCgroup pins the calling user's owned cgroup v2 delegation.
+// Callers may create private children here, but must never move existing host
+// processes or treat a successful open as proof of sandbox readiness.
+func OpenDelegatedCgroup() (*os.File, error) {
+	fd, err := delegatedCgroup()
+	if err != nil {
+		return nil, err
+	}
+	return os.NewFile(uintptr(fd), "acs-delegated-cgroup"), nil
+}
+
 func probeCgroup(ctx context.Context) (result error) {
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
