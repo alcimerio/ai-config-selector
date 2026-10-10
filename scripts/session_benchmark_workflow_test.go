@@ -36,7 +36,7 @@ func TestMacOSSessionBenchmarkWorkflowIsManualAndIsolated(t *testing.T) {
 		"uses: ./.github/actions/setup-go-macos",
 		"persist-credentials: false",
 		"go build -trimpath -o \"$bin/sessionbench\" ./tools/sessionbench",
-		"--skill-files 0,20",
+		`--skill-files "0,20"`,
 		">>\"$GITHUB_STEP_SUMMARY\"",
 		"actions/upload-artifact@",
 		// Short SHAs are resolved with git; actions/checkout accepts only

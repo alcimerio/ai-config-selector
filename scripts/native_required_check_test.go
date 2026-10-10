@@ -13,6 +13,7 @@ func TestNativeRequiredCheckWorkflowContract(t *testing.T) {
 	aggregate := nativeRequiredWorkflowJob(t, workflow, "native-required")
 	for _, required := range []string{
 		"    name: Native darwin/arm64\n",
+		"    permissions: {}\n",
 		"    needs: [candidate, native]\n",
 		"    if: ${{ always() }}\n",
 		"        shell: bash\n",

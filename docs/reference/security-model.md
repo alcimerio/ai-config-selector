@@ -61,6 +61,11 @@ values are shared by the target, local servers and descendants; there is no
 per-MCP-server secret boundary. See [MCP Profiles](../guides/mcp-profiles.md)
 and [target conformance](shared-target-conformance.md).
 
+Selecting interpreter or hook environment destinations such as `NODE_OPTIONS`,
+`PYTHONSTARTUP`, or `GIT_SSH_COMMAND` grants code-execution influence over
+whatever those tools run. Treat the selected values and any code they reference
+as trusted code inputs.
+
 ### Target authentication
 
 Devin receives only its allowlisted host credential for a Devin launch; the
@@ -97,6 +102,10 @@ The native gate checks attached and child-created PTYs, unrelated disposable
 PTY denial, and terminal input, resize, signals, and cleanup. This restriction
 does not make output or terminal-control operations on the invoking terminal
 harmless, or isolate tools sharing one Session's authority.
+
+OSC 52 terminal clipboard escape sequences in Session output are governed by
+the terminal emulator's settings and are not filtered by ACS. Blocking `pbcopy`
+and `pbpaste` does not cover these escapes.
 
 ### Host races and temporary data
 
