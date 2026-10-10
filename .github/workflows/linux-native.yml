@@ -1,0 +1,70 @@
+name: Native Linux
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-native-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Qualification attempt only: do not require this check in branch protection
+  # until the runner meets the documented kernel and delegation prerequisites.
+  containment:
+    name: Native Linux containment (amd64, qualification pending)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      ACS_LINUX_NATIVE_REQUIRED: "1"
+      CGO_ENABLED: "0"
+      GOTOOLCHAIN: local
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Record kernel and feature evidence before setup
+        run: |
+          uname -a
+          go test -v ./internal/linuxprobe -run '^TestNativeLinuxHostEvidence$' -count=1
+
+      - name: Install system Bubblewrap
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y bubblewrap
+
+      # Ubuntu 24.04 restricts unprivileged user namespaces through AppArmor by
+      # default (recorded above). This CI-only relaxation lets the containment
+      # contract itself be exercised; how ACS satisfies the restriction on a
+      # stock host (shipped AppArmor profile vs. documented admin step) is an
+      # open maintainer decision tracked in #191, and production stays disabled.
+      - name: Relax AppArmor user-namespace restriction (CI host only)
+        run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          printf 'apparmor_restrict_unprivileged_userns relaxed to 0 for this job only\n' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Require delegated native containment and denial suites
+        run: bash scripts/run-linux-native-gates.sh "${RUNNER_TEMP}/acs-linux-native"
+
+      - name: Explain unsuccessful qualification
+        if: ${{ failure() }}
+        run: |
+          printf '%s\n' \
+            'Native Linux qualification failed; missing prerequisites are failures, never passing skips.' \
+            'Keep this check out of branch protection until a native Ubuntu 24.04 HWE amd64 runner provides kernel >=6.12 and owned cgroup v2 delegation.' \
+            'See docs/development/testing.md for the self-hosted or nested-virt VM plan.' >> "$GITHUB_STEP_SUMMARY"

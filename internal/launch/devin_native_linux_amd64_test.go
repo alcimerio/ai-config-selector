@@ -72,19 +72,18 @@ func TestLinuxNativeDevinPreflights(t *testing.T) {
 				"ACS_TEST_ROOT=" + root, "ACS_TEST_DEVIN_BINARY=" + binary,
 				"HOME=" + root + "/host", "XDG_DATA_HOME=" + root + "/host/data", "XDG_CONFIG_HOME=" + root + "/host/config"}
 			cmd.ExtraFiles = []*os.File{client}
-			var diagnostics bytes.Buffer
+			var diagnostics linuxRecipeOutput
 			cmd.Stdout, cmd.Stderr = &diagnostics, &diagnostics
-			if err := cmd.Start(); err != nil {
-				t.Fatal(err)
-			}
-			defer func() { _ = cmd.Process.Kill(); _ = cmd.Wait() }()
+			process := linuxNativeStartCommand(t, cmd, diagnostics.String, func() string {
+				return linuxNativeReadLogs(filepath.Join(root, "stderr"), filepath.Join(root, "output"))
+			})
 			_ = client.Close()
-			linuxTestByte(t, owner, 'R')
+			linuxTestByte(t, owner, 'R', process.diagnostics)
 			linuxTestWrite(t, owner, 'S')
-			linuxTestByte(t, owner, 'E')
-			linuxTestByte(t, owner, 'X')
-			if err := cmd.Wait(); err != nil {
-				t.Fatalf("contained Devin %s failed; retained %s: %v %s", mode, root, err, diagnostics.String())
+			linuxTestByte(t, owner, 'E', process.diagnostics)
+			linuxTestByte(t, owner, 'X', process.diagnostics)
+			if err := process.Wait(); err != nil {
+				t.Fatalf("contained Devin %s failed; retained %s: %v\n%s", mode, root, err, process.diagnostics())
 			}
 			if err := os.RemoveAll(root); err != nil {
 				t.Fatal(err)
@@ -181,6 +180,11 @@ func TestLinuxDevinSupervisorHelper(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer output.Close()
+	stderr, err := os.Create(filepath.Join(root, "stderr"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stderr.Close()
 	helper, err := os.Open("/proc/self/exe")
 	if err != nil {
 		t.Fatal(err)
@@ -188,10 +192,10 @@ func TestLinuxDevinSupervisorHelper(t *testing.T) {
 	defer helper.Close()
 	result, err := linuxRunRecipe(context.Background(), linuxRecipeAdmission{true}, recipe, os.NewFile(3, "owner"), helper,
 		[]string{"-test.run=^TestLinuxRecipeInitHelper$", "--", "acs-recipe-init"},
-		[3]*os.File{input, output, input}, linuxTestLease(t, nil), cleanup)
+		[3]*os.File{input, output, stderr}, linuxTestLease(t, nil), cleanup)
 	proof, proofErr := VerifySessionCleanupProof(session.RootDir, challenge)
 	if err != nil || !result.Settled || !result.Exited || proofErr != nil || !proof {
-		t.Fatal("Devin probe did not prove complete settlement; retain Session")
+		t.Fatalf("Devin probe did not prove complete settlement; retain Session: result=%+v error=%v proof=%t proof error=%v", result, err, proof, proofErr)
 	}
 	data, err := os.ReadFile(output.Name())
 	if err != nil {
