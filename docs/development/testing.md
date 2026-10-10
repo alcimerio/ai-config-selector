@@ -76,6 +76,9 @@ The shared gate runs recovery in its exit/signal trap. Hard runner termination
 can prevent the trap; preserve private recovery evidence when cleanup was not
 observed. This gate proves the isolated Keychain contract and contained status
 lifecycle, not interactive login completion or target-origin token refresh.
+Synthetic login must be rejected as unverified; subsequent status and sandbox
+checks use test identities verified with injected signing keys and seeded in
+the disposable Keychain.
 Production queries prohibit authentication UI. Deterministic tests cover locked
 or unavailable providers; live locked-Keychain and direct ACL probes remain
 supplemental because macOS can present access-control UI.
