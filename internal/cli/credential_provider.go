@@ -25,7 +25,10 @@ func (app App) RunCredentialProvider(args []string) (bool, int) {
 	}
 	fmt.Fprintf(app.Output, "Credential provider: %s\n", provider)
 	if runtime.GOOS == "linux" {
-		fmt.Fprintln(app.Output, "Linux credential operations and launches remain unavailable.")
+		if provider == codexauthresource.ProviderFile {
+			fmt.Fprintln(app.Output, "File credentials use private plaintext-at-rest storage.")
+		}
+		fmt.Fprintln(app.Output, "Linux launches remain unavailable.")
 	}
 	return true, 0
 }

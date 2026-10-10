@@ -126,9 +126,9 @@ func matchProviderSelection(directory *privateDirectory, chosen, requested Provi
 	return nil
 }
 
-// Walk from a trusted root using no-follow descriptors. Only the explicit
-// selection command creates directories; reads never provision storage. The
-// ACS directory must already be private; unsafe permissions are not repaired.
+// Walk from a trusted root using no-follow descriptors. Creation is explicit;
+// provider-selection reads never provision storage. The final directory must
+// be private; unsafe existing permissions are not repaired.
 func openProviderConfigDirectory(path string, create bool) (*privateDirectory, error) {
 	if !filepath.IsAbs(path) {
 		return nil, ErrProviderChoice
