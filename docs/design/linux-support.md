@@ -559,6 +559,9 @@ proposal, not GitHub issue numbers. Split implementation further if review grows
 11. **Qualify Linux shell and generic command recipes.** Scope: fixed shell,
     ELF/runtime inputs and diagnostics/help. Depends: 8. Accept: clean startup,
     literal argv, RO defaults, interactive and redirected terminal behavior pass.
+    The [experimental recipes](linux-shell-recipes.md) connect the sealed launcher
+    and cgroup supervisor through test-only admission; production stays disabled
+    pending full native qualification.
 12. **Lock and qualify Linux Devin.** Scope: manifest/digest rows, target installer,
     bundle dependencies, exact credential/Skills/MCP preflights. Depends: 11.
     Accept: both planned architectures have verified bytes and native conformance;

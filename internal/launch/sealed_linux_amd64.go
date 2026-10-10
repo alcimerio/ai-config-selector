@@ -33,6 +33,7 @@ type linuxLaunchWire struct {
 	Executable                 string
 	Argv                       []string
 	Home, Temporary, Directory string
+	Terminal                   *linuxTerminalConfig `json:",omitempty"`
 }
 
 func (w linuxLaunchWire) validate() error {
@@ -120,6 +121,9 @@ func linuxReadTransport(f *os.File) (linuxLaunchWire, []string, error) {
 		return fail()
 	}
 	intrinsic := []string{"HOME=" + w.Home, "TMPDIR=" + w.Temporary, "PATH=/usr/bin:/bin", "LANG=C", "LC_ALL=C"}
+	if w.Terminal != nil {
+		intrinsic = append(intrinsic, "TERM=xterm")
+	}
 	selected, err := environmentresource.ReadFrame(reader, intrinsic)
 	if err != nil {
 		return fail()
@@ -216,7 +220,7 @@ func linuxPrepareBwrapWith(ctx context.Context, plan linuxFilesystemPlan, wire l
 	}
 	p.owned = append(p.owned, bwrap)
 	var filter bytes.Buffer
-	_ = binary.Write(&filter, binary.LittleEndian, linuxSeccompFilter())
+	_ = binary.Write(&filter, binary.LittleEndian, linuxSeccompFilterForSetup(wire.Terminal != nil))
 	seccomp, err := linuxSealedMemfd(filter.Bytes())
 	if err != nil {
 		return nil, err
@@ -242,8 +246,8 @@ func linuxPrepareBwrapWith(ctx context.Context, plan linuxFilesystemPlan, wire l
 		switch mount.kind {
 		case linuxMountDirectory:
 			args = append(args, "--dir", mount.destination)
-		case linuxMountReadOnly, linuxMountReadWrite:
-			if mount.source != mount.destination {
+		case linuxMountReadOnly, linuxMountReadWrite, linuxMountRuntimeAlias:
+			if mount.source != mount.destination && (mount.kind != linuxMountRuntimeAlias || !mount.identity.mode.IsRegular()) {
 				return nil, errLinuxSeal
 			}
 			source, err := linuxPinnedSource(mount)

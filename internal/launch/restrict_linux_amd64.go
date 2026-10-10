@@ -12,13 +12,14 @@ import (
 // fork. The child must never execute Go (including the runtime's signal handlers)
 // between fork and exec. See restrict_linux_amd64.s for the complete boundary.
 type linuxExecBoundary struct {
-	ruleset int64
-	status  int64
-	gate    int64
-	program *unix.SockFprog
-	path    *byte
-	argv    **byte
-	env     **byte
+	ruleset  int64
+	status   int64
+	gate     int64
+	program  *unix.SockFprog
+	path     *byte
+	argv     **byte
+	env      **byte
+	terminal int64 // -1 or a private slave duplicated above all protocol FDs
 }
 
 //go:noescape
@@ -81,6 +82,10 @@ func linuxExecStrings(values []string) ([]*byte, error) {
 // Called only by the test harness at present. It deliberately returns a PID,
 // not a Process/Session or cleanup proof. Containment integration is separate.
 func linuxStartRestricted(rules []linuxLandlockRule, path string, args, env []string, status, gate int) (int, error) {
+	return linuxStartRestrictedTerminal(rules, path, args, env, status, gate, -1)
+}
+
+func linuxStartRestrictedTerminal(rules []linuxLandlockRule, path string, args, env []string, status, gate, terminal int) (int, error) {
 	if !linuxCanonicalPlanPath(path) || len(args) == 0 || args[0] != path || status < 3 || gate < 3 || status == gate {
 		return -1, errLinuxSeal
 	}
@@ -119,9 +124,17 @@ func linuxStartRestricted(rules []linuxLandlockRule, path string, args, env []st
 		return -1, errLinuxSeal
 	}
 	defer unix.Close(gateCopy)
+	terminalCopy := -1
+	if terminal >= 0 {
+		terminalCopy, err = unix.FcntlInt(uintptr(terminal), unix.F_DUPFD_CLOEXEC, 128)
+		if err != nil {
+			return -1, errLinuxSeal
+		}
+		defer unix.Close(terminalCopy)
+	}
 	filter := linuxSeccompFilter()
 	program := unix.SockFprog{Len: uint16(len(filter)), Filter: &filter[0]}
-	config := linuxExecBoundary{int64(ruleset), int64(statusCopy), int64(gateCopy), &program, argv[0], &argv[0], &envp[0]}
+	config := linuxExecBoundary{int64(ruleset), int64(statusCopy), int64(gateCopy), &program, argv[0], &argv[0], &envp[0], int64(terminalCopy)}
 	runtime.LockOSThread()
 	pid, errno := linuxForkExec(&config)
 	runtime.UnlockOSThread()

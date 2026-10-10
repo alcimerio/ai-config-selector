@@ -19,6 +19,10 @@ import (
 // A small interpreter proves the generated classic-BPF branches, including
 // otherwise uncallable foreign architectures and the x32 syscall-number bit.
 func linuxEvaluateFilter(t *testing.T, arch, nr uint32, args [6]uint64) uint32 {
+	return linuxEvaluateProgram(t, linuxSeccompFilter(), arch, nr, args)
+}
+
+func linuxEvaluateProgram(t *testing.T, f []unix.SockFilter, arch, nr uint32, args [6]uint64) uint32 {
 	t.Helper()
 	var data [64]byte
 	binary.LittleEndian.PutUint32(data[:4], nr)
@@ -27,7 +31,6 @@ func linuxEvaluateFilter(t *testing.T, arch, nr uint32, args [6]uint64) uint32 {
 		binary.LittleEndian.PutUint64(data[16+i*8:], arg)
 	}
 	var a uint32
-	f := linuxSeccompFilter()
 	for pc := 0; pc < len(f); pc++ {
 		i := f[pc]
 		switch i.Code {
@@ -35,10 +38,13 @@ func linuxEvaluateFilter(t *testing.T, arch, nr uint32, args [6]uint64) uint32 {
 			a = binary.LittleEndian.Uint32(data[i.K:])
 		case unix.BPF_ALU | unix.BPF_AND | unix.BPF_K:
 			a &= i.K
-		case unix.BPF_JMP | unix.BPF_JEQ | unix.BPF_K, unix.BPF_JMP | unix.BPF_JSET | unix.BPF_K:
+		case unix.BPF_JMP | unix.BPF_JEQ | unix.BPF_K, unix.BPF_JMP | unix.BPF_JSET | unix.BPF_K, unix.BPF_JMP | unix.BPF_JGE | unix.BPF_K:
 			match := a == i.K
 			if i.Code == unix.BPF_JMP|unix.BPF_JSET|unix.BPF_K {
 				match = a&i.K != 0
+			}
+			if i.Code == unix.BPF_JMP|unix.BPF_JGE|unix.BPF_K {
+				match = a >= i.K
 			}
 			if match {
 				pc += int(i.Jt)

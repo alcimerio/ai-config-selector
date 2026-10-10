@@ -9,7 +9,7 @@ settings to make a test pass.
 
 ## Testing the sandbox shell
 
-The shell must remain `/bin/zsh -f`. Cover selected Skills, clean environment
+The macOS shell must remain `/bin/zsh -f`. Cover selected Skills, clean environment
 and descriptors, workspace/Session writes, unrelated-path and symlink denial,
 absence of Devin credentials/preflights, terminal I/O, resize, signals, exit
 status, descendant settlement and stable fail-closed errors on every exit path.
