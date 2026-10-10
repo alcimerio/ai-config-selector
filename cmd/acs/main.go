@@ -47,6 +47,9 @@ func main() {
 	if handled, code := informational.RunUnsupportedExecution(os.Args[1:]); handled {
 		os.Exit(code)
 	}
+	if handled, code := informational.RunCredentialProvider(os.Args[1:]); handled {
+		os.Exit(code)
+	}
 	if cli.UpdateRequested(os.Args[1:]) {
 		updateContext, stopUpdate := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		handled, code := informational.RunUpdate(updateContext, os.Args[1:], selfupdate.Config{})

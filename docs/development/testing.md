@@ -32,6 +32,21 @@ backend exists yet. To compile without running anything, use `go test -c`, not
 `go test -run '^$'`, which starts test executables and package initialization. Portable unit tests supplement
 native checks; they establish neither Linux runtime support nor containment.
 
+The [Staticcheck helper](../../scripts/check-go-staticcheck.sh) runs the same
+pinned checker as CI, including tests, for both source targets:
+
+```sh
+scripts/check-go-staticcheck.sh linux amd64
+scripts/check-go-staticcheck.sh darwin arm64
+```
+
+It builds the checker for the host with the project's selected Go toolchain,
+then applies the analysis target. Version-suffixed `go run` ignores the local
+`go.mod`, so the helper resolves the toolchain before invoking it. A separately
+installed Staticcheck may have been built with an older Go version or export-data
+reader and fail to analyze the project even when `go test` succeeds. Review the
+checker pin when upgrading Go; keep both target checks and test analysis enabled.
+
 ## Native named-authentication evidence
 
 The promoted-artifact workflow fetches both [reviewed target pairs](../reference/target-compatibility.md)

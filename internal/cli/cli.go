@@ -145,6 +145,9 @@ func (app App) Run(ctx context.Context, args []string) int {
 	if handled, code := app.RunInformational(args); handled {
 		return code
 	}
+	if handled, code := app.RunCredentialProvider(args); handled {
+		return code
+	}
 	if handled, code := app.RunProfileExchange(ctx, args, os.UserHomeDir); handled {
 		return code
 	}

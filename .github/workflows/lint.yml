@@ -42,9 +42,7 @@ jobs:
           cache: true
 
       - name: Check Go source and tests
-        # Build Staticcheck for the host; apply the target only when running it.
-        # This revision pins x/tools v0.51.0 to read Go 1.27 export data.
-        run: go run -exec "env GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} CGO_ENABLED=0" honnef.co/go/tools/cmd/staticcheck@v0.7.0-0.dev.0.20261009230814-452d5bb86b45 ./...
+        run: scripts/check-go-staticcheck.sh ${{ matrix.goos }} ${{ matrix.goarch }}
 
   actionlint:
     name: actionlint
