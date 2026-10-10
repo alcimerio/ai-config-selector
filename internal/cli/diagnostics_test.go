@@ -30,7 +30,7 @@ func TestDiagnosticsPublicGrammar(t *testing.T) {
 
 func TestDiagnosticsMissingProfileIsStructured(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	for _, args := range []string{"profile validate missing --json", "profile validate --json missing", "doctor --json", "doctor --json --target devin", "doctor --target sandbox --json", "doctor --target codex-auth --json"} {
+	for _, args := range []string{"profile validate missing --json", "profile validate --json missing", "doctor --json", "doctor --json --target devin", "doctor --target sandbox --json", "doctor --target codex-auth --json", "doctor --check-linux-capabilities --json"} {
 		var out, stderr bytes.Buffer
 		code := (cli.App{Output: &out, ErrorOutput: &stderr}).Run(context.Background(), strings.Fields(args))
 		var result struct {
