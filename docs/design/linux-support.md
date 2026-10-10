@@ -507,6 +507,9 @@ proposal, not GitHub issue numbers. Split implementation further if review grows
    plan compilation; resolve the exclusions/socket-in-grant gates. Depends: 4.
    Accept: RO/RW, protected MCP/auth paths, absent exclusions and ancestor guards
    have demonstrated enforceable semantics; ambiguous plans are rejected.
+   The [initial pure compiler](linux-filesystem-plan.md) records its supported
+   subset, conservative rejection gates, and outstanding native proof; it does
+   not enable production launches.
 6. **Implement the sealed Linux launcher.** Scope: trusted namespace setup,
    single-threaded restriction/exec boundary, seccomp, private env/FD transport,
    terminal policy. Depends: 5. Accept: real allowed/denied controls pass under a
