@@ -45,21 +45,7 @@ func newSeatbeltSessionProcesses() (*seatbeltSessionProcesses, string, error) {
 	allowed := append([]byte(name), 0)
 	denied := append([]byte(name+".control"), 0)
 	query := func(pid int, value []byte) (bool, error) {
-		runtime.LockOSThread()
-		defer runtime.UnlockOSThread()
-		errno := (*int32)(api.errno())
-		*errno = 0
-		result, _, _ := purego.SyscallN(check, uintptr(pid), uintptr(unsafe.Pointer(&operation[0])), filter, uintptr(unsafe.Pointer(&value[0])))
-		runtime.KeepAlive(operation)
-		runtime.KeepAlive(value)
-		switch int32(result) {
-		case 0:
-			return true, nil
-		case 1:
-			return false, nil
-		default:
-			return false, fmt.Errorf("inspect Seatbelt Session policy: %w", syscall.Errno(*errno))
-		}
+		return checkSeatbeltSessionPolicy(api, check, pid, operation, filter, value)
 	}
 	processes := &seatbeltSessionProcesses{seatbeltProcessEnumerator: api, ledger: newSeatbeltIdentityLedger()}
 	processes.member = func(pid int) (bool, error) {
@@ -71,6 +57,41 @@ func newSeatbeltSessionProcesses() (*seatbeltSessionProcesses, string, error) {
 		return !control && err == nil, err
 	}
 	return processes, fmt.Sprintf("\n(allow mach-lookup (global-name %q))\n", name), nil
+}
+
+func checkSeatbeltSessionPolicy(api seatbeltProcAPI, check uintptr, pid int, operation []byte, filter uintptr, value []byte) (bool, error) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	errno := (*int32)(api.errno())
+	*errno = 0
+	var result uintptr
+	if runtime.GOARCH == "arm64" {
+		// sandbox_check(pid_t, const char *, enum sandbox_filter_type, ...)
+		// takes the service name as a C variadic argument. Apple's ARM64 ABI
+		// puts variadic arguments on the stack, even with free registers.
+		// Purego's SyscallN (and RegisterFunc's ...any) uses fixed arguments:
+		// fill x3-x7 so the ninth argument lands in the first stack slot.
+		// https://developer.apple.com/documentation/xcode/writing-arm64-code-for-apple-platforms
+		result, _, _ = purego.SyscallN(check, uintptr(pid), uintptr(unsafe.Pointer(&operation[0])), filter,
+			0, 0, 0, 0, 0, uintptr(unsafe.Pointer(&value[0])))
+	} else {
+		result, _, _ = purego.SyscallN(check, uintptr(pid), uintptr(unsafe.Pointer(&operation[0])), filter, uintptr(unsafe.Pointer(&value[0])))
+	}
+	// Read thread-local errno before any other foreign call can replace it.
+	queryErrno := syscall.Errno(*errno)
+	runtime.KeepAlive(operation)
+	runtime.KeepAlive(value)
+	switch int32(result) {
+	case 0:
+		return true, nil
+	case 1:
+		return false, nil
+	default:
+		if queryErrno != 0 {
+			return false, fmt.Errorf("inspect Seatbelt Session policy: %w", queryErrno)
+		}
+		return false, fmt.Errorf("inspect Seatbelt Session policy: unexpected result %d without errno", int32(result))
+	}
 }
 
 func (processes *seatbeltSessionProcesses) allPIDs() ([]int, error) {
@@ -211,5 +232,11 @@ func loadSeatbeltSessionAPI() (uintptr, uintptr, error) {
 		// SANDBOX_FILTER_GLOBAL_NAME is 2 in <sandbox/private.h>.
 		seatbeltSessionFilter = uintptr(2 | flag)
 	})
+	if loadSeatbeltSessionErr != nil {
+		return 0, 0, loadSeatbeltSessionErr
+	}
+	if seatbeltSessionCheck == 0 || seatbeltSessionFilter == 0 {
+		return 0, 0, errors.New("Seatbelt Session policy API is unavailable")
+	}
 	return seatbeltSessionCheck, seatbeltSessionFilter, loadSeatbeltSessionErr
 }
