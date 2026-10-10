@@ -130,6 +130,50 @@ Use `acs help doctor` or `acs help profile validate` for exact
 [grammar](../reference/cli.md#grammar). Help exits 0 on stdout; invalid syntax
 exits 1 with contextual stderr usage and no JSON.
 
+### Experimental Linux capability probes
+
+`acs doctor --check-linux-capabilities [--json]` explicitly adds bounded active
+observations for the future Linux backend. Default `doctor` remains passive.
+Linux production launches remain disabled, even if every observation passes;
+`host.platform` still fails and `runtime.enforcement` remains unchecked.
+
+The extra `linux.*` facts report native amd64, an ordinary unprivileged user,
+kernel 6.12+, Ubuntu 24.04, WSL/container detection, Landlock ABI 6+, system
+Bubblewrap identity, user/mount/PID namespace availability, seccomp, and cgroup v2
+delegation. Missing or unreadable prerequisites fail closed. Failed host gates
+leave active probes unchecked. Raw errors, subprocess output, environment values
+and local paths are not included in diagnostics. On other operating systems the
+flag reports `not_linux` without active work.
+
+The namespace and seccomp probes re-execute ACS with a fixed helper grammar and
+an empty environment apart from locale settings. They accept no user command.
+Seccomp is tested by installing a small architecture-checked filter with
+no-new-privileges, allowing `getpid` and denying `getppid`. This is a feature
+probe, not the future sandbox policy for terminal ioctls, inbound listeners,
+ptrace, keyctl, bpf, perf, mounts, or namespace changes. Landlock is queried for
+its ABI; these observations do not prove filesystem enforcement.
+
+Bubblewrap is read only at `/usr/bin/bwrap`. Every path component is opened
+without following symlinks and checked for root ownership and absence of user
+write access, including ACL-based access. The executable must be an amd64 ELF
+file without setuid/setgid bits or extra hard links. Its content hash and file
+identity are captured through the descriptor and checked for concurrent change.
+It is not executed; this is local system-file provenance, not package-signature,
+version, feature, or AppArmor-profile certification. PATH overrides are ignored.
+
+The cgroup probe requires an owned delegated domain under the standard writable
+`/sys/fs/cgroup` v2 mount. It creates a randomly named `acs-probe-*` child, places
+one fixed helper into it atomically, writes `cgroup.kill`, reaps the helper,
+checks `cgroup.events` and membership for emptiness, and removes the child.
+It does not create a Session, change the caller's membership, or manipulate
+systemd-owned groups. Unproven cleanup is a failure. The 15-second overall
+deadline contains individual 3-second active probes.
+
+Ubuntu 24.04 HWE certification, Bubblewrap's AppArmor execution path, the complete
+sandbox composition, and descendant/owner-loss cleanup are later native gates.
+Container detection uses known kernel, environment, marker and procfs signals;
+passing detection is not evidence of container isolation or certification.
+
 ### Diagnostic JSON format 1
 
 Every syntactically valid `--json` invocation emits one compact object plus
@@ -141,7 +185,9 @@ separate from persisted schemas and inspection output. It contains exactly:
 - `target`: `""` without a doctor target, otherwise `devin`, `sandbox` or
   `codex-auth`; always `""` for validation.
 - `checks`: array in the following fixed order. Each check has exactly the
-  string fields `id`, `status`, `code` and `nextStep`.
+  string fields `id`, `status`, `code` and `nextStep`. The explicit Linux probe
+  option appends `linux.*` checks after these facts and updates `backend.file`
+  with its Bubblewrap identity observation.
 
 | Check ID | Doctor | Profile validation |
 | --- | --- | --- |
