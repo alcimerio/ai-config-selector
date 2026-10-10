@@ -217,34 +217,88 @@ func TestSeatbeltVerifiesInboundConnectionsAreNotAccepted(t *testing.T) {
 	}
 }
 
-// A contained target can signal its own supervisor because both share the
-// sandbox. Cleanup then fails closed; this test records whether a detached
-// descendant keeps running after that point.
-func TestSeatbeltReportsDetachedDescendantAfterSupervisorLoss(t *testing.T) {
+// Parent cleanup settles detached descendants after supervisor loss while
+// preserving a concurrent launch with the same paths and permissions.
+func TestSeatbeltCleansDetachedDescendantAfterSupervisorLoss(t *testing.T) {
 	skipSeatbeltNativeTestBinaryUnderRace(t)
 	request := seatbeltTestRequest(t)
 	heartbeat := filepath.Join(request.sessionDirectory, "heartbeat")
 	pidFile := filepath.Join(request.sessionDirectory, "heartbeat-pid")
-	t.Cleanup(func() {
-		if contents, err := os.ReadFile(pidFile); err == nil {
-			if pid, err := strconv.Atoi(strings.TrimSpace(string(contents))); err == nil && pid > 1 {
-				_ = syscall.Kill(pid, syscall.SIGKILL)
-			}
-		}
-	})
 	request.arguments = []string{seatbeltDenialProbeRun, "--", "detach-and-signal-supervisor", heartbeat, pidFile}
-	settled, err := seatbeltTerminalNativeRun(request)
-	time.Sleep(time.Second)
-	first, _ := readSeatbeltHeartbeat(heartbeat)
-	time.Sleep(time.Second)
-	second, _ := readSeatbeltHeartbeat(heartbeat)
-	alive := second > first
-	seatbeltDenialEvidence(t, "settled=%v run_err=%v heartbeat_advancing=%v (%d -> %d)", settled, err, alive, first, second)
-	if settled {
-		t.Fatal("supervisor loss unexpectedly produced cleanup proof")
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	bystanderRequest := request
+	bystanderPIDFile := filepath.Join(request.sessionDirectory, "bystander-pid")
+	bystanderRequest.arguments = []string{seatbeltDenialProbeRun, "--", "heartbeat", filepath.Join(request.sessionDirectory, "bystander-heartbeat"), bystanderPIDFile}
+	bystander, err := newSeatbeltBackend(seatbeltExecutable).prepare(ctx, bystanderRequest)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if alive {
-		t.Skip("a detached descendant kept running after supervisor loss; the Session stays quarantined (known limitation)")
+	if err := bystander.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = bystander.Signal(syscall.SIGKILL)
+		_ = bystander.Wait()
+	})
+	seatbeltWaitForMarker(t, filepath.Join(request.sessionDirectory, "bystander-heartbeat"))
+	contents, err := os.ReadFile(bystanderPIDFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bystanderPID, err := strconv.Atoi(strings.TrimSpace(string(contents)))
+	if err != nil || bystanderPID <= 1 {
+		t.Fatalf("bystander PID = %q: %v", contents, err)
+	}
+	api, err := loadSeatbeltProcAPI()
+	if err != nil {
+		t.Fatal(err)
+	}
+	bystanderIdentity, err := api.info(bystanderPID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := newSeatbeltBackend(seatbeltExecutable).prepare(ctx, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	process := prepared.(*seatbeltProcess)
+	if err := process.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		cancel()
+		_ = process.closeControl()
+		_ = process.settleSession()
+		_ = process.command.Process.Kill()
+	})
+	if err := process.Wait(); err == nil || !strings.Contains(err.Error(), errSandboxSessionCleanupRecovered.Error()) {
+		t.Fatalf("supervisor loss result = %v, want recovered cleanup report", err)
+	}
+	select {
+	case <-process.CleanupDone():
+	default:
+		t.Fatal("parent did not verify Session cleanup")
+	}
+	contents, err = os.ReadFile(pidFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(contents)))
+	if err != nil || pid <= 1 {
+		t.Fatalf("detached descendant PID = %q: %v", contents, err)
+	}
+	if info, err := api.info(pid); err == nil && info.Status != seatbeltProcStatusZombie {
+		t.Fatalf("detached descendant survived: %+v", info)
+	} else if err != nil && !errors.Is(err, syscall.ESRCH) {
+		t.Fatal(err)
+	}
+	if remaining, err := process.sessionProcesses.allPIDs(); err != nil || len(remaining) != 0 {
+		t.Fatalf("remaining Session processes = %v: %v", remaining, err)
+	}
+	if info, err := api.info(bystanderPID); err != nil || info.StartSecond != bystanderIdentity.StartSecond ||
+		info.StartMicrosecond != bystanderIdentity.StartMicrosecond || info.Status == seatbeltProcStatusZombie || info.Status == seatbeltProcStatusStop {
+		t.Fatalf("concurrent sandbox changed during cleanup: %+v, %v", info, err)
 	}
 }
 
@@ -365,7 +419,17 @@ func TestSeatbeltDenialProbeHelper(t *testing.T) {
 		if err := child.Start(); err != nil {
 			os.Exit(91)
 		}
-		time.Sleep(200 * time.Millisecond)
+		deadline := time.Now().Add(2 * time.Second)
+		for {
+			contents, err := os.ReadFile(arguments[2])
+			if err == nil && strings.TrimSpace(string(contents)) == strconv.Itoa(child.Process.Pid) {
+				break
+			}
+			if time.Now().After(deadline) {
+				os.Exit(93)
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
 		if err := syscall.Kill(os.Getppid(), syscall.SIGKILL); err != nil {
 			os.Exit(92)
 		}

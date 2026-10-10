@@ -166,6 +166,11 @@ type SandboxError struct {
 	remediation string
 }
 
+var (
+	errSandboxSessionCleanupRecovered = errors.New("remaining Session processes were terminated; target status is unavailable")
+	errSandboxSessionCleanupUnproven  = errors.New("Session cleanup could not be verified; Session remains quarantined")
+)
+
 func (e *SandboxError) Error() string {
 	var message string
 	switch e.Category {
@@ -201,11 +206,18 @@ func (e *SandboxError) Error() string {
 
 func sandboxError(category SandboxErrorCategory, cause error) error {
 	result := &SandboxError{Category: category}
-	// Only exclusion errors contain prevalidated entry-level, source-free text.
-	// Arbitrary causes still never enter public diagnostics.
+	// Only exclusion errors and fixed cleanup outcomes contain prevalidated,
+	// source-free text. Arbitrary causes never enter public diagnostics.
 	var exclusion *exclusionError
 	if errors.As(cause, &exclusion) {
 		result.remediation = exclusion.Error()
+	}
+	var classified *SandboxError
+	errors.As(cause, &classified)
+	for _, cleanup := range []error{errSandboxSessionCleanupRecovered, errSandboxSessionCleanupUnproven} {
+		if errors.Is(cause, cleanup) || (classified != nil && classified.remediation == cleanup.Error()) {
+			result.remediation = cleanup.Error()
+		}
 	}
 	return result
 }
