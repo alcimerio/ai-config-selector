@@ -141,21 +141,26 @@ func TestDevelopmentCandidateVersionHasReleaseNotes(t *testing.T) {
 	}
 }
 
-func TestPortableSourceCompilationDoesNotExecuteUnsupportedRuntime(t *testing.T) {
+func TestPortableLinuxTestsDoNotClaimRuntimeSupport(t *testing.T) {
 	ci := readRepositoryFile(t, "..", filepath.Join(".github", "workflows", "ci.yml"))
 	for _, required := range []string{
-		"Compile portable source (non-blocking)",
-		"continue-on-error: true",
-		"CGO_ENABLED=0 go test -c",
-		"CGO_ENABLED=0 go build",
+		"Portable Linux tests (ubuntu-24.04)",
+		"runs-on: ubuntu-24.04",
+		"CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go vet ./...",
+		"CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build",
+		"CGO_ENABLED=0 go test ./...",
+		"Linux launch fails closed without a backend",
+		"Linux sandbox backend is not available yet",
 	} {
 		if !strings.Contains(ci, required) {
-			t.Errorf("Portable compilation omits %q", required)
+			t.Errorf("Portable Linux job omits %q", required)
 		}
 	}
-	for _, forbidden := range []string{"go test ./...", "go test -race ./...", "go test -run", "Bubblewrap", "release-candidate.sh"} {
+	// Portable tests are not native containment evidence: no Linux sandbox
+	// backend, release candidate, or skipped-failure escape hatch belongs here.
+	for _, forbidden := range []string{"continue-on-error", "Bubblewrap", "bwrap", "release-candidate.sh"} {
 		if strings.Contains(ci, forbidden) {
-			t.Errorf("Portable compilation is still a support gate through %q", forbidden)
+			t.Errorf("Portable Linux job must not contain %q", forbidden)
 		}
 	}
 }
