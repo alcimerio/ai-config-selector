@@ -25,9 +25,11 @@ For cross-target capability and lifecycle checks, use
 ## Portable source checks
 
 OS-specific filesystem and terminal shims keep shared code testable on Linux.
-The nonblocking CI observation uses `go test -c` and builds the command without
-executing either. Do not use `go test -run '^$'` as a compile-only check: it starts
-test executables and package initialization. Portable unit tests supplement
+The `Portable Linux tests` CI job on `ubuntu-24.04` checks formatting, vets
+linux/amd64 and darwin/arm64, builds linux/amd64 and linux/arm64, runs
+`go test ./...`, and confirms that a Linux launch fails closed because no Linux
+backend exists yet. To compile without running anything, use `go test -c`, not
+`go test -run '^$'`, which starts test executables and package initialization. Portable unit tests supplement
 native checks; they establish neither Linux runtime support nor containment.
 
 ## Native named-authentication evidence

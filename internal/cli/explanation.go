@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"runtime"
 	"sort"
 	"strings"
 
@@ -160,6 +161,8 @@ func (app App) RunExplanation(ctx context.Context, args []string) (bool, int) {
 		status, code, detail := "fail", "unsupported_platform", "The current host is not a supported macOS 26 Apple Silicon runtime."
 		if readiness.Supported {
 			status, code, detail = "pass", "supported_platform", "The current host matches supported platform policy."
+		} else if runtime.GOOS == "linux" && readiness.Failure != nil {
+			detail = readiness.Failure.Error()
 		}
 		checks[len(checks)-2] = explanationCheck{"native.platform", status, code, detail}
 		status, code, detail = "fail", "backend_not_ready", "The fixed native backend readiness observation did not pass."

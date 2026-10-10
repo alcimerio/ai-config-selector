@@ -14,11 +14,10 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  portable-compilation:
-    name: Compile portable source (non-blocking)
+  portable-linux:
+    name: Portable Linux tests (ubuntu-24.04)
     runs-on: ubuntu-24.04
-    continue-on-error: true
-    timeout-minutes: 5
+    timeout-minutes: 20
 
     steps:
       - name: Check out repository
@@ -32,11 +31,35 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Compile portable tests without executing them
+      - name: Check formatting
         run: |
-          compile_dir="$(mktemp -d)"
-          trap 'rm -rf "$compile_dir"' EXIT
-          CGO_ENABLED=0 go test -c -o "$compile_dir/" ./...
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            printf 'gofmt needed:\n%s\n' "$unformatted"
+            exit 1
+          fi
 
-      - name: Compile the command without a runtime backend
-        run: CGO_ENABLED=0 go build -o /tmp/acs-portable ./cmd/acs
+      - name: Vet for linux/amd64 and darwin/arm64
+        run: |
+          CGO_ENABLED=0 go vet ./...
+          CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go vet ./...
+
+      - name: Build the command for linux/amd64 and linux/arm64
+        run: |
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /tmp/acs-linux-amd64 ./cmd/acs
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o /tmp/acs-linux-arm64 ./cmd/acs
+
+      - name: Run portable tests
+        run: CGO_ENABLED=0 go test ./...
+
+      - name: Linux launch fails closed without a backend
+        run: |
+          home="$(mktemp -d)"
+          set +e
+          output="$(HOME="$home" /tmp/acs-linux-amd64 devin --profile linux-ci-probe 2>&1)"
+          status=$?
+          set -e
+          printf '%s\n' "$output"
+          test "$status" -ne 0
+          printf '%s' "$output" | grep -q 'Linux sandbox backend is not available yet'
+          printf '%s' "$output" | grep -q 'never runs targets unsandboxed'

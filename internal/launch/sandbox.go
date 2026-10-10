@@ -166,6 +166,11 @@ type SandboxError struct {
 	remediation string
 }
 
+var (
+	errSandboxSessionCleanupRecovered = errors.New("remaining Session processes were terminated; target status is unavailable")
+	errSandboxSessionCleanupUnproven  = errors.New("Session cleanup could not be verified; Session remains quarantined")
+)
+
 func (e *SandboxError) Error() string {
 	var message string
 	switch e.Category {
@@ -201,13 +206,28 @@ func (e *SandboxError) Error() string {
 
 func sandboxError(category SandboxErrorCategory, cause error) error {
 	result := &SandboxError{Category: category}
-	// Only exclusion errors contain prevalidated entry-level, source-free text.
-	// Arbitrary causes still never enter public diagnostics.
+	// Only exclusion errors and fixed cleanup outcomes contain prevalidated,
+	// source-free text. Arbitrary causes never enter public diagnostics.
 	var exclusion *exclusionError
 	if errors.As(cause, &exclusion) {
 		result.remediation = exclusion.Error()
 	}
+	var classified *SandboxError
+	errors.As(cause, &classified)
+	for _, cleanup := range []error{errSandboxSessionCleanupRecovered, errSandboxSessionCleanupUnproven} {
+		if errors.Is(cause, cleanup) || (classified != nil && classified.remediation == cleanup.Error()) {
+			result.remediation = cleanup.Error()
+		}
+	}
 	return result
+}
+
+func unsupportedPlatformError(operatingSystem string) *SandboxError {
+	remediation := ""
+	if operatingSystem == "linux" {
+		remediation = "Linux sandbox backend is not available yet; ACS never runs targets unsandboxed; see docs/design/linux-support.md"
+	}
+	return newSandboxError(SandboxUnsupportedPlatform, remediation)
 }
 
 // Platform identifies the host properties relevant to the supported sandbox
@@ -227,7 +247,7 @@ func ValidatePlatform(platform Platform) error {
 		supported = platform.Architecture == "arm64" && releaseLine(platform.Release, "26")
 	}
 	if !supported {
-		return sandboxError(SandboxUnsupportedPlatform, nil)
+		return unsupportedPlatformError(platform.OS)
 	}
 	return nil
 }
@@ -262,7 +282,7 @@ func CurrentPlatform() (Platform, error) {
 		}
 		platform.Release = strings.TrimSpace(string(output))
 	default:
-		return Platform{}, sandboxError(SandboxUnsupportedPlatform, nil)
+		return Platform{}, unsupportedPlatformError(runtime.GOOS)
 	}
 	return platform, nil
 }
@@ -484,7 +504,7 @@ func (sandbox *nativeProcessSandbox) selectedBackend(ctx context.Context) (sandb
 	}
 	platform, err := sandbox.cachedPlatformLocked()
 	if err != nil {
-		return nil, sandboxError(SandboxUnsupportedPlatform, err)
+		return nil, unsupportedPlatformError(runtime.GOOS)
 	}
 	if err := ValidatePlatform(platform); err != nil {
 		return nil, err
@@ -509,7 +529,7 @@ func (sandbox *nativeProcessSandbox) Readiness(ctx context.Context) (SandboxRead
 	if err != nil {
 		readiness.Backend = "None"
 		readiness.Platform = "Unknown platform"
-		readiness.Failure = newSandboxError(SandboxUnsupportedPlatform, "")
+		readiness.Failure = unsupportedPlatformError(runtime.GOOS)
 		return readiness, nil
 	}
 	readiness.Backend = nativeBackendName(platform.OS)
@@ -640,7 +660,7 @@ func (sandbox *nativeProcessSandbox) Prepare(ctx context.Context, request Proces
 func (sandbox *nativeProcessSandbox) checkEnvironmentTransport() error {
 	platform, err := sandbox.cachedPlatform()
 	if err != nil {
-		return sandboxError(SandboxUnsupportedPlatform, err)
+		return unsupportedPlatformError(runtime.GOOS)
 	}
 	if err := ValidatePlatform(platform); err != nil {
 		return err

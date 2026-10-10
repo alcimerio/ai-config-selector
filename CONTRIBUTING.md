@@ -83,8 +83,9 @@ Before opening a PR:
 4. Confirm that the PR changes no release asset, tag or external state.
 
 PR gates install the candidate bytes on macOS 26 Apple Silicon; the native job
-must pass before merge. Portable-source compilation is nonblocking and does not
-replace the native Apple Silicon artifact gate.
+must pass before merge. The portable Linux tests job must also pass; it proves
+that shared code builds and that Linux fails closed, and it does not replace the
+native Apple Silicon artifact gate or establish Linux runtime support.
 
 See [testing and dependency maintenance](docs/development/testing.md) for native,
 portable, research and authenticated checks, and
