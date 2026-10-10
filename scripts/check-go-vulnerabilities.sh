@@ -78,6 +78,8 @@ scanner="$workspace/govulncheck"
 if [ "$mode" = source ]; then
   GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 \
     "$scanner" -test -show=verbose,version -format=text -db=https://vuln.go.dev ./...
+  GOOS=linux GOARCH=amd64 CGO_ENABLED=0 \
+    "$scanner" -test -show=verbose,version -format=text -db=https://vuln.go.dev ./...
 else
   scan_status=0
   "$scanner" -mode=binary -show=verbose,version -format=text -db=https://vuln.go.dev "$candidate_binary" || scan_status=$?

@@ -22,6 +22,8 @@ jobs:
     name: Build candidate artifact set
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    outputs:
+      version: ${{ steps.candidate-version.outputs.version }}
 
     steps:
       - name: Check out repository
@@ -41,6 +43,10 @@ jobs:
       - name: Build and verify candidate artifact set
         run: scripts/release-candidate.sh "$ACS_CANDIDATE_VERSION"
 
+      - name: Record candidate version
+        id: candidate-version
+        run: echo "version=$ACS_CANDIDATE_VERSION" >>"$GITHUB_OUTPUT"
+
       - name: Fetch and verify locked native authentication targets
         run: scripts/fetch-codex-test-targets.sh scripts/codex-test-targets.lock dist/codex-test-targets
 
@@ -49,6 +55,15 @@ jobs:
         with:
           name: acs-candidate-${{ github.sha }}
           path: dist/release-candidate
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+
+      - name: Upload separate Linux candidate set (never published)
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: acs-linux-candidate-${{ github.sha }}
+          path: dist/linux-candidate
           if-no-files-found: error
           compression-level: 0
           retention-days: 1
@@ -321,3 +336,15 @@ jobs:
             printf 'Required native validation failed: candidate=%s native=%s\n' "$CANDIDATE_RESULT" "$NATIVE_RESULT"
             exit 1
           fi
+
+  linux-candidate:
+    name: Stage Linux amd64 candidate only
+    needs: candidate
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    uses: ./.github/workflows/linux-candidate.yml
+    with:
+      artifact-name: acs-linux-candidate-${{ github.sha }}
+      version: ${{ needs.candidate.outputs.version }}
