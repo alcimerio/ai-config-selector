@@ -524,6 +524,9 @@ proposal, not GitHub issue numbers. Split implementation further if review grows
    pidfds, PID init/subreaper, gated start, signals and exit status. Depends: 6.
    Accept: fork/setsid/owner-loss tests cannot escape membership or kill unrelated
    processes; missing delegation rejects launch; no leaked resources on abort.
+   The [initial containment supervisor](linux-session-containment.md) records the
+   gated pidfd/cgroup lifecycle, primitive evidence, and outstanding native
+   composition qualification; production Linux remains disabled.
 8. **Integrate authenticated Linux cleanup and recovery.** Scope: durable proof,
    lease/quarantine lifecycle, timeout/cancel and TTY restore. Depends: 7. Accept:
    empty-cgroup/reaping proof precedes deletion, lost proof retains state, stale
