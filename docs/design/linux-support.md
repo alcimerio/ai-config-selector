@@ -575,6 +575,10 @@ proposal, not GitHub issue numbers. Split implementation further if review grows
     pairs, provider projection and fixed execution recipe. Depends: 10,11.
     Accept: each admitted version passes synthetic login/status/interactive,
     refresh, MCP protection and quarantine; no global auth fallback.
+    The [experimental Codex pairs](linux-codex-target.md) record exact amd64
+    archive/member digests, the fixed recipe, file-provider lifecycle fixtures
+    and native qualification harness. Production admission remains closed;
+    protected MCP and complete native target conformance remain activation gates.
 
 ### Stack 6 — native adversarial CI
 
