@@ -60,8 +60,9 @@ The compiler cannot establish snapshot completeness or eliminate host races.
   received descriptors so no host socket enters the target. Private `socketpair`
   IPC can remain available. A directory scan cannot prevent a host from adding
   a socket after capture; ABI 6 alone does not mediate pathname connections.
-  This is a required future enforcement mechanism, not a claim that seccomp is
-  implemented here. See the [Linux 6.12 Landlock contract](https://docs.kernel.org/6.12/userspace-api/landlock.html).
+  The separate [sealed launcher](linux-sealed-launcher.md) implements this
+  seccomp and descriptor boundary; compilation alone does not enforce it.
+  See the [Linux 6.12 Landlock contract](https://docs.kernel.org/6.12/userspace-api/landlock.html).
 - All containment requirements remain: trusted system Bubblewrap, Linux 6.12+
   on a qualified amd64 host, no WSL/containers, sealed single-threaded setup,
   complete seccomp and descriptor policy, and delegated cgroup v2 settlement

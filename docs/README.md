@@ -45,6 +45,7 @@ Devin and the fixed sandbox shell start in [Get started](guides/getting-started.
 - [Native transport research](development/native-transport-research.md): opt-in probes and evidence limits
 - [Linux support design](design/linux-support.md): proposed security contract and staged implementation; Linux execution remains unsupported
 - [Linux filesystem compiler](design/linux-filesystem-plan.md): pure mount/Landlock planning, rejection gates and remaining native proof
+- [Sealed Linux launcher](design/linux-sealed-launcher.md): test-only Bubblewrap, Landlock and seccomp boundary; production Linux remains disabled
 
 [Release-note sources](releases/) are reviewed version-specific records consumed
 by publication. Use [GitHub Releases](https://github.com/alcimerio/ai-config-selector/releases)
