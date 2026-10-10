@@ -40,6 +40,25 @@ func inspectBwrap() (bwrapIdentity, error) {
 }
 
 func inspectBwrapWith(p bwrapOps) (bwrapIdentity, error) {
+	fd, id, err := openBwrapWith(p)
+	if err == nil {
+		_ = p.close(fd)
+	}
+	return id, err
+}
+
+// OpenSystemBwrap returns the verified, pinned system executable. The caller
+// must exec this descriptor (not re-open its pathname) and close it afterwards.
+// This establishes file identity only, not package provenance or launch safety.
+func OpenSystemBwrap() (*os.File, error) {
+	fd, _, err := openBwrapWith(bwrapOps{unix.Openat, unix.Fstat, unix.Faccessat2, unix.Close, digestBwrap})
+	if err != nil {
+		return nil, err
+	}
+	return os.NewFile(uintptr(fd), bwrapPath), nil
+}
+
+func openBwrapWith(p bwrapOps) (result int, identity bwrapIdentity, resultErr error) {
 	// Walk every component relative to a pinned parent, never resolving a PATH
 	// entry or a symlink (including /bin -> /usr/bin). ACL write access is also
 	// checked with the caller's effective IDs, not inferred from mode bits.
@@ -47,7 +66,9 @@ func inspectBwrapWith(p bwrapOps) (bwrapIdentity, error) {
 	var opened []int
 	defer func() {
 		for _, fd := range opened {
-			_ = p.close(fd)
+			if resultErr != nil || fd != result {
+				_ = p.close(fd)
+			}
 		}
 	}()
 	var before unix.Stat_t
@@ -61,18 +82,18 @@ func inspectBwrapWith(p bwrapOps) (bwrapIdentity, error) {
 		}
 		fd, err := p.openat(parent, name, flags, 0)
 		if err != nil {
-			return bwrapIdentity{}, errUntrustedBwrap
+			return -1, bwrapIdentity{}, errUntrustedBwrap
 		}
 		opened = append(opened, fd)
 		if p.stat(fd, &before) != nil || !trustedBwrapMode(before, directory) {
-			return bwrapIdentity{}, errUntrustedBwrap
+			return -1, bwrapIdentity{}, errUntrustedBwrap
 		}
 		writeErr := p.access(fd, "", unix.W_OK, unix.AT_EMPTY_PATH|unix.AT_EACCESS)
 		if !errors.Is(writeErr, unix.EACCES) && !errors.Is(writeErr, unix.EROFS) {
-			return bwrapIdentity{}, errUntrustedBwrap
+			return -1, bwrapIdentity{}, errUntrustedBwrap
 		}
 		if p.access(fd, "", unix.R_OK|unix.X_OK, unix.AT_EMPTY_PATH|unix.AT_EACCESS) != nil {
-			return bwrapIdentity{}, errUntrustedBwrap
+			return -1, bwrapIdentity{}, errUntrustedBwrap
 		}
 		parent = fd
 	}
@@ -80,10 +101,10 @@ func inspectBwrapWith(p bwrapOps) (bwrapIdentity, error) {
 	digest, err := p.digest(parent)
 	var after unix.Stat_t
 	if err != nil || p.stat(parent, &after) != nil || id != bwrapStatIdentity(after) {
-		return bwrapIdentity{}, errUntrustedBwrap
+		return -1, bwrapIdentity{}, errUntrustedBwrap
 	}
 	id.SHA256 = digest
-	return id, nil
+	return parent, id, nil
 }
 
 func trustedBwrapMode(s unix.Stat_t, directory bool) bool {

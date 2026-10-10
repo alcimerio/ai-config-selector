@@ -515,6 +515,8 @@ proposal, not GitHub issue numbers. Split implementation further if review grows
    terminal policy. Depends: 5. Accept: real allowed/denied controls pass under a
    test-only harness; all setup failures start zero untrusted processes; production
    Linux remains disabled until containment integration.
+   The [initial sealed launcher](linux-sealed-launcher.md) records primitive
+   native evidence, the separate composition gate and remaining limitations.
 
 ### Stack 3 — supervisor and containment
 
