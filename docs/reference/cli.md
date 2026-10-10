@@ -81,7 +81,7 @@ macOS continues to use Keychain, independently of Linux configuration.
 | --- | --- | --- |
 | `profile list` / `show` | Reads saved structure and sanitized selections | Source availability, credentials, target readiness |
 | `profile validate` | Checks supported stored structure and selected Skill-source resolution | Full instruction/path/env/MCP/runtime readiness |
-| `doctor` | Checks passive host/backend-file prerequisites; optional target availability | Target versions, authentication, actual containment |
+| `doctor` | Checks passive host/backend-file prerequisites; optional target availability; `--check-linux-capabilities` opts into bounded experimental Linux probes | Target versions, authentication, actual containment; Linux launch admission remains disabled |
 | `explain` | Reports requested/added/effective/unsupported authority | Local content identity or readiness from a semantic digest alone |
 | `explain --check-native-readiness` | Adds the explicit bounded native readiness check | An end-to-end target launch |
 | `sandbox`, `devin`, or `run --dry-run` | Plans supported launch inputs and bounded backend readiness; no Session | Successful target execution or hosted-account behavior |

@@ -42,7 +42,7 @@ jobs:
           cache: true
 
       - name: Check Go source and tests
-        run: scripts/check-go-staticcheck.sh ${{ matrix.goos }} ${{ matrix.goarch }}
+        run: scripts/check-go-staticcheck.sh "${{ matrix.goos }}" "${{ matrix.goarch }}"
 
   actionlint:
     name: actionlint

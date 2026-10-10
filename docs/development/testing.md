@@ -32,20 +32,40 @@ backend exists yet. To compile without running anything, use `go test -c`, not
 `go test -run '^$'`, which starts test executables and package initialization. Portable unit tests supplement
 native checks; they establish neither Linux runtime support nor containment.
 
-The [Staticcheck helper](../../scripts/check-go-staticcheck.sh) runs the same
-pinned checker as CI, including tests, for both source targets:
+Run the same Staticcheck gates as CI with:
 
 ```sh
 scripts/check-go-staticcheck.sh linux amd64
 scripts/check-go-staticcheck.sh darwin arm64
 ```
 
-It builds the checker for the host with the project's selected Go toolchain,
-then applies the analysis target. Version-suffixed `go run` ignores the local
-`go.mod`, so the helper resolves the toolchain before invoking it. A separately
-installed Staticcheck may have been built with an older Go version or export-data
-reader and fail to analyze the project even when `go test` succeeds. Review the
-checker pin when upgrading Go; keep both target checks and test analysis enabled.
+The helper builds the pinned analyzer with the exact Go version in `go.mod`
+and explicitly includes tests when checking the requested target. It analyzes
+test code without executing target binaries, so either gate can run on Linux
+or macOS. Use it instead of an
+older installed `staticcheck`: both the analyzer's Go version and its export-data
+reader must support the module's toolchain. A bare versioned `go run` can select
+the analyzer's older minimum Go version even inside this repository.
+
+### Linux capability probes
+
+`go test -v ./internal/linuxprobe` runs mocked failure gates plus native ABI,
+namespace, seccomp, cgroup and system-Bubblewrap observations. Native tests skip
+with a specific prerequisite reason only when `ACS_LINUX_NATIVE_REQUIRED` is
+unset. On a qualification host, use:
+
+```sh
+ACS_LINUX_NATIVE_REQUIRED=1 CGO_ENABLED=0 go test -v ./internal/linuxprobe -count=1
+```
+
+With the variable set, unavailable prerequisites fail the suite. Do not count
+skips as native evidence. The initial host target is Ubuntu 24.04 HWE on amd64,
+kernel 6.12+, Landlock ABI 6+, working unprivileged user/mount/PID namespaces,
+seccomp, trusted `/usr/bin/bwrap`, and an owned delegated cgroup v2 domain.
+The probe temporarily creates one child cgroup and kills/reaps its fixed helper;
+it does not allocate an ACS Session. Landlock ABI availability and a probe
+seccomp filter do not establish the full containment contract. Linux production
+launch admission stays disabled. See the [diagnostic probe scope](../guides/diagnostics.md#experimental-linux-capability-probes).
 
 ## Native named-authentication evidence
 
