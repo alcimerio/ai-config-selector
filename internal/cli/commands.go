@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"runtime"
 	"strconv"
 	"strings"
 
@@ -390,6 +391,14 @@ func helpPath(command commandSpec) string {
 }
 
 func (app App) printHelp(command commandSpec) {
+	if runtime.GOOS == "linux" {
+		switch command.path {
+		case "sandbox":
+			command.description = "The experimental Linux recipe uses /bin/bash --noprofile --norc with a private Session HOME.\nProduction Linux launches remain disabled; there is no CLI or environment bypass.\n--dry-run inspects the plan without creating a Session or starting a shell."
+		case "run":
+			command.description += "\nExperimental Linux recipes accept native amd64 ELF commands and bounded runtime files.\nProduction Linux launches remain disabled; scripts and custom ELF search paths are not qualified."
+		}
+	}
 	fmt.Fprintf(app.Output, "Usage: %s\n\n%s\n", command.syntax, command.description)
 	if command.group || command.path == "devin" || command.path == "codex" {
 		fmt.Fprintln(app.Output, "\nCommands:")

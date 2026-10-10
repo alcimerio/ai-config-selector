@@ -14,6 +14,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -33,7 +34,7 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-const systemShell = "/bin/zsh"
+var systemShell, systemShellArguments = launch.ShellRecipe(runtime.GOOS)
 
 const maxDevinProbeOutput = 2 << 20
 
@@ -220,7 +221,7 @@ func (e *Executor) Readiness(ctx context.Context) (launch.SandboxReadiness, erro
 	return e.sandbox.Readiness(ctx)
 }
 
-// RunShell creates and materializes a Session, then runs exactly /bin/zsh -f.
+// RunShell creates and materializes a Session, then runs the fixed platform shell.
 // A Session is retained until backend cleanup proves the whole process tree is
 // gone; cleanup uncertainty and finalization failures outrank an ordinary exit.
 func (e *Executor) RunShell(ctx context.Context, request ShellRequest) (resultErr error) {
@@ -235,7 +236,7 @@ func (e *Executor) RunShell(ctx context.Context, request ShellRequest) (resultEr
 		sessionsDirectory: request.SessionsDirectory, workingDirectory: request.WorkingDirectory,
 		workspaceAccess: workspaceAccess, materializer: materializer, runtimeAuthority: runtimeAuthority,
 		resolvedPlan: request.ResolvedPlan,
-		executable:   systemShell, arguments: []string{"-f"}, terminal: request.Terminal,
+		executable:   systemShell, arguments: systemShellArguments, terminal: request.Terminal,
 	})
 	return resultErr
 }
