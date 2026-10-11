@@ -270,7 +270,12 @@ func TestLinuxRecipeInitHelper(t *testing.T) {
 	transport := os.NewFile(3, "transport")
 	wire, env, err := linuxReadTransport(transport)
 	_ = transport.Close()
-	if err != nil || linuxRunContainedInit(wire, env, os.NewFile(4, "report"), os.NewFile(5, "control")) != nil {
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "contained init: read launch transport:", err)
+		os.Exit(125)
+	}
+	if err := linuxRunContainedInit(wire, env, os.NewFile(4, "report"), os.NewFile(5, "control")); err != nil {
+		fmt.Fprintln(os.Stderr, err)
 		os.Exit(125)
 	}
 	os.Exit(0)
@@ -373,7 +378,7 @@ func linuxNativeRecipeScenario(t *testing.T, mode string) {
 	cmd := exec.CommandContext(ctx, "/proc/self/exe", "-test.run=^TestLinuxRecipeSupervisorHelper$")
 	cmd.Env = []string{"LANG=C", "LC_ALL=C", "ACS_TEST_RECIPE=" + mode, "ACS_TEST_ROOT=" + root, "HOST_LEAK=private"}
 	cmd.ExtraFiles = []*os.File{client}
-	var output bytes.Buffer
+	var output linuxRecipeOutput
 	var master, slave *os.File
 	if mode == "interactive" {
 		var err error
@@ -392,14 +397,11 @@ func linuxNativeRecipeScenario(t *testing.T, mode string) {
 		cmd.Stdin = strings.NewReader("[[ -z ${HOST_LEAK+x} ]] || exit 90\nprintf REDIRECTED\nexit 23\n")
 		cmd.Stdout, cmd.Stderr = &output, &output
 	}
-	if err := cmd.Start(); err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = cmd.Process.Kill(); _ = cmd.Wait() }()
+	process := linuxNativeStartCommand(t, cmd, output.String, func() string { return linuxNativePTYDiagnostics(master) })
 	_ = client.Close()
-	linuxTestByte(t, owner, 'R')
+	linuxTestByte(t, owner, 'R', process.diagnostics)
 	linuxTestWrite(t, owner, 'S')
-	linuxTestByte(t, owner, 'E')
+	linuxTestByte(t, owner, 'E', process.diagnostics)
 	if mode == "interactive" {
 		if _, err := master.Write([]byte("[[ $- == *i* && $- == *m* ]] || exit 91; printf 'INTERACTIVE-READY\\n'\n")); err != nil {
 			t.Fatal(err)
@@ -422,9 +424,9 @@ func linuxNativeRecipeScenario(t *testing.T, mode string) {
 			t.Fatal(err)
 		}
 	}
-	linuxTestByte(t, owner, 'X')
-	if err := cmd.Wait(); err != nil {
-		t.Fatalf("native recipe failed: %v %q", err, output.String())
+	linuxTestByte(t, owner, 'X', process.diagnostics)
+	if err := process.Wait(); err != nil {
+		t.Fatalf("native recipe failed: %v\n%s", err, process.diagnostics())
 	}
 	data, err := os.ReadFile(filepath.Join(root, "receipt"))
 	var receipt linuxRecipeReceipt
@@ -435,7 +437,7 @@ func linuxNativeRecipeScenario(t *testing.T, mode string) {
 	if mode == "command" {
 		wantStatus = 0
 		var args []string
-		if json.Unmarshal(output.Bytes(), &args) != nil || !reflect.DeepEqual(args, []string{"a b", "$(touch injected)", ""}) {
+		if json.Unmarshal([]byte(output.String()), &args) != nil || !reflect.DeepEqual(args, []string{"a b", "$(touch injected)", ""}) {
 			t.Fatalf("argv: %q", output.String())
 		}
 	} else if mode == "redirected" && output.String() != "REDIRECTED" {

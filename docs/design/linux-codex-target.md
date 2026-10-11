@@ -49,6 +49,21 @@ Extra flags, config overrides, custom endpoints, arbitrary subcommands and
 selected environment variables are refused. HOME and XDG paths come from the
 sealed Session environment, excluding host auth, desktop buses and API tokens.
 
+`CODEX_HOME` is explicitly fixed to the Session's `.codex` directory. The
+launcher overlays its `config.toml` with sealed, generated empty-selection bytes
+using Bubblewrap's read-only data mount, leaving authentication refreshes and
+other Session state writable. Original Session config bytes remain unchanged.
+Captured project and ancestor `.codex/config.toml` paths are omitted from the
+private filesystem, including absent names that could otherwise appear in live
+directory binds. Writable workspace authority that conflicts with these
+exclusions is refused by the existing compiler.
+
+This projection is necessary because Codex's
+[configuration merge](https://github.com/openai/codex/blob/rust-v0.149.1/codex-rs/config/src/merge.rs)
+recursively merges tables: `-c mcp_servers={}` does not erase lower-layer servers.
+The [configuration loader](https://github.com/openai/codex/blob/rust-v0.156.0/codex-rs/config/src/loader/mod.rs)
+also discovers project config independently of the user config directory.
+
 The stack-4 file provider requires durable explicit selection and keeps its
 existing `$XDG_STATE_HOME/acs/credentials` storage (default
 `~/.local/state/acs/credentials`). Only the selected identity is projected into
@@ -56,9 +71,11 @@ the Session as mode-0600 `.codex/auth.json`. Provider absence, unavailable Secre
 Service or a missing named identity never selects global Codex auth or creates
 an implicit plaintext provider.
 
-The filesystem compiler still refuses immutable MCP configuration/recipe files
-under writable Session HOME. A regression test supplies both protections and
-asserts refusal, with an unprotected positive compilation control. This is a
+The filesystem compiler still refuses arbitrary selected immutable MCP
+configuration/recipe files under writable Session HOME. The fixed generated
+empty-selection overlay does not enable that deferred feature. A regression
+test supplies both protections and asserts refusal, with an unprotected positive
+compilation control. This is a
 closed admission gate, not evidence of native immutable-MCP support. No
 protection is removed to make this recipe launch.
 

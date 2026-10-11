@@ -6,12 +6,16 @@ import (
 	"debug/elf"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/alcimerio/ai-config-selector/internal/codexcompat"
+	"golang.org/x/sys/unix"
 )
 
 func TestLinuxCodexPairRejectsSubstitution(t *testing.T) {
@@ -131,10 +135,11 @@ func TestLinuxCodexRejectsSelectedEnvironment(t *testing.T) {
 }
 
 func TestLinuxCodexTransportHidesHostAuthentication(t *testing.T) {
-	for _, key := range []string{"CODEX_HOME", "OPENAI_API_KEY", "CODEX_API_KEY", "DBUS_SESSION_BUS_ADDRESS"} {
+	for _, key := range []string{"HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME", "XDG_STATE_HOME", "CODEX_HOME", "OPENAI_API_KEY", "CODEX_API_KEY", "DBUS_SESSION_BUS_ADDRESS"} {
 		t.Setenv(key, "host-auth-sentinel")
 	}
 	wire := linuxTestWire()
+	wire.CodexHome = wire.Home + "/.codex"
 	transport, err := linuxWriteTransport(wire, linuxTestLease(t, nil))
 	if err != nil {
 		t.Fatal(err)
@@ -147,11 +152,149 @@ func TestLinuxCodexTransportHidesHostAuthentication(t *testing.T) {
 	if strings.Contains(strings.Join(env, "\n"), "host-auth-sentinel") {
 		t.Fatal("host authentication entered the sealed environment")
 	}
-	found := false
+	got := map[string]string{}
 	for _, entry := range env {
-		found = found || entry == "HOME="+wire.Home
+		name, value, _ := strings.Cut(entry, "=")
+		got[name] = value
+	}
+	for name, want := range map[string]string{"HOME": wire.Home, "CODEX_HOME": wire.Home + "/.codex",
+		"XDG_CONFIG_HOME": wire.Home + "/.config", "XDG_DATA_HOME": wire.Home + "/.local/share",
+		"XDG_CACHE_HOME": wire.Home + "/.cache", "XDG_STATE_HOME": wire.Home + "/.local/state"} {
+		if got[name] != want {
+			t.Fatalf("Codex lost its private %s: %q", name, got[name])
+		}
+	}
+}
+
+func TestLinuxCodexConfigurationProjection(t *testing.T) {
+	for _, state := range []string{"absent-directory", "absent-file", "present"} {
+		t.Run(state, func(t *testing.T) {
+			f := newLinuxPlanFixture()
+			project := f.request.workspace
+			f.directory(project + "/nested")
+			f.file(project + "/README")
+			f.grant(project, PathAccessReadOnly)
+			f.request.workspace = project + "/nested"
+			if state != "absent-directory" {
+				f.directory(project + "/.codex")
+				f.directory(project + "/.codex/skills")
+			}
+			if state == "present" {
+				f.file(project + "/.codex/config.toml")
+				f.directory(project + "/nested/.codex")
+				f.file(project + "/nested/.codex/config.toml")
+			}
+			f.directory(f.request.sessionHome + "/.codex")
+			f.file(f.request.sessionHome + "/.codex/config.toml")
+			f.file(f.request.sessionHome + "/.codex/auth.json")
+			original := append([]FilesystemExclusion(nil), f.request.filesystemExclusions...)
+			request, err := linuxCodexConfigurationRequest(f.request, f.tree)
+			if err != nil || !reflect.DeepEqual(original, f.request.filesystemExclusions) {
+				t.Fatalf("configuration request: %v", err)
+			}
+			plan, err := compileLinuxFilesystemPlan(request, f.tree, f.features, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			linuxAddCodexConfiguration(&plan, request.sessionHome)
+			if planMount(t, plan, request.sessionHome).kind != linuxMountReadWrite ||
+				planMount(t, plan, request.sessionHome+"/.codex/config.toml").kind != linuxMountEmptyCodexConfig {
+				t.Fatal("Codex config did not use the empty selection while preserving writable authentication")
+			}
+			for _, config := range []string{project + "/.codex/config.toml", project + "/nested/.codex/config.toml"} {
+				for _, mount := range plan.mounts {
+					if mount.source != "" && withinOrEqual(mount.source, config) {
+						t.Fatalf("project configuration remains reachable through %+v", mount)
+					}
+				}
+			}
+			if planMount(t, plan, project+"/README").kind != linuxMountReadOnly {
+				t.Fatal("project data disappeared with the unselected configuration")
+			}
+			if state != "absent-directory" && planMount(t, plan, project+"/.codex/skills").kind != linuxMountReadOnly {
+				t.Fatal("non-config project content disappeared")
+			}
+			request.workspaceAccess = WorkspaceAccessReadWrite
+			if _, err := compileLinuxFilesystemPlan(request, f.tree, f.features, nil); err == nil {
+				t.Fatal("writable project could recreate an unselected configuration")
+			}
+		})
+	}
+}
+
+func TestLinuxCodexConfigurationUsesSealedMount(t *testing.T) {
+	wire := linuxTestWire()
+	wire.CodexHome = wire.Home + "/.codex"
+	plan := linuxFilesystemPlan{handledAccess: linuxHandledFilesystem, scoped: 3, unixSockets: linuxUnixSocketsDenyCreation,
+		mounts: []linuxMount{{kind: linuxMountDirectory, destination: "/"}, {kind: linuxMountSealRoot, destination: "/"}},
+		rules:  []linuxLandlockRule{{wire.Rules[0].Path, wire.Rules[0].Access}}}
+	linuxAddCodexConfiguration(&plan, wire.Home)
+	file, err := os.OpenFile("/dev/null", os.O_RDWR, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	prepare := func(plan linuxFilesystemPlan, wire linuxLaunchWire) (*linuxBwrapLaunch, error) {
+		return linuxPrepareBwrapWith(context.Background(), plan, wire, linuxTestLease(t, nil), file, file, file,
+			[3]*os.File{file, file, file}, nil, func() (*os.File, error) { return os.Open("/proc/self/exe") })
+	}
+	prepared, err := prepare(plan, wire)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer prepared.close()
+	found := false
+	args := prepared.command.Args
+	for i, arg := range args {
+		if arg != "--ro-bind-data" || i+2 >= len(args) || args[i+2] != wire.CodexHome+"/config.toml" {
+			continue
+		}
+		fd, err := strconv.Atoi(args[i+1])
+		if err != nil || fd < 3 || fd-3 >= len(prepared.command.ExtraFiles) {
+			t.Fatal("configuration did not use a private descriptor")
+		}
+		config := prepared.command.ExtraFiles[fd-3]
+		data, err := io.ReadAll(config)
+		if err != nil || string(data) != linuxCodexEmptyConfig {
+			t.Fatalf("selected configuration bytes: %q %v", data, err)
+		}
+		if seals, err := unix.FcntlInt(config.Fd(), unix.F_GET_SEALS, 0); err != nil || seals != linuxTransportSeals {
+			t.Fatal("selected configuration is mutable")
+		}
+		found = true
 	}
 	if !found {
-		t.Fatal("Codex lost its private HOME")
+		t.Fatal("unselected Session config was not replaced by a read-only sealed mount")
+	}
+	for _, failure := range []string{"missing", "duplicate", "wrong-path", "source", "no-codex-home"} {
+		t.Run(failure, func(t *testing.T) {
+			bad := plan
+			bad.mounts = append([]linuxMount(nil), plan.mounts...)
+			badWire := wire
+			for i, mount := range bad.mounts {
+				if mount.kind != linuxMountEmptyCodexConfig {
+					continue
+				}
+				switch failure {
+				case "missing":
+					bad.mounts = append(bad.mounts[:i], bad.mounts[i+1:]...)
+				case "duplicate":
+					bad.mounts = append(bad.mounts[:i], append([]linuxMount{mount}, bad.mounts[i:]...)...)
+				case "wrong-path":
+					bad.mounts[i].destination = "/host/config.toml"
+				case "source":
+					bad.mounts[i].source = "/host/config.toml"
+				case "no-codex-home":
+					badWire.CodexHome = ""
+				}
+				break
+			}
+			if prepared, err := prepare(bad, badWire); err == nil || prepared != nil {
+				if prepared != nil {
+					prepared.close()
+				}
+				t.Fatal("invalid selected configuration mount accepted")
+			}
+		})
 	}
 }
