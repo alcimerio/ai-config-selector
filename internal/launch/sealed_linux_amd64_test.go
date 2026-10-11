@@ -1,7 +1,6 @@
 package launch
 
 import (
-	"bytes"
 	"context"
 	"encoding/binary"
 	"io"
@@ -157,7 +156,12 @@ func TestLinuxPrivateTransport(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(want, got) {
 		t.Fatalf("round trip: %v", err)
 	}
-	if !bytes.Contains([]byte(env[len(env)-1]), []byte("SELECTED=synthetic-secret")) || len(env) != 6 {
+	expectedEnvironment := []string{
+		"HOME=/session/home", "TMPDIR=/session/tmp", "PATH=/usr/bin:/bin", "LANG=C", "LC_ALL=C",
+		"XDG_CONFIG_HOME=/session/home/.config", "XDG_DATA_HOME=/session/home/.local/share",
+		"XDG_CACHE_HOME=/session/home/.cache", "XDG_STATE_HOME=/session/home/.local/state", "SELECTED=synthetic-secret",
+	}
+	if !reflect.DeepEqual(env, expectedEnvironment) {
 		t.Fatal("environment selection changed")
 	}
 	if _, err := f.WriteAt([]byte("x"), 0); err != unix.EPERM && !os.IsPermission(err) {

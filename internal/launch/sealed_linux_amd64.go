@@ -120,7 +120,9 @@ func linuxReadTransport(f *os.File) (linuxLaunchWire, []string, error) {
 	if d.Decode(&w) != nil || w.validate() != nil || d.Decode(new(any)) != io.EOF {
 		return fail()
 	}
-	intrinsic := []string{"HOME=" + w.Home, "TMPDIR=" + w.Temporary, "PATH=/usr/bin:/bin", "LANG=C", "LC_ALL=C"}
+	intrinsic := []string{"HOME=" + w.Home, "TMPDIR=" + w.Temporary, "PATH=/usr/bin:/bin", "LANG=C", "LC_ALL=C",
+		"XDG_CONFIG_HOME=" + w.Home + "/.config", "XDG_DATA_HOME=" + w.Home + "/.local/share",
+		"XDG_CACHE_HOME=" + w.Home + "/.cache", "XDG_STATE_HOME=" + w.Home + "/.local/state"}
 	if w.Terminal != nil {
 		intrinsic = append(intrinsic, "TERM=xterm")
 	}

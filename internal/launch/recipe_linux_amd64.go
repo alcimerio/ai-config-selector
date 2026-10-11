@@ -15,6 +15,7 @@ type linuxRecipeKind uint8
 const (
 	linuxShellRecipe linuxRecipeKind = iota + 1
 	linuxCommandRecipe
+	linuxDevinRecipe
 )
 
 // The zero value refuses admission. Only tests opt in: no registered backend,
@@ -50,6 +51,11 @@ func linuxCompileRecipe(admission linuxRecipeAdmission, kind linuxRecipeKind, re
 		request.executable, request.arguments = ShellRecipe("linux")
 	case linuxCommandRecipe:
 		request.arguments = append([]string(nil), request.arguments...)
+	case linuxDevinRecipe:
+		if interactive || !filepath.IsAbs(request.executable) || !linuxDevinArguments(request.arguments) {
+			return linuxRecipe{}, errLinuxRecipe
+		}
+		request.arguments = append([]string(nil), request.arguments...)
 	default:
 		return linuxRecipe{}, errLinuxRecipe
 	}
@@ -58,7 +64,12 @@ func linuxCompileRecipe(admission linuxRecipeAdmission, kind linuxRecipeKind, re
 		return linuxRecipe{}, errLinuxRecipe
 	}
 	request.executable = executable
-	files, err := linuxDiscoverRuntime(executable, interactive)
+	var files []linuxRuntimeFile
+	if kind == linuxDevinRecipe {
+		files, err = linuxDevinRuntime(executable)
+	} else {
+		files, err = linuxDiscoverRuntime(executable, interactive)
+	}
 	if err != nil {
 		return linuxRecipe{}, err
 	}

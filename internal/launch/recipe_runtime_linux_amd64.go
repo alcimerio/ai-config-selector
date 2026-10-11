@@ -24,10 +24,14 @@ type linuxRuntimeFile struct {
 }
 
 func linuxRuntimeNode(file *os.File) (linuxFilesystemNode, error) {
+	return linuxRuntimeNodeLimit(file, 64<<20)
+}
+
+func linuxRuntimeNodeLimit(file *os.File, limit int64) (linuxFilesystemNode, error) {
 	info, err := file.Stat()
 	var x unix.Statx_t
 	var fs unix.Statfs_t
-	if err != nil || !info.Mode().IsRegular() || info.Size() > 64<<20 ||
+	if err != nil || !info.Mode().IsRegular() || info.Size() > limit ||
 		unix.Statx(int(file.Fd()), "", unix.AT_EMPTY_PATH, unix.STATX_MNT_ID, &x) != nil ||
 		x.Mask&unix.STATX_MNT_ID == 0 || unix.Fstatfs(int(file.Fd()), &fs) != nil {
 		return linuxFilesystemNode{}, errLinuxRecipe

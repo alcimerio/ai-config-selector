@@ -1,11 +1,18 @@
 package scripts
 
 import (
+	"archive/tar"
+	"compress/gzip"
+	"crypto/sha256"
+	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/alcimerio/ai-config-selector/internal/devinruntime"
 )
 
 func TestDevinTargetLockAndNativeProductionGate(t *testing.T) {
@@ -51,6 +58,155 @@ func TestDevinTargetLockAndNativeProductionGate(t *testing.T) {
 		if !strings.Contains(string(gate), want) {
 			t.Errorf("shared native gate omits %q", want)
 		}
+	}
+}
+
+func TestDevinLocksMatchPublishedManifest(t *testing.T) {
+	data := mustReadFile(t, "testdata/devin-3000.10.21-manifest.json")
+	if fmt.Sprintf("%x", sha256.Sum256(data)) != "b070658dcb6a7a4ed753cdd9b453375118aea1bf5ed3d353dbbbabc627f2d12c" {
+		t.Fatal("publisher manifest bytes changed")
+	}
+	var manifest struct {
+		Version   string
+		Platforms map[string]struct{ URL, SHA256 string }
+	}
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	if manifest.Version != devinruntime.LinuxAMD64Version {
+		t.Fatal("published manifest version changed")
+	}
+	lock := strings.Split(strings.TrimSpace(string(mustReadFile(t, "devin-test-targets.lock"))), "\n")
+	seen := map[string]bool{}
+	for _, line := range lock {
+		if strings.HasPrefix(line, "#") {
+			continue
+		}
+		fields := strings.Split(line, "|")
+		if len(fields) != 5 || fields[0] != manifest.Version {
+			t.Fatalf("invalid target row: %q", line)
+		}
+		platform := map[string]string{"darwin/arm64": "aarch64-apple-darwin", "linux/amd64": "x86_64-unknown-linux"}[fields[1]+"/"+fields[2]]
+		if platform == "" || seen[platform] {
+			t.Fatalf("unqualified or duplicate platform: %q", line)
+		}
+		seen[platform] = true
+		published := manifest.Platforms[platform]
+		if fields[3] != published.SHA256 || fields[4] != published.URL {
+			t.Fatal("target lock differs from the recorded publisher manifest")
+		}
+	}
+	if len(seen) != 2 || manifest.Platforms["x86_64-unknown-linux"].SHA256 != devinruntime.LinuxAMD64ArchiveSHA256 {
+		t.Fatal("target set or Linux digest changed")
+	}
+	want := fmt.Sprintf("%s|linux|amd64|bin/devin|%d|%s", devinruntime.LinuxAMD64Version,
+		devinruntime.LinuxAMD64BinarySize, devinruntime.LinuxAMD64BinarySHA256)
+	if !strings.Contains(string(mustReadFile(t, "devin-test-target-files.lock")), want+"\n") {
+		t.Fatal("runtime file lock differs from the compiled qualification inputs")
+	}
+}
+
+func TestLinuxDevinInstallerChecksBundleAndDefersArm64(t *testing.T) {
+	for _, mode := range []string{"ok", "arm64", "missing", "duplicate", "wrong-size", "wrong-digest", "duplicate-member", "symlink-member", "traversal", "extra-runtime"} {
+		t.Run(mode, func(t *testing.T) {
+			root := t.TempDir()
+			stub := filepath.Join(root, "stub")
+			out := filepath.Join(root, "bin", "devin")
+			for _, dir := range []string{stub, filepath.Dir(out)} {
+				if err := os.Mkdir(dir, 0700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			arch := "x86_64"
+			if mode == "arm64" {
+				arch = "aarch64"
+			}
+			write := func(path, body string, perm os.FileMode) {
+				t.Helper()
+				if err := os.WriteFile(path, []byte(body), perm); err != nil {
+					t.Fatal(err)
+				}
+			}
+			write(filepath.Join(stub, "uname"), "#!/bin/sh\n[ \"$1\" = -s ] && echo Linux || echo "+arch+"\n", 0700)
+			write(filepath.Join(stub, "curl"), "#!/bin/sh\nwhile [ $# -gt 0 ]; do case \"$1\" in --output) out=$2; shift 2;; *) shift;; esac; done\ncp \"$TEST_ARCHIVE\" \"$out\"\n", 0700)
+			// A successful Linux install must never execute the supplied bytes.
+			binary := []byte("#!/bin/sh\nexit 99\n")
+			archive := filepath.Join(root, "fixture.tar.gz")
+			file, err := os.Create(archive)
+			if err != nil {
+				t.Fatal(err)
+			}
+			gz := gzip.NewWriter(file)
+			tw := tar.NewWriter(gz)
+			members := []string{"bin/devin"}
+			if mode == "duplicate-member" {
+				members = append(members, "bin/devin")
+			}
+			if mode == "traversal" {
+				members = append(members, "../escape")
+			}
+			for _, name := range members {
+				header := &tar.Header{Name: name, Mode: 0755, Size: int64(len(binary)), Typeflag: tar.TypeReg}
+				if mode == "symlink-member" {
+					header.Typeflag, header.Linkname, header.Size = tar.TypeSymlink, "/bin/sh", 0
+				}
+				if err := tw.WriteHeader(header); err != nil {
+					t.Fatal(err)
+				}
+				if header.Size > 0 {
+					if _, err := tw.Write(binary); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			for _, close := range []func() error{tw.Close, gz.Close, file.Close} {
+				if err := close(); err != nil {
+					t.Fatal(err)
+				}
+			}
+			row := fmt.Sprintf("3000.10.21|linux|amd64|%x|https://example.invalid/devin.tar.gz\n", sha256.Sum256(mustReadFile(t, archive)))
+			if mode == "missing" {
+				row = "# no Linux row\n"
+			} else if mode == "duplicate" {
+				row += row
+			}
+			lock := filepath.Join(root, "targets.lock")
+			write(lock, row, 0600)
+			size, digest := len(binary), fmt.Sprintf("%x", sha256.Sum256(binary))
+			if mode == "wrong-size" {
+				size++
+			}
+			if mode == "wrong-digest" {
+				digest = strings.Repeat("0", 64)
+			}
+			fileRow := fmt.Sprintf("3000.10.21|linux|amd64|bin/devin|%d|%s\n", size, digest)
+			if mode == "extra-runtime" {
+				fileRow += "3000.10.21|linux|amd64|bin/helper|1|" + digest + "\n"
+			}
+			write(filepath.Join(root, "devin-test-target-files.lock"), fileRow, 0600)
+			cmd := exec.Command("sh", "install-devin-test-target.sh", lock, root, out)
+			cmd.Env = append(os.Environ(), "PATH="+stub+":"+os.Getenv("PATH"), "TEST_ARCHIVE="+archive)
+			output, err := cmd.CombinedOutput()
+			if mode == "ok" {
+				if err != nil {
+					t.Fatalf("install: %v %s", err, output)
+				}
+				info, err := os.Lstat(out)
+				if err != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0500 || string(mustReadFile(t, out)) != string(binary) {
+					t.Fatal("installed target bytes/mode differ")
+				}
+			} else {
+				if err == nil {
+					t.Fatal("unsafe or unsupported target installed")
+				}
+				if _, err := os.Lstat(out); !os.IsNotExist(err) {
+					t.Fatal("failure left an executable")
+				}
+				if _, err := os.Lstat(filepath.Join(root, "devin-3000.10.21-linux-amd64.tar.gz")); !os.IsNotExist(err) {
+					t.Fatal("failure left a downloaded archive")
+				}
+			}
+		})
 	}
 }
 
