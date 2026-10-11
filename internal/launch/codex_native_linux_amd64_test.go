@@ -3,7 +3,6 @@ package launch
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"os"
@@ -15,6 +14,7 @@ import (
 	"time"
 
 	"github.com/alcimerio/ai-config-selector/internal/codexauthresource"
+	"github.com/alcimerio/ai-config-selector/internal/codexauthresource/codexauthtest"
 	"github.com/alcimerio/ai-config-selector/internal/codexcompat"
 	"github.com/alcimerio/ai-config-selector/internal/linuxprobe"
 	"github.com/creack/pty"
@@ -157,10 +157,11 @@ func TestLinuxCodexSupervisorHelper(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", filepath.Join(root, "host", "data"))
 	t.Setenv("XDG_STATE_HOME", filepath.Join(root, "host", "state"))
 	must(codexauthresource.SelectProvider(codexauthresource.ProviderFile))
+	auth, restoreKeys, err := codexauthtest.SignedChatGPTAuthJSON("synthetic-user", "synthetic-workspace", "synthetic-access", "synthetic-refresh", "2026-10-10T12:00:00Z")
+	must(err)
+	defer restoreKeys()
 	store, err := codexauthresource.New(filepath.Join(root, "locks"), filepath.Join(root, "markers"))
 	must(err)
-	claims := base64.RawURLEncoding.EncodeToString([]byte(`{"sub":"synthetic-user","https://api.openai.com/auth":{"chatgpt_user_id":"synthetic-user","chatgpt_account_id":"synthetic-workspace"}}`))
-	auth := []byte(`{"auth_mode":"chatgpt","tokens":{"id_token":"header.` + claims + `.signature","access_token":"synthetic-access","refresh_token":"synthetic-refresh","account_id":"synthetic-workspace"},"last_refresh":"2026-10-10T12:00:00Z"}`)
 	write(filepath.Join(root, "host", ".codex", "auth.json"), auth)
 	seed, err := CreateProtectedSession(filepath.Join(root, "seed"))
 	must(err)
