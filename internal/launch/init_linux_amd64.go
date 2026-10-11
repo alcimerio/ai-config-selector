@@ -39,9 +39,23 @@ func linuxRunContainedInit(w linuxLaunchWire, env []string, status, control *os.
 	for i, rule := range w.Rules {
 		rules[i] = linuxLandlockRule{rule.Path, rule.Access}
 	}
-	pid, err := linuxStartRestricted(rules, w.Executable, w.Argv, env, int(report.Fd()), int(gate.Fd()))
+	terminalFD := -1
+	var terminal *linuxPrivateTerminal
+	if w.Terminal != nil {
+		terminal, err = linuxOpenPrivateTerminal(w.Terminal)
+		if err != nil {
+			return err
+		}
+		defer terminal.close()
+		terminalFD = int(terminal.slave.Fd())
+		rules = append(rules, linuxLandlockRule{terminal.slave.Name(), linuxReadFile | linuxWriteFile | unix.LANDLOCK_ACCESS_FS_IOCTL_DEV})
+	}
+	pid, err := linuxStartRestrictedTerminal(rules, w.Executable, w.Argv, env, int(report.Fd()), int(gate.Fd()), terminalFD)
 	if err != nil {
 		return err
+	}
+	if terminal != nil {
+		_ = terminal.slave.Close()
 	}
 	_ = report.Close()
 	_ = gate.Close()
@@ -112,11 +126,17 @@ func linuxRunContainedInit(w linuxLaunchWire, env []string, status, control *os.
 			if request.err != nil || !ok {
 				return errLinuxContainment
 			}
+			if terminal != nil && sig == unix.SIGWINCH && terminal.resize() != nil {
+				return errLinuxContainment
+			}
 			if err := unix.PidfdSendSignal(pidfd, sig, nil, 0); err != nil && err != unix.ESRCH {
 				return errLinuxContainment
 			}
 		case <-done:
 			if waitErr != nil || !linuxTerminalStatus(waitStatus) {
+				return errLinuxContainment
+			}
+			if terminal != nil && terminal.drain() != nil {
 				return errLinuxContainment
 			}
 			var frame [5]byte

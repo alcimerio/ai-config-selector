@@ -63,6 +63,32 @@ next_signal:
 	CMPQ R13, $65
 	JNE reset_signals
 
+	CMPQ linuxExecBoundary_terminal(R12), $0
+	JL terminal_done
+	MOVQ $112, AX // setsid: child owns a new session for its private devpts slave
+	SYSCALL
+	TESTQ AX, AX
+	JS fail
+	MOVQ $16, AX // ioctl(private_slave, TIOCSCTTY, 0); never steal an owned tty
+	MOVQ linuxExecBoundary_terminal(R12), DI
+	MOVQ $0x540e, SI
+	XORQ DX, DX
+	SYSCALL
+	TESTQ AX, AX
+	JNZ fail
+	XORQ R13, R13
+terminal_dup:
+	MOVQ $292, AX // dup3(private_slave, stdio, 0)
+	MOVQ linuxExecBoundary_terminal(R12), DI
+	MOVQ R13, SI
+	XORQ DX, DX
+	SYSCALL
+	TESTQ AX, AX
+	JS fail
+	INCQ R13
+	CMPQ R13, $3
+	JNE terminal_dup
+terminal_done:
 	MOVQ $292, AX // dup3(status, 3, O_CLOEXEC)
 	MOVQ linuxExecBoundary_status(R12), DI
 	MOVQ $3, SI

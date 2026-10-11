@@ -47,10 +47,11 @@ type linuxFilesystemFeatures struct {
 type linuxMountKind uint8
 
 const (
-	linuxMountDirectory linuxMountKind = iota // Synthetic directory in private root.
-	linuxMountReadOnly                        // bwrap --ro-bind, recursively read-only.
-	linuxMountReadWrite                       // bwrap --bind.
-	linuxMountSealRoot                        // bwrap --remount-ro /, after setup.
+	linuxMountDirectory    linuxMountKind = iota // Synthetic directory in private root.
+	linuxMountReadOnly                           // bwrap --ro-bind, recursively read-only.
+	linuxMountReadWrite                          // bwrap --bind.
+	linuxMountSealRoot                           // bwrap --remount-ro /, after setup.
+	linuxMountRuntimeAlias                       // Exact RO ELF/terminfo alias, no host symlink.
 )
 
 type linuxMount struct {

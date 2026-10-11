@@ -125,7 +125,7 @@ func TestLinuxSealHelper(t *testing.T) {
 		envp, _ := linuxExecStrings(env)
 		status, _ := unix.FcntlInt(4, unix.F_DUPFD_CLOEXEC, 128)
 		gate, _ := unix.FcntlInt(5, unix.F_DUPFD_CLOEXEC, 128)
-		config := linuxExecBoundary{int64(ruleset), int64(status), int64(gate), &program, argv[0], &argv[0], &envp[0]}
+		config := linuxExecBoundary{int64(ruleset), int64(status), int64(gate), &program, argv[0], &argv[0], &envp[0], -1}
 		if mode == "-bad-landlock" {
 			config.ruleset = -1
 		} else {
