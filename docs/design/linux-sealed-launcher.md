@@ -74,16 +74,50 @@ dry-run report the gap. The backend retains its existing host network namespace,
 IPv4/IPv6 socket authority, filesystem Landlock rules and seccomp listen/accept
 denial; production Linux admission remains disabled.
 
-The current composition cannot enforce exact parity. Landlock network rules
+The current composition does not enforce exact parity. Landlock network rules
 (since ABI 4) restrict TCP connect/bind by **port**, without matching destination
 addresses, and do not mediate UDP. A global TCP port allowlist would also restrict
 remote internet destinations, changing the ordinary outbound contract. Classic
 seccomp BPF cannot dereference connect/sendto sockaddr pointers; inspecting a
-pointer value does not identify the destination safely. Simply unsharing the
-network namespace removes ordinary networking and changes localhost's meaning;
-it does not expose selected host loopback services without additional routing or
-forwarding. The existing listen/accept denial also needs a separate, narrow
-solution for managed Codex browser login's localhost:1455 callback.
+pointer value does not identify the destination safely.
+
+Seccomp user notification (`SECCOMP_RET_USER_NOTIF`) is a feasible direction,
+not a classic-BPF limitation: an outside supervisor with the required process
+memory access can read a bounded `connect()` or `sendto()` sockaddr through
+`/proc/<pid>/mem`, copy it into supervisor-owned memory, and inspect its address
+and port. ACS's supervisor already runs outside the target cgroup and PID
+namespace. However, the current setup installs filters through Bubblewrap and
+the assembly child boundary without a notification listener or descriptor
+handoff; its two private pipes carry launch/lifecycle messages, not syscall
+requests. A broker would need new setup, permissions, notification validation,
+descriptor ownership and fail-closed settlement behavior.
+
+A copied sockaddr makes the supervisor's decision stable, but does not make
+`SECCOMP_USER_NOTIF_FLAG_CONTINUE` safe for a deny policy. Another thread or
+shared-memory writer can replace an apparently remote address with loopback
+before the kernel consumes it. Returning EPERM for a forbidden snapshot is safe;
+continuing an allowed snapshot is not sufficient enforcement. Re-reading the
+address or validating the notification ID immediately before CONTINUE still
+leaves that race. A sound implementation must re-validate the address actually
+used, for example by emulating the operation on a pinned socket using the
+supervisor-owned, validated copy, or by adding a kernel destination check.
+Emulation also has to preserve socket identity despite concurrent close/reuse,
+nonblocking behavior, connected UDP, and destination-bearing `sendmsg()` and
+`sendmmsg()` calls. The current sandbox denies `pidfd_getfd` to targets; this does
+not prohibit an outside supervisor from using it with the required permissions.
+Those permissions and socket/lifecycle semantics need native proof before such
+a broker can replace the documented gap.
+
+A private network namespace containing only lo plus a userspace network stack
+such as slirp/pasta is another direction. Unsharing alone removes ordinary
+networking and changes localhost's meaning; selected host loopback services
+would need explicit forwarding, while all routes back to host services would
+need equivalent destination enforcement. This adds a networking dependency and
+supervised forwarding lifecycle. Neither approach is a focused policy/test fix
+in the present codebase, so this change retains existing Linux behavior and its
+explicit explain/dry-run ignored-field note. The existing listen/accept denial
+also needs a separate, narrow solution for managed Codex browser login's
+localhost:1455 callback.
 
 Exact parity requires a reviewed destination-aware mechanism and native controls
 for IPv4 127/8, IPv6 ::1/mapped IPv4, localhost resolution, TCP and UDP, selected
@@ -91,7 +125,9 @@ and unselected ports, remote destinations on those same ports, DNS, child
 inheritance and private IPC. Do not claim loopback isolation or silently apply
 port-only rules while this remains unresolved. Kernel references:
 [Landlock network objects](https://docs.kernel.org/6.12/userspace-api/landlock.html#landlock-rules)
-and [seccomp pointer limits](https://docs.kernel.org/userspace-api/seccomp_filter.html#introduction).
+and [seccomp userspace notification](https://docs.kernel.org/userspace-api/seccomp_filter.html#userspace-notification).
+The kernel's [CONTINUE warning](https://github.com/torvalds/linux/blob/master/include/uapi/linux/seccomp.h)
+explicitly requires other enforcement against rewritten pointer arguments.
 
 ## Evidence and remaining gates
 

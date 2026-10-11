@@ -54,7 +54,7 @@ func TestSeatbeltLoopbackPolicyOrdersDenialAndExceptions(t *testing.T) {
 func TestSeatbeltDeniesLoopbackExceptSelectedPort(t *testing.T) {
 	skipSeatbeltNativeTestBinaryUnderRace(t)
 	for _, endpoint := range []struct{ network, host string }{
-		{"tcp4", "127.0.0.1"}, {"tcp4", "127.0.0.2"}, {"tcp6", "::1"}, {"tcp4", "localhost"},
+		{"tcp4", "127.0.0.1"}, {"tcp6", "::1"}, {"tcp4", "localhost"},
 	} {
 		t.Run(endpoint.host, func(t *testing.T) {
 			first, err := net.Listen(endpoint.network, net.JoinHostPort(endpoint.host, "0"))
@@ -80,31 +80,67 @@ func TestSeatbeltDeniesLoopbackExceptSelectedPort(t *testing.T) {
 				ports         []int
 				address, want string
 			}{
-				{"default-first", nil, first.Addr().String(), "denied"}, {"default-other", nil, other.Addr().String(), "denied"},
+				{"default-first", nil, net.JoinHostPort(endpoint.host, strconv.Itoa(port)), "denied"},
+				{"default-other", nil, net.JoinHostPort(endpoint.host, strconv.Itoa(other.Addr().(*net.TCPAddr).Port)), "denied"},
 				{"selected", []int{port}, net.JoinHostPort(endpoint.host, strconv.Itoa(port)), "allowed"},
-				{"unlisted", []int{port}, other.Addr().String(), "denied"},
+				{"unlisted", []int{port}, net.JoinHostPort(endpoint.host, strconv.Itoa(other.Addr().(*net.TCPAddr).Port)), "denied"},
 			} {
 				t.Run(test.name, func(t *testing.T) {
-					request := seatbeltTestRequest(t)
-					request.runtimeAuthority = DefaultRuntimeAuthority()
-					request.runtimeAuthority.LoopbackPorts = test.ports
-					result := filepath.Join(request.sessionDirectory, "loopback-result")
-					request.arguments = []string{seatbeltLoopbackProbeRun, "--", "dial", result, endpoint.network, test.address}
-					settled, err := seatbeltTerminalNativeRun(request)
-					if !settled || err != nil {
-						t.Fatalf("probe failed or cleanup unproven: %v", err)
-					}
-					contents, err := os.ReadFile(result)
-					if err != nil {
-						t.Fatal(err)
-					}
-					seatbeltDenialEvidence(t, "host=%s ports=%v outcome=%s", endpoint.host, test.ports, contents)
-					if string(contents) != test.want {
-						t.Fatalf("dial outcome %q, want %q", contents, test.want)
-					}
+					assertSeatbeltLoopbackDial(t, endpoint.network, test.address, test.ports, test.want)
 				})
 			}
 		})
+	}
+	t.Run("127.0.0.2", func(t *testing.T) {
+		// macOS lo0 need not have this address configured. Reserve ports on
+		// 127.0.0.1, but never require a listener or a successful dial on .2.
+		first, err := net.Listen("tcp4", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer first.Close()
+		other, err := net.Listen("tcp4", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer other.Close()
+		address := net.JoinHostPort("127.0.0.2", strconv.Itoa(first.Addr().(*net.TCPAddr).Port))
+		connection, err := net.DialTimeout("tcp4", address, time.Second)
+		if err == nil {
+			_ = connection.Close()
+			t.Fatal("unconfigured host control unexpectedly connected")
+		}
+		if errors.Is(err, syscall.EPERM) || errors.Is(err, syscall.EACCES) {
+			t.Fatalf("host control already denied by policy: %v", err)
+		}
+		seatbeltDenialEvidence(t, "host control address=%s outcome=%v", address, err)
+		t.Run("default", func(t *testing.T) {
+			assertSeatbeltLoopbackDial(t, "tcp4", address, nil, "denied")
+		})
+		t.Run("unlisted", func(t *testing.T) {
+			assertSeatbeltLoopbackDial(t, "tcp4", address, []int{other.Addr().(*net.TCPAddr).Port}, "denied")
+		})
+	})
+}
+
+func assertSeatbeltLoopbackDial(t *testing.T, network, address string, ports []int, want string) {
+	t.Helper()
+	request := seatbeltTestRequest(t)
+	request.runtimeAuthority = DefaultRuntimeAuthority()
+	request.runtimeAuthority.LoopbackPorts = ports
+	result := filepath.Join(request.sessionDirectory, "loopback-result")
+	request.arguments = []string{seatbeltLoopbackProbeRun, "--", "dial", result, network, address}
+	settled, err := seatbeltTerminalNativeRun(request)
+	if !settled || err != nil {
+		t.Fatalf("probe failed or cleanup unproven: %v", err)
+	}
+	contents, err := os.ReadFile(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seatbeltDenialEvidence(t, "address=%s ports=%v outcome=%s", address, ports, contents)
+	if string(contents) != want {
+		t.Fatalf("dial outcome %q, want %q", contents, want)
 	}
 }
 

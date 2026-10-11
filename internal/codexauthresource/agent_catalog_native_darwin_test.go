@@ -37,7 +37,6 @@ func runNativeCodexMCPAgentCase(t *testing.T, candidate, home, tools, workspace,
 	}
 	serverPath := filepath.Join(workspace, "native-mcp-server.sh")
 	writeNativeMCPServer(t, serverPath)
-	writeNativeCodexMCPProfile(t, home, "mcp", identity)
 	markerPath := inputPath + ".mcp-effect"
 	descendantPath := inputPath + ".mcp-descendant"
 	before := installedSessionSnapshot(t, candidate, home, tools, workspace)
@@ -50,6 +49,7 @@ func runNativeCodexMCPAgentCase(t *testing.T, candidate, home, tools, workspace,
 	fixture.descendantReady = descendantPath
 	fixture.mcpStartupReceipt = inputPath + ".mcp-startup"
 	defer fixture.server.Close()
+	writeNativeCodexMCPProfile(t, home, "mcp", identity, fixture.loopbackPort())
 	coordination := nativeCodexPhaseCoordination{requireMCPStartup: true}
 	if present != nil {
 		coordination.versionReady = filepath.Join(workspace, "agent-version-ready")
