@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/alcimerio/ai-config-selector/internal/codexcompat"
 	"github.com/alcimerio/ai-config-selector/internal/environmentresource"
 	"github.com/alcimerio/ai-config-selector/internal/linuxprobe"
 )
@@ -16,6 +17,7 @@ const (
 	linuxShellRecipe linuxRecipeKind = iota + 1
 	linuxCommandRecipe
 	linuxDevinRecipe
+	linuxCodexRecipe
 )
 
 // The zero value refuses admission. Only tests opt in: no registered backend,
@@ -27,6 +29,7 @@ type linuxRecipe struct {
 	wire        linuxLaunchWire
 	interactive bool
 	session     string
+	codex       bool
 }
 
 // The caller supplies the compiler's complete captured Profile/Session tree.
@@ -56,6 +59,11 @@ func linuxCompileRecipe(admission linuxRecipeAdmission, kind linuxRecipeKind, re
 			return linuxRecipe{}, errLinuxRecipe
 		}
 		request.arguments = append([]string(nil), request.arguments...)
+	case linuxCodexRecipe:
+		if !filepath.IsAbs(request.executable) || !codexcompat.ValidLinuxArguments(request.arguments, request.workspace, interactive) {
+			return linuxRecipe{}, errLinuxRecipe
+		}
+		request.arguments = append([]string(nil), request.arguments...)
 	default:
 		return linuxRecipe{}, errLinuxRecipe
 	}
@@ -67,6 +75,8 @@ func linuxCompileRecipe(admission linuxRecipeAdmission, kind linuxRecipeKind, re
 	var files []linuxRuntimeFile
 	if kind == linuxDevinRecipe {
 		files, err = linuxDevinRuntime(executable)
+	} else if kind == linuxCodexRecipe {
+		files, err = linuxCodexRuntime(executable)
 	} else {
 		files, err = linuxDiscoverRuntime(executable, interactive)
 	}
@@ -108,7 +118,7 @@ func linuxCompileRecipe(admission linuxRecipeAdmission, kind linuxRecipeKind, re
 	if wire.validate() != nil {
 		return linuxRecipe{}, errLinuxRecipe
 	}
-	return linuxRecipe{plan, wire, interactive, request.sessionDirectory}, nil
+	return linuxRecipe{plan: plan, wire: wire, interactive: interactive, session: request.sessionDirectory, codex: kind == linuxCodexRecipe}, nil
 }
 
 // Run only in the dedicated test supervisor. All recipes, including redirected
@@ -133,6 +143,12 @@ func linuxRunRecipe(ctx context.Context, admission linuxRecipeAdmission, recipe 
 		}
 	}()
 	if owner == nil || helper == nil || recipe.wire.validate() != nil {
+		return result, errLinuxRecipe
+	}
+	// Auth must come exclusively from the selected file projection. The initial
+	// Codex recipe admits no environment overrides (including API tokens,
+	// CODEX_HOME, proxy endpoints, or a desktop bus).
+	if recipe.codex && (env == nil || !env.Empty()) {
 		return result, errLinuxRecipe
 	}
 	interactive, err := linuxRecipeStdioMode(stdio)

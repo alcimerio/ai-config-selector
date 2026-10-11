@@ -50,6 +50,7 @@ Devin and the fixed sandbox shell start in [Get started](guides/getting-started.
 - [Linux cleanup and recovery](design/linux-cleanup-recovery.md): authenticated settlement, retained leases, quarantine and terminal restoration
 - [Linux shell and command recipes](design/linux-shell-recipes.md): test-only ELF runtime, private terminal and cgroup integration; production admission stays closed
 - [Linux Devin qualification](design/linux-devin-target.md): verified amd64 target bytes and contained preflight harness; arm64 deferred and production admission closed
+- [Linux Codex qualification](design/linux-codex-target.md): exact amd64 CLI/companion pairs, file-provider fixtures and native harness; production admission closed
 
 [Release-note sources](releases/) are reviewed version-specific records consumed
 by publication. Use [GitHub Releases](https://github.com/alcimerio/ai-config-selector/releases)
