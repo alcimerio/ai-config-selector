@@ -1103,6 +1103,7 @@ type testLoginResources struct {
 	provider   credentialProvider
 	locks      identityLocker
 	quarantine bindingQuarantine
+	importErr  error
 }
 
 func (resources testLoginResources) AcquireLogin(ctx context.Context, value string) (loginResourceBinding, error) {
@@ -1269,6 +1270,9 @@ func (binding testLoginBinding) DeleteMarkerAfterProjectionRemoval(ctx context.C
 	return registryTestResources(binding.registry).quarantine.Delete(ctx, binding.name)
 }
 func (binding testLoginBinding) CommitLogin(ctx context.Context, root string) (IdentityMetadata, error) {
+	if err := registryTestResources(binding.registry).importErr; err != nil {
+		return IdentityMetadata{}, err
+	}
 	auth, err := readSessionAuthFile(root)
 	if err != nil {
 		return IdentityMetadata{}, ErrUnsupportedAuth
@@ -1293,6 +1297,9 @@ func (binding testLoginBinding) MarkRefreshAllowed(ctx context.Context) error {
 }
 
 func (binding testLoginBinding) FinalizeStatus(ctx context.Context, root string) (codexauthresource.BindingDisposition, error) {
+	if err := registryTestResources(binding.registry).importErr; err != nil {
+		return codexauthresource.DiscardedProjection, err
+	}
 	if !binding.hasRecord {
 		return codexauthresource.QuarantinedUncertain, ErrProviderUnavailable
 	}
@@ -1352,6 +1359,9 @@ func (binding *testRecoveryBinding) DeleteMarkerAfterProjectionRemoval(ctx conte
 	return registryTestResources(binding.registry).quarantine.Delete(ctx, binding.name)
 }
 func (binding *testRecoveryBinding) FinalizeRecovery(ctx context.Context, root string) (codexauthresource.BindingDisposition, error) {
+	if err := registryTestResources(binding.registry).importErr; err != nil {
+		return codexauthresource.DiscardedProjection, err
+	}
 	record, exists, err := registryTestResources(binding.registry).provider.Load(ctx, binding.name)
 	if err != nil {
 		return codexauthresource.QuarantinedUncertain, ErrBindingQuarantined
