@@ -570,6 +570,7 @@ func TestNativeCandidateBroadSuitesCoveredByMacOSVerify(t *testing.T) {
 		}
 		for _, required := range []string{
 			"TestNativeInstalledACSExecutesLockedCodexToolThroughNamedIdentity",
+			"TestNativeKeychainDeniedReadFailsPromptly",
 			"TestPromotedArtifactSharedTargetConformance",
 			"TestPromotedArtifactNativeRealDevinMCP",
 			"TestPromotedProfileRecoveryNeedsNoLaunchDependencies",
