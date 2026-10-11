@@ -68,8 +68,8 @@ func TestLinuxCodexFileProviderLifecycle(t *testing.T) {
 	for _, pair := range codexcompat.LinuxAMD64Pairs() {
 		t.Run(pair.Version, func(t *testing.T) {
 			ctx := context.Background()
+			auth := signedLinuxChatGPTAuthJSON(t, "synthetic-user", "synthetic-workspace")
 			service, config := linuxCodexServiceFixture(t)
-			auth := testChatGPTAuthJSON(t, "synthetic-user", "synthetic-workspace")
 			login := &fakeLoginSandbox{version: pair.Version, auth: auth}
 			service.login = newCodexLoginRunner(config, login)
 			if _, err := service.Login(ctx, CodexLoginRequest{Name: "selected", DeviceAuth: true}); err != nil {
