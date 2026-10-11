@@ -4,6 +4,7 @@ package codexauthresource
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -27,6 +28,50 @@ func TestNativeKeychainFrameworkLoads(t *testing.T) {
 	if _, err := newNativeKeychainClient(); err != nil {
 		t.Fatalf("load native Keychain client: %v", err)
 	}
+}
+
+func TestNativeKeychainDeniedReadFailsPromptly(t *testing.T) {
+	if os.Getenv("ACS_RUN_NATIVE_AUTH_GATE") != "1" {
+		t.Skip("explicit isolated native authentication fixture required")
+	}
+	useIsolatedTestKeychain(t)
+	// The child test executable is deliberately absent from this item's ACL.
+	// A per-query UI flag alone can leave this read waiting for a macOS prompt.
+	if _, err := runNativeSecurityCommand("/usr/bin/security", "add-generic-password",
+		"-s", keychainService, "-a", "denied-child", "-w", "synthetic-only", "-T", "/usr/bin/true"); err != nil {
+		t.Fatal("create denied-read fixture")
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	command := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestNativeKeychainDeniedReadEntrypoint$", "-test.count=1")
+	command.WaitDelay = time.Second
+	command.Env = append(os.Environ(), "ACS_NATIVE_AUTH_DENIED_READ=1")
+	output, err := command.CombinedOutput()
+	if ctx.Err() != nil || err != nil {
+		t.Fatalf("denied Keychain read did not fail promptly: %v; output=%q", err, output)
+	}
+}
+
+func TestNativeKeychainDeniedReadEntrypoint(t *testing.T) {
+	if os.Getenv("ACS_NATIVE_AUTH_DENIED_READ") != "1" {
+		t.Skip("fresh-process denied Keychain read entrypoint")
+	}
+	client, err := newNativeKeychainClient()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Data(keychainService, "denied-child"); !errors.Is(err, ErrProviderUnavailable) {
+		t.Fatalf("unauthorized Keychain read = %v", err)
+	}
+}
+
+// Recovery runs during testing cleanup as well, after t.Context is canceled.
+func runNativeSecurityCommand(tool string, args ...string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	command := exec.CommandContext(ctx, tool, args...)
+	command.WaitDelay = time.Second
+	return command.CombinedOutput()
 }
 
 func TestNativeKeychainReferenceAPIRejectsMissingPath(t *testing.T) {
@@ -968,7 +1013,7 @@ func TestNativeKeychainRecoveryEntrypoint(t *testing.T) {
 		securityTool = "/usr/bin/security"
 	}
 	runSecurity := func(arguments ...string) (string, error) {
-		output, err := exec.Command(securityTool, arguments...).CombinedOutput()
+		output, err := runNativeSecurityCommand(securityTool, arguments...)
 		return string(output), err
 	}
 	if err := recoverIsolatedTestKeychainFromRootWithHooks(recoveryRoot, runSecurity, isolatedKeychainRecoveryHooks{
@@ -1037,7 +1082,7 @@ func TestNativeKeychainDeleteEntrypoint(t *testing.T) {
 		}
 		return
 	}
-	if _, err := exec.Command(securityTool, "delete-keychain", keychainPath).CombinedOutput(); err != nil {
+	if _, err := runNativeSecurityCommand(securityTool, "delete-keychain", keychainPath); err != nil {
 		t.Fatal(nativeKeychainDeleteSecurityFailure)
 	}
 }
@@ -1968,7 +2013,7 @@ func useIsolatedTestKeychain(t *testing.T) {
 	if err := configureIsolatedTestKeychain(isolatedKeychainSetup{
 		recoveryRoot: recoveryRoot,
 		runSecurity: func(arguments ...string) (string, error) {
-			output, err := exec.Command("/usr/bin/security", arguments...).CombinedOutput()
+			output, err := runNativeSecurityCommand("/usr/bin/security", arguments...)
 			return string(output), err
 		},
 		deleteKeychainAt: descriptorAnchoredKeychainDelete("/usr/bin/security"),
