@@ -1,0 +1,3 @@
+# version|os|arch|member|size|sha256
+# The Linux runtime bundle consists of this static PIE only. Docs/man pages are not runtime inputs.
+3000.10.21|linux|amd64|bin/devin|180863528|ba1956450c0e0bf95f477ccd442a0b45b14765402b2377d6737ae758126d70cd

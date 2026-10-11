@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"syscall"
 	"testing"
@@ -325,7 +326,11 @@ func TestRunShellUsesFixedCommandAndCleansMaterializedSession(t *testing.T) {
 	if err := newExecutor(s).RunShell(context.Background(), req); err != nil {
 		t.Fatal(err)
 	}
-	if s.check.Executable != systemShell || len(s.check.RuntimeInputs) != 0 || s.request.Executable != systemShell || !reflect.DeepEqual(s.request.Arguments, []string{"-f"}) {
+	wantShell, wantArgs := "/bin/zsh", []string{"-f"}
+	if runtime.GOOS == "linux" {
+		wantShell, wantArgs = "/bin/bash", []string{"--noprofile", "--norc"}
+	}
+	if s.check.Executable != wantShell || len(s.check.RuntimeInputs) != 0 || s.request.Executable != wantShell || !reflect.DeepEqual(s.request.Arguments, wantArgs) {
 		t.Fatalf("fixed shell request = check %#v prepare %#v", s.check, s.request)
 	}
 	if _, err := os.Stat(filepath.Join(materialized, "marker")); !os.IsNotExist(err) {
