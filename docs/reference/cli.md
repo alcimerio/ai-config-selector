@@ -54,6 +54,7 @@ return 2); consult their contextual help and
 | Run Devin | `acs devin --profile NAME` | [Target conformance](shared-target-conformance.md) |
 | Run Codex | `acs codex --profile NAME [--auth REF]` | [Interactive Codex](../guides/codex.md#interactive-launch) |
 | Manage named login | `acs codex auth login --name REF` | [Codex authentication](../guides/codex.md#named-authentication) |
+| Inspect or select credential provider | `acs codex auth provider [--select file\|secret-service\|keychain]` | Explicit durable choice; Linux providers and launches remain unavailable |
 | Open a sandbox shell | `acs sandbox --profile NAME` | [Get started](../guides/getting-started.md) |
 | Run literal argv | `acs run --profile NAME -- COMMAND [ARG...]` | [Generic run](../guides/generic-run.md) |
 | Inspect / recover a Session | `acs session list`, `acs session inspect ID`, `acs session recover ID` | [Session operations](../guides/session-operations.md) |
@@ -63,6 +64,16 @@ Use `--help` before copying a mutation or recovery command. Remove `--dry-run`
 only when you intend that command's documented change. Declarative creation and
 import save without interactive confirmation. Deletion, restore and pruning have
 their own confirmation requirements.
+
+`acs codex auth provider` reports the selected provider. On Linux,
+`--select file` explicitly opts into future plaintext-at-rest credential storage;
+`--select secret-service` selects the future desktop keyring provider. Neither
+Linux provider is available yet, and this command does not enable Linux launches.
+The choice is stored in `$XDG_CONFIG_HOME/acs/credential-provider.json`, defaulting
+to `~/.config/acs/credential-provider.json`. The ACS directory must be 0700 and
+the file 0600; unsafe ownership, symlinks, relative XDG paths and malformed records
+are rejected. Repeating a choice succeeds; switching providers is refused.
+macOS continues to use Keychain, independently of Linux configuration.
 
 ## What each check proves
 
