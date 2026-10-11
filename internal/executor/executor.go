@@ -107,6 +107,7 @@ func (request DevinRequest) resolvedInputs() (launch.WorkspaceAccess, session.Ma
 type Executor struct {
 	sandbox           launch.ProcessSandbox
 	environmentLookup environmentresource.Lookup
+	prepareMutex      sync.Mutex
 }
 
 type retainedSignalMode uint8
@@ -134,6 +135,10 @@ func isNilProcess(process launch.Process) bool {
 }
 
 func (e *Executor) prepareRetainedProcess(ctx context.Context, created *session.Session, request launch.ProcessRequest) (launch.Process, error) {
+	// Session generations and their preparation must advance together, even
+	// when multiple contained probes run at the same time.
+	e.prepareMutex.Lock()
+	defer e.prepareMutex.Unlock()
 	challenge, err := created.ConsumeOrArmOperation(request.RecoveryProofChallenge)
 	if err != nil {
 		return nil, err
@@ -499,9 +504,7 @@ func (e *Executor) RunDevin(ctx context.Context, request DevinRequest) (exitCode
 		return 1, err
 	}
 	projected()
-	preflights := phasetiming.Start("devin.preflights")
 	err = e.runDevinPreflights(preflightContext, created, request, requirements.Semantics)
-	preflights()
 	if err != nil {
 		return 1, err
 	}
@@ -642,7 +645,8 @@ func (e *Executor) VerifyDevin(ctx context.Context, request DevinRequest) (resul
 	return e.runDevinPreflights(ctx, created, request, requirements.Semantics)
 }
 
-func (e *Executor) runDevinPreflights(ctx context.Context, created *session.Session, request DevinRequest, semantics authority.TargetSemantics) error {
+func (e *Executor) runDevinPreflights(ctx context.Context, created *session.Session, request DevinRequest, semantics authority.TargetSemantics) (resultErr error) {
+	defer phasetiming.Start("devin.preflights")()
 	var instructionAnchor *projectedInstructionAnchor
 	if len(request.ExpectedInstructions) > 0 {
 		var err error
@@ -652,47 +656,80 @@ func (e *Executor) runDevinPreflights(ctx context.Context, created *session.Sess
 		}
 		defer instructionAnchor.Close()
 	}
+	// Authentication overlaps the catalog probe (and selected rules), but its
+	// result is consumed in the original order. Always join the worker before
+	// closing the anchor or allowing the caller to remove the Session. Do not
+	// cancel a sibling on failure: that would replace its real failure with an
+	// artificial cancellation error.
+	var authentication <-chan error
+	for _, preflight := range semantics.Preflights {
+		if preflight.ID == "devin.preflight.authentication" {
+			result := make(chan error, 1)
+			authentication = result
+			go func() {
+				result <- e.runDevinPreflight(ctx, created, request, preflight, instructionAnchor)
+			}()
+			break
+		}
+	}
+	defer func() {
+		if authentication != nil {
+			authErr := <-authentication
+			if resultErr == nil {
+				resultErr = authErr
+			} else if authErr != nil {
+				resultErr = errors.Join(resultErr, authErr)
+			}
+		}
+	}()
 	for _, preflight := range semantics.Preflights {
 		var err error
-		if instructionAnchor != nil {
-			if err := instructionAnchor.checkPathIdentity(); err != nil {
-				return devinruntime.NewPreflightError(devinruntime.CapabilityInstructionRules, devinruntime.ReasonRuleMismatch)
-			}
+		if preflight.ID == "devin.preflight.authentication" && authentication != nil {
+			err = <-authentication
+			authentication = nil
+		} else {
+			err = e.runDevinPreflight(ctx, created, request, preflight, instructionAnchor)
 		}
-		done := phasetiming.Start(preflight.ID)
-		switch preflight.ID {
-		case "devin.preflight.skills":
-			if preflight.Mode != "contained-exact-catalog" {
-				return errors.New("unsupported Devin Skill preflight")
-			}
-			err = e.verifyDevinSkills(ctx, created, request)
-		case "devin.preflight.authentication":
-			if preflight.Mode != "contained-status" {
-				return errors.New("unsupported Devin authentication preflight")
-			}
-			err = e.verifyDevinAuthentication(ctx, created, request)
-		case "devin.preflight.rules":
-			if preflight.Mode != "contained-selected-rules" {
-				return errors.New("unsupported Devin instruction rules preflight")
-			}
-			if len(request.ExpectedInstructions) == 0 {
-				done()
-				continue
-			}
-			err = e.verifyDevinRules(ctx, created, request, instructionAnchor)
-		default:
-			done()
-			return errors.New("unsupported Devin preflight")
-		}
-		done()
 		if err != nil {
 			return err
 		}
-		if instructionAnchor != nil {
-			if err := instructionAnchor.checkPathIdentity(); err != nil {
-				return devinruntime.NewPreflightError(devinruntime.CapabilityInstructionRules, devinruntime.ReasonRuleMismatch)
-			}
+	}
+	return nil
+}
+
+func (e *Executor) runDevinPreflight(ctx context.Context, created *session.Session, request DevinRequest, preflight authority.ConfigurationDecision, instructionAnchor *projectedInstructionAnchor) error {
+	if instructionAnchor != nil && instructionAnchor.checkPathIdentity() != nil {
+		return devinruntime.NewPreflightError(devinruntime.CapabilityInstructionRules, devinruntime.ReasonRuleMismatch)
+	}
+	defer phasetiming.Start(preflight.ID)()
+	var err error
+	switch preflight.ID {
+	case "devin.preflight.skills":
+		if preflight.Mode != "contained-exact-catalog" {
+			return errors.New("unsupported Devin Skill preflight")
 		}
+		err = e.verifyDevinSkills(ctx, created, request)
+	case "devin.preflight.authentication":
+		if preflight.Mode != "contained-status" {
+			return errors.New("unsupported Devin authentication preflight")
+		}
+		err = e.verifyDevinAuthentication(ctx, created, request)
+	case "devin.preflight.rules":
+		if preflight.Mode != "contained-selected-rules" {
+			return errors.New("unsupported Devin instruction rules preflight")
+		}
+		if len(request.ExpectedInstructions) == 0 {
+			return nil
+		}
+		err = e.verifyDevinRules(ctx, created, request, instructionAnchor)
+	default:
+		return errors.New("unsupported Devin preflight")
+	}
+	if err != nil {
+		return err
+	}
+	if instructionAnchor != nil && instructionAnchor.checkPathIdentity() != nil {
+		return devinruntime.NewPreflightError(devinruntime.CapabilityInstructionRules, devinruntime.ReasonRuleMismatch)
 	}
 	return nil
 }

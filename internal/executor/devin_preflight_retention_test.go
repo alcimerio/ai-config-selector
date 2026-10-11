@@ -65,11 +65,17 @@ func TestLaunchPreflightsRetainSessionUntilCleanupIsProven(t *testing.T) {
 				if stage == "rules-show" || stage == "auth" {
 					wantStages = append(wantStages, "rules-show")
 				}
-				if stage == "auth" {
-					wantStages = append(wantStages, "auth")
+				var orderedStages []string
+				authCount := 0
+				for _, prepared := range sandbox.stages {
+					if prepared == "auth" {
+						authCount++
+					} else {
+						orderedStages = append(orderedStages, prepared)
+					}
 				}
-				if !reflect.DeepEqual(sandbox.stages, wantStages) {
-					t.Fatalf("prepared stages = %v, want %v; execution advanced past unsettled cleanup", sandbox.stages, wantStages)
+				if !reflect.DeepEqual(orderedStages, wantStages) || authCount != 1 {
+					t.Fatalf("prepared stages = %v, want %v plus concurrent auth; execution advanced past unsettled cleanup", sandbox.stages, wantStages)
 				}
 				wantWaits := 1
 				if failure == "start" {
@@ -163,8 +169,8 @@ func TestVerifyDevinOwnsSessionRetentionBeforePreparingProcess(t *testing.T) {
 	if !errors.As(err, &sandboxErr) || sandboxErr.Category != launch.SandboxProcessStartFailed {
 		t.Fatalf("VerifyDevin result = %v, want retained probe start failure", err)
 	}
-	if got := sandbox.stages; !reflect.DeepEqual(got, []string{"skills"}) || sandbox.process.starts != 1 {
-		t.Fatalf("VerifyDevin prepared stages = %v, starts = %d; want one retained skills probe", got, sandbox.process.starts)
+	if got := sandbox.stages; len(got) != 2 || sandbox.process.starts != 1 {
+		t.Fatalf("VerifyDevin prepared stages = %v, starts = %d; want retained skills and concurrent auth", got, sandbox.process.starts)
 	}
 }
 
@@ -187,8 +193,10 @@ func TestInstructionAnchorPrecedesSkillsProbeAndRejectsReplacedHome(t *testing.T
 	if !errors.As(err, &preflightErr) || preflightErr.Capability != devinruntime.CapabilityInstructionRules {
 		t.Fatalf("VerifyDevin after HOME replacement = %v, want instruction rules preflight failure", err)
 	}
-	if want := []string{"skills"}; !reflect.DeepEqual(sandbox.stages, want) {
-		t.Fatalf("prepared stages=%v want %v", sandbox.stages, want)
+	for _, stage := range sandbox.stages {
+		if stage != "skills" && stage != "auth" {
+			t.Fatalf("prepared stages=%v; replaced HOME allowed rules or interactive launch", sandbox.stages)
+		}
 	}
 }
 

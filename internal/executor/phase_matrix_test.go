@@ -236,6 +236,10 @@ func phaseMatrixAssertEarlyBoundary(t *testing.T, target, phase, sessions string
 		t.Fatalf("fixed first-process ordering = %v, want %v", got, want)
 	}
 	for index, process := range sandbox.processes {
+		if process == nil || (target == "devin" && index == 1) {
+			// Authentication can finish while skills preparation fails.
+			continue
+		}
 		if process.starts != 0 || process.waits != 0 {
 			t.Fatalf("process %d Start/Wait = %d/%d, want 0/0 after Prepare failure", index, process.starts, process.waits)
 		}
@@ -247,13 +251,18 @@ func phaseMatrixFirstArguments(target string) [][]string {
 	if target == "shell" {
 		return [][]string{{"-f"}}
 	}
-	return [][]string{{"skills", "list", "--json"}}
+	return [][]string{{"skills", "list", "--json"}, {"auth", "status"}}
 }
 
 func phaseMatrixArguments(requests []launch.ProcessRequest) [][]string {
 	arguments := make([][]string, len(requests))
 	for index, request := range requests {
 		arguments[index] = request.Arguments
+	}
+	// Skills and authentication may prepare in either order. All later
+	// processes must still follow both preflights.
+	if len(arguments) >= 2 && arguments[0][0] == "auth" && arguments[1][0] == "skills" {
+		arguments[0], arguments[1] = arguments[1], arguments[0]
 	}
 	return arguments
 }
@@ -299,6 +308,11 @@ func (sandbox *phaseMatrixSandbox) Check(ctx context.Context, request launch.San
 
 func (sandbox *phaseMatrixSandbox) Prepare(ctx context.Context, request launch.ProcessRequest) (launch.Process, error) {
 	index := len(sandbox.requests)
+	if request.Arguments[0] == "skills" {
+		index = 0
+	} else if request.Arguments[0] == "auth" {
+		index = 1
+	}
 	sandbox.requests = append(sandbox.requests, request)
 	if sandbox.prepareErr != nil && index == sandbox.prepareErrAt {
 		if sandbox.cancelPrepare != nil {
@@ -311,8 +325,11 @@ func (sandbox *phaseMatrixSandbox) Prepare(ctx context.Context, request launch.P
 		}
 		return nil, sandbox.prepareErr
 	}
-	if index >= len(sandbox.processes) {
-		sandbox.processes = append(sandbox.processes, &phaseMatrixProcess{})
+	for index >= len(sandbox.processes) {
+		sandbox.processes = append(sandbox.processes, nil)
+	}
+	if sandbox.processes[index] == nil {
+		sandbox.processes[index] = &phaseMatrixProcess{}
 	}
 	process := sandbox.processes[index]
 	process.output = request.Terminal.Output

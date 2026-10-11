@@ -68,8 +68,14 @@ exit 23
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := string(events), "preflight-skills\npreflight-auth\nlaunch-args=2:--respect-workspace-trust false\n"; got != want {
-		t.Fatalf("Devin events = %q, want %q", got, want)
+	lines := strings.Split(strings.TrimSpace(string(events)), "\n")
+	if len(lines) != 3 || lines[2] != "launch-args=2:--respect-workspace-trust false" ||
+		!((lines[0] == "preflight-skills" && lines[1] == "preflight-auth") ||
+			(lines[0] == "preflight-auth" && lines[1] == "preflight-skills")) {
+		t.Fatalf("Devin events = %q, want both preflights before launch", events)
+	}
+	if len(recorder.arguments) >= 2 && recorder.arguments[0][0] == "auth" {
+		recorder.arguments[0], recorder.arguments[1] = recorder.arguments[1], recorder.arguments[0]
 	}
 	if got, want := recorder.arguments, [][]string{{"skills", "list", "--json"}, {"auth", "status"}, {"--respect-workspace-trust", "false"}}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("sandbox process arguments = %#v, want %#v", got, want)

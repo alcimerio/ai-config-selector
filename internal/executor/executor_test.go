@@ -145,8 +145,8 @@ func TestRunDevinProbeRejectsInvalidPreparedProcess(t *testing.T) {
 				t.Fatalf("exit code = %d, want 1", code)
 			}
 			requireSandboxSetupFailure(t, err)
-			if sandbox.prepares != 1 {
-				t.Fatalf("prepare calls = %d, want only the Skills probe", sandbox.prepares)
+			if sandbox.prepares != 2 {
+				t.Fatalf("prepare calls = %d, want both concurrent probes", sandbox.prepares)
 			}
 			if entries, err := os.ReadDir(sessions); err != nil || len(entries) != 0 {
 				t.Fatalf("invalid prepared process retained Devin Session: %v %v", entries, err)
@@ -182,7 +182,7 @@ func TestRunDevinOwnsBothPreflightsAndTheSessionLease(t *testing.T) {
 	if code, err := newExecutor(sandbox).RunDevin(context.Background(), request); err != nil || code != 0 {
 		t.Fatalf("RunDevin = (%d, %v)", code, err)
 	}
-	if got := [][]string{requests[0].Arguments, requests[1].Arguments, requests[2].Arguments}; !reflect.DeepEqual(got, [][]string{{"skills", "list", "--json"}, {"auth", "status"}, {"--respect-workspace-trust", "false"}}) {
+	if got := phaseMatrixArguments(requests); !reflect.DeepEqual(got, [][]string{{"skills", "list", "--json"}, {"auth", "status"}, {"--respect-workspace-trust", "false"}}) {
 		t.Fatalf("fixed Devin lifecycle arguments = %#v", got)
 	}
 	for index, prepared := range requests {
@@ -283,6 +283,13 @@ func (*sequenceSandbox) Check(context.Context, launch.SandboxCheck) error { retu
 func (s *sequenceSandbox) Prepare(_ context.Context, request launch.ProcessRequest) (launch.Process, error) {
 	*s.requests = append(*s.requests, request)
 	index := len(*s.requests) - 1
+	// Probe preparation order is unspecified; fixture outputs belong to the
+	// command, not to whichever goroutine reaches Prepare first.
+	if request.Arguments[0] == "skills" {
+		index = 0
+	} else if request.Arguments[0] == "auth" {
+		index = 1
+	}
 	if index >= len(s.processes) {
 		return nil, errors.New("unexpected Devin process")
 	}
