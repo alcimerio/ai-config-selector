@@ -20,7 +20,7 @@ func TestCredentialProviderHelpAndGrammarNeedNoRuntime(t *testing.T) {
 			var out, errOut bytes.Buffer
 			code := (App{Output: &out, ErrorOutput: &errOut}).Run(context.Background(), args)
 			if strings.Contains(strings.Join(args, " "), "help") {
-				if code != 0 || !strings.Contains(out.String(), "Both Linux providers and Linux launches remain unavailable") {
+				if code != 0 || !strings.Contains(out.String(), "Linux launches remain unavailable") {
 					t.Fatalf("help = %d, %q, %q", code, out.String(), errOut.String())
 				}
 			} else if code != 1 || !strings.Contains(errOut.String(), "acs codex auth provider --help") {

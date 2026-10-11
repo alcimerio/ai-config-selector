@@ -53,7 +53,7 @@ func TestLinuxCredentialProviderCommandRunsBeforeRuntime(t *testing.T) {
 		if code != tc.code || !strings.Contains(out.String()+errOut.String(), tc.want) {
 			t.Fatalf("%s = %d, stdout=%q stderr=%q", tc.args, code, out.String(), errOut.String())
 		}
-		if code == 0 && !strings.Contains(out.String(), "Linux credential operations and launches remain unavailable") {
+		if code == 0 && !strings.Contains(out.String(), "Linux launches remain unavailable") {
 			t.Fatal("selection implied Linux availability")
 		}
 		if strings.Contains(errOut.String(), "private-invalid-value") || strings.Contains(errOut.String(), home) {
