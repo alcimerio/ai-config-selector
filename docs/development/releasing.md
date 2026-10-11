@@ -52,6 +52,54 @@ on the native Apple Silicon target, scans that installed binary, runs normal,
 race, and black-box acceptance tests, attests the archive and
 checksum manifest, and publishes through the protected `release` environment.
 
+The same build also stages `dist/linux-candidate/` with only
+`acs_1.2.3_linux_amd64.tar.gz`, its own `SHA256SUMS`, and `install.sh`. This is a
+separate maintenance candidate, never a public Release asset set. The publisher
+continues to accept only the macOS set. Neither Linux arm64 nor Intel macOS is
+built. Production Linux launches and `acs update` remain disabled.
+
+Both build targets receive the source vulnerability scan. The Linux packaging
+job installs the supplied bytes on native amd64, exercises the local updater,
+checks that production launch paths still refuse execution, and scans the exact
+installed executable. Trusted pushes attest the staged Linux archive and its
+manifest; pull requests run the same packaging checks without attestations. The
+installer is not an attestation subject. This is packaging evidence only;
+kernel, Bubblewrap, Landlock, seccomp, cgroup, credential and target qualification
+remain separate activation requirements.
+
+After obtaining the candidate and trusted digests from the workflow handoff,
+restore the executable bit on `install.sh` if artifact transport removed it.
+From the matching source checkout on native Linux amd64, use:
+
+```sh
+scripts/validate-promoted-artifact.sh v1.2.3 linux amd64 \
+  /absolute/path/to/linux-candidate /absolute/private/test-install/bin
+```
+
+For a local installation alone, the version-pinned installer requires an
+explicit local directory and never downloads Linux assets:
+
+```sh
+sh /absolute/path/to/linux-candidate/install.sh \
+  --candidate-dir /absolute/path/to/linux-candidate \
+  --bin-dir /absolute/private/test-install/bin
+```
+
+Local updates are available only through the source maintenance tool, with an
+explicit version and destination. It validates the complete candidate set,
+including ELF architecture and CGO-free Go build identity, before using the
+existing guarded replacement operation:
+
+```sh
+go run ./tools/linuxcandidate --dist /absolute/path/to/linux-candidate \
+  --version v1.2.3 --current v1.2.2 \
+  --executable /absolute/private/test-install/bin/acs
+```
+
+Checksums detect changed bytes relative to the supplied manifest; they do not
+authenticate an untrusted archive and manifest changed together. Verify the
+workflow provenance and supplied digests before installation.
+
 Never move or delete a release tag. If a candidate fails, fix the source in a
 new commit and prepare a new version. Do not treat a local build or authenticated
 smoke as a replacement for the native Apple Silicon artifact gate.

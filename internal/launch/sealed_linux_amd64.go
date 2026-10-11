@@ -33,10 +33,15 @@ type linuxLaunchWire struct {
 	Executable                 string
 	Argv                       []string
 	Home, Temporary, Directory string
+	Terminal                   *linuxTerminalConfig `json:",omitempty"`
+	CodexHome                  string               `json:",omitempty"`
 }
 
 func (w linuxLaunchWire) validate() error {
 	if w.Version != 1 || len(w.Rules) == 0 || len(w.Rules) > 8192 || len(w.Argv) == 0 || w.Argv[0] != w.Executable {
+		return errLinuxSeal
+	}
+	if w.CodexHome != "" && w.CodexHome != w.Home+"/.codex" {
 		return errLinuxSeal
 	}
 	for _, path := range []string{w.Executable, w.Home, w.Temporary, w.Directory} {
@@ -119,7 +124,15 @@ func linuxReadTransport(f *os.File) (linuxLaunchWire, []string, error) {
 	if d.Decode(&w) != nil || w.validate() != nil || d.Decode(new(any)) != io.EOF {
 		return fail()
 	}
-	intrinsic := []string{"HOME=" + w.Home, "TMPDIR=" + w.Temporary, "PATH=/usr/bin:/bin", "LANG=C", "LC_ALL=C"}
+	intrinsic := []string{"HOME=" + w.Home, "TMPDIR=" + w.Temporary, "PATH=/usr/bin:/bin", "LANG=C", "LC_ALL=C",
+		"XDG_CONFIG_HOME=" + w.Home + "/.config", "XDG_DATA_HOME=" + w.Home + "/.local/share",
+		"XDG_CACHE_HOME=" + w.Home + "/.cache", "XDG_STATE_HOME=" + w.Home + "/.local/state"}
+	if w.CodexHome != "" {
+		intrinsic = append(intrinsic, "CODEX_HOME="+w.CodexHome)
+	}
+	if w.Terminal != nil {
+		intrinsic = append(intrinsic, "TERM=xterm")
+	}
 	selected, err := environmentresource.ReadFrame(reader, intrinsic)
 	if err != nil {
 		return fail()
@@ -180,9 +193,11 @@ func linuxPrepareBwrap(ctx context.Context, plan linuxFilesystemPlan, wire linux
 func linuxPrepareBwrapWith(ctx context.Context, plan linuxFilesystemPlan, wire linuxLaunchWire, env *environmentresource.Lease,
 	helper, status, gate *os.File, stdio [3]*os.File, helperArgs []string, openBwrap func() (*os.File, error)) (_ *linuxBwrapLaunch, resultErr error) {
 	p := &linuxBwrapLaunch{}
+	step := "validate filesystem plan and transport"
 	defer func() {
 		if resultErr != nil {
 			p.close()
+			resultErr = linuxStepError(errLinuxSeal, "prepare Bubblewrap: "+step, resultErr)
 		}
 	}()
 	if helper == nil || status == nil || gate == nil || wire.validate() != nil || plan.handledAccess != linuxHandledFilesystem || plan.scoped != 3 ||
@@ -205,23 +220,27 @@ func linuxPrepareBwrapWith(ctx context.Context, plan linuxFilesystemPlan, wire l
 		wire.Rules = append(wire.Rules, linuxWireRule{path, linuxReadFile | linuxWriteFile})
 	}
 	wire.Rules = append(wire.Rules, linuxWireRule{"/dev/pts", linuxReadTree | linuxWriteFile | unix.LANDLOCK_ACCESS_FS_IOCTL_DEV})
+	step = "seal launch transport"
 	transport, err := linuxWriteTransport(wire, env)
 	if err != nil {
 		return nil, err
 	}
 	p.owned = append(p.owned, transport)
+	step = "open trusted system Bubblewrap"
 	bwrap, err := openBwrap()
 	if err != nil {
-		return nil, errLinuxSeal
+		return nil, err
 	}
 	p.owned = append(p.owned, bwrap)
 	var filter bytes.Buffer
-	_ = binary.Write(&filter, binary.LittleEndian, linuxSeccompFilter())
+	_ = binary.Write(&filter, binary.LittleEndian, linuxSeccompFilterForSetup(wire.Terminal != nil))
+	step = "seal setup seccomp filter"
 	seccomp, err := linuxSealedMemfd(filter.Bytes())
 	if err != nil {
 		return nil, err
 	}
 	p.owned = append(p.owned, seccomp)
+	step = "pin stdio"
 	pins, err := linuxPinStdio(stdio)
 	if err != nil {
 		return nil, err
@@ -232,7 +251,9 @@ func linuxPrepareBwrapWith(ctx context.Context, plan linuxFilesystemPlan, wire l
 	args := []string{"--unshare-user", "--unshare-ipc", "--unshare-pid", "--unshare-uts", "--unshare-cgroup",
 		"--disable-userns", "--die-with-parent", "--new-session", "--cap-drop", "ALL", "--clearenv",
 		"--tmpfs", "/", "--dev", "/dev", "--proc", "/proc", "--ro-bind", "/proc/self/fd/8", "/.acs-launcher"}
+	codexConfigs := 0
 	for i, mount := range plan.mounts {
+		step = "pin mount " + mount.destination
 		if mount.kind == linuxMountSealRoot || i == 0 && mount.kind == linuxMountDirectory && mount.destination == "/" {
 			continue
 		}
@@ -242,8 +263,22 @@ func linuxPrepareBwrapWith(ctx context.Context, plan linuxFilesystemPlan, wire l
 		switch mount.kind {
 		case linuxMountDirectory:
 			args = append(args, "--dir", mount.destination)
-		case linuxMountReadOnly, linuxMountReadWrite:
-			if mount.source != mount.destination {
+		case linuxMountEmptyCodexConfig:
+			if wire.CodexHome == "" || mount.destination != wire.CodexHome+"/config.toml" || mount.source != "" {
+				return nil, errLinuxSeal
+			}
+			config, err := linuxSealedMemfd([]byte(linuxCodexEmptyConfig))
+			if err != nil {
+				return nil, err
+			}
+			p.owned = append(p.owned, config)
+			// Anonymous memfds are not bind-mountable. Bubblewrap copies the
+			// sealed bytes into a private file, then mounts that file read-only.
+			args = append(args, "--perms", "0600", "--ro-bind-data", strconv.Itoa(3+len(extra)), mount.destination)
+			extra = append(extra, config)
+			codexConfigs++
+		case linuxMountReadOnly, linuxMountReadWrite, linuxMountRuntimeAlias:
+			if mount.source != mount.destination && (mount.kind != linuxMountRuntimeAlias || !mount.identity.mode.IsRegular()) {
 				return nil, errLinuxSeal
 			}
 			source, err := linuxPinnedSource(mount)
@@ -260,6 +295,9 @@ func linuxPrepareBwrapWith(ctx context.Context, plan linuxFilesystemPlan, wire l
 		default:
 			return nil, errLinuxSeal
 		}
+	}
+	if wire.CodexHome != "" && codexConfigs != 1 {
+		return nil, errLinuxSeal
 	}
 	args = append(args, "--chdir", wire.Directory, "--remount-ro", "/", "--seccomp", "7", "--", "/.acs-launcher")
 	args = append(args, helperArgs...)

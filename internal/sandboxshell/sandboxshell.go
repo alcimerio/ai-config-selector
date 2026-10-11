@@ -27,7 +27,7 @@ func New() *Launcher {
 }
 
 // Launch creates a credential-free Session, materializes the selected Profile,
-// and runs /bin/zsh -f inside the required native sandbox.
+// and runs the fixed platform shell inside the required native sandbox.
 func (launcher *Launcher) Launch(
 	ctx context.Context,
 	sessionsDirectory string,

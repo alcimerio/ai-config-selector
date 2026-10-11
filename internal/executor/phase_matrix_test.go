@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -249,6 +250,9 @@ func phaseMatrixAssertEarlyBoundary(t *testing.T, target, phase, sessions string
 
 func phaseMatrixFirstArguments(target string) [][]string {
 	if target == "shell" {
+		if runtime.GOOS == "linux" {
+			return [][]string{{"--noprofile", "--norc"}}
+		}
 		return [][]string{{"-f"}}
 	}
 	return [][]string{{"skills", "list", "--json"}, {"auth", "status"}}

@@ -83,6 +83,9 @@ func doctor(target string, host func() (launch.Platform, error), backend func() 
 		r.set("backend.file", "unchecked", "no_supported_backend", "Use a supported macOS host to inspect the native backend file.")
 	}
 	name := map[string]string{"devin": "devin", "sandbox": "/bin/zsh", "codex-auth": "codex"}[target]
+	if target == "sandbox" {
+		name, _ = launch.ShellRecipe(p.OS)
+	}
 	if name != "" {
 		if executable(name) {
 			r.set("executable.availability", "pass", "executable_available", "Workflow executable is available; version compatibility remains unchecked.")
