@@ -538,6 +538,11 @@ func assertPromotedArtifactDevinGenerations(t *testing.T) {
 		}
 		settleNativeCommand(command, done)
 	})
+	for _, phase := range []string{"skills", "authentication"} {
+		if !waitForFakeDevinMarker(filepath.Join(workspace, ".acs-phase-"+phase+"-ready"), 10*time.Second) {
+			t.Fatalf("concurrent %s phase did not become ready", phase)
+		}
+	}
 	var previous struct {
 		ID, RootName, Challenge string
 		Generation              uint64
@@ -547,13 +552,20 @@ func assertPromotedArtifactDevinGenerations(t *testing.T) {
 		if !waitForFakeDevinMarker(ready, 10*time.Second) {
 			t.Fatalf("%s phase did not become ready", phase)
 		}
-		cap := readLiveGenerationCapability(t, home)
 		phaseHome, err := os.ReadFile(ready)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cap := readLiveGenerationCapability(t, home, string(phaseHome))
 		wantHome := filepath.Join(home, ".acs", "sessions", cap.RootName, "home")
 		if err != nil || !samePromotedNativeFile(filepath.Clean(string(phaseHome)), wantHome) {
 			t.Fatalf("%s phase HOME is not bound to its private capability root", phase)
 		}
-		if index > 0 && (cap.ID != previous.ID || cap.RootName != previous.RootName || cap.Generation <= previous.Generation || cap.Challenge == previous.Challenge) {
+		if phase == "authentication" {
+			if cap.ID == previous.ID || cap.RootName == previous.RootName || cap.Generation != 1 || cap.Challenge == previous.Challenge {
+				t.Fatal("authentication did not own an independent generation/capability")
+			}
+		} else if index > 0 && (cap.ID != previous.ID || cap.RootName != previous.RootName || cap.Generation <= previous.Generation || cap.Challenge == previous.Challenge) {
 			t.Fatalf("%s capability identity or generation freshness check failed", phase)
 		}
 		sessionRoot := filepath.Join(home, ".acs", "sessions", cap.RootName)
@@ -574,7 +586,9 @@ func assertPromotedArtifactDevinGenerations(t *testing.T) {
 		if info, err := os.Stat(sessionRoot); err != nil || !info.IsDir() {
 			t.Fatalf("live %s Session was removed during recovery refusal", phase)
 		}
-		previous = cap
+		if phase != "authentication" {
+			previous = cap
+		}
 		if !writeFakeDevinMarker(filepath.Join(workspace, ".acs-phase-"+phase+"-release")) {
 			t.Fatal("release phase")
 		}
@@ -595,23 +609,29 @@ func samePromotedNativeFile(left, right string) bool {
 	return err == nil && os.SameFile(leftInfo, rightInfo)
 }
 
-func readLiveGenerationCapability(t *testing.T, home string) struct {
+func readLiveGenerationCapability(t *testing.T, home, phaseHome string) struct {
 	ID, RootName, Challenge string
 	Generation              uint64
 } {
 	t.Helper()
 	entries, err := filepath.Glob(filepath.Join(home, ".acs", "session-operations-v1", "capabilities", "*.json"))
-	if err != nil || len(entries) != 1 {
-		t.Fatalf("live capability entries=%v err=%v", entries, err)
+	if err != nil {
+		t.Fatal(err)
 	}
 	var cap struct {
 		ID, RootName, Challenge string
 		Generation              uint64
 	}
-	contents, err := os.ReadFile(entries[0])
-	if err != nil || json.Unmarshal(contents, &cap) != nil || cap.ID == "" || cap.Generation == 0 || cap.Challenge == "" {
-		t.Fatalf("read live capability: %v", err)
+	for _, entry := range entries {
+		contents, err := os.ReadFile(entry)
+		if err != nil || json.Unmarshal(contents, &cap) != nil || cap.ID == "" || cap.Generation == 0 || cap.Challenge == "" {
+			t.Fatalf("read live capability: %v", err)
+		}
+		if samePromotedNativeFile(phaseHome, filepath.Join(home, ".acs", "sessions", cap.RootName, "home")) {
+			return cap
+		}
 	}
+	t.Fatalf("no live capability for phase HOME %s", phaseHome)
 	return cap
 }
 
@@ -1841,10 +1861,14 @@ func assertPromotedArtifactExecutableVisibility(t *testing.T) {
 	done := startNativeCommand(mutation)
 	t.Cleanup(func() {
 		_ = writeFakeDevinMarker(filepath.Join(workspace, ".acs-phase-skills-release"))
+		_ = writeFakeDevinMarker(filepath.Join(workspace, ".acs-phase-authentication-release"))
 		settleNativeCommand(mutation, done)
 	})
 	if !waitForFakeDevinMarker(filepath.Join(workspace, ".acs-phase-skills-ready"), 10*time.Second) {
 		t.Fatal("executable mutation fixture did not reach the first generation")
+	}
+	if !waitForFakeDevinMarker(filepath.Join(workspace, ".acs-phase-authentication-ready"), 10*time.Second) {
+		t.Fatal("concurrent auth generation did not reach the controlled identity seam")
 	}
 	replacement := filepath.Join(canonicalDirectory, "replacement")
 	copyNativeExecutable(t, helper, replacement)
@@ -1854,11 +1878,14 @@ func assertPromotedArtifactExecutableVisibility(t *testing.T) {
 	if !writeFakeDevinMarker(filepath.Join(workspace, ".acs-phase-skills-release")) {
 		t.Fatal("release executable mutation generation")
 	}
+	if !writeFakeDevinMarker(filepath.Join(workspace, ".acs-phase-authentication-release")) {
+		t.Fatal("release auth mutation generation")
+	}
 	if err := waitNativeCommand(done, 15*time.Second); err == nil {
 		t.Fatal("executable replacement did not stop the installed candidate")
 	}
-	if waitForFakeDevinMarker(filepath.Join(workspace, ".acs-phase-authentication-ready"), 250*time.Millisecond) {
-		t.Fatal("executable replacement reached the next process generation")
+	if fakeDevinMarkerExists(filepath.Join(workspace, ".acs-phase-interactive-ready")) {
+		t.Fatal("executable replacement reached the interactive generation")
 	}
 	assertSafeCandidateFailure(t, []byte(mutationOutput.String()), "unsafe_path")
 	assertNoSessions(t, home)
@@ -1890,10 +1917,14 @@ func assertPromotedArtifactFilesystemGrantIdentityChange(t *testing.T) {
 	done := startNativeCommand(command)
 	t.Cleanup(func() {
 		_ = writeFakeDevinMarker(filepath.Join(workspace, ".acs-phase-skills-release"))
+		_ = writeFakeDevinMarker(filepath.Join(workspace, ".acs-phase-authentication-release"))
 		settleNativeCommand(command, done)
 	})
 	if !waitForFakeDevinMarker(filepath.Join(workspace, ".acs-phase-skills-ready"), 10*time.Second) {
 		t.Fatal("skills generation did not reach the controlled identity seam")
+	}
+	if !waitForFakeDevinMarker(filepath.Join(workspace, ".acs-phase-authentication-ready"), 10*time.Second) {
+		t.Fatal("concurrent auth generation did not reach the controlled identity seam")
 	}
 	replacement := filepath.Join(selectedRoot, "identity-replacement")
 	if err := os.WriteFile(replacement, []byte("second\n"), 0o600); err != nil {
@@ -1905,11 +1936,14 @@ func assertPromotedArtifactFilesystemGrantIdentityChange(t *testing.T) {
 	if !writeFakeDevinMarker(filepath.Join(workspace, ".acs-phase-skills-release")) {
 		t.Fatal("release skills generation")
 	}
+	if !writeFakeDevinMarker(filepath.Join(workspace, ".acs-phase-authentication-release")) {
+		t.Fatal("release auth identity generation")
+	}
 	if err := waitNativeCommand(done, 15*time.Second); err == nil {
 		t.Fatal("identity replacement did not fail the installed candidate")
 	}
-	if waitForFakeDevinMarker(filepath.Join(workspace, ".acs-phase-authentication-ready"), 250*time.Millisecond) || fakeDevinMarkerExists(filepath.Join(workspace, "interactive-started")) {
-		t.Fatal("identity replacement reached a later preflight or attached target")
+	if fakeDevinMarkerExists(filepath.Join(workspace, ".acs-phase-interactive-ready")) || fakeDevinMarkerExists(filepath.Join(workspace, "interactive-started")) {
+		t.Fatal("identity replacement reached the attached target")
 	}
 	assertSafeCandidateFailure(t, []byte(output.String()), "unsafe_path")
 	assertNewRemovedPromotedSessions(t, binary, home, path, before, "devin")
@@ -2681,14 +2715,53 @@ func TestPromotedArtifactSharedTargetConformance(t *testing.T) {
 		command := exec.Command(binary, "devin", "--profile", name)
 		command.Env = nativeCandidateEnvironment(home, tools+string(os.PathListSeparator)+path, nil)
 		command.Dir = workspace
-		output, err := command.CombinedOutput()
-		if err != nil {
-			t.Fatalf("installed candidate Devin %s attached fixture: %v; output=%s", access, err, output)
+		// Clear the previous access mode's host release files. No target gets
+		// extra filesystem authority to export evidence from a private HOME.
+		for _, phase := range []string{"skills", "authentication"} {
+			_ = os.Remove(filepath.Join(workspace, ".acs-shared-"+phase+"-release"))
+		}
+		var output synchronizedNativeCapture
+		command.Stdout, command.Stderr = &output, &output
+		if err := command.Start(); err != nil {
+			t.Fatal(err)
+		}
+		done := startNativeCommand(command)
+		// Register this before assertions so a failed observation cannot leave
+		// either concurrent preflight blocked in its Session.
+		release := func() {
+			for _, phase := range []string{"skills", "authentication"} {
+				if !writeFakeDevinMarker(filepath.Join(workspace, ".acs-shared-"+phase+"-release")) {
+					t.Error("release shared preflight")
+				}
+			}
+		}
+		t.Cleanup(func() { release(); settleNativeCommand(command, done) })
+		skillsEvidence := waitForFakeDevinPreflightEvidence(t, home, "skills")
+		authEvidence := waitForFakeDevinPreflightEvidence(t, home, "authentication")
+		if samePromotedNativeFile(skillsEvidence.Home, authEvidence.Home) {
+			t.Fatal("authentication reused the skills Session")
+		}
+		for _, evidence := range []fakeDevinPreflightEvidence{skillsEvidence, authEvidence} {
+			readLiveGenerationCapability(t, home, evidence.Home)
+			observation := evidence.Result
+			if !observation.SelectedCommonSkills || !observation.SelectedProjectedSkills || !observation.UnselectedGlobalAbsent ||
+				!observation.ProjectAgentReadable || !observation.ProjectDevinReadable || !observation.SessionWritable || !observation.AllowedEnvironment ||
+				observation.WorkspaceWritable != (access == "read-write") || observation.HostFileReadable || observation.ExternalWriteSucceeded {
+				t.Fatalf("%s preflight lost shared inputs or isolation: %#v", evidence.Phase, observation)
+			}
+		}
+		release()
+		if err := waitNativeCommand(done, 15*time.Second); err != nil {
+			t.Fatalf("installed candidate Devin %s attached fixture: %v; output=%s", access, err, output.String())
 		}
 		var result fakeDevinResult
-		if err := json.Unmarshal(bytes.TrimSpace(output), &result); err != nil {
-			t.Fatalf("contained Devin fixture result is invalid: %v; output=%s", err, output)
+		if err := json.Unmarshal(bytes.TrimSpace([]byte(output.String())), &result); err != nil {
+			t.Fatalf("contained Devin fixture result is invalid: %v; output=%s", err, output.String())
 		}
+		if result.PreflightAuthentication {
+			t.Fatal("interactive fixture saw authentication evidence in the main Session")
+		}
+		result.PreflightAuthentication = authEvidence.Result.PreflightAuthentication
 		if workspaceFact, found := devinRequested["common.workspace"]; !found || workspaceFact.Value.Access != access {
 			t.Fatalf("Devin behavioral result lacks matching declared workspace authority: %#v", workspaceFact)
 		}
@@ -2742,16 +2815,17 @@ func TestPromotedArtifactSharedTargetConformance(t *testing.T) {
 	assertNoSessions(t, home)
 }
 
-func TestSharedTargetFixtureDoesNotInventPreflightEvidence(t *testing.T) {
+func TestSharedTargetFixtureObservesOnlyLocalPreflightEvidence(t *testing.T) {
 	for _, test := range []struct {
-		name   string
-		skills bool
-		auth   bool
+		name             string
+		skills           bool
+		auth             bool
+		otherSessionAuth bool
 	}{
 		{name: "neither Session marker"},
 		{name: "skills only", skills: true},
 		{name: "auth only", auth: true},
-		{name: "both", skills: true, auth: true},
+		{name: "auth belongs to another Session", skills: true, otherSessionAuth: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			home := t.TempDir()
@@ -2765,6 +2839,9 @@ func TestSharedTargetFixtureDoesNotInventPreflightEvidence(t *testing.T) {
 				writeFakeDevinMarker(filepath.Join(home, fakeDevinAuthProbeMarker))
 			}
 
+			if test.otherSessionAuth {
+				writeFakeDevinMarker(filepath.Join(t.TempDir(), fakeDevinAuthProbeMarker))
+			}
 			result := observeFakeDevinSharedTargetConformance(fakeDevinConfiguration{}, workspace)
 			if result.PreflightSkills != test.skills {
 				t.Fatalf("skills preflight observation = %v, want %v", result.PreflightSkills, test.skills)
@@ -3457,7 +3534,7 @@ func assertPromotedArtifactNativeContainment(t *testing.T) {
 
 	result := readFakeDevinResult(t, workspace)
 	if !result.PreflightSkills || !result.PreflightAuthentication {
-		t.Fatal("candidate did not run both preflight probes in the contained Session")
+		t.Fatal("candidate did not run both contained preflight probes")
 	}
 	for name, actual := range map[string]bool{
 		"workspace write":      result.WorkspaceWritable,
@@ -3590,44 +3667,6 @@ type fakeDevinConfiguration struct {
 	ProtectionRelease   string `json:"protectionRelease,omitempty"`
 }
 
-type fakeDevinResult struct {
-	PreflightSkills            bool `json:"preflightSkills"`
-	PreflightAuthentication    bool `json:"preflightAuthentication"`
-	WorkspaceWritable          bool `json:"workspaceWritable"`
-	SessionWritable            bool `json:"sessionWritable"`
-	TemporaryWritable          bool `json:"temporaryWritable"`
-	HostFileReadable           bool `json:"hostFileReadable"`
-	SymlinkEscapeReadable      bool `json:"symlinkEscapeReadable"`
-	AllowedEnvironment         bool `json:"allowedEnvironment"`
-	BlockedEnvironmentVisible  bool `json:"blockedEnvironmentVisible"`
-	DescriptorLeaked           bool `json:"descriptorLeaked"`
-	HostSocketReachable        bool `json:"hostSocketReachable"`
-	OutboundIP                 bool `json:"outboundIP"`
-	LocalIPBind                bool `json:"localIPBind"`
-	LocalUnixBind              bool `json:"localUnixBind"`
-	ExternalWriteSucceeded     bool `json:"externalWriteSucceeded"`
-	DescendantStarted          bool `json:"descendantStarted"`
-	RegisteredSysctls          bool `json:"registeredSysctls"`
-	UnregisteredSysctlDenied   bool `json:"unregisteredSysctlDenied"`
-	SystemTrustSettings        bool `json:"systemTrustSettings"`
-	LocalSystemTrust           bool `json:"localSystemTrust"`
-	SelectedCommonSkills       bool `json:"selectedCommonSkills"`
-	SelectedProjectedSkills    bool `json:"selectedProjectedSkills"`
-	UnselectedGlobalAbsent     bool `json:"unselectedGlobalAbsent"`
-	ProjectAgentReadable       bool `json:"projectAgentReadable"`
-	ProjectDevinReadable       bool `json:"projectDevinReadable"`
-	EnvironmentSkillsAbsent    bool `json:"environmentSkillsAbsent"`
-	EnvironmentAuthAbsent      bool `json:"environmentAuthAbsent"`
-	EnvironmentSelected        bool `json:"environmentSelected"`
-	EnvironmentOptional        bool `json:"environmentOptional"`
-	EnvironmentSecretSelected  bool `json:"environmentSecretSelected"`
-	EnvironmentUnselectedGone  bool `json:"environmentUnselectedGone"`
-	EnvironmentChildSelected   bool `json:"environmentChildSelected"`
-	EnvironmentChildOptional   bool `json:"environmentChildOptional"`
-	EnvironmentChildSecret     bool `json:"environmentChildSecret"`
-	EnvironmentChildUnselected bool `json:"environmentChildUnselected"`
-}
-
 func installPromotedArtifactFakeDevin(t *testing.T, tools string) {
 	t.Helper()
 	binary, err := os.Executable()
@@ -3704,7 +3743,7 @@ func runFakeDevinSkills() {
 	configuration, _ := readFakeDevinConfiguration()
 	holdFakeDevinGenerationPhase(configuration, "skills", workspace)
 	if configuration.Mode == "shared-target-conformance" {
-		writeFakeDevinMarker(filepath.Join(os.Getenv("HOME"), fakeDevinSkillsProbeMarker))
+		recordFakeDevinSharedPreflight(configuration, "skills", fakeDevinSkillsProbeMarker)
 	} else if configuration.Mode == "scoped-environment" {
 		if scopedEnvironmentNamesAbsent() {
 			writeFakeDevinMarker(filepath.Join(workspace, "environment-skills-absent"))
@@ -3741,7 +3780,7 @@ func runFakeDevinAuthentication() {
 		os.Exit(65)
 	}
 	if configuration.Mode == "shared-target-conformance" {
-		writeFakeDevinMarker(filepath.Join(os.Getenv("HOME"), fakeDevinAuthProbeMarker))
+		recordFakeDevinSharedPreflight(configuration, "authentication", fakeDevinAuthProbeMarker)
 	} else if configuration.Mode == "scoped-environment" {
 		if scopedEnvironmentNamesAbsent() {
 			writeFakeDevinMarker(filepath.Join(mustGetwd(), "environment-auth-absent"))
@@ -3983,6 +4022,42 @@ func holdFakeDevinGenerationPhase(configuration fakeDevinConfiguration, phase, w
 	}
 }
 
+func recordFakeDevinSharedPreflight(configuration fakeDevinConfiguration, phase, marker string) {
+	home := os.Getenv("HOME")
+	if !writeFakeDevinMarker(filepath.Join(home, marker)) {
+		os.Exit(78)
+	}
+	evidence := fakeDevinPreflightEvidence{
+		Home: home, Phase: phase,
+		Result: observeFakeDevinSharedTargetConformance(configuration, mustGetwd()),
+	}
+	contents, err := json.Marshal(evidence)
+	receipt := filepath.Join(home, fakeDevinPreflightReceiptName(phase))
+	if err != nil || os.WriteFile(receipt+".pending", contents, 0600) != nil || os.Rename(receipt+".pending", receipt) != nil {
+		os.Exit(79)
+	}
+	if !waitForFakeDevinFile(filepath.Join(mustGetwd(), ".acs-shared-"+phase+"-release")) {
+		os.Exit(80)
+	}
+}
+
+func waitForFakeDevinPreflightEvidence(t *testing.T, home, phase string) fakeDevinPreflightEvidence {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		evidence, found, err := readFakeDevinPreflightEvidence(filepath.Join(home, ".acs", "sessions"), phase)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if found {
+			return evidence
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("%s contained preflight did not publish its Session receipt", phase)
+	return fakeDevinPreflightEvidence{}
+}
+
 func runFakeDevinSharedTargetConformance(configuration fakeDevinConfiguration, workspace string) {
 	result := observeFakeDevinSharedTargetConformance(configuration, workspace)
 	if err := json.NewEncoder(os.Stdout).Encode(result); err != nil {
@@ -3993,6 +4068,7 @@ func runFakeDevinSharedTargetConformance(configuration fakeDevinConfiguration, w
 func observeFakeDevinSharedTargetConformance(configuration fakeDevinConfiguration, workspace string) fakeDevinResult {
 	home := os.Getenv("HOME")
 	return fakeDevinResult{
+		AllowedEnvironment:      fakeDevinAllowedEnvironment(),
 		PreflightSkills:         fakeDevinMarkerExists(filepath.Join(home, fakeDevinSkillsProbeMarker)),
 		PreflightAuthentication: fakeDevinMarkerExists(filepath.Join(home, fakeDevinAuthProbeMarker)),
 		SelectedCommonSkills: fakeDevinContentsEqual(filepath.Join(home, ".acs", "common", "v1", "skills", "devin-config", "review", "SKILL.md"), "# review\n") &&

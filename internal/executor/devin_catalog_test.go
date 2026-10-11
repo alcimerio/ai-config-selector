@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/alcimerio/ai-config-selector/internal/devinruntime"
@@ -244,11 +245,14 @@ func newCatalogFixture(t *testing.T) *catalogFixture {
 func (f *catalogFixture) verify(t *testing.T) error {
 	t.Helper()
 	err := newExecutor(f.sandbox).VerifyDevin(context.Background(), f.request)
-	if f.sandbox.sessionHome == "" {
-		t.Fatal("VerifyDevin did not create a protected Session")
+	homes := f.sandbox.sessionHomes
+	if homes["skills"] == "" || homes["auth"] == "" || homes["skills"] == homes["auth"] {
+		t.Fatalf("VerifyDevin did not use independent protected preflight Sessions: %v", homes)
 	}
-	if _, statErr := os.Stat(f.sandbox.sessionHome); !os.IsNotExist(statErr) {
-		t.Fatalf("VerifyDevin did not clean up its Session home: %v", statErr)
+	for phase, home := range homes {
+		if _, statErr := os.Stat(home); !os.IsNotExist(statErr) {
+			t.Fatalf("VerifyDevin did not clean up the %s Session home: %v", phase, statErr)
+		}
 	}
 	return err
 }
@@ -258,9 +262,10 @@ type catalogMaterializer func(string) error
 func (f catalogMaterializer) Materialize(home string) error { return f(home) }
 
 type catalogSandbox struct {
-	fixture     *catalogFixture
-	prepareErr  error
-	sessionHome string
+	fixture      *catalogFixture
+	prepareErr   error
+	mu           sync.Mutex
+	sessionHomes map[string]string
 }
 
 func (*catalogSandbox) Readiness(context.Context) (launch.SandboxReadiness, error) {
@@ -268,7 +273,12 @@ func (*catalogSandbox) Readiness(context.Context) (launch.SandboxReadiness, erro
 }
 func (*catalogSandbox) Check(context.Context, launch.SandboxCheck) error { return nil }
 func (s *catalogSandbox) Prepare(_ context.Context, request launch.ProcessRequest) (launch.Process, error) {
-	s.sessionHome = request.SessionHome
+	s.mu.Lock()
+	if s.sessionHomes == nil {
+		s.sessionHomes = make(map[string]string)
+	}
+	s.sessionHomes[request.Arguments[0]] = request.SessionHome
+	s.mu.Unlock()
 	if s.prepareErr != nil {
 		return nil, s.prepareErr
 	}
@@ -317,8 +327,8 @@ func TestVerifyDevinRejectsAliasedSessionRootBeforePreparingProcess(t *testing.T
 	}
 	fixture.request.SessionsDirectory = aliasRoot
 	err := newExecutor(fixture.sandbox).VerifyDevin(context.Background(), fixture.request)
-	if err == nil || fixture.sandbox.sessionHome != "" {
-		t.Fatalf("unsafe Session root = %v, prepared home = %q", err, fixture.sandbox.sessionHome)
+	if err == nil || len(fixture.sandbox.sessionHomes) != 0 {
+		t.Fatalf("unsafe Session root = %v, prepared homes = %v", err, fixture.sandbox.sessionHomes)
 	}
 	if entries, err := os.ReadDir(realRoot); err != nil || len(entries) != 0 {
 		t.Fatalf("aliased root was populated: %v %v", entries, err)
