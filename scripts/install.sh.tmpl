@@ -15,8 +15,14 @@ fail() {
 }
 
 bin_directory=""
+candidate_directory=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
+    --candidate-dir)
+      [ "$#" -ge 2 ] && [ -n "$2" ] || fail "--candidate-dir requires a value"
+      candidate_directory="$2"
+      shift 2
+      ;;
     --bin-dir)
       [ "$#" -ge 2 ] || fail "--bin-dir requires a value"
       [ -n "$2" ] || fail "--bin-dir requires a value"
@@ -35,22 +41,30 @@ fi
 command -v uname >/dev/null 2>&1 || fail "required tool is unavailable: uname"
 case "$(uname -s)" in
   Darwin) target_os="darwin" ;;
+  Linux)
+    [ -n "$candidate_directory" ] || fail "ACS release installers support macOS only; Linux requires an explicit local --candidate-dir"
+    target_os="linux"
+    ;;
   *) fail "unsupported operating system; ACS release installers support macOS only" ;;
 esac
-case "$(uname -m)" in
-  arm64 | aarch64) target_arch="arm64" ;;
+case "$target_os/$(uname -m)" in
+  darwin/arm64 | darwin/aarch64) target_arch="arm64" ;;
+  linux/x86_64 | linux/amd64) target_arch="amd64" ;;
   *) fail "unsupported architecture; ACS supports Apple Silicon (arm64) only" ;;
 esac
 
-command -v sw_vers >/dev/null 2>&1 || fail "required tool is unavailable: sw_vers"
-macos_version="$(sw_vers -productVersion 2>/dev/null)" || fail "could not determine macOS version"
-case "$macos_version" in
-  "" | *[!0-9.]* | .* | *. | *..*) fail "could not determine macOS version" ;;
-esac
-case "${macos_version%%.*}" in
-  26) ;;
-  *) fail "unsupported macOS version $macos_version; ACS supports macOS 26 only" ;;
-esac
+if [ "$target_os" = darwin ]; then
+  [ -z "$candidate_directory" ] || fail "local candidate installation is only available for linux/amd64"
+  command -v sw_vers >/dev/null 2>&1 || fail "required tool is unavailable: sw_vers"
+  macos_version="$(sw_vers -productVersion 2>/dev/null)" || fail "could not determine macOS version"
+  case "$macos_version" in
+    "" | *[!0-9.]* | .* | *. | *..*) fail "could not determine macOS version" ;;
+  esac
+  case "${macos_version%%.*}" in
+    26) ;;
+    *) fail "unsupported macOS version $macos_version; ACS supports macOS 26 only" ;;
+  esac
+fi
 
 case "$bin_directory" in
   "" | / | /*/ | *[!\ -~]* | *:* | *"'"* | *//* | */./* | */../* | */. | */..)
@@ -101,7 +115,10 @@ fi
 for prerequisite in awk chmod cp ln mkdir mktemp rm tar; do
   command -v "$prerequisite" >/dev/null 2>&1 || fail "required tool is unavailable: $prerequisite"
 done
-if command -v curl >/dev/null 2>&1; then
+if [ -n "$candidate_directory" ]; then
+  download_tool="local"
+  command -v od >/dev/null 2>&1 || fail "required tool is unavailable: od"
+elif command -v curl >/dev/null 2>&1; then
   download_tool="curl"
 elif command -v wget >/dev/null 2>&1; then
   download_tool="wget"
@@ -149,11 +166,33 @@ download() {
   fi
 }
 
-download "$archive_path" "$release_url/$archive_name" || fail "archive download failed"
-download "$manifest_path" "$release_url/SHA256SUMS" || fail "checksum manifest download failed"
+if [ -n "$candidate_directory" ]; then
+  case "$candidate_directory" in /*) ;; *) fail "candidate directory must be absolute" ;; esac
+  [ -d "$candidate_directory" ] && [ ! -L "$candidate_directory" ] || fail "candidate directory is unsafe"
+  # Inspect hidden entries too; candidate sets contain exactly three regular files.
+  count=0
+  set +f
+  for candidate_entry in "$candidate_directory"/* "$candidate_directory"/.[!.]* "$candidate_directory"/..?*; do
+    [ -e "$candidate_entry" ] || [ -L "$candidate_entry" ] || continue
+    [ -f "$candidate_entry" ] && [ ! -L "$candidate_entry" ] || fail "candidate set contains an unsafe entry"
+    case "${candidate_entry##*/}" in
+      "$archive_name" | SHA256SUMS | install.sh) ;;
+      *) fail "candidate set contains an unexpected entry" ;;
+    esac
+    count=$((count + 1))
+  done
+  set -f
+  [ "$count" -eq 3 ] || fail "candidate set is incomplete"
+  cp "$candidate_directory/$archive_name" "$archive_path" || fail "candidate archive copy failed"
+  cp "$candidate_directory/SHA256SUMS" "$manifest_path" || fail "candidate manifest copy failed"
+else
+  download "$archive_path" "$release_url/$archive_name" || fail "archive download failed"
+  download "$manifest_path" "$release_url/SHA256SUMS" || fail "checksum manifest download failed"
+fi
 
-if ! expected_checksum="$(awk -v selected="$archive_name" -v version="$archive_version" '
+if ! expected_checksum="$(awk -v selected="$archive_name" -v version="$archive_version" -v target_os="$target_os" '
 function expected(name) {
+  if (target_os == "linux") return name == "acs_" version "_linux_amd64.tar.gz"
   return name == "acs_" version "_darwin_arm64.tar.gz"
 }
 {
@@ -201,6 +240,14 @@ for entry in acs README.md LICENSE; do
 done
 [ -x "$extraction_directory/acs" ] || fail "archive executable is not executable"
 
+if [ "$target_os" = linux ]; then
+  # Refuse scripts and wrongly labelled binaries before executing version.
+  elf_header="$(od -An -tu1 -N20 "$extraction_directory/acs")" || fail "candidate ELF header could not be read"
+  set -- $elf_header
+  [ "$#" -eq 20 ] || fail "candidate executable is not linux/amd64 ELF"
+  [ "$1 $2 $3 $4 $5 $6 $7 ${19} ${20}" = "127 69 76 70 2 1 1 62 0" ] || fail "candidate executable is not linux/amd64 ELF"
+fi
+
 version_error="$workspace/version-error"
 if ! installed_version="$("$extraction_directory/acs" version 2>"$version_error")"; then
   fail "archive executable validation failed"
@@ -238,6 +285,9 @@ fi
 installation_complete=1
 
 printf 'Installed acs %s to %s\n' "$release_version" "$destination"
+if [ "$target_os" = linux ]; then
+  printf '%s\n' 'Linux candidate only; production launches remain disabled.'
+fi
 case ":${PATH:-}:" in
   *":$bin_directory:"*) ;;
   *)

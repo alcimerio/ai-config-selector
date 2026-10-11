@@ -43,8 +43,8 @@ $physical_row
 EOF
   case "$version" in '#'* ) continue ;; esac
   case "$url" in
-    */codex-code-mode-host-*) archive="codex_code_mode_host_${version}_darwin_arm64.tar.gz" ;;
-    *) archive="codex_${version}_darwin_arm64.tar.gz" ;;
+    */codex-code-mode-host-*) archive="codex_code_mode_host_${version}_${target_os}_${target_arch}.tar.gz" ;;
+    *) archive="codex_${version}_${target_os}_${target_arch}.tar.gz" ;;
   esac
   temporary="$workspace/$archive"
   curl --fail --location --silent --show-error --proto '=https' --tlsv1.2 --output "$temporary" "$url" || fail "approved release asset download failed"

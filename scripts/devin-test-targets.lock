@@ -1,2 +1,4 @@
 # version|os|arch|sha256|url
 3000.10.21|darwin|arm64|c0b97f8197bf3ce895ff14aa19257c511154b49a0a195bba4962acb5e475c68e|https://static.devin.ai/cli/3000.10.21/devin-3000.10.21-aarch64-apple-darwin.tar.gz
+3000.10.21|linux|amd64|7cac6f5739ba3a3e5542f3b7fa07ed902d6dfb96ca22e4c63ae84c03bb7db47c|https://static.devin.ai/cli/3000.10.21/devin-3000.10.21-x86_64-unknown-linux.tar.gz
+# Linux arm64 is deferred pending native qualification; no installable row.

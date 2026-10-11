@@ -85,6 +85,23 @@ func TestPlanRejectsCandidateWithUnexpectedIntelArchive(t *testing.T) {
 	}
 }
 
+func TestPlanRejectsLinuxCandidates(t *testing.T) {
+	for _, linuxOnly := range []bool{false, true} {
+		candidate, _ := writePublicationCandidate(t)
+		if linuxOnly {
+			if err := os.Remove(filepath.Join(candidate, "acs_0.2.0_darwin_arm64.tar.gz")); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := os.WriteFile(filepath.Join(candidate, "acs_0.2.0_linux_amd64.tar.gz"), []byte("candidate only"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := publication.Plan(candidate, "v0.2.0", "0123456789abcdef0123456789abcdef01234567", "notes\n", nil); err == nil {
+			t.Fatal("Linux candidate admitted to publication")
+		}
+	}
+}
+
 type fixtureAsset struct {
 	name   string
 	size   int

@@ -6,6 +6,12 @@ import "golang.org/x/sys/unix"
 // policy independent of the host's available syscalls: an ENOSYS fallback is
 // intentional for clone3 (whose flags are indirect), never for a security gate.
 func linuxSeccompFilter() []unix.SockFilter {
+	return linuxSeccompFilterForSetup(false)
+}
+
+// Only the trusted helper's setup filter can acquire an unused private tty.
+// Every untrusted child always installs linuxSeccompFilter(), which denies it.
+func linuxSeccompFilterForSetup(privateTerminal bool) []unix.SockFilter {
 	const (
 		load = unix.BPF_LD | unix.BPF_W | unix.BPF_ABS
 		jeq  = unix.BPF_JMP | unix.BPF_JEQ | unix.BPF_K
@@ -68,6 +74,17 @@ func linuxSeccompFilter() []unix.SockFilter {
 	// An allowlist also excludes terminal detachment, console redirection and
 	// line-discipline changes. Compare the low word, as the kernel does for ioctl.
 	ioctls := []unix.SockFilter{{Code: load, K: 24}}
+	if privateTerminal {
+		attach := []unix.SockFilter{
+			{Code: load, K: 32}, {Code: jeq, K: 0, Jt: 1}, {Code: ret, K: deny},
+			{Code: load, K: 36}, {Code: jeq, K: 0, Jt: 1}, {Code: ret, K: deny},
+			{Code: load, K: 20}, {Code: jeq, K: 0, Jt: 1}, {Code: ret, K: deny},
+			{Code: load, K: 16}, {Code: unix.BPF_JMP | unix.BPF_JGE | unix.BPF_K, K: 128, Jt: 1},
+			{Code: ret, K: deny}, {Code: ret, K: unix.SECCOMP_RET_ALLOW},
+		}
+		ioctls = append(ioctls, unix.SockFilter{Code: jeq, K: unix.TIOCSCTTY, Jf: uint8(len(attach))})
+		ioctls = append(ioctls, attach...)
+	}
 	for _, request := range []uint32{
 		unix.TCGETS, unix.TCSETS, unix.TCSETSW, unix.TCSETSF,
 		unix.TCGETS2, unix.TCSETS2, unix.TCSETSW2, unix.TCSETSF2,
