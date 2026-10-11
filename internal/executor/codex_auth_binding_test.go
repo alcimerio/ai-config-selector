@@ -13,10 +13,55 @@ import (
 	"testing"
 	"time"
 
+	"github.com/alcimerio/ai-config-selector/internal/codexauthresource"
 	"github.com/alcimerio/ai-config-selector/internal/launch"
 	"github.com/alcimerio/ai-config-selector/internal/session"
 	"github.com/alcimerio/ai-config-selector/internal/sessionops"
 )
+
+func TestCredentialImportVerificationErrorsReachCallerAfterCleanup(t *testing.T) {
+	for _, operation := range []string{"login", "status", "recovery"} {
+		t.Run(operation, func(t *testing.T) {
+			auth := testChatGPTAuthJSON(t, "user", "workspace")
+			registry, provider, _, sessionsDirectory := newBindingTestRegistry(t, "work", auth)
+			resources := registryTestResources(registry)
+			resources.importErr = errors.Join(codexauthresource.ErrIdentityUnverified, codexauthresource.ErrProjectedAuthInvalid, codexauthresource.ErrUnsupportedAuth)
+			var err error
+			switch operation {
+			case "login":
+				registry.login = &fakeLoginRunner{auth: auth, result: loginRunResult{containedRunResult: containedRunResult{cleanupProven: true}}}
+				_, err = registry.Login(context.Background(), CodexLoginRequest{Name: "new"})
+			case "status":
+				_, err = registry.Status(context.Background(), "work")
+			case "recovery":
+				created, createErr := session.Create(sessionsDirectory, registry.workingDirectory, nil)
+				if createErr != nil {
+					t.Fatal(createErr)
+				}
+				if err := created.ProtectForRecovery(); err != nil {
+					t.Fatal(err)
+				}
+				if err := resources.quarantine.Create(context.Background(), quarantineMarker{Version: recordVersion, Name: "work", SessionID: filepath.Base(created.RootDirectory()), Phase: quarantineRecoverable, ProofChallenge: testCleanupProofChallenge, RefreshAllowed: true}); err != nil {
+					t.Fatal(err)
+				}
+				if err := created.PreserveForRecovery(); err != nil {
+					t.Fatal(err)
+				}
+				_, err = registry.Recover(context.Background(), "work")
+			}
+			if !errors.Is(err, codexauthresource.ErrIdentityUnverified) || !strings.Contains(err.Error(), "credentials were not saved") {
+				t.Fatalf("verification error = %v", err)
+			}
+			if provider.createCalls != 0 || provider.replaceCalls != 0 || !bytes.Equal(provider.records["work"].Auth, auth) {
+				t.Fatal("failed verification changed credentials")
+			}
+			assertNoSessionDirectories(t, sessionsDirectory)
+			if _, exists, err := resources.quarantine.Inspect(context.Background(), "work"); err != nil || exists {
+				t.Fatalf("marker after rejected import = (%v, %v)", exists, err)
+			}
+		})
+	}
+}
 
 func TestStatusProjectsOneIdentityAndDiscardsUnchangedCredential(t *testing.T) {
 	auth := testChatGPTAuthJSON(t, "user", "workspace")
