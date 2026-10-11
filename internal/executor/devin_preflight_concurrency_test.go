@@ -2,11 +2,14 @@ package executor
 
 import (
 	"context"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"io"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -14,6 +17,7 @@ import (
 	"github.com/alcimerio/ai-config-selector/internal/devinruntime"
 	"github.com/alcimerio/ai-config-selector/internal/launch"
 	"github.com/alcimerio/ai-config-selector/internal/session"
+	"github.com/alcimerio/ai-config-selector/internal/sessionops"
 )
 
 // Neither fake runner can finish until the test has observed both in Wait.
@@ -23,6 +27,7 @@ type concurrentPreflightSandbox struct {
 	finished chan string
 	release  map[string]chan struct{}
 	failures map[string]error
+	requests map[string]launch.ProcessRequest
 }
 
 func (*concurrentPreflightSandbox) Readiness(context.Context) (launch.SandboxReadiness, error) {
@@ -39,7 +44,10 @@ type concurrentPreflightProcess struct {
 	sandbox *concurrentPreflightSandbox
 }
 
-func (*concurrentPreflightProcess) Start() error           { return nil }
+func (p *concurrentPreflightProcess) Start() error {
+	// Model the native supervisor revoking the no-target proof before start.
+	return os.Remove(filepath.Join(p.request.SessionDirectory, ".acs-cleanup-proof-v1"))
+}
 func (*concurrentPreflightProcess) Signal(os.Signal) error { return nil }
 func (p *concurrentPreflightProcess) Wait() error {
 	name := p.request.Arguments[0]
@@ -68,23 +76,38 @@ func startConcurrentPreflights(t *testing.T, failures map[string]error) (*concur
 	sandbox := &concurrentPreflightSandbox{
 		entered: make(chan launch.ProcessRequest, 2), finished: make(chan string, 2),
 		release:  map[string]chan struct{}{"skills": make(chan struct{}), "auth": make(chan struct{})},
-		failures: failures,
+		failures: failures, requests: make(map[string]launch.ProcessRequest),
 	}
-	created, err := session.CreateTracked(filepath.Join(t.TempDir(), "sessions"), t.TempDir(), nil, "devin")
+	materializer := materializerFunc(func(home string) error {
+		return os.WriteFile(filepath.Join(home, ".config", "profile-fixture"), []byte("selected profile"), 0600)
+	})
+	created, err := session.CreateTracked(filepath.Join(t.TempDir(), "sessions"), t.TempDir(), materializer, "devin")
 	if err != nil {
 		t.Fatal(err)
 	}
 	result := make(chan error, 1)
 	joined := make(chan struct{})
+	host := t.TempDir()
+	credential := filepath.Join(".local", "share", "devin", "credentials.toml")
+	if err := os.MkdirAll(filepath.Dir(filepath.Join(host, credential)), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(host, credential), []byte("selected credential fixture"), 0600); err != nil {
+		t.Fatal(err)
+	}
 	request := DevinRequest{
 		WorkspaceAccess: launch.WorkspaceAccessReadOnly, Executable: "fixture-devin",
+		Materializer: materializer, ExistingHomeDirectory: host,
 		RuntimeInputs: []string{"registered-runtime"}, RuntimeAuthority: launch.DefaultRuntimeAuthority(),
 		FilesystemGrants:     []launch.FilesystemGrant{{ID: "read", Access: launch.PathAccessReadOnly}},
 		FilesystemExclusions: []launch.FilesystemExclusion{{ID: "hidden"}},
 		ExecutableGrants:     []launch.ExecutableGrant{{ID: "tool"}},
-		sessionProtections:   []launch.SessionProtection{{Path: "/fixture/protected"}},
-		selectedMCPConfig:    "/fixture/mcp.json", reserveMCPConfigNames: true,
 	}
+	request, err = projectDevinSession(created, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	go func() {
 		defer close(joined)
 		err := newExecutor(sandbox).runDevinPreflights(ctx, created, request, authority.DevinSemantics())
@@ -109,20 +132,36 @@ func startConcurrentPreflights(t *testing.T, failures map[string]error) (*concur
 				t.Fatalf("duplicate preflight: %s", name)
 			}
 			seen[name] = true
+			sandbox.requests[name] = prepared
 			arguments := []string{"skills", "list", "--json"}
 			if name == "auth" {
 				arguments = []string{"auth", "status"}
 			}
 			want := launch.ProcessRequest{
 				Workspace: created.WorkingDirectory(), WorkspaceAccess: request.WorkspaceAccess,
-				SessionsDirectory: created.SessionsDirectory(), SessionDirectory: created.RootDirectory(),
-				SessionHome: created.HomeDirectory(), TemporaryDirectory: created.TemporaryDirectory(),
+				SessionsDirectory: created.SessionsDirectory(), SessionDirectory: prepared.SessionDirectory,
+				SessionHome: prepared.SessionHome, TemporaryDirectory: prepared.TemporaryDirectory,
 				Executable: request.Executable, RuntimeInputs: request.RuntimeInputs, Arguments: arguments,
 				Terminal:         launch.Terminal{Output: prepared.Terminal.Output, ErrorOutput: io.Discard},
 				RuntimeAuthority: request.RuntimeAuthority, FilesystemGrants: request.FilesystemGrants,
 				FilesystemExclusions: request.FilesystemExclusions, ExecutableGrants: request.ExecutableGrants,
 				SessionProtections: request.sessionProtections, SelectedMCPConfig: request.selectedMCPConfig,
 				ReserveMCPConfigNames: request.reserveMCPConfigNames, RecoveryProofChallenge: prepared.RecoveryProofChallenge,
+			}
+			if name == "skills" && prepared.SessionDirectory != created.RootDirectory() {
+				t.Fatal("skills left the main Session")
+			}
+			if name == "auth" {
+				if prepared.SessionDirectory == created.RootDirectory() || filepath.Dir(prepared.SessionDirectory) != created.SessionsDirectory() {
+					t.Fatal("auth must own an independent Session")
+				}
+				want.SessionProtections = append([]launch.SessionProtection(nil), request.sessionProtections...)
+				for i := range want.SessionProtections {
+					want.SessionProtections[i].Path = strings.Replace(want.SessionProtections[i].Path, created.HomeDirectory(), prepared.SessionHome, 1)
+				}
+			}
+			if prepared.SessionHome != filepath.Join(prepared.SessionDirectory, "home") || prepared.TemporaryDirectory != filepath.Join(prepared.SessionDirectory, "tmp") {
+				t.Fatal("preflight paths crossed Session boundaries")
 			}
 			if !reflect.DeepEqual(prepared, want) || len(prepared.RecoveryProofChallenge) != launch.RecoveryProofChallengeSize {
 				t.Fatalf("%s isolation differs: got %#v, want %#v", name, prepared, want)
@@ -136,6 +175,35 @@ func startConcurrentPreflights(t *testing.T, failures map[string]error) (*concur
 			t.Fatal("both preflights did not reach the runner barrier concurrently")
 		}
 	}
+	// Both processes are live: neither may have overwritten the other's
+	// durable capability or published a cleanup proof for that shared root.
+	capabilities := concurrentPreflightCapabilities(t, sandbox)
+	store := sessionops.Store{SessionsDirectory: created.SessionsDirectory()}
+	for name, prepared := range sandbox.requests {
+		for relative, want := range map[string]string{filepath.Join(".config", "profile-fixture"): "selected profile", credential: "selected credential fixture"} {
+			path := filepath.Join(prepared.SessionHome, relative)
+			data, err := os.ReadFile(path)
+			info, statErr := os.Stat(path)
+			if err != nil || string(data) != want || statErr != nil || info.Mode().Perm() != 0600 {
+				t.Fatalf("%s lost selected projection %s", name, relative)
+			}
+		}
+		for _, protection := range prepared.SessionProtections {
+			if _, err := os.Stat(protection.Path); err != nil {
+				t.Fatalf("%s protection missing: %v", name, err)
+			}
+		}
+		cap := capabilities[name]
+		if cap.Generation != 1 || cap.Challenge != hex.EncodeToString(prepared.RecoveryProofChallenge) {
+			t.Fatalf("%s lost its live generation/challenge", name)
+		}
+		if _, err := os.Stat(filepath.Join(prepared.SessionDirectory, ".acs-cleanup-proof-v1")); !os.IsNotExist(err) {
+			t.Fatalf("%s published cleanup proof while live: %v", name, err)
+		}
+		if recovered, err := store.Recover(cap.ID); err == nil || recovered.Outcome != "active" {
+			t.Fatalf("%s live recovery = %+v, %v", name, recovered, err)
+		}
+	}
 	return sandbox, result, ctx, cancel
 }
 
@@ -146,6 +214,7 @@ func TestDevinPreflightsRunConcurrently(t *testing.T) {
 	if err := <-result; err != nil {
 		t.Fatal(err)
 	}
+	assertConcurrentPreflightsRemoved(t, sandbox)
 }
 
 func TestDevinPreflightFailuresHaveStableOrder(t *testing.T) {
@@ -194,6 +263,7 @@ func TestDevinPreflightFailuresHaveStableOrder(t *testing.T) {
 						t.Fatalf("single failure type = %T, want original preflight error type", err)
 					}
 				}
+				assertConcurrentPreflightsRemoved(t, sandbox)
 				var preflight *devinruntime.PreflightError
 				if !errors.As(err, &preflight) || preflight.Capability != want[0].(*devinruntime.PreflightError).Capability {
 					t.Fatalf("first typed failure = %v, want %v", preflight, want[0])
@@ -214,6 +284,7 @@ func TestDevinPreflightsRespectCancellationAndJoinBothRunners(t *testing.T) {
 	if err == nil || err.Error() != want.Error() {
 		t.Fatalf("cancellation = %v, want %v", err, want)
 	}
+	assertConcurrentPreflightsRemoved(t, sandbox)
 	if len(sandbox.finished) != 2 {
 		t.Fatalf("only %d runners finished before return", len(sandbox.finished))
 	}
@@ -228,5 +299,63 @@ func TestDevinConcurrentPreflightPreservesSandboxFailure(t *testing.T) {
 	var got *launch.SandboxError
 	if !errors.As(err, &got) || got != failure {
 		t.Fatalf("sandbox failure = %v, want original %v", err, failure)
+	}
+}
+
+// Read private bindings by root, as public Session operations omit challenges.
+type preflightCapability struct {
+	ID, RootName, Challenge string
+	Generation              uint64
+}
+
+func concurrentPreflightCapabilities(t *testing.T, sandbox *concurrentPreflightSandbox) map[string]preflightCapability {
+	t.Helper()
+	directory := filepath.Join(filepath.Dir(sandbox.requests["skills"].SessionsDirectory), "session-operations-v1", "capabilities")
+	paths, err := filepath.Glob(filepath.Join(directory, "*.json"))
+	if err != nil || len(paths) != 2 {
+		t.Fatalf("live capabilities = %v, %v; want two", paths, err)
+	}
+	result := make(map[string]preflightCapability)
+	for _, path := range paths {
+		data, err := os.ReadFile(path)
+		var cap preflightCapability
+		if err != nil || json.Unmarshal(data, &cap) != nil {
+			t.Fatal("invalid preflight capability", err)
+		}
+		for name, request := range sandbox.requests {
+			if cap.RootName == filepath.Base(request.SessionDirectory) {
+				result[name] = cap
+			}
+		}
+	}
+	if len(result) != 2 || result["skills"].ID == result["auth"].ID {
+		t.Fatal("concurrent preflights do not have independent durable bindings")
+	}
+	return result
+}
+
+func assertConcurrentPreflightsRemoved(t *testing.T, sandbox *concurrentPreflightSandbox) {
+	t.Helper()
+	store := sessionops.Store{SessionsDirectory: sandbox.requests["skills"].SessionsDirectory}
+	listed, err := store.List("")
+	if err != nil || len(listed.Sessions) != 2 {
+		t.Fatalf("durable preflight rows = %+v, %v", listed, err)
+	}
+	for _, item := range listed.Sessions {
+		if item.State != sessionops.StateRemoved {
+			t.Fatalf("preflight not settled: %+v", item)
+		}
+		if recovered, err := store.Recover(item.ID); err != nil || recovered.Outcome != "removed" {
+			t.Fatalf("completed recovery = %+v, %v", recovered, err)
+		}
+	}
+	for _, request := range sandbox.requests {
+		if _, err := os.Stat(request.SessionDirectory); !os.IsNotExist(err) {
+			t.Fatalf("preflight root remains: %v", err)
+		}
+	}
+	paths, err := filepath.Glob(filepath.Join(filepath.Dir(store.SessionsDirectory), "session-operations-v1", "capabilities", "*.json"))
+	if err != nil || len(paths) != 0 {
+		t.Fatalf("settled preflight capabilities remain: %v, %v", paths, err)
 	}
 }

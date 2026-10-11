@@ -8,6 +8,13 @@ inspect lifecycle state. Recovery also requires an inactive Session lease, its
 exact private process generation and the matching native supervisor cleanup
 proof.
 
+Each tracked Session has one current process generation and cleanup challenge.
+Processes sharing a Session run sequentially, advancing the generation only
+after the previous process tree has completed proven cleanup. Devin's concurrent
+skills and authentication preflights use independent tracked Sessions; rules
+and the interactive process continue in the skills Session. Each Session has
+its own recovery record and settles independently.
+
 ```sh
 acs session list
 acs session list --state retryable --json

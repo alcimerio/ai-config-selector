@@ -300,7 +300,7 @@ func runPublicDevinPTY(r devinNativeRun) (err error) {
 					return devinPublicACSFailure(e, phase, released, progress.stage, "already-drained", &evidence, driverFailure)
 				}
 				if e = acknowledgeDevinPhase(phases[phase], r.BeforeAttachedInspection, func() error {
-					return inspectDevinCompletedPhase(r.Coordination, phases[phase], r.Driver.home, r.Candidate)
+					return inspectDevinCompletedPhase(r.Coordination, phases[phase], r.Driver.phaseHomes[phases[phase]], r.Candidate)
 				}); e != nil {
 					return e
 				}
@@ -369,7 +369,7 @@ func runPublicDevinPTY(r devinNativeRun) (err error) {
 			e = verifyDevinPhaseDone(r.Coordination, name, readyPIDs[name])
 			if e == nil {
 				if e = acknowledgeDevinPhase(phases[phase], r.BeforeAttachedInspection, func() error {
-					return inspectDevinCompletedPhase(r.Coordination, phases[phase], r.Driver.home, r.Candidate)
+					return inspectDevinCompletedPhase(r.Coordination, phases[phase], r.Driver.phaseHomes[phases[phase]], r.Candidate)
 				}); e != nil {
 					return e
 				}

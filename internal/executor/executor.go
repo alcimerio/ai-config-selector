@@ -136,8 +136,9 @@ func isNilProcess(process launch.Process) bool {
 }
 
 func (e *Executor) prepareRetainedProcess(ctx context.Context, created *session.Session, request launch.ProcessRequest) (launch.Process, error) {
-	// Session generations and their preparation must advance together, even
-	// when multiple contained probes run at the same time.
+	// Serialize backend preparation and capability publication. This lock does
+	// not permit overlapping process generations within one tracked Session;
+	// concurrent probes must use independent Sessions.
 	e.prepareMutex.Lock()
 	defer e.prepareMutex.Unlock()
 	challenge, err := created.ConsumeOrArmOperation(request.RecoveryProofChallenge)
@@ -463,48 +464,13 @@ func (e *Executor) RunDevin(ctx context.Context, request DevinRequest) (exitCode
 	// Deferred calls run in reverse order: enter cleanup mode before the
 	// Session removal above, so Ctrl-C during a slow exit is not swallowed.
 	defer supervisor.beginCleanup()
-	servers := []launch.MCPServerIntent{}
-	environmentIntents := []launch.EnvironmentIntent{}
-	if request.ResolvedPlan != nil {
-		servers = request.ResolvedPlan.MCPServerIntents()
-		environmentIntents = request.ResolvedPlan.EnvironmentIntents()
-	}
-	projected := phasetiming.Start("session.project-config")
-	recipes, recipeDirectory, launcher, err := prepareMCPRecipes(created.HomeDirectory(), servers, request.ExecutableGrants, request.FilesystemGrants, environmentIntents)
-	if err != nil {
-		return 1, errors.New("selected MCP bindings could not be compiled")
-	}
-	if launcher == "" {
-		launcher, err = os.Executable()
-		if err == nil {
-			launcher, err = filepath.EvalSymlinks(launcher)
-		}
-		if err != nil {
-			return 1, errors.New("MCP target projection is unavailable")
-		}
-	}
-	devinUserConfig, err := writeDevinUserConfig(created.HomeDirectory())
-	if err != nil {
-		return 1, err
-	}
-	selectedMCPConfig := ""
-	if len(recipes) != 0 {
-		selectedMCPConfig, err = writeDevinMCPConfig(created.HomeDirectory(), launcher, recipes)
-		if err != nil {
-			return 1, err
-		}
-	}
-	request.selectedMCPConfig = selectedMCPConfig
-	request.reserveMCPConfigNames = true
-	request.sessionProtections = mcpSessionProtections(recipeDirectory, selectedMCPConfig)
-	request.sessionProtections = append(request.sessionProtections, launch.SessionProtection{Path: devinUserConfig})
 	if requirements.Semantics.CredentialProjection != "optional-allowlisted-value-omitted" {
 		return 1, errors.New("resolved authority has unsupported Devin credential projection")
 	}
-	if err := copyDevinCredentialIfPresent(filepath.Join(request.ExistingHomeDirectory, ".local", "share", "devin", "credentials.toml"), filepath.Join(created.HomeDirectory(), ".local", "share", "devin", "credentials.toml")); err != nil {
+	request, err = projectDevinSession(created, request)
+	if err != nil {
 		return 1, err
 	}
-	projected()
 	err = e.runDevinPreflights(preflightContext, created, request, requirements.Semantics)
 	if err != nil {
 		return 1, err
@@ -603,6 +569,20 @@ func (e *Executor) VerifyDevin(ctx context.Context, request DevinRequest) (resul
 			resultErr = cleanupPrecedence(resultErr, removeErr)
 		}
 	}()
+	if requirements.Semantics.CredentialProjection != "optional-allowlisted-value-omitted" {
+		return errors.New("resolved authority has unsupported Devin credential projection")
+	}
+	request, err = projectDevinSession(created, request)
+	if err != nil {
+		return err
+	}
+	return e.runDevinPreflights(ctx, created, request, requirements.Semantics)
+}
+
+// projectDevinSession derives every protected config path from this Session.
+// Concurrent preflights must never reuse paths into another Session's home.
+func projectDevinSession(created *session.Session, request DevinRequest) (DevinRequest, error) {
+	defer phasetiming.Start("session.project-config")()
 	servers := []launch.MCPServerIntent{}
 	environmentIntents := []launch.EnvironmentIntent{}
 	if request.ResolvedPlan != nil {
@@ -611,7 +591,7 @@ func (e *Executor) VerifyDevin(ctx context.Context, request DevinRequest) (resul
 	}
 	recipes, recipeDirectory, launcher, err := prepareMCPRecipes(created.HomeDirectory(), servers, request.ExecutableGrants, request.FilesystemGrants, environmentIntents)
 	if err != nil {
-		return errors.New("selected MCP bindings could not be compiled")
+		return request, errors.New("selected MCP bindings could not be compiled")
 	}
 	if launcher == "" {
 		launcher, err = os.Executable()
@@ -619,31 +599,28 @@ func (e *Executor) VerifyDevin(ctx context.Context, request DevinRequest) (resul
 			launcher, err = filepath.EvalSymlinks(launcher)
 		}
 		if err != nil {
-			return errors.New("MCP target projection is unavailable")
+			return request, errors.New("MCP target projection is unavailable")
 		}
 	}
 	devinUserConfig, err := writeDevinUserConfig(created.HomeDirectory())
 	if err != nil {
-		return err
+		return request, err
 	}
 	selectedMCPConfig := ""
 	if len(recipes) != 0 {
 		selectedMCPConfig, err = writeDevinMCPConfig(created.HomeDirectory(), launcher, recipes)
 		if err != nil {
-			return err
+			return request, err
 		}
 	}
 	request.selectedMCPConfig = selectedMCPConfig
 	request.reserveMCPConfigNames = true
 	request.sessionProtections = mcpSessionProtections(recipeDirectory, selectedMCPConfig)
 	request.sessionProtections = append(request.sessionProtections, launch.SessionProtection{Path: devinUserConfig})
-	if requirements.Semantics.CredentialProjection != "optional-allowlisted-value-omitted" {
-		return errors.New("resolved authority has unsupported Devin credential projection")
-	}
 	if err := copyDevinCredentialIfPresent(filepath.Join(request.ExistingHomeDirectory, ".local", "share", "devin", "credentials.toml"), filepath.Join(created.HomeDirectory(), ".local", "share", "devin", "credentials.toml")); err != nil {
-		return err
+		return request, err
 	}
-	return e.runDevinPreflights(ctx, created, request, requirements.Semantics)
+	return request, nil
 }
 
 func (e *Executor) runDevinPreflights(ctx context.Context, created *session.Session, request DevinRequest, semantics authority.TargetSemantics) (resultErr error) {
@@ -668,7 +645,7 @@ func (e *Executor) runDevinPreflights(ctx context.Context, created *session.Sess
 			result := make(chan error, 1)
 			authentication = result
 			go func() {
-				result <- e.runDevinPreflight(ctx, created, request, preflight, instructionAnchor)
+				result <- e.runDevinIndependentAuthPreflight(ctx, created, request, preflight)
 			}()
 			break
 		}
@@ -696,6 +673,34 @@ func (e *Executor) runDevinPreflights(ctx context.Context, created *session.Sess
 		}
 	}
 	return nil
+}
+
+// A tracked Session has one current recovery capability and cleanup proof.
+// Authentication therefore owns a separate Session for its entire lifetime,
+// including backend quarantine and durable removal after cleanup is proven.
+func (e *Executor) runDevinIndependentAuthPreflight(ctx context.Context, main *session.Session, request DevinRequest, preflight authority.ConfigurationDecision) (resultErr error) {
+	created, err := session.CreateTracked(main.SessionsDirectory(), main.WorkingDirectory(), request.Materializer, "devin")
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if removeErr := created.Remove(); removeErr != nil {
+			resultErr = cleanupPrecedence(resultErr, removeErr)
+		}
+	}()
+	request, err = projectDevinSession(created, request)
+	if err != nil {
+		return err
+	}
+	var anchor *projectedInstructionAnchor
+	if len(request.ExpectedInstructions) > 0 {
+		anchor, err = openProjectedInstructionAnchor(created.HomeDirectory())
+		if err != nil {
+			return devinruntime.NewPreflightError(devinruntime.CapabilityInstructionRules, devinruntime.ReasonRuleMismatch)
+		}
+		defer anchor.Close()
+	}
+	return e.runDevinPreflight(ctx, created, request, preflight, anchor)
 }
 
 func (e *Executor) runDevinPreflight(ctx context.Context, created *session.Session, request DevinRequest, preflight authority.ConfigurationDecision, instructionAnchor *projectedInstructionAnchor) error {

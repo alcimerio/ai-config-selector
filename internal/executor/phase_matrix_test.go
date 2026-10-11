@@ -223,8 +223,13 @@ func phaseMatrixAssertEarlyBoundary(t *testing.T, target, phase, sessions string
 		}
 		return
 	}
-	if materialized != 1 {
-		t.Fatalf("materialization calls = %d, want 1", materialized)
+	wantMaterialized := 1
+	if target == "devin" && (phase == "Prepare failure" || phase == "Prepare cancellation") {
+		// Concurrent auth has its own materialized, recovery-tracked Session.
+		wantMaterialized = 2
+	}
+	if materialized != wantMaterialized {
+		t.Fatalf("materialization calls = %d, want %d", materialized, wantMaterialized)
 	}
 	if phase == "materialization failure" || phase == "materialization cancellation" {
 		if len(sandbox.requests) != 0 {

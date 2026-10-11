@@ -224,6 +224,15 @@ func assembleNativeDevinProofWithAssessment(t *testing.T, input func(devinInputF
 		run.BeforeAttachedInspection = options.verify
 	}
 	run.VerifyEffects = func() error {
+		for _, sessionHome := range d.phaseHomes {
+			if _, err := os.Stat(filepath.Dir(sessionHome)); !os.IsNotExist(err) {
+				return errors.New("observed phase Session was not removed")
+			}
+		}
+		capabilities, err := filepath.Glob(filepath.Join(home, ".acs", "session-operations-v1", "capabilities", "*.json"))
+		if err != nil || len(capabilities) != 0 {
+			return errors.New("phase recovery capabilities remain after cleanup")
+		}
 		if _, e := os.Stat(forbidden + ".descendant-effect"); !os.IsNotExist(e) {
 			return errors.New("forbidden descendant marker exists")
 		}
