@@ -91,35 +91,33 @@ func TestSeatbeltDeniesLoopbackExceptSelectedPort(t *testing.T) {
 			}
 		})
 	}
+	// SBPL's "localhost" host form matches 127.0.0.1 and ::1 only; other
+	// 127/8 addresses cannot be named in SBPL. macOS does not configure them
+	// on lo0 by default, so they are unreachable rather than policy-denied.
+	// Record the outcome and require only that the target never connects.
 	t.Run("127.0.0.2", func(t *testing.T) {
-		// macOS lo0 need not have this address configured. Reserve ports on
-		// 127.0.0.1, but never require a listener or a successful dial on .2.
-		first, err := net.Listen("tcp4", "127.0.0.1:0")
+		listener, err := net.Listen("tcp4", "127.0.0.1:0")
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer first.Close()
-		other, err := net.Listen("tcp4", "127.0.0.1:0")
+		defer listener.Close()
+		address := net.JoinHostPort("127.0.0.2", strconv.Itoa(listener.Addr().(*net.TCPAddr).Port))
+		request := seatbeltTestRequest(t)
+		request.runtimeAuthority = DefaultRuntimeAuthority()
+		result := filepath.Join(request.sessionDirectory, "loopback-result")
+		request.arguments = []string{seatbeltLoopbackProbeRun, "--", "dial", result, "tcp4", address}
+		settled, err := seatbeltTerminalNativeRun(request)
+		if !settled || err != nil {
+			t.Fatalf("probe failed or cleanup unproven: %v", err)
+		}
+		contents, err := os.ReadFile(result)
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer other.Close()
-		address := net.JoinHostPort("127.0.0.2", strconv.Itoa(first.Addr().(*net.TCPAddr).Port))
-		connection, err := net.DialTimeout("tcp4", address, time.Second)
-		if err == nil {
-			_ = connection.Close()
-			t.Fatal("unconfigured host control unexpectedly connected")
+		seatbeltDenialEvidence(t, "unconfigured 127/8 address=%s outcome=%s", address, contents)
+		if string(contents) == "allowed" {
+			t.Fatalf("target reached %s", address)
 		}
-		if errors.Is(err, syscall.EPERM) || errors.Is(err, syscall.EACCES) {
-			t.Fatalf("host control already denied by policy: %v", err)
-		}
-		seatbeltDenialEvidence(t, "host control address=%s outcome=%v", address, err)
-		t.Run("default", func(t *testing.T) {
-			assertSeatbeltLoopbackDial(t, "tcp4", address, nil, "denied")
-		})
-		t.Run("unlisted", func(t *testing.T) {
-			assertSeatbeltLoopbackDial(t, "tcp4", address, []int{other.Addr().(*net.TCPAddr).Port}, "denied")
-		})
 	})
 }
 

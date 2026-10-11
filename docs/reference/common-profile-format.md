@@ -126,8 +126,10 @@ digest, independent of selection order.
 
 On macOS, Seatbelt first allows ordinary outbound IP/DNS, then denies
 `(remote ip "localhost:*")`, then re-allows only each selected
-`(remote ip "localhost:<port>")`. The loopback host form covers localhost,
-127.0.0.0/8 and ::1. Port exceptions apply to IP transport (TCP and UDP), not to
+`(remote ip "localhost:<port>")`. The loopback host form covers 127.0.0.1 and
+::1 (and therefore `localhost`), verified natively. SBPL cannot name other
+127.0.0.0/8 addresses; macOS does not configure them on `lo0` by default, so
+they are unreachable there, but a host that adds `lo0` aliases is not covered. Port exceptions apply to IP transport (TCP and UDP), not to
 one local process or executable. Other loopback ports remain denied. Unix socket
 policy, `/private/var/run/mDNSResponder` and ACS inherited Unix socket pairs
 remain available under their existing grants. Inbound binds are unchanged;
