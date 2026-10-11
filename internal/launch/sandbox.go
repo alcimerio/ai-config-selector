@@ -16,6 +16,7 @@ import (
 
 	"github.com/alcimerio/ai-config-selector/internal/environmentresource"
 	"github.com/alcimerio/ai-config-selector/internal/executableintent"
+	"github.com/alcimerio/ai-config-selector/internal/networkintent"
 	"github.com/alcimerio/ai-config-selector/internal/pathintent"
 	"github.com/alcimerio/ai-config-selector/internal/phasetiming"
 	"github.com/charmbracelet/x/term"
@@ -340,12 +341,15 @@ type SessionProtection struct {
 // construction and native policy compilation. The zero value selects the sole
 // shipped set for compatibility with internal callers.
 type RuntimeAuthority struct {
-	Version                   int
-	ProcessMode               string
-	SystemReadMode            string
-	MetadataMode              string
-	SessionAccess             string
-	NetworkMode               string
+	Version        int
+	ProcessMode    string
+	SystemReadMode string
+	MetadataMode   string
+	SessionAccess  string
+	NetworkMode    string
+	LoopbackPorts  []int
+	// CodexLoginCallback is operation-scoped, never Profile authority.
+	CodexLoginCallback        bool
 	TerminalMode              string
 	DeviceMode                string
 	FixedPath                 string
@@ -371,6 +375,7 @@ func (value RuntimeAuthority) Clone() RuntimeAuthority {
 	value.InheritedEnvironmentNames = append([]string(nil), value.InheritedEnvironmentNames...)
 	value.SysctlNames = append([]string(nil), value.SysctlNames...)
 	value.MachServices = append([]string(nil), value.MachServices...)
+	value.LoopbackPorts = append([]int(nil), value.LoopbackPorts...)
 	return value
 }
 
@@ -381,7 +386,17 @@ func normalizeRuntimeAuthority(value RuntimeAuthority) (RuntimeAuthority, error)
 		}
 		return DefaultRuntimeAuthority(), nil
 	}
+	ports, err := networkintent.Canonical(networkintent.Selection{LoopbackPorts: value.LoopbackPorts})
+	if err != nil {
+		return RuntimeAuthority{}, err
+	}
+	value.LoopbackPorts = append([]int(nil), ports.LoopbackPorts...)
 	want := DefaultRuntimeAuthority()
+	if value.CodexLoginCallback && (len(value.LoopbackPorts) != 1 || value.LoopbackPorts[0] != 1455) {
+		return RuntimeAuthority{}, errors.New("invalid Codex login callback authority")
+	}
+	want.LoopbackPorts = value.LoopbackPorts
+	want.CodexLoginCallback = value.CodexLoginCallback
 	if !reflect.DeepEqual(value, want) {
 		return RuntimeAuthority{}, errors.New("unsupported runtime authority")
 	}

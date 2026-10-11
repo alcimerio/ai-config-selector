@@ -3374,6 +3374,23 @@ func assertPromotedArtifactNativeContainment(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = ipListener.Close() })
+	profilePath := filepath.Join(home, ".acs", "profiles", "reviews.json")
+	profileBytes, err := os.ReadFile(profilePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var profileShape map[string]any
+	if err := json.Unmarshal(profileBytes, &profileShape); err != nil {
+		t.Fatal(err)
+	}
+	profileShape["common"].(map[string]any)["network"] = map[string]any{"version": 1, "selection": map[string]any{"loopbackPorts": []int{ipListener.Addr().(*net.TCPAddr).Port}}}
+	profileBytes, err = json.Marshal(profileShape)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(profilePath, profileBytes, 0600); err != nil {
+		t.Fatal(err)
+	}
 	ipAccepted := make(chan struct{}, 1)
 	go func() {
 		connection, acceptErr := ipListener.Accept()

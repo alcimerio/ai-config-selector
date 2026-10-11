@@ -21,6 +21,7 @@ import (
 	"github.com/alcimerio/ai-config-selector/internal/instructions"
 	"github.com/alcimerio/ai-config-selector/internal/launch"
 	"github.com/alcimerio/ai-config-selector/internal/mcpintent"
+	"github.com/alcimerio/ai-config-selector/internal/networkintent"
 	"github.com/alcimerio/ai-config-selector/internal/profile"
 	"github.com/alcimerio/ai-config-selector/internal/skills"
 	"github.com/alcimerio/ai-config-selector/internal/strictjson"
@@ -90,14 +91,15 @@ type exchangeProfile struct {
 	Overlays map[string]exchangeOverlay `json:"overlays"`
 }
 type commonIntent struct {
-	Skills       exchangeSkills        `json:"skills"`
-	Workspace    exchangeWorkspace     `json:"workspace"`
-	Paths        exchangePaths         `json:"paths,omitempty"`
-	Executables  exchangeExecutables   `json:"executables,omitempty"`
-	Environment  exchangeEnvironment   `json:"environment,omitempty"`
-	Exclusions   *exchangeExclusions   `json:"exclusions,omitempty"`
-	MCP          *exchangeMCP          `json:"mcp,omitempty"`
-	Instructions *exchangeInstructions `json:"instructions,omitempty"`
+	Skills       exchangeSkills         `json:"skills"`
+	Workspace    exchangeWorkspace      `json:"workspace"`
+	Paths        exchangePaths          `json:"paths,omitempty"`
+	Executables  exchangeExecutables    `json:"executables,omitempty"`
+	Environment  exchangeEnvironment    `json:"environment,omitempty"`
+	Exclusions   *exchangeExclusions    `json:"exclusions,omitempty"`
+	Network      *profile.CommonPayload `json:"network,omitempty"`
+	MCP          *exchangeMCP           `json:"mcp,omitempty"`
+	Instructions *exchangeInstructions  `json:"instructions,omitempty"`
 }
 type exchangeMCP struct {
 	Version   int             `json:"version"`
@@ -243,6 +245,21 @@ func Export(candidate profile.Profile) ([]byte, Report, error) {
 			return nil, Report{}, errors.New("invalid paths intent")
 		}
 		pathSelection = decodedPaths
+	}
+	var networkPayload *profile.CommonPayload
+	if payload, ok := candidate.Common[commonprofile.NetworkCapabilityID]; ok {
+		if payload.Version != 1 {
+			return nil, Report{}, errors.New("unsupported network capability")
+		}
+		network, err := networkintent.Decode(payload.Selection)
+		if err != nil {
+			return nil, Report{}, err
+		}
+		encoded, err := networkintent.Encode(network)
+		if err != nil {
+			return nil, Report{}, err
+		}
+		networkPayload = &profile.CommonPayload{Version: 1, Selection: encoded}
 	}
 	exclusionSelection := commonprofile.ExclusionSelection{}
 	exclusionPresent := false
@@ -442,6 +459,7 @@ func Export(candidate profile.Profile) ([]byte, Report, error) {
 		Executables: exchangeExecutables{Version: commonprofile.ExecutablesCapabilityVersion, Selection: exchangeExecutableEntries},
 		Environment: exchangeEnvironment{Version: commonprofile.EnvironmentCapabilityVersion, Selection: exchangeEnvironmentEntries},
 	}, Overlays: overlays}, Requirements: reqs}
+	doc.Profile.Common.Network = networkPayload
 	if exclusionPresent {
 		doc.Profile.Common.Exclusions = &exchangeExclusions{Version: 1, Selection: exchangeExclusionEntries}
 	}
@@ -888,6 +906,7 @@ func KnownFieldClassifications() map[string]string {
 		"common.skills.version": "portable", "common.skills.selection": "portable", "common.skills.source": "host-bound", "common.skills.relativePath": "portable",
 		"common.workspace.version": "portable", "common.workspace.selection": "portable", "common.workspace.access": "portable", "overlays": "portable",
 		"common.paths.version": "portable", "common.paths.selection": "portable", "common.paths.id": "portable", "common.paths.access": "portable", "common.paths.type": "portable", "common.paths.reference.kind": "portable", "common.paths.reference.path": "portable-or-symbolic",
+		"common.network.version": "portable", "common.network.selection": "portable", "common.network.loopbackPorts": "portable",
 		"common.exclusions.version": "portable", "common.exclusions.selection": "portable", "common.exclusions.id": "portable", "common.exclusions.type": "portable", "common.exclusions.reference.kind": "portable", "common.exclusions.reference.path": "portable-or-symbolic",
 		"common.executables.version": "portable", "common.executables.selection": "portable", "common.executables.id": "portable", "common.executables.reference.kind": "portable", "common.executables.reference.name": "portable", "common.executables.reference.path": "portable-or-symbolic",
 		"common.environment.version": "portable", "common.environment.selection": "portable", "common.environment.id": "portable", "common.environment.destination": "portable", "common.environment.scope": "portable", "common.environment.required": "portable", "common.environment.classification": "portable", "common.environment.source.kind": "portable", "common.environment.source.name": "portable", "common.environment.source.provider": "portable", "common.environment.source.reference": "secret-reference-symbolic",

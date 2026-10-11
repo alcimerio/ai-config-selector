@@ -1061,6 +1061,13 @@ func buildSeatbeltPolicy(request validatedProcessRequest) (string, []string, err
 		workspaceWriteRule = `
   (literal (param "WORKSPACE")) (subpath (param "WORKSPACE"))`
 	}
+	var loopbackAllowRules strings.Builder
+	for _, port := range runtimeAuthority.LoopbackPorts {
+		fmt.Fprintf(&loopbackAllowRules, "\n(allow network-outbound (remote ip %q))", "localhost:"+strconv.Itoa(port))
+	}
+	if runtimeAuthority.CodexLoginCallback {
+		loopbackAllowRules.WriteString("\n(allow network-inbound (local ip \"localhost:1455\"))")
+	}
 	var sysctlRules strings.Builder
 	for _, name := range runtimeAuthority.SysctlNames {
 		fmt.Fprintf(&sysctlRules, "\n  (sysctl-name %q)", name)
@@ -1134,6 +1141,8 @@ func buildSeatbeltPolicy(request validatedProcessRequest) (string, []string, err
 (allow network-outbound
   (remote ip)
   (literal "/private/var/run/mDNSResponder"))
+; Host-local services commonly trust loopback. Unix sockets remain unchanged.
+(deny network-outbound (remote ip "localhost:*"))` + loopbackAllowRules.String() + `
 
 ; Security.framework reads system trust settings and evaluates platform TLS
 ; through these exact Mach services. All other Mach services remain denied.

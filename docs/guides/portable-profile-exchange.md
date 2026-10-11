@@ -162,6 +162,12 @@ resulting local-absolute reference. Existence, supported anchors, identity,
 type, and native enforcement are checked only by an actual launch.
 
 
+Exchange v3 optionally carries `common.network` version 1 with the ordinary
+`selection.loopbackPorts` array. Ports need no local bindings and retain their
+exact intent through export/import. The normal limits and strict integer
+validation apply. This does not imply Linux enforcement; see the
+[loopback contract](../reference/common-profile-format.md#loopback-network-authority).
+
 Exchange v3 optionally carries `common.exclusions` version 1 with a
 selection array of `id`, `type` and `reference` entries. Workspace-relative references
 remain portable. Each local-absolute exclusion uses a deterministic `path-N`

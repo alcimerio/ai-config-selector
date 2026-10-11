@@ -20,6 +20,7 @@ var commonCapabilities = []CommonCapability{
 	{ID: "environment", Version: 1},
 	{ID: "instructions", Version: 1},
 	{ID: "mcp", Version: 1},
+	{ID: "network", Version: 1},
 }
 
 // CommonCapabilities returns an independent copy in stable catalog order.

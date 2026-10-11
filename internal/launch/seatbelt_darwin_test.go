@@ -2811,6 +2811,8 @@ func TestSeatbeltContainsFilesystemNetworkEnvironmentAndDescendants(t *testing.T
 	}
 	defer tcp.Close()
 	go acceptSeatbeltTestConnection(tcp)
+	request.runtimeAuthority = DefaultRuntimeAuthority()
+	request.runtimeAuthority.LoopbackPorts = []int{tcp.Addr().(*net.TCPAddr).Port}
 	unixPath := filepath.Join(hostHome, "agent.sock")
 	unixListener, err := net.Listen("unix", unixPath)
 	if err != nil {

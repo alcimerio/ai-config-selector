@@ -132,7 +132,8 @@ Remote MCP is unsupported. Profiles with URL, HTTP, SSE,
 header or OAuth transport settings are rejected; these fields are not accepted
 as inert placeholders. The selected executable visibility category remains
 non-exclusive, and normal outbound-network authority still applies to a stdio
-server. MCP selection does not create destination-specific network filtering.
+server, including macOS loopback denial and explicit Profile port exceptions.
+MCP selection itself does not add loopback ports or general destination filtering.
 
 Codex's generated MCP table is composed with the target's existing isolated HOME
 and untrusted-project configuration; an empty table does not erase other loaded

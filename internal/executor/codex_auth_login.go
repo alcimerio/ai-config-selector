@@ -81,7 +81,7 @@ func (runner *codexLoginRunner) Prepare(ctx context.Context) (loginPreparation, 
 	if runner == nil {
 		return loginPreparation{}, ErrLoginFailed
 	}
-	operation, err := prepareContainedOperation(ctx, runner.config, runner.sandbox, ErrLoginFailed)
+	operation, err := prepareContainedOperationWithAccess(ctx, runner.config, runner.sandbox, launch.WorkspaceAccessLegacy, ErrLoginFailed, codexLoginCallbackAuthority())
 	if err != nil {
 		return loginPreparation{}, err
 	}
@@ -185,4 +185,12 @@ func (runner *codexLoginRunner) run(
 		ctx, config, runner.sandbox, created, "", proofChallenge, binding, arguments, terminal,
 		ErrLoginFailed, ErrLoginCleanupUncertain,
 	)
+}
+
+// The managed browser login alone may use the fixed upstream callback port.
+func codexLoginCallbackAuthority() launch.RuntimeAuthority {
+	value := launch.DefaultRuntimeAuthority()
+	value.LoopbackPorts = []int{1455}
+	value.CodexLoginCallback = true
+	return value
 }

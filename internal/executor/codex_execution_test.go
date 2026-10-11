@@ -528,6 +528,10 @@ func TestInteractiveCodexUsesResolvedAuthorityInsteadOfRunnerScalarInputs(t *tes
 		t.Fatalf("processes = %d", len(sandbox.requests))
 	}
 	for index, request := range sandbox.requests {
+		if request.RuntimeAuthority.CodexLoginCallback || len(request.RuntimeAuthority.LoopbackPorts) != 0 {
+			t.Fatal("ordinary Codex session inherited login callback authority")
+		}
+
 		if observedExecutableContents[index] != "target" || request.Executable == "/stale/scalar/codex" || !reflect.DeepEqual(request.RuntimeInputs, []string{runtime}) {
 			t.Fatalf("process authority = executable %q runtime %#v", request.Executable, request.RuntimeInputs)
 		}

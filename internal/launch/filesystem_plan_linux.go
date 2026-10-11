@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/alcimerio/ai-config-selector/internal/networkintent"
 	"golang.org/x/sys/unix"
 )
 
@@ -123,7 +124,14 @@ func compileLinuxFilesystemPlan(request validatedProcessRequest, snapshot linuxF
 	if features.unixSockets != linuxUnixSocketsDenyCreation {
 		return fail("sealed Unix socket denial is required for live directory grants")
 	}
-	if !reflect.DeepEqual(request.runtimeAuthority, linuxFilesystemRuntimeAuthority()) {
+	// Port intent is validated but ignored: this prototype has no destination
+	// address mediation. Retain the strict checks for every other runtime field.
+	if _, err := networkintent.Canonical(networkintent.Selection{LoopbackPorts: request.runtimeAuthority.LoopbackPorts}); err != nil {
+		return fail("invalid loopback ports")
+	}
+	runtimeAuthority := request.runtimeAuthority.Clone()
+	runtimeAuthority.LoopbackPorts = nil
+	if !reflect.DeepEqual(runtimeAuthority, linuxFilesystemRuntimeAuthority()) {
 		return fail("explicit Linux runtime authority is required")
 	}
 	if request.reserveMCPConfigNames || request.selectedMCPConfig != "" {

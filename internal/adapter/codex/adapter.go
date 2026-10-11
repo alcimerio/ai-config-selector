@@ -119,7 +119,11 @@ func New(config Config) (*Adapter, error) {
 	if err != nil {
 		return nil, err
 	}
-	a.editors, err = builder.NewEditorRegistry(a.categories, skillsEditor, instructionsEditor, workspaceEditor, pathsEditor, exclusionsEditor, executablesEditor, environmentEditor, mcpEditor)
+	networkEditor, err := builder.RegisterNetworkEditor(bindings.Network)
+	if err != nil {
+		return nil, err
+	}
+	a.editors, err = builder.NewEditorRegistry(a.categories, skillsEditor, instructionsEditor, workspaceEditor, pathsEditor, exclusionsEditor, executablesEditor, environmentEditor, mcpEditor, networkEditor)
 	if err != nil {
 		return nil, err
 	}

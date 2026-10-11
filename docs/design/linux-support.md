@@ -233,12 +233,18 @@ unsupported plans before Session creation rather than silently omitting rules.
 
 ### Network, Unix sockets and terminal parity
 
-Current Seatbelt allows local IP bind and coarse outbound IP/DNS, but has no
-listen grant; unrelated Unix sockets remain denied
-(`internal/launch/seatbelt_darwin.go:1090-1099`). Linux should preserve outbound
-TCP/UDP and DNS, test host loopback reachability explicitly, and deny new listeners
-with seccomp. Blocking `listen` alone does not restrict UDP reception; record that
-distinction and test it. Do not advertise loopback isolation or an egress firewall.
+Current Seatbelt allows local IP bind and coarse outbound IP/DNS, with loopback
+outbound denied except for `common.network` v1 `selection.loopbackPorts`. It has
+no ordinary inbound grant; managed Codex browser login alone receives the
+localhost:1455 callback exception. Unrelated Unix sockets remain denied.
+The Linux prototype shares the host network namespace and ignores this capability
+for enforcement. Explain/dry-run report unchanged Linux behavior explicitly.
+Landlock TCP port rules cannot distinguish loopback from remote destinations,
+and seccomp BPF cannot dereference sockaddr pointers. See the
+[loopback policy gap](linux-sealed-launcher.md#loopback-policy-gap) before claiming
+network parity. Blocking `listen` alone does not restrict UDP reception; record
+that distinction and test it. Do not advertise Linux loopback isolation or an
+egress firewall.
 
 Private mounts hide pathname Unix sockets; ABI 6 scopes abstract sockets.
 Audit sockets reachable inside writable grants too: on ABI 6, hiding `/run` alone

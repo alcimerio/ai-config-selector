@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strconv"
 
 	"github.com/alcimerio/ai-config-selector/internal/instructions"
 	"github.com/alcimerio/ai-config-selector/internal/launch"
@@ -232,6 +233,8 @@ type executableGrantContributor interface {
 type environmentContributor interface {
 	EnvironmentIntents() []launch.EnvironmentIntent
 }
+type networkContributor interface{ LoopbackPorts() []int }
+
 type mcpServerContributor interface {
 	MCPServerIntents() []launch.MCPServerIntent
 }
@@ -259,6 +262,9 @@ func New(contributions []Contribution, workspaceAccess launch.WorkspaceAccess, o
 	}
 	plan := Plan{contributions: append([]Contribution(nil), contributions...), workspaceAccess: workspaceAccess, overlay: overlay, requirements: requirements, runtimeAuthority: launch.DefaultRuntimeAuthority()}
 	for _, contribution := range plan.contributions {
+		if network, ok := contribution.Value.(networkContributor); ok {
+			plan.runtimeAuthority.LoopbackPorts = network.LoopbackPorts()
+		}
 		if exclusions, ok := contribution.Value.(pathExclusionContributor); ok {
 			plan.pathExclusionIntents = append(plan.pathExclusionIntents, exclusions.PathExclusionIntents()...)
 		}
@@ -651,6 +657,7 @@ func runtimeFacts(runtime launch.RuntimeAuthority) Facts {
 		{ID: "runtime.mach-services", Kind: "mach-service", Value: FactValue{Names: sortedStrings(runtime.MachServices)}, Reason: "acs_runtime", Source: FactSource{Kind: "acs", ID: "native-sandbox", Version: runtime.Version}},
 		{ID: "runtime.metadata", Kind: "filesystem-metadata", Value: FactValue{Mode: runtime.MetadataMode}, Reason: "acs_runtime", Source: FactSource{Kind: "acs", ID: "native-sandbox", Version: runtime.Version}},
 		{ID: "runtime.network", Kind: "network", Value: FactValue{Mode: runtime.NetworkMode}, Reason: "acs_runtime", Source: FactSource{Kind: "acs", ID: "native-sandbox", Version: runtime.Version}},
+		{ID: "runtime.network.loopback", Kind: "network", Value: FactValue{Mode: "denied-except-listed-ports-macos", Names: loopbackPortNames(runtime.LoopbackPorts), Scope: codexCallbackScope(runtime.CodexLoginCallback)}, Reason: "acs_runtime", Source: FactSource{Kind: "acs", ID: "native-sandbox", Version: runtime.Version}},
 		{ID: "runtime.process", Kind: "process", Value: FactValue{Mode: runtime.ProcessMode}, Reason: "acs_runtime", Source: FactSource{Kind: "acs", ID: "native-sandbox", Version: runtime.Version}},
 		{ID: "runtime.session", Kind: "filesystem", Value: FactValue{Access: runtime.SessionAccess}, Reason: "intrinsic_session", Source: FactSource{Kind: "acs", ID: "session", Version: runtime.Version}},
 		{ID: "runtime.sysctls", Kind: "sysctl", Value: FactValue{Names: sortedStrings(runtime.SysctlNames)}, Reason: "acs_runtime", Source: FactSource{Kind: "acs", ID: "native-sandbox", Version: runtime.Version}},
@@ -661,7 +668,7 @@ func runtimeFacts(runtime launch.RuntimeAuthority) Facts {
 		{ID: "unsupported.exclusive-execution-filtering", Kind: "executable", Value: FactValue{Mode: "non-exclusive-visibility-only"}, Reason: "not_supported", Source: FactSource{Kind: "acs", ID: "native-sandbox"}},
 		{ID: "unsupported.arbitrary-host-paths", Kind: "filesystem", Value: FactValue{Mode: "arbitrary-grants"}, Reason: "not_supported", Source: FactSource{Kind: "acs", ID: "native-sandbox"}},
 		{ID: "unsupported.host-environment", Kind: "environment", Value: FactValue{Mode: "arbitrary-values"}, Reason: "not_supported", Source: FactSource{Kind: "acs", ID: "native-sandbox"}},
-		{ID: "unsupported.network-destinations", Kind: "network", Value: FactValue{Mode: "destination-filtering"}, Reason: "not_supported", Source: FactSource{Kind: "acs", ID: "native-sandbox"}},
+		{ID: "unsupported.network-destinations", Kind: "network", Value: FactValue{Mode: "general-destination-filtering"}, Reason: "not_supported", Source: FactSource{Kind: "acs", ID: "native-sandbox"}},
 		{ID: "unsupported.sandbox-bypass", Kind: "isolation", Value: FactValue{Mode: "bypass"}, Reason: "not_supported", Source: FactSource{Kind: "acs", ID: "native-sandbox"}},
 		{ID: "unsupported.target-pass-through", Kind: "target-control", Value: FactValue{Mode: "arbitrary-options"}, Reason: "not_supported", Source: FactSource{Kind: "acs", ID: "recipes"}},
 		{ID: "unsupported.raw-policy", Kind: "isolation", Value: FactValue{Mode: "caller-supplied"}, Reason: "not_supported", Source: FactSource{Kind: "acs", ID: "native-sandbox"}},
@@ -854,4 +861,19 @@ func (plan Plan) Verify(ctx context.Context, verification launch.VerificationCon
 		}
 	}
 	return nil
+}
+
+func loopbackPortNames(ports []int) []string {
+	names := make([]string, len(ports))
+	for i, port := range ports {
+		names[i] = strconv.Itoa(port)
+	}
+	return sortedStrings(names)
+}
+
+func codexCallbackScope(enabled bool) string {
+	if enabled {
+		return "codex-login-localhost-1455-inbound"
+	}
+	return ""
 }

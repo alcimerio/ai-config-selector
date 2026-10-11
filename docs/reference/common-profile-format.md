@@ -29,6 +29,10 @@ Noninteractive authoring accepts only this representation; see
         {"source": "acs-instructions", "relativePath": "reviews/backend.md"}
       ]
     },
+    "network": {
+      "version": 1,
+      "selection": {"loopbackPorts": []}
+    },
     "workspace": {
       "version": 1,
       "selection": {"access": "read-only"}
@@ -92,6 +96,55 @@ name or cleaned path. Unknown common capabilities and unsupported selected
 overlays fail closed. Unknown inactive overlays can be reported by passive inspection but do
 not grant authority. Because rewriting their representation could lose unknown
 data, edit, clone and rename refuse them before preview.
+
+## Loopback network authority
+
+`common.network` version 1 explicitly selects outbound loopback ports:
+
+```json
+"network": {
+  "version": 1,
+  "selection": {"loopbackPorts": [1455, 3000]}
+}
+```
+
+The capability follows the independently versioned common format; `loopbackPorts`
+uses the camelCase style of sibling fields such as `relativePath`. The envelope
+remains version 1 (read alias 3). Omission and an empty array both deny loopback
+on macOS; existing Profiles are not rewritten on load. New creation and confirmed
+mutation emit an explicit selection. Older builds reject a present unknown
+capability; use a pre-feature Profile revision before downgrading.
+
+Select at most 64 distinct integer ports from 1 through 65535. Port 0,
+duplicates, ranges, strings, fractions, null arrays, unknown keys and unsupported
+versions are rejected by active and passive admission. Saved selections sort
+ports numerically. Portable exchange v3 preserves the selection without local
+bindings. Edit, clone, rename and history restore preserve the port intent.
+The Network editor adds/removes ports; explain and dry-run show the selected
+ports and default denial. The ports also participate in the semantic authority
+digest, independent of selection order.
+
+On macOS, Seatbelt first allows ordinary outbound IP/DNS, then denies
+`(remote ip "localhost:*")`, then re-allows only each selected
+`(remote ip "localhost:<port>")`. The loopback host form covers localhost,
+127.0.0.0/8 and ::1. Port exceptions apply to IP transport (TCP and UDP), not to
+one local process or executable. Other loopback ports remain denied. Unix socket
+policy, `/private/var/run/mDNSResponder` and ACS inherited Unix socket pairs
+remain available under their existing grants. Inbound binds are unchanged;
+Profiles do not grant inbound listener access.
+
+ACS-managed Codex browser login receives an operation-only localhost:1455
+outbound exception and inbound callback grant. It is not saved in a Profile or
+inherited by ordinary Codex sessions, device login, version probes or auth status.
+If a normal session needs that port it must select it explicitly.
+
+Linux currently ignores this capability for enforcement and retains its existing
+network behavior. Explain and dry-run include an explicit ignored-field note;
+production Linux launch remains unsupported. See the
+[Linux network enforcement gap](../design/linux-sealed-launcher.md#loopback-policy-gap).
+This capability does not deny private LAN addresses, other host-interface
+addresses, remote destinations or proxied access; ACS is not a general egress
+firewall.
 
 ## Workspace authority
 

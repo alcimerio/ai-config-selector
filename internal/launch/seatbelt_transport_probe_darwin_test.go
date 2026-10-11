@@ -554,7 +554,23 @@ func (fixture *seatbeltTransportFixture) runCase(t *testing.T, name string, poli
 			return "", nil, err
 		}
 		if policyKind == seatbeltTransportPolicyCoarse {
-			return generated, definitions, nil
+			request.runtimeAuthority = DefaultRuntimeAuthority()
+			for _, recorder := range fixture.all {
+				if seatbeltRecorderNetwork(recorder) == "unix" {
+					continue
+				}
+				port := seatbeltPort(recorder.address())
+				found := false
+				for _, selected := range request.runtimeAuthority.LoopbackPorts {
+					if port == selected {
+						found = true
+					}
+				}
+				if !found {
+					request.runtimeAuthority.LoopbackPorts = append(request.runtimeAuthority.LoopbackPorts, port)
+				}
+			}
+			return buildSeatbeltPolicy(request)
 		}
 		generated, err = seatbeltRemovePolicyTextExactlyOnce(generated, seatbeltTransportOutboundRule, "transport outbound rule")
 		if err != nil {
@@ -1460,7 +1476,7 @@ func seatbeltTransportDemonstrated(evidence *seatbeltTransportEvidence) []string
 	for _, probe := range evidence.Cases {
 		switch probe.Conclusion {
 		case "coarse_ip_outbound_observed_custom_unix_denied":
-			demonstrated = append(demonstrated, "current coarse Seatbelt outbound behavior for numeric loopback IPv4 and IPv6 TCP and UDP")
+			demonstrated = append(demonstrated, "Seatbelt outbound behavior for explicitly selected loopback IPv4 and IPv6 TCP and UDP ports")
 		case "all_probed_outbound_denied":
 			demonstrated = append(demonstrated, "permission-denied client results plus exact-marker absence under the disposable denied-outbound policy")
 		case "exact_unix_path_observed":

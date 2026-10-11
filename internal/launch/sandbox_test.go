@@ -840,3 +840,34 @@ func TestCurrentPlatformRejectsUnsupportedOperatingSystems(t *testing.T) {
 	}
 	assertSandboxCategory(t, err, SandboxUnsupportedPlatform)
 }
+
+func TestRuntimeAuthorityAdmitsOnlyValidatedLoopbackPortsAndScopedCallback(t *testing.T) {
+	value := DefaultRuntimeAuthority()
+	value.LoopbackPorts = []int{8080, 1455}
+	normalized, err := normalizeRuntimeAuthority(value)
+	if err != nil || !reflect.DeepEqual(normalized.LoopbackPorts, []int{1455, 8080}) {
+		t.Fatalf("normalize=%#v %v", normalized, err)
+	}
+	normalized.LoopbackPorts[0] = 9
+	if value.LoopbackPorts[0] != 8080 {
+		t.Fatal("normalization aliases caller ports")
+	}
+	for _, ports := range [][]int{{0}, {65536}, {1455, 1455}, make([]int, 65)} {
+		value.LoopbackPorts = ports
+		if _, err := normalizeRuntimeAuthority(value); err == nil {
+			t.Fatalf("accepted invalid ports %v", ports)
+		}
+	}
+	value.LoopbackPorts = []int{1455}
+	value.CodexLoginCallback = true
+	if _, err := normalizeRuntimeAuthority(value); err != nil {
+		t.Fatal(err)
+	}
+	value.LoopbackPorts = []int{8080}
+	if _, err := normalizeRuntimeAuthority(value); err == nil {
+		t.Fatal("callback exception widened to arbitrary port")
+	}
+	if _, err := normalizeRuntimeAuthority(RuntimeAuthority{LoopbackPorts: []int{1455}}); err == nil {
+		t.Fatal("partial authority silently replaced default")
+	}
+}

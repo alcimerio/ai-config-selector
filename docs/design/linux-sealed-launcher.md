@@ -65,6 +65,34 @@ Bubblewrap starts a new session. Interactive shell qualification and terminal
 ownership/restoration remain required before production use. Blocking TCP listen
 and accept does not prohibit UDP bind/reception. There is no egress filtering.
 
+## Loopback policy gap
+
+macOS denies outbound loopback by default and re-allows only
+`common.network` v1 `selection.loopbackPorts`. The Linux prototype ignores that
+selection for enforcement, including the omitted/default denial. Explain and
+dry-run report the gap. The backend retains its existing host network namespace,
+IPv4/IPv6 socket authority, filesystem Landlock rules and seccomp listen/accept
+denial; production Linux admission remains disabled.
+
+The current composition cannot enforce exact parity. Landlock network rules
+(since ABI 4) restrict TCP connect/bind by **port**, without matching destination
+addresses, and do not mediate UDP. A global TCP port allowlist would also restrict
+remote internet destinations, changing the ordinary outbound contract. Classic
+seccomp BPF cannot dereference connect/sendto sockaddr pointers; inspecting a
+pointer value does not identify the destination safely. Simply unsharing the
+network namespace removes ordinary networking and changes localhost's meaning;
+it does not expose selected host loopback services without additional routing or
+forwarding. The existing listen/accept denial also needs a separate, narrow
+solution for managed Codex browser login's localhost:1455 callback.
+
+Exact parity requires a reviewed destination-aware mechanism and native controls
+for IPv4 127/8, IPv6 ::1/mapped IPv4, localhost resolution, TCP and UDP, selected
+and unselected ports, remote destinations on those same ports, DNS, child
+inheritance and private IPC. Do not claim loopback isolation or silently apply
+port-only rules while this remains unresolved. Kernel references:
+[Landlock network objects](https://docs.kernel.org/6.12/userspace-api/landlock.html#landlock-rules)
+and [seccomp pointer limits](https://docs.kernel.org/userspace-api/seccomp_filter.html#introduction).
+
 ## Evidence and remaining gates
 
 Unit tests interpret the complete BPF control flow, including foreign ABIs,

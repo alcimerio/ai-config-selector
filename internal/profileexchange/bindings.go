@@ -164,6 +164,9 @@ func bindDocument(admitted admittedDocument, bindingData []byte, name string, re
 	if doc.Profile.Common.Exclusions != nil {
 		candidate.Common[commonprofile.ExclusionsCapabilityID] = profile.CommonPayload{Version: 1, Selection: selections.exclusions}
 	}
+	if doc.Profile.Common.Network != nil {
+		candidate.Common[commonprofile.NetworkCapabilityID] = *doc.Profile.Common.Network
+	}
 	if doc.Profile.Common.MCP != nil {
 		candidate.Common[commonprofile.MCPCapabilityID] = profile.CommonPayload{Version: commonprofile.MCPCapabilityVersion, Selection: selections.mcp}
 	}

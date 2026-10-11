@@ -159,13 +159,17 @@ func runContainedCodex(
 		return containedRunResult{err: targetFailure, cleanupProven: true}
 	}
 	executor := &Executor{sandbox: sandbox}
+	runtimeAuthority := launch.DefaultRuntimeAuthority()
+	if len(arguments) == 1 && arguments[0] == "login" {
+		runtimeAuthority = codexLoginCallbackAuthority()
+	}
 	process, err := executor.prepareRetainedProcess(ctx, created, launch.ProcessRequest{
 		Workspace: created.WorkingDirectory(), SessionsDirectory: created.SessionsDirectory(),
 		SessionDirectory: created.RootDirectory(), SessionHome: created.HomeDirectory(),
 		TemporaryDirectory: created.TemporaryDirectory(), Executable: config.BinaryPath,
 		RuntimeInputs: config.RuntimeInputs, RuntimeProbePaths: config.RuntimeProbePaths, FilesystemExclusions: config.filesystemExclusions,
-		RecoveryProofChallenge: challenge,
-		Arguments:              codexAuthRuntimeArguments(workspace, arguments...), Terminal: terminal,
+		RecoveryProofChallenge: challenge, RuntimeAuthority: runtimeAuthority,
+		Arguments: codexAuthRuntimeArguments(workspace, arguments...), Terminal: terminal,
 	})
 	if err != nil {
 		if errors.Is(err, errRetainPreparedProcess) || errors.Is(err, errInvalidPreparedProcess) {
