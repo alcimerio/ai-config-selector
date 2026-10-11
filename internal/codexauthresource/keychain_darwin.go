@@ -23,13 +23,14 @@ const (
 type nativeKeychainClient struct{ api *keychainAPI }
 
 type keychainAPI struct {
-	secItemAdd           func(uintptr, uintptr) int32
-	secItemCopyMatching  func(uintptr, uintptr) int32
-	secItemDelete        func(uintptr) int32
-	secItemUpdate        func(uintptr, uintptr) int32
-	secKeychainOpen      func(uintptr, uintptr) int32
-	secKeychainGetStatus func(uintptr, uintptr) int32
-	secKeychainDelete    func(uintptr) int32
+	secItemAdd                           func(uintptr, uintptr) int32
+	secItemCopyMatching                  func(uintptr, uintptr) int32
+	secItemDelete                        func(uintptr) int32
+	secItemUpdate                        func(uintptr, uintptr) int32
+	secKeychainOpen                      func(uintptr, uintptr) int32
+	secKeychainGetStatus                 func(uintptr, uintptr) int32
+	secKeychainDelete                    func(uintptr) int32
+	secKeychainSetUserInteractionAllowed func(uint8) int32
 
 	dictionaryCreateMutable func(uintptr, int64, uintptr, uintptr) uintptr
 	dictionarySetValue      func(uintptr, uintptr, uintptr)
@@ -106,6 +107,10 @@ func loadKeychainAPI() (*keychainAPI, error) {
 	purego.RegisterLibFunc(&api.secKeychainOpen, security, "SecKeychainOpen")
 	purego.RegisterLibFunc(&api.secKeychainGetStatus, security, "SecKeychainGetStatus")
 	purego.RegisterLibFunc(&api.secKeychainDelete, security, "SecKeychainDelete")
+	purego.RegisterLibFunc(&api.secKeychainSetUserInteractionAllowed, security, "SecKeychainSetUserInteractionAllowed")
+	if err := api.disableUserInteraction(); err != nil {
+		return nil, err
+	}
 	purego.RegisterLibFunc(&api.dictionaryCreateMutable, coreFoundation, "CFDictionaryCreateMutable")
 	purego.RegisterLibFunc(&api.dictionarySetValue, coreFoundation, "CFDictionarySetValue")
 	purego.RegisterLibFunc(&api.dictionaryGetValue, coreFoundation, "CFDictionaryGetValue")
@@ -158,6 +163,17 @@ func loadKeychainAPI() (*keychainAPI, error) {
 		*destination = value
 	}
 	return api, nil
+}
+
+func (api *keychainAPI) disableUserInteraction() error {
+	// kSecUseAuthenticationUIFail only covers the data-protection Keychain.
+	// File-backed Keychains can still prompt for an item's ACL or an unlock.
+	// ACS never asks securityd to show UI, so disable it for this process once,
+	// before any operation, and leave it disabled for every later client.
+	if api.secKeychainSetUserInteractionAllowed(0) != 0 {
+		return ErrProviderUnavailable
+	}
+	return nil
 }
 
 func loadCFReference(

@@ -196,6 +196,14 @@ A missing file, failed status, forced logout, changed identity/workspace/method
 or unknown schema is never durable logout. ACS keeps the last valid Keychain
 payload and discards rejected projections only after verified cleanup.
 
+Before storing a new login or changed credentials, ACS verifies the ID token's
+RS256 signature using OpenAI's signing keys, issuer, Codex audience and expiry.
+It also requires any account ID in `auth.json` to match the signed account claim.
+Signing keys are cached in memory for one hour and refreshed for unknown keys.
+If verification fails or keys cannot be fetched, ACS reports an error and keeps
+the previously stored credentials. Unchanged credentials need no network
+verification, including when their ID token has expired.
+
 ## Quarantine and recovery
 
 Keep quarantined Sessions and recovery files intact. Once the earlier operation

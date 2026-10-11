@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 
@@ -16,6 +17,9 @@ func (app App) RunDiagnostics(args []string, home func() (string, error)) (bool,
 	var result diagnostics.Result
 	if inv.command.path == "doctor" {
 		result = diagnostics.Doctor(inv.value)
+		if inv.secondEnabled {
+			result = linuxCapabilityDiagnostics(context.Background(), result)
+		}
 	} else {
 		result = diagnostics.Validate(inv.operand, home)
 	}
@@ -24,7 +28,11 @@ func (app App) RunDiagnostics(args []string, home func() (string, error)) (bool,
 			return true, 1
 		}
 	} else {
-		fmt.Fprintln(app.Output, "Passive diagnostics (no processes executed or files changed):")
+		if inv.secondEnabled {
+			fmt.Fprintln(app.Output, "Linux capability diagnostics (bounded probes; production Linux launches remain disabled):")
+		} else {
+			fmt.Fprintln(app.Output, "Passive diagnostics (no processes executed or files changed):")
+		}
 		for _, check := range result.Checks {
 			fmt.Fprintf(app.Output, "  %s: %s (%s)\n    %s\n", check.ID, check.Status, check.Code, check.NextStep)
 		}

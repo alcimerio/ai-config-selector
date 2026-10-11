@@ -507,11 +507,16 @@ proposal, not GitHub issue numbers. Split implementation further if review grows
    plan compilation; resolve the exclusions/socket-in-grant gates. Depends: 4.
    Accept: RO/RW, protected MCP/auth paths, absent exclusions and ancestor guards
    have demonstrated enforceable semantics; ambiguous plans are rejected.
+   The [initial pure compiler](linux-filesystem-plan.md) records its supported
+   subset, conservative rejection gates, and outstanding native proof; it does
+   not enable production launches.
 6. **Implement the sealed Linux launcher.** Scope: trusted namespace setup,
    single-threaded restriction/exec boundary, seccomp, private env/FD transport,
    terminal policy. Depends: 5. Accept: real allowed/denied controls pass under a
    test-only harness; all setup failures start zero untrusted processes; production
    Linux remains disabled until containment integration.
+   The [initial sealed launcher](linux-sealed-launcher.md) records primitive
+   native evidence, the separate composition gate and remaining limitations.
 
 ### Stack 3 — supervisor and containment
 
@@ -519,10 +524,16 @@ proposal, not GitHub issue numbers. Split implementation further if review grows
    pidfds, PID init/subreaper, gated start, signals and exit status. Depends: 6.
    Accept: fork/setsid/owner-loss tests cannot escape membership or kill unrelated
    processes; missing delegation rejects launch; no leaked resources on abort.
+   The [initial containment supervisor](linux-session-containment.md) records the
+   gated pidfd/cgroup lifecycle, primitive evidence, and outstanding native
+   composition qualification; production Linux remains disabled.
 8. **Integrate authenticated Linux cleanup and recovery.** Scope: durable proof,
    lease/quarantine lifecycle, timeout/cancel and TTY restore. Depends: 7. Accept:
    empty-cgroup/reaping proof precedes deletion, lost proof retains state, stale
    generation is rejected, and pending TTY input cannot reach the resumed shell.
+   The [initial cleanup and recovery implementation](linux-cleanup-recovery.md)
+   records authenticated generation binding, quarantine and terminal restoration;
+   production Linux admission remains closed pending full native qualification.
 
 ### Stack 4 — credentials
 
