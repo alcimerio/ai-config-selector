@@ -54,7 +54,7 @@ func TestCurrentDocumentationDefinesTheMacOSSandboxShellContract(t *testing.T) {
 	}
 }
 
-func TestReleaseArtifactContractIsExactlyOneAppleSiliconTarget(t *testing.T) {
+func TestReleaseArtifactContractKeepsLinuxCandidatesSeparate(t *testing.T) {
 	repository := ".."
 	sharedGates := readRepositoryFile(t, repository, filepath.Join("scripts", "run-native-candidate-gates.sh"))
 	for _, workflow := range []string{"promoted-artifacts.yml", "release.yml"} {
@@ -87,24 +87,45 @@ func TestReleaseArtifactContractIsExactlyOneAppleSiliconTarget(t *testing.T) {
 	}
 
 	goreleaser := readRepositoryFile(t, repository, ".goreleaser.yaml")
-	if strings.Contains(goreleaser, "      - linux") || strings.Count(goreleaser, "      - darwin") != 1 {
-		t.Fatal("GoReleaser target matrix is not macOS-only")
+	for _, required := range []string{
+		"      - darwin", "      - linux", "      - arm64", "      - amd64", "CGO_ENABLED=0",
+		"      - goos: darwin\n        goarch: amd64", "      - goos: linux\n        goarch: arm64",
+		"release:\n  disable: true",
+	} {
+		if !strings.Contains(goreleaser, required) {
+			t.Errorf("GoReleaser omits candidate boundary %q", required)
+		}
 	}
 	candidate := readRepositoryFile(t, repository, filepath.Join("scripts", "release-candidate.sh"))
-	for _, archive := range []string{"darwin_arm64.tar.gz"} {
-		if !strings.Contains(candidate, archive) {
-			t.Errorf("release candidate script omits %s", archive)
-		}
+	if !strings.Contains(candidate, `artifact="acs_${archive_version}_${target}.tar.gz"`) {
+		t.Error("release candidate script does not stage the selected target archive")
 	}
 	if strings.Contains(candidate, "darwin_amd64.tar.gz") {
 		t.Fatal("release candidate script still stages an Intel archive")
 	}
-	if strings.Contains(candidate, "linux_") {
-		t.Fatal("release candidate script still publishes a Linux archive")
+	for _, required := range []string{"darwin_arm64 linux_amd64", "candidate_directory=\"dist/linux-candidate\"", "--linux-candidate"} {
+		if !strings.Contains(candidate, required) {
+			t.Errorf("candidate script omits separate Linux staging %q", required)
+		}
 	}
 	installer := readRepositoryFile(t, repository, filepath.Join("scripts", "install.sh.tmpl"))
-	if strings.Contains(installer, "Linux) target_os") || !strings.Contains(installer, "ACS release installers support macOS only") {
+	if !strings.Contains(installer, `[ -n "$candidate_directory" ] || fail "ACS release installers support macOS only`) || !strings.Contains(installer, "--candidate-dir)") {
 		t.Fatal("installer does not reject unsupported Linux hosts clearly")
+	}
+	publication := readRepositoryFile(t, repository, "internal/release/publication/plan.go")
+	if strings.Contains(publication, "linux_") {
+		t.Fatal("publication permits Linux assets")
+	}
+	linuxWorkflow := readRepositoryFile(t, repository, ".github/workflows/linux-candidate.yml")
+	for _, required := range []string{"runs-on: ubuntu-24.04", "scripts/check-go-vulnerabilities.sh binary", "--linux-candidate", "dist/linux-candidate/*.tar.gz", "dist/linux-candidate/SHA256SUMS", "github.event_name != 'pull_request'"} {
+		if !strings.Contains(linuxWorkflow, required) {
+			t.Errorf("Linux candidate workflow omits %q", required)
+		}
+	}
+	for _, forbidden := range []string{"publish-release", "go build", "release-candidate.sh", "contents: write"} {
+		if strings.Contains(linuxWorkflow, forbidden) {
+			t.Errorf("Linux candidate workflow contains %q", forbidden)
+		}
 	}
 }
 

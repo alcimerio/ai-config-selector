@@ -599,6 +599,11 @@ proposal, not GitHub issue numbers. Split implementation further if review grows
     candidates without publishing a Linux support claim. Depends: 14,15 for
     both architectures. Accept: exact supplied bytes pass every native gate;
     wrong arch, altered archive/manifest and incomplete sets are rejected.
+    The initial amd64 staging path is described in
+    [release and candidate verification](../development/releasing.md). It keeps
+    Linux candidates separate from the publishable macOS set, with local-only
+    install/update checks and staged-asset attestations. Packaging evidence does
+    not satisfy the outstanding native containment gates or enable admission.
 17. **Enable qualified Linux support and publish its contract.** Scope: final
     admission switch, help/docs/security support table, release notes and evidence.
     Depends: 16 and resolution of all security gates. Accept: only qualified

@@ -26,18 +26,26 @@ fi
 scripts/goreleaser.sh check
 ACS_RELEASE_VERSION="$archive_version" scripts/goreleaser.sh release --snapshot --clean
 
-candidate_directory="dist/release-candidate"
-mkdir "$candidate_directory"
-for artifact in \
-  "acs_${archive_version}_darwin_arm64.tar.gz" \
-  SHA256SUMS
-do
+# These disjoint sets share one build. Only release-candidate is publishable.
+for target in darwin_arm64 linux_amd64; do
+  candidate_directory="dist/release-candidate"
+  if [ "$target" = linux_amd64 ]; then
+    candidate_directory="dist/linux-candidate"
+  fi
+  mkdir "$candidate_directory"
+  artifact="acs_${archive_version}_${target}.tar.gz"
   cp "dist/$artifact" "$candidate_directory/$artifact"
+  # Preserve GoReleaser's digest for these exact bytes, without cross-set rows.
+  awk -v artifact="$artifact" '$2 == artifact { print; count++ } END { if (count != 1) exit 1 }' \
+    dist/SHA256SUMS >"$candidate_directory/SHA256SUMS"
+  go run ./tools/renderinstaller \
+    --template scripts/install.sh.tmpl \
+    --output "$candidate_directory/install.sh" \
+    --version "$release_tag"
+  sh -n "$candidate_directory/install.sh"
+  if [ "$target" = linux_amd64 ]; then
+    go run ./tools/releaseverify --dist "$candidate_directory" --version "$release_tag" --linux-candidate
+  else
+    go run ./tools/releaseverify --dist "$candidate_directory" --version "$release_tag"
+  fi
 done
-
-go run ./tools/renderinstaller \
-  --template scripts/install.sh.tmpl \
-  --output "$candidate_directory/install.sh" \
-  --version "$release_tag"
-sh -n "$candidate_directory/install.sh"
-go run ./tools/releaseverify --dist "$candidate_directory" --version "$release_tag"
