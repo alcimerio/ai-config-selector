@@ -21,6 +21,7 @@ func TestLinuxFileProviderStoreRefreshAndQuarantine(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			store.verifier = newTestIDTokenVerifier(t)
 			provider := store.provider.(*fileCredentialProvider)
 			if err := provider.Create(context.Background(), original); err != nil {
 				t.Fatal(err)
@@ -93,6 +94,7 @@ func TestLinuxFileProviderRecoveryRefresh(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	store.verifier = newTestIDTokenVerifier(t)
 	if err := store.provider.Create(context.Background(), original); err != nil {
 		t.Fatal(err)
 	}
@@ -126,6 +128,7 @@ func TestLinuxFileProviderRecoveryRefresh(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	reopened.verifier = newTestIDTokenVerifier(t)
 	recovery, err := reopened.AcquireRecovery(context.Background(), "work")
 	if err != nil || recovery == nil {
 		t.Fatalf("reopen quarantine: %v", err)
@@ -155,6 +158,7 @@ func TestLinuxFileProviderCommitsLoginOnlyAfterSettlement(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	store.verifier = newTestIDTokenVerifier(t)
 	binding, err := store.AcquireLogin(context.Background(), "work")
 	if err != nil {
 		t.Fatal(err)

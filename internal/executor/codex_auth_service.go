@@ -232,7 +232,7 @@ func (registry *CodexAuthService) loginWithResource(ctx context.Context, request
 		if cleanupErr := remove(); cleanupErr != nil {
 			return IdentityMetadata{}, cleanupErr
 		}
-		if errors.Is(err, codexauthresource.ErrUnsupportedAuth) {
+		if errors.Is(err, codexauthresource.ErrUnsupportedAuth) && !errors.Is(err, codexauthresource.ErrIdentityUnverified) {
 			return IdentityMetadata{}, ErrUnsupportedAuth
 		}
 		return IdentityMetadata{}, err
