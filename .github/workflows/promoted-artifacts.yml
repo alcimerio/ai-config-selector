@@ -51,7 +51,7 @@ jobs:
         run: scripts/fetch-codex-test-targets.sh scripts/codex-test-targets.lock dist/codex-test-targets
 
       - name: Upload immutable candidate artifact set
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: acs-candidate-${{ github.sha }}
           path: dist/release-candidate
@@ -60,7 +60,7 @@ jobs:
           retention-days: 1
 
       - name: Upload separate Linux candidate set (never published)
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: acs-linux-candidate-${{ github.sha }}
           path: dist/linux-candidate
@@ -69,7 +69,7 @@ jobs:
           retention-days: 1
 
       - name: Upload immutable native authentication targets
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: codex-test-targets-${{ github.sha }}
           path: dist/codex-test-targets
@@ -109,13 +109,13 @@ jobs:
         uses: ./.github/actions/setup-go-macos
 
       - name: Download immutable candidate artifact set
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: acs-candidate-${{ github.sha }}
           path: dist/release-candidate
 
       - name: Download immutable native authentication targets
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: codex-test-targets-${{ github.sha }}
           path: dist/codex-test-targets
