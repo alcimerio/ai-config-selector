@@ -136,11 +136,6 @@ func runNativeInstalledACSLockedCodexFixtureWithAgent(t *testing.T, agentPresent
 			t.FailNow()
 		}
 	}
-	writeNativeCodexProfile(t, home, "coding", identities["coding"], "read-write")
-	writeNativeCodexProfile(t, home, "readonly", identities["readonly"], "read-only")
-	writeNativeCodexProfile(t, home, "recovery", identities["recovery"], "read-write")
-	writeNativeCodexEnvironmentProfile(t, home, "environment", identities["coding"])
-	restoredCoding := restoreDeletedNativeCodexProfile(t, candidate, home, tools, workspace, identities["coding"])
 	grantedTarget := filepath.Join(workspace, "locked-codex-target")
 	copyLockedTarget(t, target, grantedTarget)
 	// This trampoline execs the real CLI in the workspace. Its companion must
@@ -163,12 +158,12 @@ func runNativeInstalledACSLockedCodexFixtureWithAgent(t *testing.T, agentPresent
 		return
 	}
 	pathFixture := prepareNativeCodexPathGrantFixture(t, home, workspace)
-	writeNativeCodexPathGrantProfile(t, home, identities["coding"], pathFixture)
 	t.Run("Codex filesystem grants govern matching parent and child operations", func(t *testing.T) {
 		before := installedSessionSnapshot(t, candidate, home, tools, workspace)
 		fixture := newNativeResponsesFixture(t, nativeCodexPathGrantCommand(pathFixture)+isolationProbe+nativeControlledDescendantCommand(pathFixture.descendantReady), home)
 		fixture.descendantReady = pathFixture.descendantReady
 		defer fixture.server.Close()
+		writeNativeCodexPathGrantProfile(t, home, identities["coding"], pathFixture, fixture.loopbackPort())
 		trampoline := filepath.Join(tools, "codex")
 		fixture.buildTrampoline(t, grantedTarget, trampoline)
 		t.Logf("path-grant harness executable sha256=%s; locked target member sha256=%s", fileSHA256(t, trampoline), fileSHA256(t, grantedTarget))
@@ -184,6 +179,7 @@ func runNativeInstalledACSLockedCodexFixtureWithAgent(t *testing.T, agentPresent
 		before := installedSessionSnapshot(t, candidate, home, tools, workspace)
 		fixture := newNativeResponsesFixture(t, "printf codex-native-tool-output"+isolationProbe, home)
 		defer fixture.server.Close()
+		writeNativeCodexProfile(t, home, "coding", identities["coding"], "read-write", fixture.loopbackPort())
 		coordination := nativeCodexPhaseCoordination{
 			versionReady:       filepath.Join(workspace, ".acs-codex-version-ready"),
 			versionRelease:     filepath.Join(workspace, ".acs-codex-version-release"),
@@ -222,6 +218,7 @@ func runNativeInstalledACSLockedCodexFixtureWithAgent(t *testing.T, agentPresent
 			expectEnvironment:  true,
 		}
 		defer fixture.server.Close()
+		writeNativeCodexEnvironmentProfile(t, home, "environment", identities["coding"], fixture.loopbackPort())
 		fixture.buildTrampoline(t, grantedTarget, filepath.Join(tools, "codex"), *fixture.coordination)
 		runInstalledCodexPTY(t, candidate, home, tools, workspace, "environment", fixture, false)
 		fixture.assert(t, false)
@@ -248,6 +245,7 @@ func runNativeInstalledACSLockedCodexFixtureWithAgent(t *testing.T, agentPresent
 		runNativeCodexMCPAgentCase(t, candidate, home, tools, workspace, grantedTarget, identities["coding"], nil)
 	})
 	t.Run("missing required environment precedes locked Codex Session", func(t *testing.T) {
+		writeNativeCodexEnvironmentProfile(t, home, "environment", identities["coding"])
 		ready := filepath.Join(workspace, ".acs-codex-missing-environment-started")
 		buildFixedCodexTrampoline(t, grantedTarget, "http://127.0.0.1:1/backend-api", filepath.Join(tools, "codex"), nativeCodexPhaseCoordination{
 			versionReady: ready, versionRelease: filepath.Join(workspace, ".acs-codex-missing-environment-release"), expectEnvironment: true,
@@ -281,7 +279,7 @@ func runNativeInstalledACSLockedCodexFixtureWithAgent(t *testing.T, agentPresent
 		wantWrite, wantDescendant                                      bool
 	}{
 		{name: "coding write", profile: "coding", command: codingCommand, marker: "codex-native-write", expectedWrite: "codex-native-tool-ok", descendantReady: normalDescendantReady, wantWrite: true, wantDescendant: true},
-		{name: "restored coding write", profile: restoredCoding, command: "printf restored-codex-native-tool-ok > ./restored-codex-native-write; printf codex-native-tool-output" + isolationProbe, marker: "restored-codex-native-write", expectedWrite: "restored-codex-native-tool-ok", wantWrite: true},
+		{name: "restored coding write", profile: "restored-coding", command: "printf restored-codex-native-tool-ok > ./restored-codex-native-write; printf codex-native-tool-output" + isolationProbe, marker: "restored-codex-native-write", expectedWrite: "restored-codex-native-tool-ok", wantWrite: true},
 		{name: "read-only denial", profile: "readonly", command: "printf forbidden > ./codex-native-readonly-write; printf codex-native-tool-output" + isolationProbe, marker: "codex-native-readonly-write", wantWrite: false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -289,6 +287,15 @@ func runNativeInstalledACSLockedCodexFixtureWithAgent(t *testing.T, agentPresent
 			fixture := newNativeResponsesFixture(t, test.command, home)
 			fixture.descendantReady = test.descendantReady
 			defer fixture.server.Close()
+			if test.profile == "restored-coding" {
+				restoreDeletedNativeCodexProfile(t, candidate, home, tools, workspace, identities["coding"], fixture.loopbackPort())
+			} else {
+				access := "read-only"
+				if test.wantWrite {
+					access = "read-write"
+				}
+				writeNativeCodexProfile(t, home, test.profile, identities[test.profile], access, fixture.loopbackPort())
+			}
 			trampoline := filepath.Join(tools, "codex")
 			fixture.buildTrampoline(t, grantedTarget, trampoline)
 			t.Logf("harness executable sha256=%s; locked target member sha256=%s", fileSHA256(t, trampoline), fileSHA256(t, grantedTarget))
@@ -312,6 +319,7 @@ func runNativeInstalledACSLockedCodexFixtureWithAgent(t *testing.T, agentPresent
 		fixture := newNativeResponsesFixture(t, "printf codex-native-tool-output"+isolationProbe+nativeControlledDescendantCommand(recoveryDescendantReady), home)
 		fixture.descendantReady = recoveryDescendantReady
 		defer fixture.server.Close()
+		writeNativeCodexProfile(t, home, "recovery", identities["recovery"], "read-write", fixture.loopbackPort())
 		fixture.buildTrampoline(t, grantedTarget, filepath.Join(tools, "codex"))
 		runInstalledCodexPTY(t, candidate, home, tools, workspace, "recovery", fixture, true)
 		descendantPID := fixture.assert(t, true)
@@ -326,6 +334,7 @@ func runNativeInstalledACSLockedCodexFixtureWithAgent(t *testing.T, agentPresent
 		assertNoNativeSessions(t, filepath.Join(home, ".acs", "sessions"))
 		reuseFixture := newNativeResponsesFixture(t, "printf codex-native-tool-output"+isolationProbe, home)
 		defer reuseFixture.server.Close()
+		writeNativeCodexProfile(t, home, "recovery", identities["recovery"], "read-write", reuseFixture.loopbackPort())
 		reuseFixture.buildTrampoline(t, grantedTarget, filepath.Join(tools, "codex"))
 		runInstalledCodexPTY(t, candidate, home, tools, workspace, "recovery", reuseFixture, false)
 		reuseFixture.assert(t, false)
@@ -1551,6 +1560,10 @@ func newNativeResponsesFixture(t *testing.T, shellCommand, launcherHome string) 
 	return fixture
 }
 
+func (fixture *nativeResponsesFixture) loopbackPort() int {
+	return fixture.server.Listener.Addr().(*net.TCPAddr).Port
+}
+
 // Rustls rejects a CA used as the server leaf. Keep a proper CA and a
 // separately signed loopback leaf; both private keys remain in fixture memory.
 func nativeLoopbackCertificate(t *testing.T) (tls.Certificate, []byte) {
@@ -2655,25 +2668,37 @@ func writeNativeSkill(t *testing.T, directory, name, sentinel string) {
 	}
 }
 
-func writeNativeCodexProfile(t *testing.T, home, profileName, authRef, access string) {
+// Fixture ports enter the stored Profile at creation, including the public
+// create/delete/restore path. Ordinary sessions receive only these explicit
+// outbound exceptions; the production policy keeps its default denial.
+func nativeCodexNetworkCapability(t *testing.T, ports ...int) string {
+	t.Helper()
+	selection, err := json.Marshal(append([]int{}, ports...))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return `{"version":1,"selection":{"loopbackPorts":` + string(selection) + `}}`
+}
+
+func writeNativeCodexProfile(t *testing.T, home, profileName, authRef, access string, loopbackPorts ...int) {
 	t.Helper()
 	profiles := filepath.Join(home, ".acs", "profiles")
 	if err := os.MkdirAll(profiles, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	document := `{"version":1,"name":` + strconv.Quote(profileName) + `,"common":{"skills":{"version":1,"selection":[{"source":"shared-agents","relativePath":"managed-proof"}]},"workspace":{"version":1,"selection":{"access":` + strconv.Quote(access) + `}}},"overlays":{"codex":{"version":1,"authRef":` + strconv.Quote(authRef) + `}}}`
+	document := `{"version":1,"name":` + strconv.Quote(profileName) + `,"common":{"network":` + nativeCodexNetworkCapability(t, loopbackPorts...) + `,"skills":{"version":1,"selection":[{"source":"shared-agents","relativePath":"managed-proof"}]},"workspace":{"version":1,"selection":{"access":` + strconv.Quote(access) + `}}},"overlays":{"codex":{"version":1,"authRef":` + strconv.Quote(authRef) + `}}}`
 	if err := os.WriteFile(filepath.Join(profiles, profileName+".json"), []byte(document), 0o600); err != nil {
 		t.Fatal(err)
 	}
 }
 
-func writeNativeCodexEnvironmentProfile(t *testing.T, home, profileName, authRef string) {
+func writeNativeCodexEnvironmentProfile(t *testing.T, home, profileName, authRef string, loopbackPorts ...int) {
 	t.Helper()
 	profiles := filepath.Join(home, ".acs", "profiles")
 	if err := os.MkdirAll(profiles, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	document := `{"version":1,"name":` + strconv.Quote(profileName) + `,"common":{"skills":{"version":1,"selection":[{"source":"shared-agents","relativePath":"managed-proof"}]},"workspace":{"version":1,"selection":{"access":"read-write"}},"environment":{"version":1,"selection":{"entries":[` +
+	document := `{"version":1,"name":` + strconv.Quote(profileName) + `,"common":{"network":` + nativeCodexNetworkCapability(t, loopbackPorts...) + `,"skills":{"version":1,"selection":[{"source":"shared-agents","relativePath":"managed-proof"}]},"workspace":{"version":1,"selection":{"access":"read-write"}},"environment":{"version":1,"selection":{"entries":[` +
 		`{"id":"mode","destination":"PROFILE_CODEX_MODE","scope":"attached-process-tree","source":{"kind":"host-environment","name":"ACS_NATIVE_CODEX_MODE"},"required":true,"classification":"non-secret"},` +
 		`{"id":"token","destination":"PROFILE_CODEX_TOKEN","scope":"attached-process-tree","source":{"kind":"secret-reference","provider":"host-environment","reference":"ACS_NATIVE_CODEX_TOKEN"},"required":true,"classification":"secret"}` +
 		`]}}},"overlays":{"codex":{"version":1,"authRef":` + strconv.Quote(authRef) + `}}}`
@@ -2682,13 +2707,13 @@ func writeNativeCodexEnvironmentProfile(t *testing.T, home, profileName, authRef
 	}
 }
 
-func writeNativeCodexMCPProfile(t *testing.T, home, profileName, authRef string) {
+func writeNativeCodexMCPProfile(t *testing.T, home, profileName, authRef string, loopbackPorts ...int) {
 	t.Helper()
 	profiles := filepath.Join(home, ".acs", "profiles")
 	if err := os.MkdirAll(profiles, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	document := `{"version":1,"name":` + strconv.Quote(profileName) + `,"common":{
+	document := `{"version":1,"name":` + strconv.Quote(profileName) + `,"common":{"network":` + nativeCodexNetworkCapability(t, loopbackPorts...) + `,
 		"skills":{"version":1,"selection":[{"source":"shared-agents","relativePath":"managed-proof"}]},
 		"workspace":{"version":1,"selection":{"access":"read-write"}},
 		"executables":{"version":1,"selection":{"entries":[{"id":"mcp-server","reference":{"kind":"workspace-relative","path":"native-mcp-server.sh"}}]}},
@@ -2755,9 +2780,12 @@ done
 	}
 }
 
-func writeNativeCodexPathGrantProfile(t *testing.T, home, authRef string, fixture nativeCodexPathGrantFixture) {
+func writeNativeCodexPathGrantProfile(t *testing.T, home, authRef string, fixture nativeCodexPathGrantFixture, loopbackPorts ...int) {
 	t.Helper()
 	profiles := filepath.Join(home, ".acs", "profiles")
+	if err := os.MkdirAll(profiles, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	entries := []string{
 		nativeCodexLocalPathEntry("exact-file", "read-write", "file", fixture.readWriteFile),
 		nativeCodexLocalPathEntry("writable-directory", "read-write", "directory", fixture.readWriteDirectory),
@@ -2765,7 +2793,7 @@ func writeNativeCodexPathGrantProfile(t *testing.T, home, authRef string, fixtur
 		nativeCodexLocalPathEntry("read-only-parent", "read-only", "directory", fixture.readOnlyParent),
 		nativeCodexLocalPathEntry("writable-child", "read-write", "directory", fixture.writableChild),
 	}
-	document := `{"version":1,"name":"path-grants","common":{"skills":{"version":1,"selection":[{"source":"shared-agents","relativePath":"managed-proof"}]},"workspace":{"version":1,"selection":{"access":"read-only"}},"paths":{"version":1,"selection":{"entries":[` + strings.Join(entries, ",") + `]}}},"overlays":{"codex":{"version":1,"authRef":` + strconv.Quote(authRef) + `}}}`
+	document := `{"version":1,"name":"path-grants","common":{"network":` + nativeCodexNetworkCapability(t, loopbackPorts...) + `,"skills":{"version":1,"selection":[{"source":"shared-agents","relativePath":"managed-proof"}]},"workspace":{"version":1,"selection":{"access":"read-only"}},"paths":{"version":1,"selection":{"entries":[` + strings.Join(entries, ",") + `]}}},"overlays":{"codex":{"version":1,"authRef":` + strconv.Quote(authRef) + `}}}`
 	if err := os.WriteFile(filepath.Join(profiles, "path-grants.json"), []byte(document), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -2780,11 +2808,11 @@ func nativeCodexLocalPathEntry(id, access, pathType, path string) string {
 // preview, and exact-digest restore all go through the supplied ACS artifact.
 // The explicit exchange binding is deliberate: the deleted intent contains an
 // auth reference and must not recover a machine-local credential implicitly.
-func restoreDeletedNativeCodexProfile(t *testing.T, candidate, home, tools, workspace, authRef string) string {
+func restoreDeletedNativeCodexProfile(t *testing.T, candidate, home, tools, workspace, authRef string, loopbackPort int) string {
 	t.Helper()
 	const profileName = "restored-coding"
 	documentPath := filepath.Join(home, "restored-coding.json")
-	document := `{"version":1,"name":"` + profileName + `","common":{"skills":{"version":1,"selection":[{"source":"shared-agents","relativePath":"managed-proof"}]},"workspace":{"version":1,"selection":{"access":"read-write"}}},"overlays":{"codex":{"version":1,"authRef":` + strconv.Quote(authRef) + `}}}`
+	document := `{"version":1,"name":"` + profileName + `","common":{"network":` + nativeCodexNetworkCapability(t, loopbackPort) + `,"skills":{"version":1,"selection":[{"source":"shared-agents","relativePath":"managed-proof"}]},"workspace":{"version":1,"selection":{"access":"read-write"}}},"overlays":{"codex":{"version":1,"authRef":` + strconv.Quote(authRef) + `}}}`
 	if err := os.WriteFile(documentPath, []byte(document), 0o600); err != nil {
 		t.Fatal(err)
 	}

@@ -7,6 +7,7 @@ import (
 	"github.com/alcimerio/ai-config-selector/internal/commonprofile"
 	"github.com/alcimerio/ai-config-selector/internal/instructions"
 	"github.com/alcimerio/ai-config-selector/internal/launch"
+	"github.com/alcimerio/ai-config-selector/internal/networkintent"
 )
 
 // admittedDocument can enter local binding resolution only after portable
@@ -34,6 +35,7 @@ func admitDocument(data []byte) (admittedDocument, Code) {
 	environmentPresent := exchangeCommonFieldPresent(data, "environment")
 	instructionsPresent := exchangeCommonFieldPresent(data, "instructions")
 	exclusionsPresent := exchangeCommonFieldPresent(data, "exclusions")
+	networkPresent := exchangeCommonFieldPresent(data, "network")
 	mcpPresent := exchangeCommonFieldPresent(data, "mcp")
 	executableRequirementsPresent := exchangeRequirementsFieldPresent(data, "executables")
 	environmentRequirementsPresent := exchangeRequirementsFieldPresent(data, "environment")
@@ -70,6 +72,14 @@ func admitDocument(data []byte) (admittedDocument, Code) {
 	}
 	if exclusionsPresent && (doc.ExchangeVersion != ExchangeVersion || doc.Profile.Common.Exclusions == nil || doc.Profile.Common.Exclusions.Version != 1 || doc.Profile.Common.Exclusions.Selection == nil || len(doc.Profile.Common.Exclusions.Selection) > 128) {
 		return admittedDocument{}, CodeUnsupportedContent
+	}
+	if networkPresent {
+		if doc.ExchangeVersion != ExchangeVersion || doc.Profile.Common.Network == nil || doc.Profile.Common.Network.Version != 1 {
+			return admittedDocument{}, CodeUnsupportedContent
+		}
+		if _, err := networkintent.Decode(doc.Profile.Common.Network.Selection); err != nil {
+			return admittedDocument{}, CodeInvalidStructure
+		}
 	}
 	if mcpPresent {
 		if doc.ExchangeVersion != ExchangeVersion || doc.Profile.Common.MCP == nil || doc.Profile.Common.MCP.Version != commonprofile.MCPCapabilityVersion {

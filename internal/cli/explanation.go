@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/alcimerio/ai-config-selector/internal/authority"
+	"github.com/alcimerio/ai-config-selector/internal/commonprofile"
 	"github.com/alcimerio/ai-config-selector/internal/profile"
 	"github.com/alcimerio/ai-config-selector/internal/runcommand"
 )
@@ -113,6 +114,9 @@ func (app App) RunExplanation(ctx context.Context, args []string) (bool, int) {
 	limitations := []explanationLimitation{
 		{"semantic_digest_only", "The digest excludes local paths, file contents, argument values, credentials, concrete project files, and host readiness; equal digests do not mean file-level execution-plan equality."},
 		{"native_readiness_not_launch_readiness", "Native readiness, when requested, does not check target version, authentication, materialization, generated policy, preflights, or cleanup."},
+	}
+	if runtime.GOOS == "linux" {
+		limitations = append(limitations, explanationLimitation{"linux_loopback_unenforced", commonprofile.LinuxLoopbackGap})
 	}
 	limitations = append(limitations, appendInactiveOverlays(&semantic, loaded, overlay)...)
 	sort.Slice(limitations, func(i, j int) bool {
@@ -315,7 +319,7 @@ func renderExplanation(output *bytes.Buffer, result explanationResult) {
 	for _, limitation := range result.Limitations {
 		fmt.Fprintf(output, "  %s: %s\n", limitation.Code, safeTerminalText(limitation.Detail))
 	}
-	fmt.Fprintln(output, "\nCurrent network authority is local-IP socket bind (not listen/inbound) plus coarse outbound IP and macOS DNS resolver access; no destination allowlist is enforced.")
+	fmt.Fprintln(output, "\nCurrent network authority is local-IP socket bind (not listen/inbound) plus coarse outbound IP and macOS DNS resolver access; macOS loopback outbound is denied except for the listed Profile ports.")
 	if result.Intent.Recipe == "codex" {
 		fmt.Fprintln(output, "Codex danger-full-access and no-approval mode do not widen the outer ACS grants.")
 	}

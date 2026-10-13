@@ -1,6 +1,6 @@
 Effective capability explanation for Profile "format-profile" (stored version 1)
 Intent: codex
-Semantic authority digest: sha256:f7aebf0af2fb1d1b65976cbe3bc4baf8c079b4951274c409891d6576eee89d38
+Semantic authority digest: sha256:60edc5bcab37a45e98acaad01dd2fad693c64e63d95c518fe0114a039d6fde67
 Digest scope: semantic ACS authority and recipe requirements only; excluded local bindings are rechecked separately where execution requires it.
 
 Requested:
@@ -38,6 +38,7 @@ Effective:
   runtime.mach-services [mach-service]: names=com.apple.SecurityServer,com.apple.trustd.agent (reason=acs_runtime; source=acs:native-sandbox@v1)
   runtime.metadata [filesystem-metadata]: mode=executable-and-session-ancestors (reason=acs_runtime; source=acs:native-sandbox@v1)
   runtime.network [network]: mode=local-ip-socket-bind-no-listen-coarse-outbound-ip-macos-dns (reason=acs_runtime; source=acs:native-sandbox@v1)
+  runtime.network.loopback [network]: mode=denied-except-listed-ports-macos (reason=acs_runtime; source=acs:native-sandbox@v1)
   runtime.process [process]: mode=same-sandbox-descendants (reason=acs_runtime; source=acs:native-sandbox@v1)
   runtime.session [filesystem]: access=private-read-write (reason=intrinsic_session; source=acs:session@v1)
   runtime.sysctls [sysctl]: names=hw.ncpu,hw.pagesize,hw.pagesize_compat (reason=acs_runtime; source=acs:native-sandbox@v1)
@@ -56,7 +57,7 @@ Unsupported or inert:
   unsupported.codex.target-sandbox-enforcement [target-control]: mode=disabled-under-acs (reason=not_supported; source=target:codex@v1)
   unsupported.exclusive-execution-filtering [executable]: mode=non-exclusive-visibility-only (reason=not_supported; source=acs:native-sandbox)
   unsupported.host-environment [environment]: mode=arbitrary-values (reason=not_supported; source=acs:native-sandbox)
-  unsupported.network-destinations [network]: mode=destination-filtering (reason=not_supported; source=acs:native-sandbox)
+  unsupported.network-destinations [network]: mode=general-destination-filtering (reason=not_supported; source=acs:native-sandbox)
   unsupported.raw-policy [isolation]: mode=caller-supplied (reason=not_supported; source=acs:native-sandbox)
   unsupported.sandbox-bypass [isolation]: mode=bypass (reason=not_supported; source=acs:native-sandbox)
   unsupported.target-pass-through [target-control]: mode=arbitrary-options (reason=not_supported; source=acs:recipes)
@@ -95,6 +96,6 @@ Limitations:
   native_readiness_not_launch_readiness: Native readiness, when requested, does not check target version, authentication, materialization, generated policy, preflights, or cleanup.
   semantic_digest_only: The digest excludes local paths, file contents, argument values, credentials, concrete project files, and host readiness; equal digests do not mean file-level execution-plan equality.
 
-Current network authority is local-IP socket bind (not listen/inbound) plus coarse outbound IP and macOS DNS resolver access; no destination allowlist is enforced.
+Current network authority is local-IP socket bind (not listen/inbound) plus coarse outbound IP and macOS DNS resolver access; macOS loopback outbound is denied except for the listed Profile ports.
 Codex danger-full-access and no-approval mode do not widen the outer ACS grants.
 Native readiness: unchecked (not probed); this is not launch readiness.

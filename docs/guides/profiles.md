@@ -54,7 +54,7 @@ document supplies the Profile name. Standard input and implicit file selection
 are unsupported. Creation accepts only the supported Profile representation (envelope version 1;
 version 3 from earlier builds is accepted as an alias and written as 1):
 common `skills`, optional `instructions`, `workspace`, `paths`, `exclusions`, `executables`,
-`environment`, reference-only `mcp`, and supported version-1 `devin` and `codex`
+`environment`, reference-only `mcp`, optional `network` loopback ports, and supported version-1 `devin` and `codex`
 overlays. [MCP references](mcp-profiles.md) must bind to selected executable,
 path and environment entries. Future or retired envelopes, duplicate
 keys, unknown fields or capabilities, unsupported overlays, invalid references,
@@ -100,7 +100,7 @@ inspects one Profile even if selected Skills disappeared. Both accept `--json`.
 Use `acs help profile` for [command grammar](../reference/cli.md#grammar).
 
 Human output reports counts for stored Skills, instructions, path grants, exclusions,
-executables, environment entries and MCP servers. Workspace access is shown
+executables, environment entries, loopback ports and MCP servers. Workspace access is shown
 as a configured mode rather than a selection count. Counts do not resolve
 references or establish runtime access; use
 [`acs explain`](diagnostics.md#effective-capability-explanation) for effective

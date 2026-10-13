@@ -47,6 +47,12 @@
         "servers": []
       }
     },
+    "network": {
+      "version": 1,
+      "selection": {
+        "loopbackPorts": []
+      }
+    },
     "paths": {
       "version": 1,
       "selection": {

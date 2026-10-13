@@ -276,6 +276,8 @@ func TestNativeInstalledExtensionDiscovery(t *testing.T) {
 		if e != nil {
 			t.Fatal(e)
 		}
+		s.request.RuntimeAuthority = launch.DefaultRuntimeAuthority()
+		s.request.RuntimeAuthority.LoopbackPorts = []int{35973}
 		s.environment, e = discoveryDevinEnvironment(endpoint)
 		if e != nil {
 			t.Fatal("synthetic endpoint lease invalid")
@@ -478,6 +480,8 @@ func seedDiscoveryCodexConfig(t *testing.T, s *discoverySession) {
 			}
 		}
 	})
+	s.request.RuntimeAuthority = launch.DefaultRuntimeAuthority()
+	s.request.RuntimeAuthority.LoopbackPorts = []int{listener.Addr().(*net.TCPAddr).Port}
 	endpoint := "http://" + listener.Addr().String()
 	cfg := "cli_auth_credentials_store = \"file\"\nmodel = \"acs-discovery\"\nmodel_provider = \"acs-discovery\"\nchatgpt_base_url = " + strconv.Quote(endpoint) + "\n[model_providers.acs-discovery]\nname = \"ACS discovery tripwire\"\nbase_url = " + strconv.Quote(endpoint) + "\nwire_api = \"responses\"\nrequires_openai_auth = false\n"
 	if e = discoveryWrite(filepath.Join(s.created.HomeDirectory(), ".codex", "config.toml"), []byte(cfg)); e != nil {

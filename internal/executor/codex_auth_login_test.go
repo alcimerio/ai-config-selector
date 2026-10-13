@@ -64,6 +64,10 @@ func TestContainedLoginPinsVersionUsesSyntheticHomeAndCleansSession(t *testing.T
 		t.Fatalf("sandbox check runtime probes = %q", sandbox.check.RuntimeProbePaths)
 	}
 	for _, request := range sandbox.requests {
+		if request.RuntimeAuthority.CodexLoginCallback || len(request.RuntimeAuthority.LoopbackPorts) != 0 {
+			t.Fatal("device login received browser callback exception")
+		}
+
 		if !reflect.DeepEqual(request.RuntimeProbePaths, []string{codexSystemRequirementsPath}) {
 			t.Fatalf("sandbox process runtime probes = %q", request.RuntimeProbePaths)
 		}
@@ -108,6 +112,16 @@ func TestContainedLoginUsesDefaultBrowserFlowWithoutDeviceFlag(t *testing.T) {
 	if got := sandbox.arguments; !reflect.DeepEqual(got, wantArguments) {
 		t.Fatalf("arguments = %#v", got)
 	}
+	if len(sandbox.requests) != 2 {
+		t.Fatalf("requests=%d", len(sandbox.requests))
+	}
+	if sandbox.requests[0].RuntimeAuthority.CodexLoginCallback || len(sandbox.requests[0].RuntimeAuthority.LoopbackPorts) != 0 {
+		t.Fatal("version probe received callback exception")
+	}
+	if !sandbox.requests[1].RuntimeAuthority.CodexLoginCallback || !reflect.DeepEqual(sandbox.requests[1].RuntimeAuthority.LoopbackPorts, []int{1455}) {
+		t.Fatal("browser login missing exact callback authority")
+	}
+
 }
 
 func TestContainedLoginArmsRecoveryBeforePublishingProcessIntent(t *testing.T) {
@@ -369,6 +383,11 @@ func TestContainedStatusPinsAuthPolicyAtRuntimePrecedence(t *testing.T) {
 			}
 			if !reflect.DeepEqual(sandbox.arguments, wantArguments) {
 				t.Fatalf("arguments = %#v", sandbox.arguments)
+			}
+			for _, request := range sandbox.requests {
+				if request.RuntimeAuthority.CodexLoginCallback || len(request.RuntimeAuthority.LoopbackPorts) != 0 {
+					t.Fatal("auth status received callback exception")
+				}
 			}
 
 		})

@@ -125,6 +125,8 @@ func TestAuthorityDigestTracksEveryRuntimeAuthorityFieldAndIgnoresSetOrder(t *te
 		{"metadata", func(value *launch.RuntimeAuthority) { value.MetadataMode += "-changed" }},
 		{"session", func(value *launch.RuntimeAuthority) { value.SessionAccess += "-changed" }},
 		{"network", func(value *launch.RuntimeAuthority) { value.NetworkMode += "-changed" }},
+		{"loopback ports", func(value *launch.RuntimeAuthority) { value.LoopbackPorts = []int{1455} }},
+		{"login callback", func(value *launch.RuntimeAuthority) { value.CodexLoginCallback = true }},
 		{"terminal", func(value *launch.RuntimeAuthority) { value.TerminalMode += "-changed" }},
 		{"device", func(value *launch.RuntimeAuthority) { value.DeviceMode += "-changed" }},
 		{"fixed-path", func(value *launch.RuntimeAuthority) { value.FixedPath += ":/changed" }},

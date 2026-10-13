@@ -11,6 +11,7 @@ import (
 	"github.com/alcimerio/ai-config-selector/internal/executableintent"
 	"github.com/alcimerio/ai-config-selector/internal/instructions"
 	"github.com/alcimerio/ai-config-selector/internal/mcpintent"
+	"github.com/alcimerio/ai-config-selector/internal/networkintent"
 	"github.com/alcimerio/ai-config-selector/internal/pathintent"
 	"github.com/alcimerio/ai-config-selector/internal/profile"
 	"github.com/alcimerio/ai-config-selector/internal/skills"
@@ -109,6 +110,20 @@ func decodeEnvelope(entry Entry, envelope map[string]json.RawMessage) Entry {
 			return entry.failed("invalid_structure")
 		}
 		entry.Categories = append(entry.Categories, countedCategory("exclusions", version, len(exclusions.Entries)))
+	}
+	if payload, exists := common["network"]; exists {
+		version, selection, code := decodeCommonPayload(payload)
+		if code != "" || version != 1 {
+			if code == "" {
+				code = "unsupported_content"
+			}
+			return entry.failed(code)
+		}
+		network, err := networkintent.Decode(selection)
+		if err != nil {
+			return entry.failed("invalid_structure")
+		}
+		entry.Categories = append(entry.Categories, countedCategory("network", version, len(network.LoopbackPorts)))
 	}
 	if executablesPayload, exists := common["executables"]; exists {
 		executablesVersion, executableSelection, code := decodeCommonPayload(executablesPayload)

@@ -70,6 +70,7 @@ type Adapter struct {
 	executablesCategory  commonprofile.ExecutablesBinding
 	environmentCategory  commonprofile.EnvironmentBinding
 	mcpCategory          commonprofile.MCPBinding
+	networkCategory      commonprofile.NetworkBinding
 	executor             devinExecutor
 	runtimeInputs        []string
 	runtimeInputIDs      []string
@@ -234,4 +235,8 @@ func diagnosticIdentity(reference SkillReference) string {
 
 func (adapter *Adapter) SetExclusionSelection(draft *category.Draft, selection commonprofile.ExclusionSelection) error {
 	return category.SetSelection(draft, adapter.exclusionsCategory, selection)
+}
+
+func (adapter *Adapter) SetNetworkSelection(draft *category.Draft, selection commonprofile.NetworkSelection) error {
+	return category.SetSelection(draft, adapter.networkCategory, selection)
 }

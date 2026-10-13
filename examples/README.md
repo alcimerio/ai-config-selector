@@ -12,6 +12,7 @@ named logins, and are checked in CI with the same codec as
 | --- | --- | --- |
 | [review-readonly](profiles/review-readonly.json) | Default read-only workspace; nothing else selected | Devin, Codex, sandbox |
 | [dev-secrets-excluded](profiles/dev-secrets-excluded.json) | Writable workspace with `.env`, `.env.local` and `secrets/` denied | Devin, Codex, sandbox |
+| [dev-local-service](profiles/dev-local-service.json) | Writable workspace with outbound localhost:3000 for a local dev service | Devin, Codex, sandbox |
 | [dev-scoped-token](profiles/dev-scoped-token.json) | One secret passed by reference and renamed; one optional non-secret | Devin, Codex, sandbox |
 | [docs-writer](profiles/docs-writer.json) | Read-only workspace with only `docs/` writable, plus a selected instruction file | Devin, Codex, sandbox |
 | [skill-review-isolated](profiles/skill-review-isolated.json) | One selected global Skill; repository `.agents/skills` and `.devin/skills` denied | Devin, Codex, sandbox |
@@ -56,6 +57,9 @@ See [interactive Codex](../docs/guides/codex.md#interactive-launch).
   contain the selected Skill and the launch fails closed.
 - Exclusions are pathname based. They do not hide Git history, copies or names
   in parent listings; see [filesystem exclusions](../docs/reference/common-profile-format.md#filesystem-exclusions).
+- macOS loopback outbound is denied by default. **dev-local-service** explicitly
+  allows port 3000; other loopback ports stay denied. Linux ignores the selection
+  and reports the enforcement gap in explain/dry-run.
 - ACS is not an egress firewall: a target can transmit data it can read.
 
 To share your own variant without local paths, use

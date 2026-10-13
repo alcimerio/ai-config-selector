@@ -405,3 +405,17 @@ func TestLinuxFilesystemPlanPrivateStoresAndDeterminism(t *testing.T) {
 		t.Fatal("newer ABI silently changed the fixed rights mask or socket policy")
 	}
 }
+
+func TestLinuxFilesystemPlanIgnoresValidatedLoopbackPortIntent(t *testing.T) {
+	fixture := newLinuxPlanFixture()
+	baseline := fixture.compile(t)
+	fixture.request.runtimeAuthority.LoopbackPorts = []int{1455, 8080}
+	got := fixture.compile(t)
+	if !reflect.DeepEqual(got, baseline) {
+		t.Fatal("loopback ports changed Linux enforcement plan")
+	}
+	fixture.request.runtimeAuthority.LoopbackPorts = []int{0}
+	if _, err := compileLinuxFilesystemPlan(fixture.request, fixture.tree, fixture.features, nil); err == nil {
+		t.Fatal("invalid ports bypassed shared authority validation")
+	}
+}

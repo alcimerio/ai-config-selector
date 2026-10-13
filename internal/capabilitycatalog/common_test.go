@@ -15,6 +15,7 @@ func TestCommonCapabilitiesPreserveStructuralContract(t *testing.T) {
 		{ID: "environment", Version: 1},
 		{ID: "instructions", Version: 1},
 		{ID: "mcp", Version: 1},
+		{ID: "network", Version: 1},
 	}
 	if got := CommonCapabilities(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("common capabilities = %#v, want %#v", got, want)
@@ -68,7 +69,7 @@ func TestSupportsCommonCatalogPreservesRequirednessAndExactIDs(t *testing.T) {
 		{"exclusions missing skills", []string{"workspace", "exclusions"}, false},
 		{"exclusions missing workspace", []string{"skills", "exclusions"}, false},
 		{"order independent", []string{"workspace", "skills"}, true},
-		{"all", []string{"skills", "workspace", "paths", "exclusions", "executables", "environment", "instructions", "mcp"}, true},
+		{"all", []string{"skills", "workspace", "paths", "exclusions", "executables", "environment", "instructions", "mcp", "network"}, true},
 		{"unknown", []string{"skills", "workspace", "future"}, false},
 		{"duplicate required", []string{"skills", "workspace", "skills"}, false},
 		{"duplicate optional", []string{"skills", "workspace", "mcp", "mcp"}, false},

@@ -36,13 +36,20 @@ Inspect effective permissions with `acs explain TARGET --profile NAME` and read 
 
 ### Network destinations and data disclosure
 
-ACS is not an egress firewall. Coarse outbound IP and DNS access are allowed.
+ACS is not an egress firewall. Coarse outbound IP and DNS access are allowed,
+with macOS loopback outbound denied by default. Profiles may explicitly allow
+ports through `common.network` v1 `selection.loopbackPorts`; all other loopback
+ports stay denied. This does not block private LAN or other host-interface IPs.
+ACS-managed Codex browser login alone receives localhost:1455 outbound and
+inbound callback access. Ordinary sessions do not inherit that exception.
 If a target can read a file, selected secret, credential projection, or prompt,
 it may be able to send that data to its provider or another network destination.
 Read-only access denies filesystem writes to that grant. It still permits
 reading and transmitting the data.
-Destination filtering is not a shipped capability. Native transport experiments
-do not extend the production network contract.
+General destination filtering is not a shipped capability. Linux currently
+ignores the loopback capability and reports that gap in explain/dry-run; its
+production launch admission remains closed. Native transport experiments do
+not extend this network contract.
 
 ### Code and instructions inside the Session
 

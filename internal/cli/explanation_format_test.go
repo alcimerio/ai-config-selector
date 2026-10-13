@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -193,6 +194,9 @@ func literalArguments(args []string) []string {
 }
 
 func readExplanationGolden(t *testing.T, name string) string {
+	if runtime.GOOS == "linux" {
+		name += ".linux"
+	}
 	t.Helper()
 	bytes, err := os.ReadFile(filepath.Join("testdata", "explanation-format", name+".golden"))
 	if err != nil {
@@ -202,6 +206,9 @@ func readExplanationGolden(t *testing.T, name string) string {
 }
 
 func writeExplanationGolden(t *testing.T, name, output string) {
+	if runtime.GOOS == "linux" {
+		name += ".linux"
+	}
 	t.Helper()
 	directory := filepath.Join("testdata", "explanation-format")
 	if err := os.MkdirAll(directory, 0o755); err != nil {

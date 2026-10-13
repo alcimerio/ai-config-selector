@@ -165,7 +165,7 @@ func TestDeclarativeCreateStrictlyRejectsUnsupportedOrLossyDocuments(t *testing.
 		"retired":         strings.Replace(valid, `"version":1`, `"version":2`, 1),
 		"future":          strings.Replace(valid, `"version":1`, `"version":4`, 1),
 		"duplicate":       strings.Replace(valid, `"version":1`, `"version":1,"version":1`, 1),
-		"unknown common":  strings.Replace(valid, `"skills":`, `"network":{"version":1,"selection":{}},"skills":`, 1),
+		"unknown common":  strings.Replace(valid, `"skills":`, `"future-network":{"version":1,"selection":{}},"skills":`, 1),
 		"unknown overlay": strings.Replace(valid, `"codex":`, `"future":{"version":1},"codex":`, 1),
 		"unsafe skill":    strings.Replace(valid, `"relativePath":"review"`, `"relativePath":"../review"`, 1),
 		"unknown field":   strings.Replace(valid, `"name":"example"`, `"name":"example","secret":"value"`, 1),
