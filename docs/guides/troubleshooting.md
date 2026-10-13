@@ -62,11 +62,15 @@ paths, arguments or values. In launch order:
 - each contained process: `sandbox.prepare` (on macOS including
   `sandbox.policy-validate`), `sandbox.supervisor-handshake`, `process.probe`
   or `process.devin-interactive`, and `process.await-cleanup`;
-- `devin.preflights` (the sum of every Devin preflight, each also reported by
-  name);
+- `devin.preflight.skills`, `devin.preflight.authentication` and
+  `devin.preflight.rules` (each preflight's duration); `devin.preflights`
+  measures the overall wall-clock time, including cleanup. Skills and
+  authentication run concurrently, so their durations overlap and timing
+  lines can appear in completion order;
 - exit: `session.remove`, including `session.remove.settling` and
   `session.remove.delete`, then `devin.total`.
 
 Codex launches also report `codex.executable-snapshot` and `codex.total`.
-Devin launches run one contained probe per preflight before the interactive
-process, so preflight phases are usually the largest startup cost.
+Devin runs contained skills and authentication probes concurrently before the
+interactive process; selected instruction rules also require contained list
+and show probes. Preflight phases are usually the largest startup cost.

@@ -15,44 +15,46 @@ import (
 	"time"
 )
 
-type devinCapability struct {
-	ID, RootName, Challenge string
-	Generation              uint64
-}
-
 func devinPhaseObserver(candidate, home, tools, workspace, trampoline string, d *devinDriver) func(string, devinPhaseReceipt) error {
-	var previous devinCapability
+	observed := newDevinPhaseCapabilities()
 	return func(phase string, r devinPhaseReceipt) error {
 		paths, e := filepath.Glob(filepath.Join(home, ".acs", "session-operations-v1", "capabilities", "*.json"))
-		if e != nil || len(paths) != 1 {
-			return errors.New("ambiguous live Session capability")
+		if e != nil || len(paths) == 0 || len(paths) > 2 {
+			return errors.New("unexpected live Session capabilities")
 		}
-		f, e := os.Open(paths[0])
-		if e != nil {
-			return e
-		}
-		info, e := f.Stat()
-		if e != nil || !info.Mode().IsRegular() || info.Size() > 16384 {
-			_ = f.Close()
-			return errors.New("capability file shape")
-		}
-		var cap devinCapability
-		e = json.NewDecoder(f).Decode(&cap)
-		_ = f.Close()
-		if e != nil || cap.ID == "" || cap.RootName == "" || filepath.Base(cap.RootName) != cap.RootName || cap.Generation == 0 || cap.Challenge == "" {
-			return errors.New("capability identity")
-		}
-		if previous.ID != "" && (cap.ID != previous.ID || cap.RootName != previous.RootName || cap.Generation <= previous.Generation || cap.Challenge == previous.Challenge) {
-			return errors.New("phase capability not fresh")
-		}
-		root := filepath.Join(home, ".acs", "sessions", cap.RootName)
-		expected := filepath.Join(root, "home")
 		actualInfo, e := os.Stat(r.SessionHome)
 		if e != nil {
 			return e
 		}
-		expectedInfo, e := os.Stat(expected)
-		if e != nil || !os.SameFile(actualInfo, expectedInfo) {
+		var cap devinCapability
+		var root, expected string
+		for _, path := range paths {
+			f, err := os.Open(path)
+			if err != nil {
+				return err
+			}
+			info, err := f.Stat()
+			if err != nil || !info.Mode().IsRegular() || info.Size() > 16384 {
+				_ = f.Close()
+				return errors.New("capability file shape")
+			}
+			var current devinCapability
+			err = json.NewDecoder(f).Decode(&current)
+			_ = f.Close()
+			if err != nil || current.ID == "" || current.RootName == "" || filepath.Base(current.RootName) != current.RootName || current.Generation == 0 || current.Challenge == "" || current.Removed {
+				return errors.New("capability identity")
+			}
+			currentRoot := filepath.Join(home, ".acs", "sessions", current.RootName)
+			currentHome := filepath.Join(currentRoot, "home")
+			expectedInfo, err := os.Stat(currentHome)
+			if err == nil && os.SameFile(actualInfo, expectedInfo) {
+				if cap.ID != "" {
+					return errors.New("ambiguous phase Session capability")
+				}
+				cap, root, expected = current, currentRoot, currentHome
+			}
+		}
+		if cap.ID == "" {
 			return errors.New("phase HOME not capability-bound")
 		}
 		if _, e = os.Stat(filepath.Join(root, ".acs-cleanup-proof-v1")); !os.IsNotExist(e) {
@@ -76,16 +78,19 @@ func devinPhaseObserver(candidate, home, tools, workspace, trampoline string, d 
 		if e == nil || len(data) > 65536 || json.Unmarshal(data, &outcome) != nil || (outcome.Outcome != "active" && outcome.Outcome != "busy") {
 			return errors.New("public live Session proof")
 		}
+		if err := observed.record(phase, cap); err != nil {
+			return err
+		}
 		d.mu.Lock()
-		if d.home == "" {
+		if phase == "skills" {
 			d.home = expected
 		}
-		same := d.home == expected
-		d.mu.Unlock()
-		if !same {
-			return errors.New("Session HOME changed")
+		if d.phaseHomes == nil {
+			d.phaseHomes = make(map[string]string)
 		}
-		if previous.ID == "" {
+		d.phaseHomes[phase] = expected
+		d.mu.Unlock()
+		if phase != "attached" {
 			ambient, err := json.Marshal(map[string]any{"mcpServers": map[string]any{"acs-import-windsurf": map[string]any{"command": filepath.Join(workspace, "ambient-server.sh"), "args": []string{}, "env": map[string]string{}}}})
 			if err != nil {
 				return err
@@ -110,7 +115,6 @@ func devinPhaseObserver(candidate, home, tools, workspace, trampoline string, d 
 		if e = devinInspectGenerated(expected, candidate); e != nil {
 			return e
 		}
-		previous = cap
 		return nil
 	}
 }

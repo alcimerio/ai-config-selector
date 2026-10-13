@@ -334,13 +334,22 @@ exit 23
 		t.Fatal(err)
 	}
 	lines := strings.Split(strings.TrimSpace(string(events)), "\n")
-	if len(lines) != 3 || !strings.HasPrefix(lines[0], "preflight-skills:") || !strings.HasPrefix(lines[1], "preflight-auth:") || !strings.HasPrefix(lines[2], "launch:") {
-		t.Fatal("fake Devin did not record the expected preflight and launch order")
+	if len(lines) != 3 || !strings.HasPrefix(lines[2], "launch:") {
+		t.Fatal("fake Devin did not record both preflights before launch")
 	}
+	homes := map[string]string{}
 	for _, line := range lines {
-		if !strings.Contains(line, filepath.Join(home, ".acs", "sessions")+string(filepath.Separator)+"session-") {
-			t.Error("fake Devin did not use an isolated Session home")
+		phase, sessionHome, found := strings.Cut(line, ":")
+		if phase == "launch" {
+			sessionHome, _, _ = strings.Cut(sessionHome, ":")
 		}
+		if !found || homes[phase] != "" || !strings.HasPrefix(sessionHome, filepath.Join(home, ".acs", "sessions")+string(filepath.Separator)+"session-") {
+			t.Fatal("fake Devin did not record unique phases with isolated Session homes")
+		}
+		homes[phase] = sessionHome
+	}
+	if homes["preflight-skills"] == "" || homes["preflight-auth"] == "" || homes["launch"] != homes["preflight-skills"] || homes["preflight-auth"] == homes["preflight-skills"] {
+		t.Fatalf("fake Devin Session boundaries differ: %#v", homes)
 	}
 	assertNoSessions(t, home)
 

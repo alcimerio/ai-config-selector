@@ -215,6 +215,7 @@ type devinDriver struct {
 	initialCatalog                                                      func([]byte) error
 	mu                                                                  sync.Mutex
 	member, home                                                        string
+	phaseHomes                                                          map[string]string
 	phase                                                               string
 	generation, requests, totalBytes, team, models, modelWrites, active int
 	ended                                                               bool
@@ -237,7 +238,12 @@ func (d *devinDriver) begin(r devinPhaseReceipt) error {
 	if d.failure != nil {
 		return d.failure
 	}
-	if r.PID <= 1 || r.MemberSHA256 != d.member || r.SessionHome != d.home {
+	phaseNames := []string{"skills", "auth", "attached"}
+	expectedHome := d.home
+	if d.phaseHomes != nil && d.generation < len(phaseNames) {
+		expectedHome = d.phaseHomes[phaseNames[d.generation]]
+	}
+	if r.PID <= 1 || r.MemberSHA256 != d.member || expectedHome == "" || r.SessionHome != expectedHome {
 		return errors.New("unvalidated phase identity")
 	}
 	phases := [][]string{{"skills", "list", "--json"}, {"auth", "status"}, {"--respect-workspace-trust", "false"}}

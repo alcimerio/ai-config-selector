@@ -136,6 +136,9 @@ func (session *Session) RetainUntilProcessDone(process launch.Process) (launch.P
 
 // ArmOperation durably advances this Session's process generation and prepares
 // its exact cleanup proof. supplied may be nil, or a typed Codex challenge.
+// The previous contained process must have completed proven cleanup first:
+// tracking and recovery bind one current generation/challenge to each root.
+// Lease reference counting alone does not make concurrent generations safe.
 func (session *Session) ArmOperation(supplied []byte) ([]byte, error) {
 	if session == nil {
 		return nil, errors.New("arm ACS Session: Session unavailable")

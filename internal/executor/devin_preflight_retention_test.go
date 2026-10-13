@@ -3,6 +3,7 @@ package executor
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,6 +21,7 @@ import (
 	"github.com/alcimerio/ai-config-selector/internal/instructions"
 	"github.com/alcimerio/ai-config-selector/internal/launch"
 	"github.com/alcimerio/ai-config-selector/internal/session"
+	"github.com/alcimerio/ai-config-selector/internal/sessionops"
 )
 
 func TestLaunchPreflightsRetainSessionUntilCleanupIsProven(t *testing.T) {
@@ -49,6 +51,7 @@ func TestLaunchPreflightsRetainSessionUntilCleanupIsProven(t *testing.T) {
 				if _, statErr := os.Stat(sandbox.root); statErr != nil {
 					t.Fatalf("Session removed before preflight cleanup was proven: %v", statErr)
 				}
+				assertUnsettledPreflightCapability(t, sandbox)
 				var sandboxErr *launch.SandboxError
 				if exitCode != 1 || !errors.As(err, &sandboxErr) || sandboxErr.Category != launch.SandboxProcessWaitFailed {
 					t.Fatalf("launch result = (%d, %v), want cleanup failure to supersede the probe result", exitCode, err)
@@ -65,11 +68,17 @@ func TestLaunchPreflightsRetainSessionUntilCleanupIsProven(t *testing.T) {
 				if stage == "rules-show" || stage == "auth" {
 					wantStages = append(wantStages, "rules-show")
 				}
-				if stage == "auth" {
-					wantStages = append(wantStages, "auth")
+				var orderedStages []string
+				authCount := 0
+				for _, prepared := range sandbox.stages {
+					if prepared == "auth" {
+						authCount++
+					} else {
+						orderedStages = append(orderedStages, prepared)
+					}
 				}
-				if !reflect.DeepEqual(sandbox.stages, wantStages) {
-					t.Fatalf("prepared stages = %v, want %v; execution advanced past unsettled cleanup", sandbox.stages, wantStages)
+				if !reflect.DeepEqual(orderedStages, wantStages) || authCount != 1 {
+					t.Fatalf("prepared stages = %v, want %v plus concurrent auth; execution advanced past unsettled cleanup", sandbox.stages, wantStages)
 				}
 				wantWaits := 1
 				if failure == "start" {
@@ -163,8 +172,8 @@ func TestVerifyDevinOwnsSessionRetentionBeforePreparingProcess(t *testing.T) {
 	if !errors.As(err, &sandboxErr) || sandboxErr.Category != launch.SandboxProcessStartFailed {
 		t.Fatalf("VerifyDevin result = %v, want retained probe start failure", err)
 	}
-	if got := sandbox.stages; !reflect.DeepEqual(got, []string{"skills"}) || sandbox.process.starts != 1 {
-		t.Fatalf("VerifyDevin prepared stages = %v, starts = %d; want one retained skills probe", got, sandbox.process.starts)
+	if got := sandbox.stages; len(got) != 2 || sandbox.process.starts != 1 {
+		t.Fatalf("VerifyDevin prepared stages = %v, starts = %d; want retained skills and concurrent auth", got, sandbox.process.starts)
 	}
 }
 
@@ -187,8 +196,10 @@ func TestInstructionAnchorPrecedesSkillsProbeAndRejectsReplacedHome(t *testing.T
 	if !errors.As(err, &preflightErr) || preflightErr.Capability != devinruntime.CapabilityInstructionRules {
 		t.Fatalf("VerifyDevin after HOME replacement = %v, want instruction rules preflight failure", err)
 	}
-	if want := []string{"skills"}; !reflect.DeepEqual(sandbox.stages, want) {
-		t.Fatalf("prepared stages=%v want %v", sandbox.stages, want)
+	for _, stage := range sandbox.stages {
+		if stage != "skills" && stage != "auth" {
+			t.Fatalf("prepared stages=%v; replaced HOME allowed rules or interactive launch", sandbox.stages)
+		}
 	}
 }
 
@@ -228,6 +239,7 @@ func (sandbox *preflightRetentionSandbox) Prepare(_ context.Context, request lau
 		return nil, err
 	}
 	process := &preflightRetentionProcess{output: request.Terminal.Output, stage: stage, home: canonicalHome, ruleFile: sandbox.ruleFile, ruleBody: append([]byte(nil), sandbox.ruleBody...), replaceHome: sandbox.replaceHome}
+	process.challenge = append([]byte(nil), request.RecoveryProofChallenge...)
 	if stage == sandbox.stage {
 		sandbox.root = request.SessionDirectory
 		// Observe the existing lease inode so the test can await its final
@@ -252,6 +264,7 @@ type preflightRetentionProcess struct {
 	failure     string
 	output      io.Writer
 	cleanupDone <-chan struct{}
+	challenge   []byte
 	replaceHome bool
 	starts      int
 	waits       int
@@ -345,6 +358,35 @@ func (m retentionInstructionMaterializer) Materialize(home string) error {
 
 func (*preflightRetentionProcess) Signal(os.Signal) error               { return nil }
 func (process *preflightRetentionProcess) CleanupDone() <-chan struct{} { return process.cleanupDone }
+
+func assertUnsettledPreflightCapability(t *testing.T, sandbox *preflightRetentionSandbox) {
+	t.Helper()
+	sessions := filepath.Dir(sandbox.root)
+	paths, err := filepath.Glob(filepath.Join(launch.SessionOperationsDirectory(sessions), "capabilities", "*.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range paths {
+		data, err := os.ReadFile(path)
+		var cap preflightCapability
+		if err != nil || json.Unmarshal(data, &cap) != nil {
+			t.Fatal("invalid retained preflight capability", err)
+		}
+		if cap.RootName != filepath.Base(sandbox.root) {
+			continue
+		}
+		generation := map[string]uint64{"skills": 1, "rules-list": 2, "rules-show": 3, "auth": 1}[sandbox.stage]
+		if cap.Generation != generation || cap.Challenge != hex.EncodeToString(sandbox.process.challenge) {
+			t.Fatal("unsettled preflight lost its exact recovery capability")
+		}
+		outcome, err := (sessionops.Store{SessionsDirectory: sessions}).Recover(cap.ID)
+		if err == nil || outcome.Outcome != "active" {
+			t.Fatalf("unsettled preflight recovery = %+v, %v", outcome, err)
+		}
+		return
+	}
+	t.Fatal("unsettled preflight has no recovery capability")
+}
 
 func waitForPreflightSessionRemoval(t *testing.T, sandbox *preflightRetentionSandbox) {
 	t.Helper()
