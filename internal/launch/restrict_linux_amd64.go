@@ -35,9 +35,12 @@ func linuxLandlockRuleset(rules []linuxLandlockRule) (int, error) {
 		}
 		return -1, linuxStepError(errLinuxSeal, "query Landlock ABI (requires >=6)", cause)
 	}
-	attr := unix.LandlockRulesetAttr{Access_fs: linuxHandledFilesystem,
+	attr := unix.LandlockRulesetAttr{Handled_access_fs: linuxHandledFilesystem,
 		Scoped: unix.LANDLOCK_SCOPE_ABSTRACT_UNIX_SOCKET | unix.LANDLOCK_SCOPE_SIGNAL}
-	fd, _, errno := unix.Syscall(unix.SYS_LANDLOCK_CREATE_RULESET, uintptr(unsafe.Pointer(&attr)), unsafe.Sizeof(attr), 0)
+	// Only pass the ABI 6 prefix through Scoped. Newer x/sys structs also
+	// contain quiet fields, which this policy neither enables nor requires.
+	attrSize := unsafe.Offsetof(attr.Scoped) + unsafe.Sizeof(attr.Scoped)
+	fd, _, errno := unix.Syscall(unix.SYS_LANDLOCK_CREATE_RULESET, uintptr(unsafe.Pointer(&attr)), attrSize, 0)
 	if errno != 0 {
 		return -1, linuxStepError(errLinuxSeal, "landlock_create_ruleset", errno)
 	}
