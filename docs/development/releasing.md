@@ -42,31 +42,36 @@ exactly these files in `dist/release-candidate/`:
 
 ```text
 acs_1.2.3_darwin_arm64.tar.gz
+acs_1.2.3_linux_amd64.tar.gz
 SHA256SUMS
 install.sh
 ```
 
-The tag workflow validates annotated tag identity and ancestry, builds the
-candidate once after a tagged-source vulnerability scan, installs the exact bytes
-on the native Apple Silicon target, scans that installed binary, runs normal,
-race, and black-box acceptance tests, attests the archive and
-checksum manifest, and publishes through the protected `release` environment.
+`SHA256SUMS` in that directory has one row for each archive. The tag workflow
+validates annotated tag identity and ancestry, builds the candidate once after a
+tagged-source vulnerability scan, installs the exact bytes on the native Apple
+Silicon target, scans that installed binary, runs normal, race, and black-box
+acceptance tests, attests both archives and the checksum manifest, and publishes
+through the protected `release` environment.
 
 The same build also stages `dist/linux-candidate/` with only
 `acs_1.2.3_linux_amd64.tar.gz`, its own `SHA256SUMS`, and `install.sh`. Neither
 Linux arm64 nor Intel macOS is built. Qualified `linux/amd64` hosts are admitted
 by `ValidatePlatform` and the registered Bubblewrap backend. `acs update` on
 `linux/amd64` selects `acs_*_linux_amd64.tar.gz` from the published Release and
-refuses every other Linux architecture. The publisher still uploads only the
-macOS asset set. A release that claims Linux update support must add the staged
-Linux archive and its checksum row to that set before the tag is pushed.
+refuses every other Linux architecture. The publisher uploads both archives from
+`dist/release-candidate` and the checksum manifest that lists them. `linux/arm64`
+stays unpublished. Publication waits for the native Linux packaging gate and the
+Apple Silicon gate.
 
 Both build targets receive the source vulnerability scan. The Linux packaging
 job installs the supplied bytes on native amd64, exercises the local updater,
 checks that a missing Profile cannot create state, and scans the exact installed
-executable. Trusted pushes attest the staged Linux archive and its manifest;
-pull requests run the same packaging checks without attestations. The installer
-is not an attestation subject. Native kernel, Bubblewrap, Landlock, seccomp,
+executable. Trusted pushes attest the staged Linux archive and its packaging
+manifest. The release attestation covers both published archives and the
+published checksum manifest. Pull requests run the same packaging checks without
+attestations. The installer is not an attestation subject. Native kernel,
+Bubblewrap, Landlock, seccomp,
 cgroup, credential, and target gates remain the qualification evidence. A failed
 prerequisite refuses the launch.
 

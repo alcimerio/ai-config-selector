@@ -85,20 +85,34 @@ func TestPlanRejectsCandidateWithUnexpectedIntelArchive(t *testing.T) {
 	}
 }
 
-func TestPlanRejectsLinuxCandidates(t *testing.T) {
-	for _, linuxOnly := range []bool{false, true} {
-		candidate, _ := writePublicationCandidate(t)
-		if linuxOnly {
+func TestPlanRejectsIncompleteOrUnqualifiedArchives(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		mutate func(*testing.T, string)
+	}{
+		{name: "linux only", mutate: func(t *testing.T, candidate string) {
 			if err := os.Remove(filepath.Join(candidate, "acs_0.2.0_darwin_arm64.tar.gz")); err != nil {
 				t.Fatal(err)
 			}
-		}
-		if err := os.WriteFile(filepath.Join(candidate, "acs_0.2.0_linux_amd64.tar.gz"), []byte("candidate only"), 0600); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := publication.Plan(candidate, "v0.2.0", "0123456789abcdef0123456789abcdef01234567", "notes\n", nil); err == nil {
-			t.Fatal("Linux candidate admitted to publication")
-		}
+		}},
+		{name: "missing linux archive", mutate: func(t *testing.T, candidate string) {
+			if err := os.Remove(filepath.Join(candidate, "acs_0.2.0_linux_amd64.tar.gz")); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{name: "linux arm64", mutate: func(t *testing.T, candidate string) {
+			if err := os.WriteFile(filepath.Join(candidate, "acs_0.2.0_linux_arm64.tar.gz"), []byte("unqualified"), 0600); err != nil {
+				t.Fatal(err)
+			}
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			candidate, _ := writePublicationCandidate(t)
+			test.mutate(t, candidate)
+			if _, err := publication.Plan(candidate, "v0.2.0", "0123456789abcdef0123456789abcdef01234567", "notes\n", nil); err == nil || !strings.Contains(err.Error(), "asset names are incomplete or unexpected") {
+				t.Fatalf("unqualified archive rejection = %v", err)
+			}
+		})
 	}
 }
 
@@ -113,6 +127,7 @@ func writePublicationCandidate(t *testing.T) (string, []fixtureAsset) {
 	directory := t.TempDir()
 	names := []string{
 		"acs_0.2.0_darwin_arm64.tar.gz",
+		"acs_0.2.0_linux_amd64.tar.gz",
 		"SHA256SUMS",
 		"install.sh",
 	}

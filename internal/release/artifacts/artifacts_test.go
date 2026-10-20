@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -93,6 +94,80 @@ func TestLinuxCandidateExactSet(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestPublishableSetRequiresDarwinAndLinuxAmd64(t *testing.T) {
+	binaryPath := filepath.Join(t.TempDir(), "acs")
+	build := exec.Command("go", "build", "-buildvcs=false", "-o", binaryPath, "./cmd/acs")
+	build.Dir = "../../.."
+	build.Env = append(os.Environ(), "GOOS=linux", "GOARCH=amd64", "CGO_ENABLED=0")
+	if output, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build: %v\n%s", err, output)
+	}
+	binary, err := os.ReadFile(binaryPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	writeLinuxArchive(t, dir, binary, nil)
+	writeNamedArchive(t, dir, "acs_0.2.0_darwin_arm64.tar.gz", []byte("darwin fixture"))
+	mustWrite(t, filepath.Join(dir, "install.sh"), []byte("#!/bin/sh\nreadonly release_version=\"v0.2.0\"\n"))
+	writePublishableChecksums(t, dir)
+	got, err := Read(dir, "v0.2.0", false)
+	if err != nil {
+		t.Fatalf("publishable set rejected: %v", err)
+	}
+	if runtime.GOOS == "linux" && runtime.GOARCH == "amd64" && !bytes.Equal(got, binary) {
+		t.Fatal("publishable set did not return the linux executable on linux/amd64")
+	}
+	if _, err := Read(dir, "v0.2.0", true); err == nil {
+		t.Fatal("mixed publishable set accepted as a linux-only candidate")
+	}
+	mustRemove(t, filepath.Join(dir, "acs_0.2.0_linux_amd64.tar.gz"))
+	if _, err := Read(dir, "v0.2.0", false); err == nil || !strings.Contains(err.Error(), "artifact names") {
+		t.Fatalf("darwin-only set error = %v", err)
+	}
+}
+
+func writePublishableChecksums(t *testing.T, dir string) {
+	t.Helper()
+	var manifest strings.Builder
+	for _, name := range []string{"acs_0.2.0_darwin_arm64.tar.gz", "acs_0.2.0_linux_amd64.tar.gz"} {
+		contents, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		fmt.Fprintf(&manifest, "%x  %s\n", sha256.Sum256(contents), name)
+	}
+	mustWrite(t, filepath.Join(dir, "SHA256SUMS"), []byte(manifest.String()))
+}
+
+func writeNamedArchive(t *testing.T, dir, name string, binary []byte) {
+	t.Helper()
+	var compressed bytes.Buffer
+	z := gzip.NewWriter(&compressed)
+	w := tar.NewWriter(z)
+	for _, entry := range []struct {
+		entryName string
+		contents  []byte
+		mode      int64
+	}{
+		{"acs", binary, 0755}, {"README.md", []byte("fixture"), 0644}, {"LICENSE", []byte("fixture"), 0644},
+	} {
+		if err := w.WriteHeader(&tar.Header{Name: entry.entryName, Mode: entry.mode, Size: int64(len(entry.contents)), Typeflag: tar.TypeReg}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := w.Write(entry.contents); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := z.Close(); err != nil {
+		t.Fatal(err)
+	}
+	mustWrite(t, filepath.Join(dir, name), compressed.Bytes())
 }
 
 func writeLinuxArchive(t *testing.T, dir string, binary []byte, alter func([]byte) []byte) {

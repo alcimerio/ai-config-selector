@@ -129,6 +129,7 @@ release assets:
 
 ```sh
 gh attestation verify acs_MAJOR.MINOR.PATCH_darwin_arm64.tar.gz --repo alcimerio/ai-config-selector
+gh attestation verify acs_MAJOR.MINOR.PATCH_linux_amd64.tar.gz --repo alcimerio/ai-config-selector
 shasum -a 256 -c SHA256SUMS
 ```
 

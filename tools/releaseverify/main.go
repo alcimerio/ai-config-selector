@@ -21,7 +21,7 @@ func main() {
 	flags.SetOutput(&flagOutput)
 	dist := flags.String("dist", "", "directory containing the release candidate")
 	version := flags.String("version", "", "canonical release tag")
-	linuxCandidate := flags.Bool("linux-candidate", false, "validate the separate, non-publishable linux/amd64 candidate set")
+	linuxCandidate := flags.Bool("linux-candidate", false, "validate the linux-only packaging set")
 	if err := flags.Parse(os.Args[1:]); err != nil {
 		fmt.Fprintf(os.Stderr, "invalid arguments: %s\n", strconv.QuoteToASCII(flagOutput.String()))
 		os.Exit(2)
@@ -32,10 +32,7 @@ func main() {
 	}
 	binary, err := artifacts.Read(*dist, *version, *linuxCandidate)
 	if err == nil {
-		goos, goarch := "darwin", "arm64"
-		if *linuxCandidate {
-			goos, goarch = "linux", "amd64"
-		}
+		goos, goarch := packagedExecutableTarget(*linuxCandidate)
 		if goos == runtime.GOOS && goarch == runtime.GOARCH {
 			err = verifyExecutable(binary, *version)
 			if err == nil {
@@ -49,6 +46,13 @@ func main() {
 		fmt.Fprintf(os.Stderr, "release candidate is invalid: %s\n", strconv.QuoteToASCII(err.Error()))
 		os.Exit(1)
 	}
+}
+
+func packagedExecutableTarget(linuxCandidate bool) (string, string) {
+	if linuxCandidate || (runtime.GOOS == "linux" && runtime.GOARCH == "amd64") {
+		return "linux", "amd64"
+	}
+	return "darwin", "arm64"
 }
 
 func verifyExecutable(contents []byte, version string) error {

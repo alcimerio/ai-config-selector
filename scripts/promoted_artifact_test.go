@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -87,10 +88,15 @@ func writePromotedCandidate(t *testing.T, candidateDirectory string) {
 		t.Fatal(err)
 	}
 	var manifest strings.Builder
-	for _, target := range []string{"darwin_arm64"} {
+	linuxBinary := string(linuxAmd64ACSBinary(t))
+	for _, target := range []string{"darwin_arm64", "linux_amd64"} {
 		name := "acs_0.2.0_" + target + ".tar.gz"
 		path := filepath.Join(candidateDirectory, name)
-		writeInstallerArchive(t, path, "#!/bin/sh\nif [ \"${1:-}\" = version ]; then printf 'acs v0.2.0\\n'; exit 0; fi\nexit 2\n")
+		body := "#!/bin/sh\nif [ \"${1:-}\" = version ]; then printf 'acs v0.2.0\\n'; exit 0; fi\nexit 2\n"
+		if target == "linux_amd64" {
+			body = linuxBinary
+		}
+		writeInstallerArchive(t, path, body)
 		contents, err := os.ReadFile(path)
 		if err != nil {
 			t.Fatal(err)
@@ -108,4 +114,34 @@ func writePromotedCandidate(t *testing.T, candidateDirectory string) {
 	if err := os.WriteFile(filepath.Join(candidateDirectory, "install.sh"), []byte(installer), 0o700); err != nil {
 		t.Fatal(err)
 	}
+}
+
+var (
+	linuxACSOnce   sync.Once
+	linuxACSBinary []byte
+	linuxACSErr    error
+)
+
+func linuxAmd64ACSBinary(t *testing.T) []byte {
+	t.Helper()
+	linuxACSOnce.Do(func() {
+		directory, err := os.MkdirTemp("", "acs-linux-fixture")
+		if err != nil {
+			linuxACSErr = err
+			return
+		}
+		binaryPath := filepath.Join(directory, "acs")
+		command := exec.Command("go", "build", "-buildvcs=false", "-ldflags", "-X main.releaseVersion=v0.2.0", "-o", binaryPath, "./cmd/acs")
+		command.Dir = ".."
+		command.Env = append(os.Environ(), "GOOS=linux", "GOARCH=amd64", "CGO_ENABLED=0")
+		if output, err := command.CombinedOutput(); err != nil {
+			linuxACSErr = fmt.Errorf("build linux/amd64 acs: %w\n%s", err, output)
+			return
+		}
+		linuxACSBinary, linuxACSErr = os.ReadFile(binaryPath)
+	})
+	if linuxACSErr != nil {
+		t.Fatal(linuxACSErr)
+	}
+	return linuxACSBinary
 }

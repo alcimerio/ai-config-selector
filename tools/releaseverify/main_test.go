@@ -10,10 +10,11 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 )
 
-func TestReleaseCandidateAcceptsExactlyOneAppleSiliconArchive(t *testing.T) {
+func TestReleaseCandidateAcceptsThePublishableSet(t *testing.T) {
 	version := "v0.2.0"
 	dist := writeCandidate(t, version)
 
@@ -22,16 +23,14 @@ func TestReleaseCandidateAcceptsExactlyOneAppleSiliconArchive(t *testing.T) {
 		t.Fatalf("release candidate rejected: %v\n%s", err, output)
 	}
 	host := runtime.GOOS + "/" + runtime.GOARCH
-	for _, target := range []string{"darwin/arm64"} {
-		var want string
-		if target == host {
-			want = "Verified packaged executable for " + target + "."
-		} else {
-			want = "Skipped packaged executable verification for " + target + ": validation host is " + host + "."
-		}
-		if !strings.Contains(string(output), want) {
-			t.Fatalf("verification report omits %q: %q", want, output)
-		}
+	var want string
+	if host == "linux/amd64" || host == "darwin/arm64" {
+		want = "Verified packaged executable for " + host + "."
+	} else {
+		want = "Skipped packaged executable verification for darwin/arm64: validation host is " + host + "."
+	}
+	if !strings.Contains(string(output), want) {
+		t.Fatalf("verification report omits %q: %q", want, output)
 	}
 }
 
@@ -163,19 +162,12 @@ func writeCandidate(t *testing.T, version string) string {
 	t.Helper()
 	dist := t.TempDir()
 	archiveVersion := strings.TrimPrefix(version, "v")
-	for _, target := range []struct {
-		goos   string
-		goarch string
-	}{
-		{goos: "darwin", goarch: "arm64"},
-	} {
-		name := fmt.Sprintf("acs_%s_%s_%s.tar.gz", archiveVersion, target.goos, target.goarch)
-		binary := []byte("fixture executable")
-		if target.goos == runtime.GOOS && target.goarch == runtime.GOARCH {
-			binary = []byte("#!/bin/sh\nprintf 'acs v0.2.0\\n'\n")
-		}
-		writeArchive(t, filepath.Join(dist, name), binary)
+	darwin := []byte("fixture executable")
+	if runtime.GOOS == "darwin" && runtime.GOARCH == "arm64" {
+		darwin = []byte("#!/bin/sh\nprintf 'acs v0.2.0\\n'\n")
 	}
+	writeArchive(t, filepath.Join(dist, fmt.Sprintf("acs_%s_darwin_arm64.tar.gz", archiveVersion)), darwin)
+	writeArchive(t, filepath.Join(dist, fmt.Sprintf("acs_%s_linux_amd64.tar.gz", archiveVersion)), linuxACSBinary(t))
 	writeChecksums(t, dist, archiveVersion)
 	installer := "#!/bin/sh\nreadonly release_version=\"v0.2.0\"\n"
 	mustWriteFile(t, filepath.Join(dist, "install.sh"), []byte(installer))
@@ -249,7 +241,7 @@ func rewriteArchive(t *testing.T, dist, name string, entries []archiveEntry) {
 func writeChecksums(t *testing.T, dist, archiveVersion string) {
 	t.Helper()
 	var checksums strings.Builder
-	for _, target := range []string{"darwin_arm64"} {
+	for _, target := range []string{"darwin_arm64", "linux_amd64"} {
 		name := fmt.Sprintf("acs_%s_%s.tar.gz", archiveVersion, target)
 		contents, err := os.ReadFile(filepath.Join(dist, name))
 		if err != nil {
@@ -272,6 +264,36 @@ func mustRemove(t *testing.T, path string) {
 	if err := os.Remove(path); err != nil {
 		t.Fatal(err)
 	}
+}
+
+var (
+	linuxACSOnce  sync.Once
+	linuxACSBytes []byte
+	linuxACSBuild error
+)
+
+func linuxACSBinary(t *testing.T) []byte {
+	t.Helper()
+	linuxACSOnce.Do(func() {
+		directory, err := os.MkdirTemp("", "acs-linux-fixture")
+		if err != nil {
+			linuxACSBuild = err
+			return
+		}
+		binaryPath := filepath.Join(directory, "acs")
+		command := exec.Command("go", "build", "-buildvcs=false", "-ldflags", "-X main.releaseVersion=v0.2.0", "-o", binaryPath, "./cmd/acs")
+		command.Dir = "../.."
+		command.Env = append(os.Environ(), "GOOS=linux", "GOARCH=amd64", "CGO_ENABLED=0")
+		if output, err := command.CombinedOutput(); err != nil {
+			linuxACSBuild = fmt.Errorf("build linux/amd64 acs: %w\n%s", err, output)
+			return
+		}
+		linuxACSBytes, linuxACSBuild = os.ReadFile(binaryPath)
+	})
+	if linuxACSBuild != nil {
+		t.Fatal(linuxACSBuild)
+	}
+	return linuxACSBytes
 }
 
 func mustRename(t *testing.T, oldPath, newPath string) {
