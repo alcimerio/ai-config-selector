@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/alcimerio/ai-config-selector/internal/devinruntime"
@@ -34,7 +35,9 @@ func TestLinuxDevinAdmissionAndArguments(t *testing.T) {
 	if err == nil {
 		t.Fatal("Devin qualification searched PATH")
 	}
-	assertLinuxUnsupported(t, NewProcessSandbox().Check(context.Background(), SandboxCheck{Executable: "devin"}))
+	if err := NewProcessSandbox().Check(context.Background(), SandboxCheck{Executable: "devin"}); err == nil || !strings.Contains(err.Error(), requiredSandboxNotice) {
+		t.Fatalf("bare Devin name was admitted: %v", err)
+	}
 }
 
 func TestLinuxDevinVerifiesStaticELFAndDigest(t *testing.T) {

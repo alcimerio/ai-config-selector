@@ -14,7 +14,7 @@ import (
 // This is an internal, pure compiler, not a launcher. It consumes the filesystem
 // facet of resolved Profile/recipe authority and a captured canonical tree. No
 // filesystem access, default macOS runtime paths, feature probes or execution
-// occur here. Production Linux admission remains closed.
+// occur here. Production admission is the registered linux/amd64 backend, not this compiler.
 //
 // A future launcher must capture complete directory listings without following
 // links, revalidate/pin source identities, build the private view, and install

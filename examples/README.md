@@ -58,9 +58,10 @@ See [interactive Codex](../docs/guides/codex.md#interactive-launch).
   contain the selected Skill and the launch fails closed.
 - Exclusions are pathname based. They do not hide Git history, copies or names
   in parent listings; see [filesystem exclusions](../docs/reference/common-profile-format.md#filesystem-exclusions).
-- macOS loopback outbound is denied by default. **dev-local-service** explicitly
-  allows port 3000; other loopback ports stay denied. Linux ignores the selection
-  and reports the enforcement gap in explain/dry-run.
+- Loopback outbound is denied by default. **dev-local-service** explicitly
+  allows port 3000; other loopback ports stay denied. Qualified `linux/amd64`
+  enforces that selection, including the whole 127.0.0.0/8. Other Linux hosts
+  are refused.
 - ACS is not an egress firewall: a target can transmit data it can read.
 
 To share your own variant without local paths, use

@@ -14,8 +14,8 @@ func TestLinuxRecipeHelpKeepsProductionAdmissionClosed(t *testing.T) {
 		command string
 		phrases []string
 	}{
-		{"sandbox", []string{"/bin/bash --noprofile --norc", "Production Linux launches remain disabled", "no CLI or environment bypass"}},
-		{"run", []string{"literal argv", "amd64 ELF", "Production Linux launches remain disabled", "custom ELF search paths"}},
+		{"sandbox", []string{"/bin/bash --noprofile --norc", "qualified Linux sandbox", "no unsandboxed fallback"}},
+		{"run", []string{"literal argv", "amd64 ELF", "Qualified linux/amd64", "custom ELF search paths"}},
 	} {
 		var out, stderr bytes.Buffer
 		code := (cli.App{Output: &out, ErrorOutput: &stderr}).Run(context.Background(), []string{tc.command, "--help"})

@@ -3,10 +3,9 @@
 [Documentation index](../README.md)
 
 This implements [roadmap item 7](linux-support.md#stack-3--supervisor-and-containment).
-Production Linux launches remain disabled. There is no registered Linux backend,
-production helper entry point, bypass flag, or credential-provider change. The
-supervisor and namespace helper are linux/amd64 Go code without CGO; Darwin code
-and tests are unchanged.
+Qualified `linux/amd64` admission re-execs this supervisor. It is not a flag on
+the main ACS process, and there is no bypass. The supervisor and namespace
+helper are linux/amd64 Go code without CGO; Darwin code and tests are unchanged.
 
 ## Ownership and start gate
 

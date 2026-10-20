@@ -165,7 +165,7 @@ type, and native enforcement are checked only by an actual launch.
 Exchange v3 optionally carries `common.network` version 1 with the ordinary
 `selection.loopbackPorts` array. Ports need no local bindings and retain their
 exact intent through export/import. The normal limits and strict integer
-validation apply. This does not imply Linux enforcement; see the
+validation apply. Qualified `linux/amd64` enforces the same selection. See the
 [loopback contract](../reference/common-profile-format.md#loopback-network-authority).
 
 Exchange v3 optionally carries `common.exclusions` version 1 with a

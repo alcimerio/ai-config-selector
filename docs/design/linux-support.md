@@ -2,8 +2,9 @@
 
 [Documentation index](../README.md)
 
-Status: proposed; no Linux runtime or release support is added by this document.
-Research baseline: `c5477ebb4b0115b83617cd15c1966eeb34256256`, 2026-10-09.
+Status: design record. Qualified native `linux/amd64` admission is the registered
+Bubblewrap backend. This document does not publish a release. `linux/arm64` stays
+unpublished. Research baseline: `c5477ebb4b0115b83617cd15c1966eeb34256256`, 2026-10-09.
 Repository citations use `path:line` at that commit unless a historical ref is
 specified. External references were checked on the research date. This was a
 read-only investigation; no builds, native probes, or target installers were run.
@@ -12,10 +13,10 @@ Recommendation: retain the shared launch contract; implement a Linux backend
 combining a private filesystem view, Landlock, seccomp, and supervised process
 containment. Prefer verified system Bubblewrap for namespace setup over writing
 a new mount launcher. Initially qualify Linux 6.12+ with Landlock ABI 6+, cgroups
-v2 delegation, and working unprivileged namespaces. These are proposed floors,
-not sufficient conditions: probe the actual features and reject missing ones.
-Keep Linux execution disabled until the complete composition passes native
-tests, especially exclusions, Unix sockets, credentials, and supervisor loss.
+v2 delegation, and working unprivileged namespaces. These floors are not
+sufficient on their own: the host probe rejects a missing feature. Qualified
+`linux/amd64` launches only after that probe passes. A missing prerequisite
+refuses the launch. There is no unsandboxed fallback.
 
 ## 1. What changed, and why
 
@@ -36,9 +37,12 @@ tests, especially exclusions, Unix sockets, credentials, and supervisor loss.
   `bubblewrap_supervisor_linux.go`, `sandbox_backends_linux.go`, their tests, and
   `acceptance/promoted_artifact_native_linux_test.go`. These were not deleted
   in the v0.4.0 transition itself.
-- Current support is narrower still: macOS 26 Apple Silicon only, with no support
-  for historical Linux or Intel assets (`SECURITY.md:15-22`,
-  `README.md:27-30`, `docs/releases/v0.5.0.md:87-92`).
+- At the research baseline, support was macOS 26 Apple Silicon only, with no
+  support for historical Linux or Intel assets. Qualified native `linux/amd64`
+  is now admitted by `ValidatePlatform` and the registered Bubblewrap backend.
+  `linux/arm64`, Intel Macs, WSL, containers, and historical Linux or Intel
+  assets stay unsupported. The publisher still uploads only the macOS asset set
+  until a release adds the staged Linux archive.
 
 The documented reason is a deliberate narrowing of the supported, natively
 validated release surface to macOS alongside the new shell. The inspected
@@ -479,9 +483,10 @@ release notes; they describe the old matrix, not present support.
 
 ## 9. Phased roadmap: small PR stacks
 
-Each PR must preserve macOS gates. Until the final activation PR, production
-Linux launch admission remains closed; test-only backend construction must not
-be reachable via a user bypass flag. Dependencies below use PR numbers in this
+Each PR must preserve macOS gates. Stacks before item 17 kept production Linux
+launch admission closed; test-only backend construction must not be reachable
+via a user bypass flag. Item 17 is the qualified `linux/amd64` admission switch.
+The notes below record each earlier stack's scope. Dependencies below use PR numbers in this
 proposal, not GitHub issue numbers. Split implementation further if review grows.
 
 ### Stack 1 — foundations
@@ -620,9 +625,9 @@ proposal, not GitHub issue numbers. Split implementation further if review grows
 
 ## 10. Decisions
 
-These are the smallest choices consistent with this design. Production admission
-stays off until stack 7's qualified-host switch; this section does not publish
-a release.
+These are the smallest choices consistent with this design. Qualified
+`linux/amd64` admission is the stack 7 host switch. This section does not
+publish a release. `linux/arm64` stays closed.
 
 1. **Sandbox composition:** system Bubblewrap plus Landlock ABI 6 plus seccomp.
    No separate launcher. Loopback uses seccomp notification emulation, not

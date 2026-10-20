@@ -29,5 +29,5 @@ func main() {
 		fmt.Fprintf(os.Stderr, "candidate update failed: %s\n", strconv.QuoteToASCII(err.Error()))
 		os.Exit(1)
 	}
-	fmt.Println("Local Linux candidate updated; production launches remain disabled.")
+	fmt.Println("Local Linux candidate updated. Qualified linux/amd64 launches use the sandbox; other hosts stay refused.")
 }

@@ -63,5 +63,5 @@ the directory is untrusted.
 Grok's built-in web tools use ACS's coarse outbound network. Tool filtering is
 a Grok feature, not a separate ACS boundary.
 
-Linux production launches stay disabled. Dry-run, explain, doctor, and check
-still report the plan and passive facts.
+Grok is not a qualified Linux target. A `linux/amd64` Grok launch is refused.
+Dry-run, explain, doctor, and check still report the plan and passive facts.

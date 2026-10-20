@@ -171,6 +171,8 @@ func (app App) RunExplanation(ctx context.Context, args []string) (bool, int) {
 		status, code, detail = "fail", "backend_not_ready", "The fixed native backend readiness observation did not pass."
 		if readiness.Ready {
 			status, code, detail = "pass", "backend_ready", "The fixed native backend readiness observation passed; launch-specific checks remain."
+		} else if readiness.Failure != nil {
+			detail = readiness.Failure.Error()
 		}
 		checks[len(checks)-1] = explanationCheck{"native.backend", status, code, detail}
 		if !readiness.Supported || !readiness.Ready {

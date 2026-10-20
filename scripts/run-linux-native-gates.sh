@@ -90,4 +90,4 @@ run_suite executor ./internal/executor '^TestLinux' \
   TestLinuxLaunchFailsBeforeSessionCreation TestLinuxDevinProjectsOnlyTheAllowlistedCredential \
   TestLinuxCodexFileProviderLifecycle TestLinuxCodexNeverFallsBackToGlobalAuth
 
-printf '%s\n' 'Native Linux suites passed with mandatory prerequisites and no skipped selected tests. Production Linux launches remain disabled.'
+printf '%s\n' 'Native Linux suites passed with mandatory prerequisites and no skipped selected tests. Qualified linux/amd64 admission uses these gates.'

@@ -29,7 +29,7 @@ func (app App) RunDiagnostics(args []string, home func() (string, error)) (bool,
 		}
 	} else {
 		if inv.secondEnabled {
-			fmt.Fprintln(app.Output, "Linux capability diagnostics (bounded probes; production Linux launches remain disabled):")
+			fmt.Fprintln(app.Output, "Linux capability diagnostics (bounded probes; a failed prerequisite refuses every launch):")
 		} else {
 			fmt.Fprintln(app.Output, "Passive diagnostics (no processes executed or files changed):")
 		}

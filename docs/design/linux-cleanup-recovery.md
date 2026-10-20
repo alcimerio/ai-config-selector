@@ -3,9 +3,8 @@
 [Documentation index](../README.md)
 
 This implements [roadmap item 8](linux-support.md#stack-3--supervisor-and-containment)
-on the existing Linux containment primitives. Production Linux launches remain
-disabled: there is no registered backend, production helper entry point, bypass
-flag, credential-provider change, or release/support expansion. Darwin uses its
+on the existing Linux containment primitives. Qualified `linux/amd64` cleanup
+uses this authenticated settlement. There is no bypass flag. Darwin uses its
 existing proof verifier, supervisor and terminal implementation unchanged.
 
 ## Cleanup ownership and durable evidence

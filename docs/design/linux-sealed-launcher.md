@@ -3,10 +3,10 @@
 [Documentation index](../README.md)
 
 This is the implementation of [roadmap item 6](linux-support.md#stack-2--sandbox-backend).
-Production Linux admission remains disabled. There is no registered Linux
-backend, helper CLI switch, environment bypass, or credential-provider change.
-Only the test executable contains the helper entry point. The implementation is
-linux/amd64 and uses Go plus Go assembly, without CGO. Darwin code is unchanged.
+Qualified `linux/amd64` admission now uses this launcher through the registered
+Bubblewrap backend. The internal re-exec markers are not command-line flags.
+The implementation is linux/amd64 and uses Go plus Go assembly, without CGO.
+Darwin code is unchanged. `linux/arm64` stays closed.
 
 ## Boundary
 
@@ -97,7 +97,7 @@ installs the new descriptor with `SECCOMP_IOCTL_NOTIF_ADDFD` and
 `SECCOMP_ADDFD_FLAG_SEND`. Responses use a negative errno in the return value
 and never set `CONTINUE`.
 
-Production Linux admission remains closed. This is destination mediation for
+Qualified `linux/amd64` uses this destination mediation. This is destination mediation for
 loopback, not an egress firewall. UDP bind and reception are still not denied.
 
 ## Evidence and remaining gates

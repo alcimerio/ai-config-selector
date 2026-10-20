@@ -1,19 +1,20 @@
 <h1 align="center">AI Config Selector</h1>
 
 <p align="center">
-  Reusable, sandboxed capability Profiles for AI coding CLIs on macOS.
+  Reusable, sandboxed capability Profiles for AI coding CLIs on macOS and qualified linux/amd64.
 </p>
 
 <p align="center">
   <a href="https://github.com/alcimerio/ai-config-selector/releases/latest"><img src="https://img.shields.io/github/v/release/alcimerio/ai-config-selector?sort=semver" alt="Latest release"></a>
   <a href="https://github.com/alcimerio/ai-config-selector/actions/workflows/ci.yml"><img src="https://github.com/alcimerio/ai-config-selector/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
   <a href="https://github.com/alcimerio/ai-config-selector/actions/workflows/macos.yml"><img src="https://github.com/alcimerio/ai-config-selector/actions/workflows/macos.yml/badge.svg?branch=main" alt="macOS validation"></a>
-  <img src="https://img.shields.io/badge/platform-macOS%2026%20%7C%20Apple%20Silicon-black?logo=apple" alt="Platform: macOS 26 on Apple Silicon">
+  <img src="https://img.shields.io/badge/platform-macOS%2026%20%7C%20linux%2Famd64-black" alt="Platform: macOS 26 Apple Silicon and linux/amd64">
   <a href="LICENSE"><img src="https://img.shields.io/github/license/alcimerio/ai-config-selector" alt="MIT License"></a>
 </p>
 
 AI Config Selector (`acs`) is a Go CLI that runs Devin, Codex, Grok Build, a shell, or any
-command inside the native macOS Seatbelt sandbox. Run directly, a coding agent
+command inside a required native sandbox: Seatbelt on macOS, and Bubblewrap with
+Landlock and seccomp on qualified `linux/amd64`. Run directly, a coding agent
 can usually reach your whole home directory, every installed Skill and any
 credentials it finds. ACS makes that access explicit and repeatable: save the local
 Skills, instruction files, filesystem permissions, environment references and
@@ -25,9 +26,12 @@ project.
 [Contribute](CONTRIBUTING.md)
 
 > [!IMPORTANT]
-> ACS supports macOS 26 on Apple Silicon (`darwin/arm64`). Linux and Intel Macs
-> are not supported runtimes. Devin, Codex, and Grok Build are installed separately; you can
-> try the sandbox without an AI account.
+> ACS supports macOS 26 on Apple Silicon (`darwin/arm64`) and qualified native
+> `linux/amd64` (Linux 6.12+, Landlock ABI 6, Bubblewrap, unprivileged user
+> namespaces, and an owned cgroup v2 delegation). Intel Macs and `linux/arm64`
+> are not supported. A missing prerequisite refuses the launch. Devin, Codex,
+> and Grok Build are installed separately; you can try the sandbox without an
+> AI account. Grok is not a qualified Linux target.
 
 ## Why ACS?
 
@@ -51,9 +55,11 @@ project.
 ## How it works
 
 ```text
-Profile ──► immutable authority plan ──► private Session ──► Seatbelt sandbox ──► target
-(saved      (resolved before any         (synthetic home,      (macOS native,       devin | codex | grok |
-selections)  Session exists)              selected material)    no fallback)         /bin/zsh -f | your command
+Profile ──► immutable authority plan ──► private Session ──► native sandbox ──► target
+(saved      (resolved before any         (synthetic home,     (Seatbelt on macOS;  devin | codex |
+selections)  Session exists)              selected material)   Bubblewrap on        grok on macOS |
+                                                              linux/amd64;         shell or command
+                                                              no fallback)
 ```
 
 | Term | Meaning |
@@ -61,7 +67,7 @@ selections)  Session exists)              selected material)    no fallback)    
 | **Profile** | Saved capability selections under `~/.acs/profiles`: Skills, instructions, workspace and path access, executables, environment references, MCP servers and optional per-target overlays. It stores references, not copies of files or secret values. |
 | **Skill** | A local bundle with a `SKILL.md` entry file, discovered under `~/.agents/skills` and `~/.config/devin/skills`. ACS does not install or download Skills. |
 | **Session** | The private, temporary home and state for one launch. ACS removes it only after proving the contained process tree has settled. |
-| **Target** | What runs inside the sandbox: Devin, Codex, Grok Build, the sandbox shell (`/bin/zsh -f`), or a literal command passed to `acs run`. |
+| **Target** | What runs inside the sandbox: Devin, Codex, Grok Build on macOS, the sandbox shell (`/bin/zsh -f` on macOS, `/bin/bash --noprofile --norc` on linux/amd64), or a literal command passed to `acs run`. Grok is not a qualified Linux target. |
 
 The [architecture](docs/development/architecture.md) and
 [security model](docs/reference/security-model.md) describe each step in detail.
@@ -142,8 +148,10 @@ Already have ACS? Follow the
 your working binary and verify the replacement before switching. Use the manual
 path when your binary has no updater.
 
-`acs update --check` and `acs update` support direct installer layouts. Read the
-upgrade guide before replacing a binary: rollback does not downgrade stored data.
+`acs update --check` and `acs update` support direct installer layouts on macOS 26
+Apple Silicon and `linux/amd64`. Linux updates install `acs_*_linux_amd64.tar.gz`
+from the published release. Read the upgrade guide before replacing a binary:
+rollback does not downgrade stored data.
 
 ### Build from source
 
@@ -175,7 +183,8 @@ In the builder (step 2), keep the Review preset, continue without target
 overlays, and choose Create Profile for a minimal read-only run. Confirm the
 empty selection. The builder requires no client or account.
 
-The shell runs `/bin/zsh -f` without user startup files. Your workspace is the
+On macOS the shell runs `/bin/zsh -f`. On qualified `linux/amd64` it runs
+`/bin/bash --noprofile --norc`. Neither shell reads user startup files. Your workspace is the
 current directory and `$HOME` is a synthetic Session home. Type `exit` to return.
 
 To use an AI target, install and authenticate it separately and select its
@@ -231,9 +240,10 @@ Report vulnerabilities privately as described in the
 
 | Platform | Status |
 | --- | --- |
-| macOS 26 on Apple Silicon (`darwin/arm64`) | Supported |
+| macOS 26 on Apple Silicon (`darwin/arm64`) | Supported. Seatbelt is the required sandbox. |
+| Qualified native `linux/amd64` | Supported when Bubblewrap, Landlock ABI 6, unprivileged user namespaces, and cgroup v2 delegation pass. Otherwise the launch is refused. |
 | Intel Macs | Not supported. Historical v0.4.0 Intel assets do not extend current support. |
-| Linux | Not supported. v0.3.3 was the final Linux-supported release. |
+| `linux/arm64` and other Linux hosts | Not supported. WSL and containers are not evidence. |
 
 Supported Codex versions are listed in
 [target compatibility](docs/reference/target-compatibility.md).

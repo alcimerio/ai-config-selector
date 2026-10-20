@@ -11,7 +11,7 @@ func TestLinuxDoctorChecksFixedBashWithoutAdmittingHost(t *testing.T) {
 	r := doctor("sandbox", func() (launch.Platform, error) { return launch.Platform{OS: "linux", Architecture: "amd64"}, nil },
 		func() bool { t.Fatal("unsupported backend queried"); return false },
 		func(path string) bool { requested = path; return true })
-	if requested != "/bin/bash" || r.ExitCode() == 0 {
+	if requested != "/bin/bash" || r.ExitCode() != 0 {
 		t.Fatalf("Linux doctor: shell=%q result=%+v", requested, r)
 	}
 	for _, c := range r.Checks {

@@ -144,7 +144,7 @@ The Linux launcher enforces the same selection. It denies the whole
 127.0.0.0/8, `::1`, and IPv4-mapped loopback except for selected ports, and it
 keeps port 53 open only to the exact nameservers read from the host resolver
 configuration. Managed Codex login accepts only on 127.0.0.1:1455 and
-`[::1]:1455`. Production Linux launch remains unsupported. See
+`[::1]:1455`. Qualified `linux/amd64` hosts use this launcher. See
 [Linux loopback enforcement](../design/linux-sealed-launcher.md#loopback-enforcement).
 This capability does not deny private LAN addresses, other host-interface
 addresses, remote destinations or proxied access; ACS is not a general egress

@@ -84,25 +84,29 @@ acs profile validate backend-review
 acs profile validate --json backend-review
 ```
 
-`doctor` needs no HOME, account, terminal or optional client. The supported host
-is macOS 26 on Apple Silicon (`arm64`); Intel, Linux and other platforms fail
-the platform check. It reads macOS product version through native
-`kern.osproductversion`, without executing `sw_vers`.
+`doctor` needs no HOME, account, terminal or optional client. Supported hosts
+are macOS 26 on Apple Silicon (`arm64`) and qualified native `linux/amd64`.
+Intel Macs, `linux/arm64`, and other platforms fail the platform check. On
+macOS it reads the product version through native `kern.osproductversion`,
+without executing `sw_vers`.
 
 Optional `--target` selects an executable-presence check: `devin` searches for
-`devin`, `sandbox` checks `/bin/zsh`, and `codex-auth` searches for `codex` for
-both named authentication and interactive launch. It does not inspect a Profile
-or select a sandbox backend. Only absolute PATH entries are searched; empty and
-relative entries are ignored. Candidates must resolve to readable, executable
-regular files; symlinks follow runtime lookup semantics. Presence does not prove
-version compatibility, including the exact reviewed CLI version requirement.
+`devin`, `sandbox` checks `/bin/zsh` on macOS and `/bin/bash` on Linux, and
+`codex-auth` searches for `codex` for both named authentication and interactive
+launch. It does not inspect a Profile or select a sandbox backend. Only absolute
+PATH entries are searched; empty and relative entries are ignored. Candidates
+must resolve to readable, executable regular files; symlinks follow runtime
+lookup semantics. Presence does not prove version compatibility, including the
+exact reviewed CLI version requirement.
 
-The backend check examines only `/usr/bin/sandbox-exec`: a regular, non-symlink,
-root-owned file with execute bits, no group/world writes, and read/execute
-access. It never invokes the Seatbelt probe. Host support and backend-file
-availability are independent; a present backend cannot make an unsupported
-host pass. Backend availability is unchecked on non-macOS hosts or when host
-metadata is unreadable.
+On macOS the backend check examines only `/usr/bin/sandbox-exec`: a regular,
+non-symlink, root-owned file with execute bits, no group/world writes, and
+read/execute access. It never invokes the Seatbelt probe. Host support and
+backend-file availability are independent; a present backend cannot make an
+unsupported host pass. On qualified `linux/amd64`, `backend.file` stays
+unchecked and points at `acs doctor --check-linux-capabilities`. A failed
+prerequisite probe refuses every launch. Other hosts leave backend availability
+unchecked.
 
 `profile validate` uses the [inspection codec and safe
 traversal](profiles.md#inspection) for stored structure, then resolves
@@ -133,9 +137,9 @@ exits 1 with contextual stderr usage and no JSON.
 ### Experimental Linux capability probes
 
 `acs doctor --check-linux-capabilities [--json]` explicitly adds bounded active
-observations for the future Linux backend. Default `doctor` remains passive.
-Linux production launches remain disabled, even if every observation passes;
-`host.platform` still fails and `runtime.enforcement` remains unchecked.
+observations for the Linux backend. Default `doctor` remains passive.
+On qualified `linux/amd64`, `host.platform` passes. A failed prerequisite probe
+refuses every launch. `runtime.enforcement` remains unchecked by doctor.
 
 The extra `linux.*` facts report native amd64, an ordinary unprivileged user,
 kernel 6.12+, Ubuntu 24.04, WSL/container detection, Landlock ABI 6+, system
@@ -246,8 +250,9 @@ no target/user command. Project-local files are not enumerated.
 macOS it may run the fixed system Seatbelt readiness helper. A pass establishes
 only macOS 26 Apple Silicon and the fixed backend check at that moment.
 Versions, authentication, materialization, generated policy, target preflights,
-network enforcement and cleanup remain unchecked. Linux and cross-compilation
-are not native support evidence.
+network enforcement and cleanup remain unchecked. A portable or cross-compiled
+result is not native support evidence. Qualified `linux/amd64` evidence is the
+native gate.
 
 ### Facts and JSON
 
@@ -263,8 +268,8 @@ Local-IP grants permit socket binding only, not `listen`, inbound service
 authority. Loopback outbound is denied except for Profile ports in
 `common.network` v1 `selection.loopbackPorts`; explain/dry-run show those ports
 and default denial. Other outbound IP and macOS DNS remain coarse. Linux
-enforces that selection in the experimental launcher, including the whole
-127.0.0.0/8; production Linux admission stays closed.
+enforces that selection on qualified `linux/amd64`, including the whole
+127.0.0.0/8. Other Linux hosts are refused.
 
 Executable selections are requested logical facts. A workspace-relative entry
 already covered by workspace read is marked

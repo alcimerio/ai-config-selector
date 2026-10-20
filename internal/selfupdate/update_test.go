@@ -97,6 +97,20 @@ func TestArchiveSafety(t *testing.T) {
 		t.Fatal("accepted truncated gzip")
 	}
 }
+func TestLinuxCheckRequiresTheLinuxArchive(t *testing.T) {
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintf(w, `{"tag_name":"v0.10.0","assets":[{"name":"acs_0.10.0_darwin_arm64.tar.gz","browser_download_url":"%s/archive"},{"name":"SHA256SUMS","browser_download_url":"%s/manifest"}]}`, server.URL, server.URL)
+	}))
+	defer server.Close()
+	if _, err := Run(context.Background(), "v0.9.0", "", true, Config{APIBase: server.URL, Client: server.Client(), PlatformOS: "linux", PlatformArch: "amd64"}); err == nil || !strings.Contains(err.Error(), "missing required assets") {
+		t.Fatalf("linux update accepted a macOS-only release: %v", err)
+	}
+	if _, err := Run(context.Background(), "v0.9.0", "", true, Config{APIBase: server.URL, Client: server.Client(), PlatformOS: "linux", PlatformArch: "arm64"}); err == nil || !strings.Contains(err.Error(), "native linux/amd64") {
+		t.Fatalf("linux/arm64 update = %v", err)
+	}
+}
+
 func TestCheckOnlyUsesMetadata(t *testing.T) {
 	requests := 0
 	var server *httptest.Server
