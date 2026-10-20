@@ -14,6 +14,7 @@ import (
 
 	"github.com/alcimerio/ai-config-selector/internal/environmentresource"
 	"github.com/alcimerio/ai-config-selector/internal/linuxprobe"
+	"github.com/alcimerio/ai-config-selector/internal/networkintent"
 	"golang.org/x/sys/unix"
 )
 
@@ -35,6 +36,8 @@ type linuxLaunchWire struct {
 	Home, Temporary, Directory string
 	Terminal                   *linuxTerminalConfig `json:",omitempty"`
 	CodexHome                  string               `json:",omitempty"`
+	LoopbackPorts              []int                `json:",omitempty"`
+	LoopbackCallback           bool                 `json:",omitempty"`
 }
 
 func (w linuxLaunchWire) validate() error {
@@ -58,6 +61,10 @@ func (w linuxLaunchWire) validate() error {
 		if !linuxCanonicalPlanPath(rule.Path) || rule.Access == 0 || rule.Access & ^uint64(linuxHandledFilesystem) != 0 {
 			return errLinuxSeal
 		}
+	}
+	ports, err := networkintent.Canonical(networkintent.Selection{LoopbackPorts: w.LoopbackPorts})
+	if err != nil || w.LoopbackCallback && (len(ports.LoopbackPorts) != 1 || ports.LoopbackPorts[0] != linuxCodexCallbackPort) {
+		return errLinuxSeal
 	}
 	return nil
 }
@@ -221,6 +228,7 @@ func linuxPrepareBwrapWith(ctx context.Context, plan linuxFilesystemPlan, wire l
 	}
 	wire.Rules = append(wire.Rules, linuxWireRule{"/dev/pts", linuxReadTree | linuxWriteFile | unix.LANDLOCK_ACCESS_FS_IOCTL_DEV})
 	step = "seal launch transport"
+	// transport, status, gate, bwrap, seccomp, launcher, then one fd per file mount.
 	transport, err := linuxWriteTransport(wire, env)
 	if err != nil {
 		return nil, err

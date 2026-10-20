@@ -149,18 +149,63 @@ terminal_done:
 	TESTQ AX, AX
 	JNZ fail
 	MOVQ $11, R15
-	MOVQ $436, AX // close_range: remove EVERY non-stdio FD except status/gate
-	MOVQ $5, DI
+	CMPQ linuxExecBoundary_notify(R12), $2
+	JLE fail
+	MOVQ $292, AX // dup3(notify, 5, O_CLOEXEC); close_range keeps this handoff fd
+	MOVQ linuxExecBoundary_notify(R12), DI
+	MOVQ $5, SI
+	MOVQ $0x80000, DX
+	SYSCALL
+	TESTQ AX, AX
+	JS fail
+	MOVQ $436, AX // close_range: remove EVERY non-stdio FD except status/gate/notify
+	MOVQ $6, DI
 	MOVQ $0xffffffff, SI
 	XORQ DX, DX
 	SYSCALL
 	TESTQ AX, AX
 	JNZ fail
 	MOVQ $12, R15
-	MOVQ $317, AX // seccomp(SET_MODE_FILTER, 0, &program)
+	MOVQ $317, AX // seccomp(SET_MODE_FILTER, NEW_LISTENER, &program)
 	MOVQ $1, DI
-	XORQ SI, SI
+	MOVQ $8, SI
 	MOVQ linuxExecBoundary_program(R12), DX
+	SYSCALL
+	TESTQ AX, AX
+	JS fail
+	CMPQ AX, $6 // close_range left 6 as the only free low fd; the parent steals it
+	JNE fail
+	MOVQ $157, AX // prctl(PR_SET_DUMPABLE, 1); pidfd_getfd requires a dumpable caller
+	MOVQ $4, DI
+	MOVQ $1, SI
+	XORQ DX, DX
+	XORQ R10, R10
+	XORQ R8, R8
+	SYSCALL
+	TESTQ AX, AX
+	JNZ fail
+	MOVB $76, 48(SP) // 'L': listener exists; do not close it until the parent replies
+	MOVQ $1, AX // write(notify, "L", 1); write is allowed by the filter just installed
+	MOVQ $5, DI
+	LEAQ 48(SP), SI
+	MOVQ $1, DX
+	SYSCALL
+	CMPQ AX, $1
+	JNE fail
+	MOVQ $0, AX // read the parent's acknowledgement before closing the listener
+	MOVQ $5, DI
+	SYSCALL
+	CMPQ AX, $1
+	JNE fail
+	CMPB 48(SP), $75 // 'K'
+	JNE fail
+	MOVQ $3, AX // close(listener); the parent already holds a dup
+	MOVQ $6, DI
+	SYSCALL
+	TESTQ AX, AX
+	JNZ fail
+	MOVQ $3, AX // close(notify)
+	MOVQ $5, DI
 	SYSCALL
 	TESTQ AX, AX
 	JNZ fail

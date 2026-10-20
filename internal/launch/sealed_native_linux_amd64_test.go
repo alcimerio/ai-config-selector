@@ -115,7 +115,7 @@ func TestLinuxSealHelper(t *testing.T) {
 	var pid int
 	if mode == "-bad-landlock" || mode == "-bad-seccomp" {
 		// Real kernel failure injection, confined to this disposable helper.
-		filter := linuxSeccompFilter()
+		filter := linuxSeccompFilter(false)
 		program := unix.SockFprog{Len: uint16(len(filter)), Filter: &filter[0]}
 		ruleset, setupErr := linuxLandlockRuleset(rules)
 		if setupErr != nil {
@@ -126,7 +126,11 @@ func TestLinuxSealHelper(t *testing.T) {
 		envp, _ := linuxExecStrings(env)
 		status, _ := unix.FcntlInt(4, unix.F_DUPFD_CLOEXEC, 128)
 		gate, _ := unix.FcntlInt(5, unix.F_DUPFD_CLOEXEC, 128)
-		config := linuxExecBoundary{int64(ruleset), int64(status), int64(gate), &program, argv[0], &argv[0], &envp[0], -1}
+		pair, pairErr := unix.Socketpair(unix.AF_UNIX, unix.SOCK_STREAM|unix.SOCK_CLOEXEC, 0)
+		if pairErr != nil {
+			os.Exit(125)
+		}
+		config := linuxExecBoundary{int64(ruleset), int64(status), int64(gate), &program, argv[0], &argv[0], &envp[0], -1, int64(pair[1])}
 		if mode == "-bad-landlock" {
 			config.ruleset = -1
 		} else {
@@ -151,7 +155,7 @@ func TestLinuxSealHelper(t *testing.T) {
 		_ = unix.Close(status)
 		_ = unix.Close(gate)
 	} else {
-		pid, err = linuxStartRestricted(rules, w.Executable, w.Argv, env, 4, 5)
+		pid, err = linuxStartRestrictedTerminal(rules, w.Executable, w.Argv, env, 4, 5, -1, linuxLoopbackPolicy{Ports: w.LoopbackPorts, Callback: w.LoopbackCallback})
 		if err != nil {
 			os.Exit(125)
 		}
@@ -265,7 +269,7 @@ func TestLinuxSealProbe(t *testing.T) {
 	if address := os.Getenv("PROBE_TCP"); address != "" {
 		conn, err := net.DialTimeout("tcp4", address, 2*time.Second)
 		if err != nil {
-			t.Fatal("outbound loopback positive control:", err)
+			t.Fatal("outbound network positive control:", err)
 		}
 		_ = conn.Close()
 		udp, err := net.ListenPacket("udp4", "127.0.0.1:0")
@@ -273,6 +277,7 @@ func TestLinuxSealProbe(t *testing.T) {
 			t.Fatal("UDP bind positive control:", err)
 		}
 		_ = udp.Close() // UDP reception is deliberately not denied by listen/accept.
+		linuxProbeLoopback(t, address)
 	}
 	child := exec.Command(os.Args[0], "-test.run=^TestLinuxSealDescendant$", "--", "acs-seal-descendant")
 	child.Env = os.Environ()
@@ -292,12 +297,213 @@ func TestLinuxSealDescendant(t *testing.T) {
 	if _, _, errno := unix.RawSyscall(unix.SYS_LISTEN, ^uintptr(0), 0, 0); errno != unix.EPERM {
 		t.Fatal("descendant escaped seccomp")
 	}
+	if err := linuxDial("127.0.0.1:9"); !errors.Is(err, unix.EPERM) {
+		t.Fatalf("descendant loopback connect: %v", err)
+	}
+}
+
+func linuxDial(address string) error {
+	conn, err := net.DialTimeout("tcp", address, time.Second)
+	if err == nil {
+		_ = conn.Close()
+	}
+	return err
+}
+
+func linuxProbeLoopback(t *testing.T, remote string) {
+	t.Helper()
+	for _, address := range []string{"127.0.0.1:9", "127.0.0.2:9", "[::1]:9"} {
+		if err := linuxDial(address); !errors.Is(err, unix.EPERM) {
+			t.Fatalf("connect %s: %v", address, err)
+		}
+	}
+	if errno := linuxProbeMappedLoopback(9); errno != unix.EPERM {
+		t.Fatalf("v4-mapped loopback: %v", errno)
+	}
+	if errno := linuxProbeUDP("127.0.0.1", 9); errno != unix.EPERM {
+		t.Fatalf("udp loopback sendto: %v", errno)
+	}
+	if os.Getenv("PROBE_LOCALHOST") == "1" {
+		if err := linuxDial("localhost:9"); !errors.Is(err, unix.EPERM) {
+			t.Fatalf("localhost: %v", err)
+		}
+	}
+	if _, err := net.Listen("tcp4", "127.0.0.1:0"); !errors.Is(err, unix.EPERM) {
+		t.Fatalf("loopback listen: %v", err)
+	}
+	_, port, err := net.SplitHostPort(remote)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := linuxDial(net.JoinHostPort("127.0.0.1", port)); !errors.Is(err, unix.EPERM) {
+		t.Fatalf("loopback on open remote port: %v", err)
+	}
+	host, _, _ := net.SplitHostPort(remote)
+	if errno := linuxProbeSendmsg(host, port); errno == unix.EPERM {
+		t.Fatal("sendmsg to a non-loopback address was denied")
+	}
+	if errno, n := linuxProbeSendmmsg("127.0.0.1", 9); errno != unix.EPERM || n != 0 {
+		t.Fatalf("sendmmsg loopback: %v len %d", errno, n)
+	}
+	if errno, n := linuxProbeSendmmsg(host, linuxPort(port)); errno == unix.EPERM || (errno == 0 && n != 1) {
+		t.Fatalf("sendmmsg non-loopback: %v len %d", errno, n)
+	}
+	if resolver := os.Getenv("PROBE_RESOLVER"); resolver != "" {
+		if errno := linuxProbeUDP(resolver, 53); errno == unix.EPERM {
+			t.Fatalf("resolver %s:53 denied", resolver)
+		}
+		if resolver != "127.0.0.53" && linuxProbeUDP("127.0.0.53", 53) != unix.EPERM {
+			t.Fatal("unlisted loopback resolver was allowed")
+		}
+	}
+	if allow := os.Getenv("PROBE_LOOPBACK_ALLOW"); allow != "" {
+		if err := linuxDial(allow); err != nil {
+			t.Fatalf("selected loopback port: %v", err)
+		}
+		_, allowPort, err := net.SplitHostPort(allow)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := linuxDial(net.JoinHostPort("127.0.0.2", allowPort)); errors.Is(err, unix.EPERM) {
+			t.Fatalf("127.0.0.2 selected port: %v", err)
+		}
+		if err := linuxDial(net.JoinHostPort("::1", allowPort)); errors.Is(err, unix.EPERM) {
+			t.Fatalf("::1 selected port: %v", err)
+		}
+		if errno := linuxProbeMappedLoopback(linuxPort(allowPort)); errno == unix.EPERM {
+			t.Fatal("v4-mapped selected port was denied")
+		}
+	}
+}
+
+func linuxPort(port string) int {
+	n := 0
+	for _, c := range port {
+		n = n*10 + int(c-'0')
+	}
+	return n
+}
+
+func linuxProbeMappedLoopback(port int) unix.Errno {
+	fd, err := unix.Socket(unix.AF_INET6, unix.SOCK_STREAM|unix.SOCK_CLOEXEC, 0)
+	if err != nil {
+		return unix.EPERM
+	}
+	defer unix.Close(fd)
+	var raw [28]byte
+	raw[0] = unix.AF_INET6
+	raw[2] = byte(port >> 8)
+	raw[3] = byte(port)
+	raw[18], raw[19], raw[20], raw[23] = 0xff, 0xff, 127, 1
+	_, _, errno := unix.RawSyscall(unix.SYS_CONNECT, uintptr(fd), uintptr(unsafe.Pointer(&raw[0])), 28)
+	return errno
+}
+
+func linuxIPv4Sockaddr(ip string, port int) ([16]byte, unix.Errno) {
+	parsed := net.ParseIP(ip).To4()
+	if parsed == nil {
+		return [16]byte{}, unix.EINVAL
+	}
+	var raw [16]byte
+	raw[0] = unix.AF_INET
+	raw[2] = byte(port >> 8)
+	raw[3] = byte(port)
+	copy(raw[4:8], parsed)
+	return raw, 0
+}
+
+func linuxProbeUDP(ip string, port int) unix.Errno {
+	fd, err := unix.Socket(unix.AF_INET, unix.SOCK_DGRAM|unix.SOCK_CLOEXEC, 0)
+	if err != nil {
+		return unix.EPERM
+	}
+	defer unix.Close(fd)
+	raw, errno := linuxIPv4Sockaddr(ip, port)
+	if errno != 0 {
+		return errno
+	}
+	payload := [1]byte{'x'}
+	_, _, errno = unix.RawSyscall6(unix.SYS_SENDTO, uintptr(fd), uintptr(unsafe.Pointer(&payload[0])), 1, 0, uintptr(unsafe.Pointer(&raw[0])), 16)
+	return errno
+}
+
+func linuxProbeSendmmsg(ip string, port int) (unix.Errno, uint32) {
+	fd, err := unix.Socket(unix.AF_INET, unix.SOCK_DGRAM|unix.SOCK_CLOEXEC, 0)
+	if err != nil {
+		return unix.EPERM, 0
+	}
+	defer unix.Close(fd)
+	raw, errno := linuxIPv4Sockaddr(ip, port)
+	if errno != 0 {
+		return errno, 0
+	}
+	payload := [1]byte{'x'}
+	iov := unix.Iovec{Base: &payload[0], Len: 1}
+	msg := unix.Mmsghdr{Hdr: unix.Msghdr{Name: &raw[0], Namelen: 16, Iov: &iov, Iovlen: 1}}
+	_, _, errno = unix.RawSyscall6(unix.SYS_SENDMMSG, uintptr(fd), uintptr(unsafe.Pointer(&msg)), 1, 0, 0, 0)
+	runtime.KeepAlive(&payload)
+	runtime.KeepAlive(&raw)
+	return errno, msg.Len
+}
+
+func linuxProbeSendmsg(ip, port string) unix.Errno {
+	n := linuxPort(port)
+	fd, err := unix.Socket(unix.AF_INET, unix.SOCK_DGRAM|unix.SOCK_CLOEXEC, 0)
+	if err != nil {
+		return unix.EPERM
+	}
+	defer unix.Close(fd)
+	raw, errno := linuxIPv4Sockaddr(ip, n)
+	if errno != 0 {
+		return errno
+	}
+	payload := [1]byte{'x'}
+	iov := unix.Iovec{Base: &payload[0], Len: 1}
+	hdr := unix.Msghdr{Name: &raw[0], Namelen: 16, Iov: &iov, Iovlen: 1}
+	_, _, errno = unix.RawSyscall(unix.SYS_SENDMSG, uintptr(fd), uintptr(unsafe.Pointer(&hdr)), 0)
+	return errno
+}
+
+func linuxNativeIPv4(t *testing.T) string {
+	t.Helper()
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, addr := range addrs {
+		ipnet, ok := addr.(*net.IPNet)
+		if !ok {
+			continue
+		}
+		ip := ipnet.IP.To4()
+		if ip == nil || ip.IsLoopback() || ip.IsUnspecified() || ip.IsMulticast() {
+			continue
+		}
+		return ip.String()
+	}
+	t.Fatal("no non-loopback IPv4 address")
+	return ""
+}
+
+func linuxProbeResolver() string {
+	data, err := os.ReadFile("/etc/resolv.conf")
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) >= 2 && fields[0] == "nameserver" {
+			return fields[1]
+		}
+	}
+	return ""
 }
 
 type linuxNativeFixture struct {
 	base string
 	plan linuxFilesystemPlan
 	wire linuxLaunchWire
+	env  map[string]string
 }
 
 func linuxNewNativeFixture(t *testing.T, compile bool) linuxNativeFixture {
@@ -326,7 +532,8 @@ func linuxNewNativeFixture(t *testing.T, compile bool) linuxNativeFixture {
 		// compiler's supported host filesystem subset (e.g. overlay st_dev).
 		w.Rules = []linuxWireRule{{w.Directory, linuxReadTree}, {executable, linuxReadFile},
 			{filepath.Join(base, "output"), linuxReadTree | linuxWriteTree},
-			{w.Home, linuxReadTree | linuxWriteTree}, {w.Temporary, linuxReadTree | linuxWriteTree}}
+			{w.Home, linuxReadTree | linuxWriteTree}, {w.Temporary, linuxReadTree | linuxWriteTree},
+			{"/etc/hosts", linuxReadFile}}
 		return linuxNativeFixture{base: base, wire: w}
 	}
 	tree := linuxFilesystemSnapshot{}
@@ -375,7 +582,7 @@ func linuxNewNativeFixture(t *testing.T, compile bool) linuxNativeFixture {
 	for _, rule := range plan.rules {
 		w.Rules = append(w.Rules, linuxWireRule{rule.path, rule.access})
 	}
-	return linuxNativeFixture{base, plan, w}
+	return linuxNativeFixture{base: base, plan: plan, wire: w}
 }
 
 func linuxRunNativeFixture(t *testing.T, f linuxNativeFixture, mode string, composed, terminal bool, start byte) (string, error) {
@@ -386,12 +593,22 @@ func linuxRunNativeFixture(t *testing.T, f linuxNativeFixture, mode string, comp
 	if terminal {
 		values["PROBE_TTY"] = "1"
 	}
-	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	hostIP := linuxNativeIPv4(t)
+	listener, err := net.Listen("tcp4", hostIP+":0")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer listener.Close()
 	values["PROBE_TCP"] = listener.Addr().String()
+	if resolver := linuxProbeResolver(); resolver != "" {
+		values["PROBE_RESOLVER"] = resolver
+	}
+	if !composed {
+		values["PROBE_LOCALHOST"] = "1"
+	}
+	for key, value := range f.env {
+		values[key] = value
+	}
 	go func() {
 		conn, err := listener.Accept()
 		if err == nil {
@@ -573,6 +790,138 @@ func TestLinuxNativeBwrapComposition(t *testing.T) {
 	f := linuxNewNativeFixture(t, true)
 	if data, err := linuxRunNativeFixture(t, f, "", true, true, 'S'); err != nil {
 		t.Fatalf("composed native probe: %v %s", err, data)
+	}
+}
+
+func TestLinuxNativeLoopbackExceptions(t *testing.T) {
+	linuxNativePrerequisites(t)
+	ln, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			_ = conn.Close()
+		}
+	}()
+	for _, composed := range []bool{false, true} {
+		t.Run(fmt.Sprintf("composed=%t", composed), func(t *testing.T) {
+			if composed {
+				linuxRequireComposed(t)
+			}
+			f := linuxNewNativeFixture(t, composed)
+			f.wire.LoopbackPorts = []int{ln.Addr().(*net.TCPAddr).Port}
+			f.env = map[string]string{"PROBE_LOOPBACK_ALLOW": ln.Addr().String()}
+			if data, err := linuxRunNativeFixture(t, f, "", composed, false, 'S'); err != nil {
+				t.Fatalf("selected loopback port: %v %s", err, data)
+			}
+		})
+	}
+}
+
+func TestLinuxNativeCodexCallback(t *testing.T) {
+	linuxNativePrerequisites(t)
+	held, err := net.Listen("tcp4", "127.0.0.1:1455")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = held.Close()
+	for _, composed := range []bool{false, true} {
+		t.Run(fmt.Sprintf("composed=%t", composed), func(t *testing.T) {
+			if composed {
+				linuxRequireComposed(t)
+			}
+			f := linuxNewNativeFixture(t, composed)
+			f.wire.LoopbackPorts = []int{linuxCodexCallbackPort}
+			f.wire.LoopbackCallback = true
+			f.wire.Argv = []string{f.wire.Executable, "-test.run=^TestLinuxLoopbackCallbackProbe$", "--", "acs-loopback-callback"}
+			if data, err := linuxRunNativeFixture(t, f, "", composed, false, 'S'); err != nil {
+				t.Fatalf("codex callback: %v %s", err, data)
+			}
+		})
+	}
+}
+
+func TestLinuxLoopbackCallbackProbe(t *testing.T) {
+	if len(os.Args) < 2 || os.Args[len(os.Args)-1] != "acs-loopback-callback" {
+		return
+	}
+	ln, err := net.Listen("tcp4", "127.0.0.1:1455")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = ln.(*net.TCPListener).SetDeadline(time.Now().Add(2 * time.Second))
+	errCh := make(chan error, 1)
+	go func() {
+		conn, err := net.DialTimeout("tcp4", "127.0.0.1:1455", time.Second)
+		if err != nil {
+			errCh <- err
+			return
+		}
+		_, err = conn.Write([]byte("ok"))
+		_ = conn.Close()
+		errCh <- err
+	}()
+	conn, err := ln.Accept()
+	if err != nil {
+		t.Fatal(err)
+	}
+	buf := make([]byte, 2)
+	if _, err := io.ReadFull(conn, buf); err != nil || string(buf) != "ok" {
+		t.Fatalf("callback payload: %v %q", err, buf)
+	}
+	_ = conn.Close()
+	_ = ln.Close()
+	if err := <-errCh; err != nil {
+		t.Fatal(err)
+	}
+	for _, address := range []string{"127.0.0.2:1455", "127.0.0.1:1456", "0.0.0.0:1455"} {
+		if _, err := net.Listen("tcp4", address); !errors.Is(err, unix.EPERM) {
+			t.Fatalf("listen %s: %v", address, err)
+		}
+	}
+	ln6, err := net.Listen("tcp6", "[::1]:1455")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = ln6.(*net.TCPListener).SetDeadline(time.Now().Add(2 * time.Second))
+	go func() {
+		conn, err := net.DialTimeout("tcp6", "[::1]:1455", time.Second)
+		if err == nil {
+			_, _ = conn.Write([]byte("ok"))
+			_ = conn.Close()
+		}
+	}()
+	conn, err = ln6.Accept()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.ReadFull(conn, buf); err != nil || string(buf) != "ok" {
+		t.Fatalf("ipv6 callback: %v %q", err, buf)
+	}
+	_ = conn.Close()
+	_ = ln6.Close()
+	if _, err := net.Listen("tcp6", "[::]:1455"); !errors.Is(err, unix.EPERM) {
+		t.Fatalf("wildcard ipv6 listen: %v", err)
+	}
+}
+
+func linuxRequireComposed(t *testing.T) {
+	t.Helper()
+	report := linuxprobe.Probe(context.Background())
+	if !report.PrerequisitesPassed() {
+		var missing []string
+		for _, check := range report.Checks {
+			if check.Status != "pass" {
+				missing = append(missing, check.ID+":"+check.Code)
+			}
+		}
+		linuxNativeUnavailable(t, strings.Join(missing, ", "))
 	}
 }
 

@@ -140,10 +140,12 @@ outbound exception and inbound callback grant. It is not saved in a Profile or
 inherited by ordinary Codex sessions, device login, version probes or auth status.
 If a normal session needs that port it must select it explicitly.
 
-Linux currently ignores this capability for enforcement and retains its existing
-network behavior. Explain and dry-run include an explicit ignored-field note;
-production Linux launch remains unsupported. See the
-[Linux network enforcement gap](../design/linux-sealed-launcher.md#loopback-policy-gap).
+The Linux launcher enforces the same selection. It denies the whole
+127.0.0.0/8, `::1`, and IPv4-mapped loopback except for selected ports, and it
+keeps port 53 open only to the exact nameservers read from the host resolver
+configuration. Managed Codex login accepts only on 127.0.0.1:1455 and
+`[::1]:1455`. Production Linux launch remains unsupported. See
+[Linux loopback enforcement](../design/linux-sealed-launcher.md#loopback-enforcement).
 This capability does not deny private LAN addresses, other host-interface
 addresses, remote destinations or proxied access; ACS is not a general egress
 firewall.

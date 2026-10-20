@@ -10,7 +10,6 @@ import (
 	"strings"
 
 	"github.com/alcimerio/ai-config-selector/internal/authority"
-	"github.com/alcimerio/ai-config-selector/internal/commonprofile"
 	"github.com/alcimerio/ai-config-selector/internal/profile"
 	"github.com/alcimerio/ai-config-selector/internal/runcommand"
 )
@@ -117,9 +116,6 @@ func (app App) RunExplanation(ctx context.Context, args []string) (bool, int) {
 	limitations := []explanationLimitation{
 		{"semantic_digest_only", "The digest excludes local paths, file contents, argument values, credentials, concrete project files, and host readiness; equal digests do not mean file-level execution-plan equality."},
 		{"native_readiness_not_launch_readiness", "Native readiness, when requested, does not check target version, authentication, materialization, generated policy, preflights, or cleanup."},
-	}
-	if runtime.GOOS == "linux" {
-		limitations = append(limitations, explanationLimitation{"linux_loopback_unenforced", commonprofile.LinuxLoopbackGap})
 	}
 	limitations = append(limitations, appendInactiveOverlays(&semantic, loaded, overlay)...)
 	sort.Slice(limitations, func(i, j int) bool {
