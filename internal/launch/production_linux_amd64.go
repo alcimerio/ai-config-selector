@@ -292,35 +292,17 @@ func linuxSnapshotRoots(request validatedProcessRequest, spec linuxLaunchSpec) [
 func linuxCaptureSnapshot(roots []string) (linuxFilesystemSnapshot, error) {
 	tree := linuxFilesystemSnapshot{}
 	seen := map[string]bool{}
+	filesystemByMount := map[uint64]int64{}
 	for _, root := range roots {
 		if root == "" || seen[root] {
 			continue
 		}
-		info, err := os.Lstat(root)
-		if errors.Is(err, os.ErrNotExist) {
+		if _, err := os.Lstat(root); errors.Is(err, os.ErrNotExist) {
 			continue
-		}
-		if err != nil {
+		} else if err != nil {
 			return nil, err
 		}
-		if !info.IsDir() {
-			if err := linuxSnapshotNode(tree, root, info); err != nil {
-				return nil, err
-			}
-			seen[root] = true
-			continue
-		}
-		err = filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
-			if walkErr != nil {
-				return walkErr
-			}
-			nodeInfo, err := entry.Info()
-			if err != nil {
-				return err
-			}
-			return linuxSnapshotNode(tree, path, nodeInfo)
-		})
-		if err != nil {
+		if err := linuxSnapshotWalk(tree, root, filesystemByMount); err != nil {
 			return nil, err
 		}
 		seen[root] = true
@@ -328,31 +310,150 @@ func linuxCaptureSnapshot(roots []string) (linuxFilesystemSnapshot, error) {
 	return tree, nil
 }
 
-func linuxSnapshotNode(tree linuxFilesystemSnapshot, path string, info os.FileInfo) error {
-	stat, ok := info.Sys().(*syscall.Stat_t)
-	if !ok {
-		return errLinuxRecipe
-	}
-	var extended unix.Statx_t
-	var filesystem unix.Statfs_t
-	if unix.Statx(unix.AT_FDCWD, path, unix.AT_SYMLINK_NOFOLLOW, unix.STATX_MNT_ID, &extended) != nil || unix.Statfs(path, &filesystem) != nil {
-		return errLinuxRecipe
-	}
-	node := linuxFilesystemNode{identity: identityFromFileInfo(info, stat), mountID: extended.Mnt_id, filesystemType: filesystem.Type}
-	if info.IsDir() {
-		children, err := os.ReadDir(path)
-		if err != nil {
-			return err
-		}
-		for _, child := range children {
-			node.children = append(node.children, child.Name())
-		}
+// linuxSnapshotWalk records one non-following identity per path. Child names
+// come from the directory listing that discovers them. Filesystem type is
+// constant for a mount, so it is read once per mount id.
+func linuxSnapshotWalk(tree linuxFilesystemSnapshot, path string, filesystemByMount map[uint64]int64) error {
+	node, err := linuxSnapshotNode(path, filesystemByMount)
+	if err != nil {
+		return err
 	}
 	if old, exists := tree[path]; exists && old.identity != node.identity {
 		return errLinuxRecipe
 	}
 	tree[path] = node
+	if !node.identity.mode.IsDir() {
+		return nil
+	}
+	for _, name := range node.children {
+		if err := linuxSnapshotWalk(tree, filepath.Join(path, name), filesystemByMount); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+func linuxSnapshotNode(path string, filesystemByMount map[uint64]int64) (linuxFilesystemNode, error) {
+	extended, mode, err := linuxSnapshotStat(path)
+	if err != nil {
+		return linuxFilesystemNode{}, err
+	}
+	filesystem, err := linuxSnapshotFilesystem(path, extended, mode, filesystemByMount)
+	if err != nil {
+		return linuxFilesystemNode{}, err
+	}
+	node := linuxFilesystemNode{
+		identity:       linuxIdentityFromStatx(extended, mode),
+		mountID:        extended.Mnt_id,
+		filesystemType: filesystem,
+	}
+	if !mode.IsDir() {
+		return node, nil
+	}
+	children, err := os.ReadDir(path)
+	if err != nil {
+		return linuxFilesystemNode{}, err
+	}
+	node.children = make([]string, len(children))
+	for index, child := range children {
+		node.children[index] = child.Name()
+	}
+	return node, nil
+}
+
+const linuxSnapshotStatMask = unix.STATX_TYPE | unix.STATX_MODE | unix.STATX_NLINK | unix.STATX_INO | unix.STATX_SIZE | unix.STATX_MTIME | unix.STATX_MNT_ID
+
+func linuxSnapshotStat(path string) (unix.Statx_t, os.FileMode, error) {
+	var extended unix.Statx_t
+	if unix.Statx(unix.AT_FDCWD, path, unix.AT_SYMLINK_NOFOLLOW, linuxSnapshotStatMask, &extended) != nil ||
+		extended.Mask&linuxSnapshotStatMask != linuxSnapshotStatMask || extended.Mnt_id == 0 {
+		return unix.Statx_t{}, 0, errLinuxRecipe
+	}
+	return extended, linuxModeFromStatx(extended.Mode), nil
+}
+
+func linuxSnapshotFilesystem(path string, extended unix.Statx_t, mode os.FileMode, cache map[uint64]int64) (int64, error) {
+	var filesystem unix.Statfs_t
+	if mode&os.ModeSymlink != 0 {
+		// Statfs follows, matching the previous capture. The result describes
+		// the target and must not be stored under the link's mount id.
+		if unix.Statfs(path, &filesystem) != nil {
+			return 0, errLinuxRecipe
+		}
+		return filesystem.Type, nil
+	}
+	if kind, ok := cache[extended.Mnt_id]; ok {
+		return kind, nil
+	}
+	// Learn the type from the same descriptor that confirms this mount id.
+	// A replacement between the path stat and this open fails closed instead
+	// of publishing another filesystem's type for the mount.
+	fd, err := unix.Open(path, unix.O_PATH|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return 0, errLinuxRecipe
+	}
+	confirmed, confirmedMode, statErr := linuxSnapshotStatFd(fd)
+	fsErr := unix.Fstatfs(fd, &filesystem)
+	unix.Close(fd)
+	if statErr != nil || fsErr != nil || confirmed.Mnt_id != extended.Mnt_id || confirmedMode&os.ModeSymlink != 0 ||
+		linuxIdentityFromStatx(confirmed, confirmedMode) != linuxIdentityFromStatx(extended, mode) {
+		return 0, errLinuxRecipe
+	}
+	cache[extended.Mnt_id] = filesystem.Type
+	return filesystem.Type, nil
+}
+
+func linuxSnapshotStatFd(fd int) (unix.Statx_t, os.FileMode, error) {
+	var extended unix.Statx_t
+	if unix.Statx(fd, "", unix.AT_EMPTY_PATH|unix.AT_SYMLINK_NOFOLLOW, linuxSnapshotStatMask, &extended) != nil ||
+		extended.Mask&linuxSnapshotStatMask != linuxSnapshotStatMask || extended.Mnt_id == 0 {
+		return unix.Statx_t{}, 0, errLinuxRecipe
+	}
+	return extended, linuxModeFromStatx(extended.Mode), nil
+}
+
+func linuxIdentityFromStatx(extended unix.Statx_t, mode os.FileMode) pathIdentity {
+	identity := pathIdentity{
+		device: unix.Mkdev(extended.Dev_major, extended.Dev_minor),
+		inode:  extended.Ino,
+		mode:   mode,
+	}
+	if mode.IsRegular() {
+		identity.links = uint64(extended.Nlink)
+		identity.size = int64(extended.Size)
+		identity.modifiedNanos = time.Unix(extended.Mtime.Sec, int64(extended.Mtime.Nsec)).UnixNano()
+	}
+	return identity
+}
+
+// linuxModeFromStatx matches os.FileInfo.Mode for a non-following stat so
+// snapshot identities stay comparable with path grants.
+func linuxModeFromStatx(raw uint16) os.FileMode {
+	mode := os.FileMode(raw & 0777)
+	switch raw & unix.S_IFMT {
+	case unix.S_IFBLK:
+		mode |= os.ModeDevice
+	case unix.S_IFCHR:
+		mode |= os.ModeDevice | os.ModeCharDevice
+	case unix.S_IFDIR:
+		mode |= os.ModeDir
+	case unix.S_IFIFO:
+		mode |= os.ModeNamedPipe
+	case unix.S_IFLNK:
+		mode |= os.ModeSymlink
+	case unix.S_IFSOCK:
+		mode |= os.ModeSocket
+	}
+	if raw&unix.S_ISUID != 0 {
+		mode |= os.ModeSetuid
+	}
+	if raw&unix.S_ISGID != 0 {
+		mode |= os.ModeSetgid
+	}
+	if raw&unix.S_ISVTX != 0 {
+		mode |= os.ModeSticky
+	}
+	return mode
 }
 
 type linuxProductionProcess struct {
