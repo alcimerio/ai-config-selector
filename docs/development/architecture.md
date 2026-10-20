@@ -21,7 +21,7 @@ Seatbelt backend. Unsupported hosts have no sandbox backend and fail closed.
   home and temporary directories, materialized content, and cleanup state.
 - Process sandbox: validates platform and paths, prepares containment and a
   clean environment, and supplies process-tree cleanup proof.
-- Execution recipe: registered Devin or Codex, fixed `/bin/zsh -f`, or the
+- Execution recipe: registered Devin, Codex, or Grok Build, fixed `/bin/zsh -f`, or the
   literal executable and argv supplied to `acs run`.
 
 See the [common Profile format](../reference/common-profile-format.md) for schemas and
@@ -127,6 +127,24 @@ interrupted login into a credential record. See
 [named Codex authentication](../guides/codex.md#named-authentication) and
 [interactive Codex](../guides/codex.md#interactive-launch) for the operator
 contract.
+
+### Grok Build
+
+1. Validate the native backend, executable, workspace, and registered Grok
+   semantics. Reject Profile environment names that would retarget Grok's home,
+   trust, sandbox, updater, or compatibility scanners.
+2. Create the Session and project selected Skills, instructions, and stdio MCP
+   servers. Write a Session `config.toml` that disables auto-update, compatibility
+   scanners, plugins, and Grok's own sandbox.
+3. Probe `grok --version` with no credential and no selected environment. Only
+   `grok 1.0.62`, with an optional parenthesized commit, continues.
+4. Copy `~/.grok/auth.json` when it is present, or require a selected
+   `XAI_API_KEY`. Write-protect the generated config and `trusted_folders.toml`.
+5. Attach plain `grok` through the shared process executor and remove the
+   Session after cleanup is proven.
+
+ACS does not pass `--trust` and does not import host managed configuration.
+See [Grok Build](../guides/grok.md).
 
 ### Sandbox shell and generic commands
 

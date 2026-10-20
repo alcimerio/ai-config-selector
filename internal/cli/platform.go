@@ -18,7 +18,7 @@ func (app App) RunUnsupportedExecution(args []string) (bool, int) {
 		return false, 0
 	}
 	switch inv.command.path {
-	case "devin", "codex", "sandbox", "run":
+	case "devin", "codex", "grok", "sandbox", "run":
 		if inv.enabled {
 			return false, 0
 		}

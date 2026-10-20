@@ -82,7 +82,7 @@ func doctor(target string, host func() (launch.Platform, error), backend func() 
 	} else {
 		r.set("backend.file", "unchecked", "no_supported_backend", "Use a supported macOS host to inspect the native backend file.")
 	}
-	name := map[string]string{"devin": "devin", "sandbox": "/bin/zsh", "codex-auth": "codex"}[target]
+	name := map[string]string{"devin": "devin", "sandbox": "/bin/zsh", "codex-auth": "codex", "grok": "grok"}[target]
 	if target == "sandbox" {
 		name, _ = launch.ShellRecipe(p.OS)
 	}

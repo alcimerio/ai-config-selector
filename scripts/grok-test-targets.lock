@@ -1,0 +1,4 @@
+# version|os|arch|sha256|url
+1.0.62|darwin|arm64|fb10cd5a381dbbb15111b020fa731642499ce20dd4d70ad9a51daa734aa80372|https://x.ai/cli/grok-1.0.62-macos-aarch64.zst
+1.0.62|linux|amd64|8a8697be26d2c77ea87c5dd754902228a9e766580f85f156080d96f88e9dca2a|https://x.ai/cli/grok-1.0.62-linux-x86_64.zst
+1.0.62|linux|arm64|a9b1cd945b1cf8da2e8962c4d7fcd27b9a8fe9d71215751dcaa67e1ecb8b3492|https://x.ai/cli/grok-1.0.62-linux-aarch64.zst

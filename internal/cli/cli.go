@@ -107,6 +107,11 @@ type App struct {
 	CodexCategories     *category.Registry
 	CodexBuilder        ProfileBuilder
 	CodexProfiles       ProfileStore
+	GrokTarget          ProfileLauncher
+	GrokPlanner         LaunchPlanner
+	GrokCategories      *category.Registry
+	GrokBuilder         ProfileBuilder
+	GrokProfiles        ProfileStore
 	Profiles            ProfileStore
 	SessionsDirectory   string
 	WorkingDirectory    string
@@ -190,6 +195,19 @@ func (app App) Run(ctx context.Context, args []string) int {
 		return app.createCodexProfile(ctx, inv.value, inv.auxValue)
 	case "codex":
 		return app.runCodex(ctx, inv.value, inv.auxValue, inv.enabled, inv.thirdValue)
+	case "grok create-profile":
+		return app.createGrokProfile(ctx, inv.value)
+	case "grok":
+		if app.GrokCategories == nil || app.GrokProfiles == nil || (inv.enabled && app.GrokPlanner == nil) || (!inv.enabled && app.GrokTarget == nil) {
+			return app.fail("interactive Grok is unavailable")
+		}
+		previousProfiles, previousCategories := app.Profiles, app.Categories
+		app.Profiles, app.Categories = app.GrokProfiles, app.GrokCategories
+		defer func() { app.Profiles, app.Categories = previousProfiles, previousCategories }()
+		if inv.enabled {
+			return app.dryRun(ctx, inv.value, "grok", inv.thirdValue, app.GrokPlanner, "No Session was created and Grok was not started.")
+		}
+		return app.launchProfile(ctx, inv.value, "grok", inv.thirdValue, app.GrokTarget, "launch Grok")
 	case "codex auth login":
 		return app.loginCodexAuth(ctx, inv.value, inv.enabled)
 	case "codex auth list":
@@ -318,6 +336,18 @@ func (app App) runCodex(ctx context.Context, name, authOverride string, dryRun b
 		return app.fail("launch Codex Profile %q: %v", name, err)
 	}
 	return exitCode
+}
+
+func (app App) createGrokProfile(ctx context.Context, name string) int {
+	if app.GrokProfiles == nil || app.GrokCategories == nil || app.GrokBuilder == nil {
+		return app.fail("Grok Profile Builder is unavailable")
+	}
+	previousProfiles, previousCategories, previousBuilder := app.Profiles, app.Categories, app.Builder
+	app.Profiles, app.Categories, app.Builder = app.GrokProfiles, app.GrokCategories, app.GrokBuilder
+	defer func() {
+		app.Profiles, app.Categories, app.Builder = previousProfiles, previousCategories, previousBuilder
+	}()
+	return app.createProfile(ctx, name)
 }
 
 func (app App) createCodexProfile(ctx context.Context, name, authRef string) int {

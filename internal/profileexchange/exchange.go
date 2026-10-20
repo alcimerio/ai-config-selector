@@ -428,9 +428,9 @@ func Export(candidate profile.Profile) ([]byte, Report, error) {
 			return nil, Report{}, errors.New("unsupported target overlay")
 		}
 		switch id {
-		case "devin":
+		case "devin", "grok":
 			if payload.Version != 1 || payload.AuthRef != "" {
-				return nil, Report{}, errors.New("unsupported Devin overlay")
+				return nil, Report{}, errors.New("unsupported target overlay")
 			}
 			overlays[id] = exchangeOverlay{Version: 1}
 		case "codex":

@@ -223,7 +223,7 @@ func NewRegistryWithRequirements(target string, requirements authority.TargetReq
 	if target == "" {
 		return nil, errors.New("category Registry target is required")
 	}
-	if requirements.Recipe != authority.RecipeDevin && requirements.Recipe != authority.RecipeCodex {
+	if requirements.Recipe != authority.RecipeDevin && requirements.Recipe != authority.RecipeCodex && requirements.Recipe != authority.RecipeGrok {
 		return nil, fmt.Errorf("category Registry target %q requires an unsupported execution recipe %q", target, requirements.Recipe)
 	}
 	if requirements.ExecutableRequirementID == "" || len(requirements.RuntimeInputIDs) != len(requirements.RuntimeInputs) || len(requirements.ProtectedPathIDs) != len(requirements.ProtectedPaths) {

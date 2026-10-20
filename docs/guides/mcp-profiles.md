@@ -119,7 +119,7 @@ transports, secret argv references, and unbound IDs reject the whole selection
 rather than being discarded.
 
 At launch, ACS compiles the selected server into a bounded Session recipe and
-projects the local stdio command into Devin or Codex configuration. ACS's
+projects the local stdio command into Devin, Codex, or Grok configuration. ACS's
 launcher revalidates the selected executable and path identities, resolves the
 typed argv references using the already selected child environment and execs the
 server in place. The recipe stores references and identities, not resolved

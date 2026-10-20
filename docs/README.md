@@ -28,8 +28,9 @@ The supported runtime is macOS 26 Apple Silicon.
 ## Launch and recover
 
 - [Target compatibility](reference/target-compatibility.md): exact reviewed versions and native target locks.
-- [Target conformance](reference/shared-target-conformance.md): Devin/Codex projections and compatibility
+- [Target conformance](reference/shared-target-conformance.md): Devin, Codex, and Grok projections and compatibility
 - [Codex](guides/codex.md): interactive launch, named Keychain identities, refresh and quarantine
+- [Grok Build](guides/grok.md): interactive launch, host `auth.json` or selected `XAI_API_KEY`
 - [Generic commands](guides/generic-run.md): literal argv, search paths, descriptors and exits
 - [Session operations](guides/session-operations.md): passive inspection and proof-gated recovery
 - [Upgrade and recovery](guides/manual-upgrade-recovery.md): verify replacement bytes, retain the working binary and recover stored data

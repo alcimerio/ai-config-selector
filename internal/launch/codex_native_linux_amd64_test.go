@@ -121,6 +121,14 @@ func TestLinuxNativeCodexPairs(t *testing.T) {
 					// request. Full model interaction is a later native gate.
 					linuxTestWrite(t, owner, byte(unix.SIGTERM))
 				}
+				if mode == "mcp" {
+					// The shared socket deadline is for in-process protocol tests.
+					// On kernel 7 hosts, contained `codex mcp list` still exits 0
+					// with an empty server list, after that deadline.
+					if err := owner.SetDeadline(time.Now().Add(20 * time.Second)); err != nil {
+						t.Fatal(err)
+					}
+				}
 				linuxTestByte(t, owner, 'X', process.diagnostics)
 				if err := process.Wait(); err != nil {
 					t.Fatalf("contained Codex qualification failed; retained %s: %v\n%s", root, err, process.diagnostics())

@@ -59,6 +59,9 @@
     },
     "devin": {
       "version": 1
+    },
+    "grok": {
+      "version": 1
     }
   }
 }

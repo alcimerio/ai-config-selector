@@ -10,12 +10,12 @@ named logins, and are checked in CI with the same codec as
 
 | Example | Demonstrates | Targets |
 | --- | --- | --- |
-| [review-readonly](profiles/review-readonly.json) | Default read-only workspace; nothing else selected | Devin, Codex, sandbox |
-| [dev-secrets-excluded](profiles/dev-secrets-excluded.json) | Writable workspace with `.env`, `.env.local` and `secrets/` denied | Devin, Codex, sandbox |
-| [dev-local-service](profiles/dev-local-service.json) | Writable workspace with outbound localhost:3000 for a local dev service | Devin, Codex, sandbox |
-| [dev-scoped-token](profiles/dev-scoped-token.json) | One secret passed by reference and renamed; one optional non-secret | Devin, Codex, sandbox |
-| [docs-writer](profiles/docs-writer.json) | Read-only workspace with only `docs/` writable, plus a selected instruction file | Devin, Codex, sandbox |
-| [skill-review-isolated](profiles/skill-review-isolated.json) | One selected global Skill; repository `.agents/skills` and `.devin/skills` denied | Devin, Codex, sandbox |
+| [review-readonly](profiles/review-readonly.json) | Default read-only workspace; nothing else selected | Devin, Codex, Grok, sandbox |
+| [dev-secrets-excluded](profiles/dev-secrets-excluded.json) | Writable workspace with `.env`, `.env.local` and `secrets/` denied | Devin, Codex, Grok, sandbox |
+| [dev-local-service](profiles/dev-local-service.json) | Writable workspace with outbound localhost:3000 for a local dev service | Devin, Codex, Grok, sandbox |
+| [dev-scoped-token](profiles/dev-scoped-token.json) | One secret passed by reference and renamed; one optional non-secret | Devin, Codex, Grok, sandbox |
+| [docs-writer](profiles/docs-writer.json) | Read-only workspace with only `docs/` writable, plus a selected instruction file | Devin, Codex, Grok, sandbox |
+| [skill-review-isolated](profiles/skill-review-isolated.json) | One selected global Skill; repository `.agents/skills` and `.devin/skills` denied | Devin, Codex, Grok, sandbox |
 | [sandbox-tools-only](profiles/sandbox-tools-only.json) | No target overlay; `git` visibility for `acs sandbox` and `acs run` | sandbox, run |
 
 ## Use an example
@@ -37,6 +37,7 @@ file and change `name`. Launch a target with:
 ```sh
 acs devin --profile review-readonly
 acs codex --profile review-readonly --auth REF
+acs grok --profile review-readonly
 acs run --profile sandbox-tools-only -- /usr/bin/git status
 ```
 

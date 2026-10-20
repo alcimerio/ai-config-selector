@@ -12,8 +12,8 @@ import (
 // CreationOptions selects overlays independently from common capabilities.
 // Authentication remains an explicit launch-time reference.
 type CreationOptions struct {
-	Devin, Codex bool
-	Development  bool
+	Devin, Codex, Grok bool
+	Development        bool
 }
 type CreationSaveFunc func(context.Context, category.Draft, CreationOptions) (string, error)
 
@@ -36,7 +36,7 @@ func (m Model) updateCreation(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.creationCursor--
 		}
 	case "down":
-		if m.creationCursor < 3 {
+		if m.creationCursor < 4 {
 			m.creationCursor++
 		}
 	case "space", "enter":
@@ -47,8 +47,10 @@ func (m Model) updateCreation(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		case 1:
 			options.Codex = !options.Codex
 		case 2:
-			options.Development = !options.Development
+			options.Grok = !options.Grok
 		case 3:
+			options.Development = !options.Development
+		case 4:
 			if err := m.creationPreset(&m.draft, options.Development); err != nil {
 				m.terminalError = err
 				return m, tea.Quit
@@ -71,6 +73,9 @@ func (m Model) creationSummary() string {
 	if m.creation.Codex {
 		targets = append(targets, "Codex")
 	}
+	if m.creation.Grok {
+		targets = append(targets, "Grok")
+	}
 	if len(targets) == 0 {
 		targets = append(targets, "common only")
 	}
@@ -87,7 +92,7 @@ func (m Model) creationView() string {
 	if m.creation.Development {
 		preset = "Development (workspace read-write)"
 	}
-	rows := []string{mark(m.creation.Devin) + " Devin overlay", mark(m.creation.Codex) + " Codex overlay", "Preset: " + preset, "Continue to common categories"}
+	rows := []string{mark(m.creation.Devin) + " Devin overlay", mark(m.creation.Codex) + " Codex overlay", mark(m.creation.Grok) + " Grok overlay", "Preset: " + preset, "Continue to common categories"}
 	var text strings.Builder
 	fmt.Fprintf(&text, "Create Profile %q\n\nChoose targets and workspace access\n\n", m.name)
 	for i, row := range rows {
@@ -97,6 +102,6 @@ func (m Model) creationView() string {
 		}
 		text.WriteString(marker + row + "\n")
 	}
-	text.WriteString("\nNeither overlay is required for sandbox or run.\nBoth overlays share the same common capabilities.\nNo login or executable is required.\nCodex authentication uses --auth at launch.\n\nUp/Down navigate  Space/Enter select\nEsc/Ctrl+C cancel")
+	text.WriteString("\nNo overlay is required for sandbox or run.\nSelected overlays share the same common capabilities.\nNo login or executable is required.\nCodex authentication uses --auth at launch.\nGrok uses an existing host login or a selected XAI_API_KEY.\n\nUp/Down navigate  Space/Enter select\nEsc/Ctrl+C cancel")
 	return text.String()
 }
