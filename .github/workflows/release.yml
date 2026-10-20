@@ -77,7 +77,7 @@ jobs:
           compression-level: 0
           retention-days: 1
 
-      - name: Upload separate Linux candidate set (never published)
+      - name: Upload Linux candidate set for the native packaging gate
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ steps.artifact-name.outputs.linux_name }}
@@ -225,6 +225,7 @@ jobs:
     needs:
       - candidate
       - native
+      - linux-candidate
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:

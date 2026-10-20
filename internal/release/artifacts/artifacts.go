@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strings"
 )
@@ -22,18 +23,21 @@ var canonicalVersionPattern = regexp.MustCompile(`^v(0|[1-9][0-9]*)\.(0|[1-9][0-
 var checksumLinePattern = regexp.MustCompile(`^([0-9a-f]{64})  ([A-Za-z0-9._-]+)$`)
 
 // Read validates one exact artifact set and returns the packaged executable bytes.
-// Linux candidates are deliberately separate from the publishable macOS set.
+// The publishable set contains darwin/arm64 and linux/amd64. linuxCandidate
+// selects the linux-only set used by the native packaging gate.
 func Read(dist, version string, linuxCandidate bool) ([]byte, error) {
 	if !canonicalVersionPattern.MatchString(version) {
 		return nil, fmt.Errorf("version must be a canonical SemVer tag")
 	}
-	target := "darwin_arm64"
-	if linuxCandidate {
-		target = "linux_amd64"
-	}
 	archiveVersion := strings.TrimPrefix(version, "v")
-	expectedArchives := []string{
-		fmt.Sprintf("acs_%s_%s.tar.gz", archiveVersion, target),
+	var expectedArchives []string
+	if linuxCandidate {
+		expectedArchives = []string{fmt.Sprintf("acs_%s_linux_amd64.tar.gz", archiveVersion)}
+	} else {
+		expectedArchives = []string{
+			fmt.Sprintf("acs_%s_darwin_arm64.tar.gz", archiveVersion),
+			fmt.Sprintf("acs_%s_linux_amd64.tar.gz", archiveVersion),
+		}
 	}
 	expectedFiles := append(append([]string(nil), expectedArchives...), "SHA256SUMS", "install.sh")
 	sort.Strings(expectedFiles)
@@ -66,6 +70,7 @@ func Read(dist, version string, linuxCandidate bool) ([]byte, error) {
 		return nil, err
 	}
 	var executable []byte
+	matchedHost := false
 	for _, archive := range expectedArchives {
 		path := filepath.Join(dist, archive)
 		contents, err := readBounded(path, 128<<20)
@@ -80,17 +85,35 @@ func Read(dist, version string, linuxCandidate bool) ([]byte, error) {
 		if len(parts) != 4 {
 			return nil, fmt.Errorf("archive name %q is malformed", archive)
 		}
-		executable, err = readArchive(contents)
+		binary, err := readArchive(contents)
 		if err != nil {
 			return nil, fmt.Errorf("archive %q: %w", archive, err)
 		}
-		if linuxCandidate {
-			if err := VerifyLinuxBinary(executable); err != nil {
+		if strings.HasSuffix(archive, "_linux_amd64.tar.gz") {
+			if err := VerifyLinuxBinary(binary); err != nil {
 				return nil, err
 			}
 		}
+		if !matchedHost {
+			executable = binary
+		}
+		if archiveMatchesHost(archive) {
+			executable = binary
+			matchedHost = true
+		}
 	}
 	return executable, nil
+}
+
+func archiveMatchesHost(archive string) bool {
+	switch {
+	case strings.HasSuffix(archive, "_linux_amd64.tar.gz"):
+		return runtime.GOOS == "linux" && runtime.GOARCH == "amd64"
+	case strings.HasSuffix(archive, "_darwin_arm64.tar.gz"):
+		return runtime.GOOS == "darwin" && runtime.GOARCH == "arm64"
+	default:
+		return false
+	}
 }
 
 func verifyInstaller(path, version string) error {

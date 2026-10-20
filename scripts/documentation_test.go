@@ -103,7 +103,7 @@ func TestReleaseArtifactContractKeepsLinuxCandidatesSeparate(t *testing.T) {
 	if strings.Contains(candidate, "darwin_amd64.tar.gz") {
 		t.Fatal("release candidate script still stages an Intel archive")
 	}
-	for _, required := range []string{"darwin_arm64 linux_amd64", "candidate_directory=\"dist/linux-candidate\"", "--linux-candidate"} {
+	for _, required := range []string{"darwin_arm64 linux_amd64", "candidate_directory=\"dist/linux-candidate\"", "--linux-candidate", "dist/release-candidate/$linux_artifact"} {
 		if !strings.Contains(candidate, required) {
 			t.Errorf("candidate script omits separate Linux staging %q", required)
 		}
@@ -113,8 +113,11 @@ func TestReleaseArtifactContractKeepsLinuxCandidatesSeparate(t *testing.T) {
 		t.Fatal("installer does not reject unsupported Linux hosts clearly")
 	}
 	publication := readRepositoryFile(t, repository, "internal/release/publication/plan.go")
-	if strings.Contains(publication, "linux_") {
-		t.Fatal("publication permits Linux assets")
+	if !strings.Contains(publication, "linux_amd64") {
+		t.Fatal("publication does not ship the linux/amd64 archive")
+	}
+	if strings.Contains(publication, "linux_arm64") || strings.Contains(publication, "darwin_amd64") {
+		t.Fatal("publication permits an unqualified architecture")
 	}
 	linuxWorkflow := readRepositoryFile(t, repository, ".github/workflows/linux-candidate.yml")
 	for _, required := range []string{"runs-on: ubuntu-24.04", "scripts/check-go-vulnerabilities.sh binary", "--linux-candidate", "dist/linux-candidate/*.tar.gz", "dist/linux-candidate/SHA256SUMS", "github.event_name != 'pull_request'"} {
@@ -207,9 +210,10 @@ func TestImmutableReleaseSafetyStillDependsOnNativeAppleSiliconAndAttestation(t 
 	publish := strings.Index(release, "  publish:\n")
 	if native < 0 || attest < native || publish < attest ||
 		!strings.Contains(release[attest:publish], "- native") ||
+		!strings.Contains(release[attest:publish], "- linux-candidate") ||
 		!strings.Contains(release[publish:], "- native") ||
 		!strings.Contains(release[publish:], "- attest") {
-		t.Fatal("attestation and publication do not depend on the native Apple Silicon gate")
+		t.Fatal("attestation and publication do not depend on the native Apple Silicon and Linux packaging gates")
 	}
 }
 

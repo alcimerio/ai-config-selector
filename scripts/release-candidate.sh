@@ -26,7 +26,8 @@ fi
 scripts/goreleaser.sh check
 ACS_RELEASE_VERSION="$archive_version" scripts/goreleaser.sh release --snapshot --clean
 
-# These disjoint sets share one build. Only release-candidate is publishable.
+# One build feeds two directories. linux-candidate stays a linux-only set for
+# the native packaging gate. release-candidate is the publishable set.
 for target in darwin_arm64 linux_amd64; do
   candidate_directory="dist/release-candidate"
   if [ "$target" = linux_amd64 ]; then
@@ -45,7 +46,12 @@ for target in darwin_arm64 linux_amd64; do
   sh -n "$candidate_directory/install.sh"
   if [ "$target" = linux_amd64 ]; then
     go run ./tools/releaseverify --dist "$candidate_directory" --version "$release_tag" --linux-candidate
-  else
-    go run ./tools/releaseverify --dist "$candidate_directory" --version "$release_tag"
   fi
 done
+
+# Publish the staged linux/amd64 archive and its checksum row with the macOS set.
+linux_artifact="acs_${archive_version}_linux_amd64.tar.gz"
+cp "dist/$linux_artifact" "dist/release-candidate/$linux_artifact"
+awk -v artifact="$linux_artifact" '$2 == artifact { print; count++ } END { if (count != 1) exit 1 }' \
+  dist/SHA256SUMS >>"dist/release-candidate/SHA256SUMS"
+go run ./tools/releaseverify --dist dist/release-candidate --version "$release_tag"

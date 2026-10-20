@@ -41,8 +41,8 @@ refuses the launch. There is no unsandboxed fallback.
   support for historical Linux or Intel assets. Qualified native `linux/amd64`
   is now admitted by `ValidatePlatform` and the registered Bubblewrap backend.
   `linux/arm64`, Intel Macs, WSL, containers, and historical Linux or Intel
-  assets stay unsupported. The publisher still uploads only the macOS asset set
-  until a release adds the staged Linux archive.
+  assets stay unsupported. The publisher uploads the macOS archive and the staged
+  linux/amd64 archive.
 
 The documented reason is a deliberate narrowing of the supported, natively
 validated release surface to macOS alongside the new shell. The inspected
@@ -82,8 +82,8 @@ instead of adding target-specific Linux execution paths.
 
 This inventory is the 2026-10-09 research baseline. Qualified `linux/amd64`
 admission, the file credential provider, doctor probes, and the `linux/amd64`
-updater are now in place. The publisher still uploads only the macOS asset set.
-`linux/arm64` stays unpublished.
+updater are now in place. The publisher uploads the macOS archive and the staged
+linux/amd64 archive. `linux/arm64` stays unpublished.
 
 | Area | Exact current files and evidence | Linux work |
 | --- | --- | --- |
@@ -98,7 +98,7 @@ updater are now in place. The publisher still uploads only the macOS asset set.
 | Credential provider | `internal/codexauthresource/keychain_darwin.go:1,92-105`; `internal/codexauthresource/keychain_other.go:1-5`; `internal/codexauthresource/keychain_provider.go:29-71` | Security/CoreFoundation via purego; non-Darwin provider is unavailable. Introduce Linux provider behind the existing store seam. |
 | Credential store | `internal/codexauthresource/store.go:24-45,78-86` | Provider interface exists, but production constructor hardcodes Keychain. Locks, markers and validated projection should remain shared. |
 | Diagnostics | `internal/diagnostics/host_darwin.go`; `internal/diagnostics/host_other.go:1-12`; `internal/diagnostics/files_unix.go` | Add Linux feature reporting; don't confuse a platform label with backend readiness. |
-| Distribution | `.goreleaser.yaml:5-20`; `internal/selfupdate/update.go:111-139`; `scripts/install.sh.tmpl:36-42,155-168` | The updater and installer accept `linux/amd64`. The publisher still uploads only the macOS set until a release adds the staged archive. `linux/arm64` stays unpublished. |
+| Distribution | `.goreleaser.yaml:5-20`; `internal/selfupdate/update.go:111-139`; `scripts/install.sh.tmpl:36-42,155-168` | The updater and installer accept `linux/amd64`. The publisher uploads the macOS archive and the staged linux/amd64 archive. `linux/arm64` stays unpublished. |
 
 Existing Linux shims should be preserved: `internal/launch/path_grants_open_linux.go:1-9`,
 `internal/launch/executable_ctime_linux.go:1-7`,
