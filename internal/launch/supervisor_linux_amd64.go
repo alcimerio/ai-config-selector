@@ -287,26 +287,53 @@ func linuxSettleSession(ops linuxSettlementOps, waited <-chan struct{}, deadline
 	if ops.kill() != nil {
 		return errLinuxSettlement
 	}
+	// Descendant reaping starts only after exec.Cmd has reaped its own child.
+	// Blocking on that signal avoids a fixed sleep while still refusing to
+	// call wait4(-1) early enough to steal the command status.
+	if err := linuxWaitForDirectChild(waited, deadline); err != nil {
+		return err
+	}
 	for {
-		// Only reap adopted descendants AFTER exec.Cmd has reaped its own
-		// child; concurrent wait4(-1) would steal the command's exit status.
-		select {
-		case <-waited:
-			dead, deadErr := ops.leaderDead()
-			reaped, reapErr := ops.reap()
-			empty, emptyErr := ops.empty()
-			if deadErr != nil || reapErr != nil || emptyErr != nil {
-				return errLinuxSettlement
-			}
-			if dead && reaped && empty {
-				return ops.remove()
-			}
-		default:
+		dead, deadErr := ops.leaderDead()
+		reaped, reapErr := ops.reap()
+		empty, emptyErr := ops.empty()
+		if deadErr != nil || reapErr != nil || emptyErr != nil {
+			return errLinuxSettlement
+		}
+		if dead && reaped && empty {
+			return ops.remove()
 		}
 		if !time.Now().Before(deadline) {
 			return errLinuxSettlement
 		}
-		time.Sleep(10 * time.Millisecond)
+		pause := time.Millisecond
+		if remaining := time.Until(deadline); remaining < pause {
+			pause = remaining
+		}
+		time.Sleep(pause)
+	}
+}
+
+func linuxWaitForDirectChild(waited <-chan struct{}, deadline time.Time) error {
+	if waited == nil {
+		waited = make(chan struct{})
+	}
+	remaining := time.Until(deadline)
+	if remaining <= 0 {
+		select {
+		case <-waited:
+			return nil
+		default:
+			return errLinuxSettlement
+		}
+	}
+	timer := time.NewTimer(remaining)
+	defer timer.Stop()
+	select {
+	case <-waited:
+		return nil
+	case <-timer.C:
+		return errLinuxSettlement
 	}
 }
 
