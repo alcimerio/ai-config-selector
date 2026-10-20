@@ -284,7 +284,7 @@ installation_complete=1
 
 printf 'Installed acs %s to %s\n' "$release_version" "$destination"
 if [ "$target_os" = linux ]; then
-  printf '%s\n' 'Qualified linux/amd64 launches stay inside the sandbox. A missing prerequisite refuses the launch.'
+  printf '%s\n' 'Qualified linux/amd64 requires Linux 6.12+, Landlock ABI 6, Bubblewrap, unprivileged user namespaces, and cgroup v2 delegation. A missing prerequisite refuses the launch.'
 fi
 case ":${PATH:-}:" in
   *":$bin_directory:"*) ;;

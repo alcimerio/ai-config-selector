@@ -13,6 +13,8 @@ Both versions use the same ACS recipe: file credentials in the private Session,
 forced ChatGPT identity and workspace, fixed provider and entrypoint, untrusted
 project configuration, disabled plugins/apps and externally contained execution.
 ACS keeps ownership of containment, process settlement and projection readback.
+The same two Codex versions are the qualified `linux/amd64` pair. Native Linux
+locks are in `scripts/codex-linux-test-targets.lock`. `linux/arm64` is not admitted.
 The named identity validator still rejects unsupported authentication shapes;
 new upstream authentication mechanisms do not become supported automatically.
 The separate optional extension/plugin discovery experiment remains pinned to
@@ -54,7 +56,8 @@ authority to admit that target.
 
 ## Grok Build
 
-ACS admits only `grok 1.0.62`. The version probe may include one parenthesized
+ACS admits only `grok 1.0.62`, and only on macOS. Grok is not a qualified Linux
+target. The version probe may include one parenthesized
 lowercase commit suffix; prereleases, nearby versions, and extra text fail
 closed before credentials are copied or the interactive process starts. Callers
 cannot override this pin. The authority digest names `grok-cli-exact-1.0.62`.

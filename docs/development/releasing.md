@@ -124,7 +124,7 @@ merged source separately; equal trees do not change build provenance. An expired
 artifact must be replaced by a newly identified build, not rebuilt under its old
 identity. The validator is a repository maintenance tool, not a release channel.
 
-Start `/bin/bash --noprofile --norc` on a supported Mac. Supply all inputs below:
+Start `/bin/bash --noprofile --norc` on macOS 26 Apple Silicon. The qualified `linux/amd64` candidate procedure is above. Supply all inputs below:
 the directory must contain only `install.sh`, `SHA256SUMS` and the named Apple
 Silicon archive. Use a new private, absolute, direct maintenance directory outside
 repositories or shared folders. The known-good binary must already be trusted.

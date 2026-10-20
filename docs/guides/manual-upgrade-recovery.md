@@ -2,12 +2,12 @@
 
 [Documentation index](../README.md)
 
-For supported direct user-owned Apple Silicon installs, `acs update --check`
+For supported direct user-owned installs on macOS 26 Apple Silicon or qualified `linux/amd64`, `acs update --check`
 checks availability and `acs update [vMAJOR.MINOR.PATCH]` replaces only the
 executable. Neither updates nor manual binary selection back up, migrate or
 recover stored data. Keep the known-good binary and private Profile backups.
 
-This procedure applies to macOS 26 on Apple Silicon (`darwin/arm64`), including
+This procedure applies to macOS 26 on Apple Silicon (`darwin/arm64`) and qualified native `linux/amd64`, including
 older installs without an updater. Choose a compatible release from
 [GitHub Releases](https://github.com/alcimerio/ai-config-selector/releases).
 For unpublished builds, use the

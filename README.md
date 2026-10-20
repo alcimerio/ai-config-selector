@@ -155,7 +155,7 @@ rollback does not downgrade stored data.
 
 ### Build from source
 
-With the Go toolchain in [go.mod](go.mod) on a supported Mac:
+With the Go toolchain in [go.mod](go.mod) on macOS 26 Apple Silicon or qualified `linux/amd64`:
 
 ```sh
 git clone https://github.com/alcimerio/ai-config-selector.git
@@ -241,7 +241,7 @@ Report vulnerabilities privately as described in the
 | Platform | Status |
 | --- | --- |
 | macOS 26 on Apple Silicon (`darwin/arm64`) | Supported. Seatbelt is the required sandbox. |
-| Qualified native `linux/amd64` | Supported when Bubblewrap, Landlock ABI 6, unprivileged user namespaces, and cgroup v2 delegation pass. Otherwise the launch is refused. |
+| Qualified native `linux/amd64` | Supported on Linux 6.12+ when Landlock ABI 6, Bubblewrap, unprivileged user namespaces, and cgroup v2 delegation pass. Otherwise the launch is refused. |
 | Intel Macs | Not supported. Historical v0.4.0 Intel assets do not extend current support. |
 | `linux/arm64` and other Linux hosts | Not supported. WSL and containers are not evidence. |
 

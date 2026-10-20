@@ -100,7 +100,7 @@ acs sandbox --profile first-review
 - `validate` checks structure and selected Skill sources, not complete launch readiness
 - `explain` describes effective authority; native readiness is unchecked unless requested
 - Sandbox dry-run resolves the plan and checks bounded native readiness, without a Session
-- The final command starts `/bin/zsh -f` inside a private Session
+- The final command starts `/bin/zsh -f` on macOS, or `/bin/bash --noprofile --norc` on qualified `linux/amd64`, inside a private Session
 
 Inside the shell, try:
 

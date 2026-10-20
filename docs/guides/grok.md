@@ -2,7 +2,7 @@
 
 [Documentation index](../README.md) · [Target compatibility](../reference/target-compatibility.md) · [CLI reference](../reference/cli.md)
 
-ACS runs the reviewed Grok Build CLI (`grok` 1.0.62) inside the required sandbox.
+ACS runs the reviewed Grok Build CLI (`grok` 1.0.62) inside the macOS Seatbelt sandbox. Grok is not a qualified Linux target.
 Install Grok separately. ACS does not download it during a launch and does not
 start `grok login` inside a Session.
 

@@ -111,7 +111,7 @@ data, edit, clone and rename refuse them before preview.
 The capability follows the independently versioned common format; `loopbackPorts`
 uses the camelCase style of sibling fields such as `relativePath`. The envelope
 remains version 1 (read alias 3). Omission and an empty array both deny loopback
-on macOS; existing Profiles are not rewritten on load. New creation and confirmed
+on macOS and on qualified `linux/amd64`; existing Profiles are not rewritten on load. New creation and confirmed
 mutation emit an explicit selection. Older builds reject a present unknown
 capability; use a pre-feature Profile revision before downgrading.
 

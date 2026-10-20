@@ -200,7 +200,7 @@ separate from persisted schemas and inspection output. It contains exactly:
 | `profile.overlays` | unchecked | supported overlays, no overlays, or unchecked unknown inactive overlays |
 | `profile.authority` | unchecked | explicit common authority |
 | `host.platform` | native metadata and supported-platform policy | unchecked |
-| `backend.file` | trusted system backend-file availability on macOS | unchecked |
+| `backend.file` | trusted macOS backend file; unchecked on `linux/amd64` until `--check-linux-capabilities` | unchecked |
 | `executable.availability` | selected target only; otherwise unchecked | unchecked |
 | `executable.version` | unchecked | unchecked |
 | `authentication` | unchecked | unchecked |
@@ -247,8 +247,9 @@ queries no authentication provider, writes no generated configuration and starts
 no target/user command. Project-local files are not enumerated.
 
 `--check-native-readiness` opts into bounded platform/backend observation. On
-macOS it may run the fixed system Seatbelt readiness helper. A pass establishes
-only macOS 26 Apple Silicon and the fixed backend check at that moment.
+macOS it may run the fixed system Seatbelt readiness helper. On qualified
+`linux/amd64` it observes the registered Bubblewrap backend and the host probe.
+A pass establishes only that host check at that moment.
 Versions, authentication, materialization, generated policy, target preflights,
 network enforcement and cleanup remain unchecked. A portable or cross-compiled
 result is not native support evidence. Qualified `linux/amd64` evidence is the

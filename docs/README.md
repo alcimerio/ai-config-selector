@@ -4,7 +4,9 @@
 
 These pages follow this checkout. Check `acs version` and use your release's Git
 tag for installed behavior; main can describe changes that have not shipped.
-The supported runtime is macOS 26 Apple Silicon.
+Supported runtimes are macOS 26 Apple Silicon and qualified native `linux/amd64`
+(Linux 6.12+, Landlock ABI 6, Bubblewrap, unprivileged user namespaces, and an
+owned cgroup v2 delegation). `linux/arm64` is not supported.
 
 ## Start here
 

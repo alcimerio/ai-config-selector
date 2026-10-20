@@ -18,6 +18,8 @@ named logins, and are checked in CI with the same codec as
 | [skill-review-isolated](profiles/skill-review-isolated.json) | One selected global Skill; repository `.agents/skills` and `.devin/skills` denied | Devin, Codex, Grok, sandbox |
 | [sandbox-tools-only](profiles/sandbox-tools-only.json) | No target overlay; `git` visibility for `acs sandbox` and `acs run` | sandbox, run |
 
+Grok examples run only on macOS. Qualified `linux/amd64` can use the Devin, Codex, sandbox, and `acs run` examples when the host probe passes. `linux/arm64` is not supported.
+
 ## Use an example
 
 From a checkout of this repository, preview and create the Profile, then

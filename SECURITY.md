@@ -37,7 +37,7 @@ reproduction or affected component in that issue.
 
 A useful private report includes:
 
-- the ACS version or commit, macOS version and architecture
+- the ACS version or commit, host OS, kernel or macOS version, and architecture
 - the affected command shape and Profile selections, sanitized
 - the expected boundary, what happened instead and the
   [security model](docs/reference/security-model.md) statement it contradicts

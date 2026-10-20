@@ -400,6 +400,12 @@ func (app App) printHelp(command commandSpec) {
 			command.description = "Open /bin/bash --noprofile --norc in the qualified Linux sandbox with a private Session HOME.\nMissing Bubblewrap, Landlock ABI 6, cgroup v2 delegation, or unprivileged user namespaces refuses the launch.\nThere is no unsandboxed fallback. --dry-run inspects the plan without creating a Session or starting a shell."
 		case "run":
 			command.description += "\nQualified linux/amd64 runs accept native amd64 ELF commands and bounded runtime files.\nGrok is not a qualified Linux target. Scripts and custom ELF search paths are not qualified."
+		case "grok":
+			command.description += "\nGrok is not a qualified Linux target. The launch is refused."
+		case "codex auth":
+			command.description = "Manage ACS-owned ChatGPT identities with the Linux file provider.\nLogin and status require a reviewed Codex CLI version and the required sandbox.\nThese commands do not launch interactive Codex or use the global Codex login."
+		case "codex auth list":
+			command.description = "List non-secret metadata for ACS-owned identities in the Linux file provider."
 		}
 	}
 	fmt.Fprintf(app.Output, "Usage: %s\n\n%s\n", command.syntax, command.description)

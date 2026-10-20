@@ -3,7 +3,8 @@
 [Documentation index](../README.md) · [Contributing](../../CONTRIBUTING.md) · [Release procedure](releasing.md)
 
 Run the normal and race suites in [local setup](../../CONTRIBUTING.md#local-setup)
-on macOS 26 Apple Silicon. Native tests require a normal terminal; another
+on macOS 26 Apple Silicon. Qualified `linux/amd64` evidence is the native Linux
+gate later in this page. Native tests require a normal terminal; another
 restrictive sandbox can invalidate their results. Never weaken macOS security
 settings to make a test pass.
 

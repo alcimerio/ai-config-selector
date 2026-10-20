@@ -80,9 +80,14 @@ instead of adding target-specific Linux execution paths.
 
 ### Files requiring platform treatment
 
+This inventory is the 2026-10-09 research baseline. Qualified `linux/amd64`
+admission, the file credential provider, doctor probes, and the `linux/amd64`
+updater are now in place. The publisher still uploads only the macOS asset set.
+`linux/arm64` stays unpublished.
+
 | Area | Exact current files and evidence | Linux work |
 | --- | --- | --- |
-| Selection | `internal/launch/sandbox.go:223-267,478-497`; `internal/launch/sandbox_backends_darwin.go:1-7`; `internal/launch/sandbox_backends_other.go:1-5` | macOS-only admission; `!darwin` returns no backend. Add a Linux registration only after qualification. |
+| Selection | `internal/launch/sandbox.go:223-267,478-497`; `internal/launch/sandbox_backends_darwin.go:1-7`; `internal/launch/sandbox_backends_other.go:1-5` | Research baseline was macOS-only. Qualified `linux/amd64` now registers the Bubblewrap backend. Other architectures still return no backend. |
 | Policy/launch | `internal/launch/seatbelt_darwin.go:1,31-37,60-90,93-126,858,1042` | Darwin build tag, `/usr/bin/sandbox-exec`, Seatbelt policy and process implementation. Implement separately. |
 | Supervisor | `internal/launch/seatbelt_supervisor_darwin.go:1,27-75,140,598-778` | Darwin helper entrypoints, descriptor sealing, process identity ledger and settlement. Preserve protocol properties, replace process APIs. |
 | Process inspection | `internal/launch/seatbelt_proc_darwin.go:1,74` | Loads `/usr/lib/libSystem.B.dylib`; Darwin process enumeration is not portable. |
@@ -93,7 +98,7 @@ instead of adding target-specific Linux execution paths.
 | Credential provider | `internal/codexauthresource/keychain_darwin.go:1,92-105`; `internal/codexauthresource/keychain_other.go:1-5`; `internal/codexauthresource/keychain_provider.go:29-71` | Security/CoreFoundation via purego; non-Darwin provider is unavailable. Introduce Linux provider behind the existing store seam. |
 | Credential store | `internal/codexauthresource/store.go:24-45,78-86` | Provider interface exists, but production constructor hardcodes Keychain. Locks, markers and validated projection should remain shared. |
 | Diagnostics | `internal/diagnostics/host_darwin.go`; `internal/diagnostics/host_other.go:1-12`; `internal/diagnostics/files_unix.go` | Add Linux feature reporting; don't confuse a platform label with backend readiness. |
-| Distribution | `.goreleaser.yaml:5-20`; `internal/selfupdate/update.go:111-139`; `scripts/install.sh.tmpl:36-42,155-168` | macOS-only build, updater and installer predicates; change together at release time. |
+| Distribution | `.goreleaser.yaml:5-20`; `internal/selfupdate/update.go:111-139`; `scripts/install.sh.tmpl:36-42,155-168` | The updater and installer accept `linux/amd64`. The publisher still uploads only the macOS set until a release adds the staged archive. `linux/arm64` stays unpublished. |
 
 Existing Linux shims should be preserved: `internal/launch/path_grants_open_linux.go:1-9`,
 `internal/launch/executable_ctime_linux.go:1-7`,
@@ -120,11 +125,11 @@ lease retention in `internal/launch/session.go:391-500`; and recovery framing in
 `internal/launch/recovery_proof.go:12-45`. Reuse the Devin/Codex adapters and
 `internal/genericrun/`, while reviewing their platform runtime dependencies.
 
-Current Ubuntu CI is only nonblocking compile observation: it uses `go test -c`
-and builds `cmd/acs`, never executes tests (`.github/workflows/ci.yml:17-42`).
-A manual check at the research baseline found that `GOOS=linux go build ./...`
-succeeds and `go test ./...` passes on a Linux amd64 host, because the macOS
-backend is excluded by build tags and Linux has no registered backend.
+At the research baseline, Ubuntu CI was only nonblocking compile observation.
+Portable tests now run on `ubuntu-24.04`. A manual check at that baseline found
+that `GOOS=linux go build ./...` succeeded, because the macOS backend was
+excluded by build tags and Linux had no registered backend. Qualified
+`linux/amd64` now registers the Bubblewrap backend.
 
 ## 3. Security contract and sandbox choices
 

@@ -149,7 +149,9 @@ quarantines the Session. Do not force-delete that state. Use
 ## Release integrity and evidence
 
 The release pipeline validates exact candidate bytes on macOS Apple Silicon and
-records checksums and GitHub provenance. SHA-256 only proves identity relative to
+records checksums and GitHub provenance. Qualified `linux/amd64` evidence is the
+native Linux gate. The publisher still uploads only the macOS asset set until a
+release adds the staged Linux archive. SHA-256 only proves identity relative to
 trusted expected bytes. The archive and checksum manifest are attestation subjects;
 the installer is part of the byte-matched set but is not itself an attestation subject.
 
