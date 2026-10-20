@@ -1,13 +1,15 @@
 # Contributing
 
-ACS supports macOS 26 on Apple Silicon (`darwin/arm64`) using Seatbelt.
-Unsupported hosts fail closed. Read the [architecture](docs/development/architecture.md)
+ACS supports macOS 26 on Apple Silicon (`darwin/arm64`) using Seatbelt, and
+qualified native `linux/amd64` (Linux 6.12+, Landlock ABI 6, Bubblewrap,
+unprivileged user namespaces, and an owned cgroup v2 delegation). Other hosts
+fail closed. `linux/arm64` is not supported. Read the [architecture](docs/development/architecture.md)
 before changing execution, capabilities or containment.
 
 ## Local setup
 
 Install the Go toolchain specified in [go.mod](go.mod), clone the repository,
-and run these checks on a supported Mac:
+and run these checks on macOS 26 Apple Silicon or qualified `linux/amd64`:
 
 ```sh
 go mod download
@@ -83,9 +85,10 @@ Before opening a PR:
 4. Confirm that the PR changes no release asset, tag or external state.
 
 PR gates install the candidate bytes on macOS 26 Apple Silicon; the native job
-must pass before merge. The portable Linux tests job must also pass; it proves
-that shared code builds and that Linux fails closed, and it does not replace the
-native Apple Silicon artifact gate or establish Linux runtime support.
+must pass before merge. The portable Linux tests job must also pass. It proves
+that shared code builds and that an unqualified host or a missing Profile fails
+closed. It does not replace the native Apple Silicon artifact gate or the native
+Linux qualification gates.
 
 See [testing and dependency maintenance](docs/development/testing.md) for native,
 portable, research and authenticated checks, and

@@ -53,7 +53,7 @@ instruction files under `$HOME/.acs/common/v1/instructions/<source>/<relative-pa
 in the synthetic Session home. It does not create Devin rules paths or apply
 Devin activation semantics. It neither projects target MCP configuration nor
 automatically starts selected MCP servers; their separately selected common
-resource grants still apply. Inactive Devin, Codex, and unknown overlay
+resource grants still apply. Inactive Devin, Codex, Grok, and unknown overlay
 payloads stay inert. A Profile's workspace is read-only unless the user
 explicitly chose coding write.
 
@@ -109,4 +109,6 @@ deleting live state. Use the [Session operations guide](session-operations.md)
 to inspect and recover retained state; do not remove private Session or lease
 files by hand.
 
-The supported runtime is macOS 26 on Apple Silicon.
+Supported runtimes are macOS 26 on Apple Silicon and qualified native
+`linux/amd64` (Linux 6.12+, Landlock ABI 6, Bubblewrap, unprivileged user
+namespaces, and an owned cgroup v2 delegation). `linux/arm64` is not supported.

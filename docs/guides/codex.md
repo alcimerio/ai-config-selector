@@ -2,11 +2,13 @@
 
 [Documentation index](../README.md)
 
-ACS supports interactive Codex on macOS 26 Apple Silicon with the exact target
-versions listed in [target compatibility](../reference/target-compatibility.md).
-The adapter uses ChatGPT authentication and a named
+ACS supports interactive Codex on macOS 26 Apple Silicon and qualified native
+`linux/amd64` with the exact target versions listed in
+[target compatibility](../reference/target-compatibility.md). macOS stores named
+identities in Keychain. Qualified `linux/amd64` uses the explicit file provider
+inside the sandbox. The adapter uses ChatGPT authentication and a named
 ACS identity; API keys, credential import and noninteractive token injection
-are unsupported.
+are unsupported. `linux/arm64` is not supported.
 
 ## Interactive launch
 

@@ -31,7 +31,7 @@ type commandSpec struct {
 
 var commands = []commandSpec{
 	{path: "", syntax: "acs <command> [flags]", description: "Create capability Profiles and use the required native sandbox.", example: "acs profile create --name backend-review", group: true},
-	{path: "check", syntax: "acs check --profile NAME --target TARGET [--json] [--check-native-readiness] [--check-authentication --auth NAME]", description: "Combine passive Profile, selected source/overlay, host, backend and executable facts. TARGET is devin, codex or sandbox.\nEvery fact is pass, fail or unchecked; success covers only requested facts, never full launch readiness.\nDefault checks execute no processes, query no credentials and change no files.\n--check-native-readiness opts into the bounded native backend process probe.\n--check-authentication requires target codex and explicit --auth NAME; it runs contained version and authentication status with credential projection, Session cleanup and eligible same-identity refresh. No login or recovery occurs.\nThere is no credential-free target version probe. Unknown or unrequested facts remain unchecked.", example: "acs check --profile backend-review --target sandbox\n  acs check --profile backend-review --target codex --json\n  acs check --profile backend-review --target codex --check-authentication --auth work", valueFlag: "--profile", auxValueFlag: "--target", thirdValueFlag: "--auth", optionalThirdValue: true, boolFlag: "--json", secondBoolFlag: "--check-native-readiness", thirdBoolFlag: "--check-authentication"},
+	{path: "check", syntax: "acs check --profile NAME --target TARGET [--json] [--check-native-readiness] [--check-authentication --auth NAME]", description: "Combine passive Profile, selected source/overlay, host, backend and executable facts. TARGET is devin, codex, grok or sandbox.\nEvery fact is pass, fail or unchecked; success covers only requested facts, never full launch readiness.\nDefault checks execute no processes, query no credentials and change no files.\n--check-native-readiness opts into the bounded native backend process probe.\n--check-authentication requires target codex and explicit --auth NAME; it runs contained version and authentication status with credential projection, Session cleanup and eligible same-identity refresh. No login or recovery occurs.\nThere is no credential-free target version probe. Unknown or unrequested facts remain unchecked.", example: "acs check --profile backend-review --target sandbox\n  acs check --profile backend-review --target codex --json\n  acs check --profile backend-review --target codex --check-authentication --auth work", valueFlag: "--profile", auxValueFlag: "--target", thirdValueFlag: "--auth", optionalThirdValue: true, boolFlag: "--json", secondBoolFlag: "--check-native-readiness", thirdBoolFlag: "--check-authentication"},
 	{path: "profile", syntax: "acs profile <command> [flags]", description: "Create, inspect, validate, exchange, edit, clone, rename, delete or recover Profile transactions.", example: "acs profile create --file profile.json\n  acs profile show backend-review", group: true},
 	{path: "profile list", syntax: "acs profile list [--json]", description: "List direct stored Profiles, including per-entry structural errors. Missing storage is empty.\nNo sources, targets, credentials or Sessions are accessed. No files are changed.", example: "acs profile list\n  acs profile list --json", boolFlag: "--json"},
 	{path: "profile recover", syntax: "acs profile recover [--json]", description: "Complete previously authorized Profile transactions under the stationary repository lock. Recovery is not rollback.\nMissing storage is not created. No Builder, target, credentials or Sessions are accessed.\nReport the exact transaction outcome and cleanup requirement; inspect stored Profiles before another mutation.", example: "acs profile recover\n  acs profile recover --json", boolFlag: "--json"},
@@ -54,29 +54,32 @@ var commands = []commandSpec{
 	{path: "session list", syntax: "acs session list [--state STATE] [--limit N [--after ID]] [--json]", description: "Passively list sanitized durable Session records, completely or in bounded pages. Missing storage is empty; no runtime or provider is accessed.", example: "acs session list\n  acs session list --state retryable --json\n  acs session list --limit 128 --json", valueFlag: "--state", optionalValue: true, auxValueFlag: "--limit", optionalAuxValue: true, thirdValueFlag: "--after", optionalThirdValue: true, boolFlag: "--json"},
 	{path: "session inspect", syntax: "acs session inspect ID [--json]", description: "Passively inspect one sanitized durable Session record without taking locks or changing files.", example: "acs session inspect ses_abcd234567abcdef234567abcd --json", nameOperand: true, boolFlag: "--json"},
 	{path: "session recover", syntax: "acs session recover ID [--json]", description: "Attempt bounded recovery using the exact private generation, inactive lease and native cleanup proof. It never kills or force-deletes a process.", example: "acs session recover ses_abcd234567abcdef234567abcd --json", nameOperand: true, boolFlag: "--json"},
-	{path: "explain", syntax: "acs explain <sandbox|devin|codex|run> [flags]", description: "Explain semantic Profile authority and registered execution requirements without creating a Session or starting a target.", example: "acs explain devin --profile backend-review\n  acs explain codex --profile backend-review --json", group: true},
+	{path: "explain", syntax: "acs explain <sandbox|devin|codex|grok|run> [flags]", description: "Explain semantic Profile authority and registered execution requirements without creating a Session or starting a target.", example: "acs explain devin --profile backend-review\n  acs explain grok --profile backend-review --json", group: true},
 	{path: "explain sandbox", syntax: "acs explain sandbox --profile NAME [--check-native-readiness] [--json]", description: "Explain the fixed sandbox-shell intent. Native readiness is unchecked unless explicitly requested.", example: "acs explain sandbox --profile backend-review --json", valueFlag: "--profile", boolFlag: "--json", secondBoolFlag: "--check-native-readiness"},
 	{path: "explain devin", syntax: "acs explain devin --profile NAME [--check-native-readiness] [--json]", description: "Explain Devin authority, projection, configuration inheritance, and evidence without starting Devin.", example: "acs explain devin --profile backend-review", valueFlag: "--profile", boolFlag: "--json", secondBoolFlag: "--check-native-readiness"},
 	{path: "explain codex", syntax: "acs explain codex --profile NAME [--auth REF] [--check-native-readiness] [--json]", description: "Explain Codex authority, fixed generated configuration, inheritance, and redacted named-auth selection without provider access.", example: "acs explain codex --profile backend-review --auth work --json", valueFlag: "--profile", auxValueFlag: "--auth", optionalAuxValue: true, boolFlag: "--json", secondBoolFlag: "--check-native-readiness"},
+	{path: "explain grok", syntax: "acs explain grok --profile NAME [--check-native-readiness] [--json]", description: "Explain Grok Build authority, fixed generated configuration, and credential projection without starting Grok.", example: "acs explain grok --profile backend-review", valueFlag: "--profile", boolFlag: "--json", secondBoolFlag: "--check-native-readiness"},
 	{path: "explain run", syntax: "acs explain run --profile NAME [--check-native-readiness] [--json] -- COMMAND [ARG...]", description: "Explain one literal generic-command intent without starting the command. Argument values remain hidden.", example: "acs explain run --profile backend-review --json -- ./tool --flag", valueFlag: "--profile", boolFlag: "--json", secondBoolFlag: "--check-native-readiness"},
 
-	{path: "doctor", syntax: "acs doctor [--target devin|sandbox|codex-auth] [--json] [--check-linux-capabilities]", description: "Inspect passive host and backend-file prerequisites. Optional targets check executable availability only.\nBy default no processes run or files change. --check-linux-capabilities explicitly runs bounded Linux helpers and creates/removes a disposable delegated cgroup.\nVersions, authentication and actual sandbox enforcement remain unchecked. Linux production launches remain disabled even when probes pass.\ncodex-auth describes named authentication workflows; use Codex dry-run to inspect a Profile launch plan.", example: "acs doctor\n  acs doctor --target devin --json\n  acs doctor --check-linux-capabilities --json", valueFlag: "--target", boolFlag: "--json", secondBoolFlag: "--check-linux-capabilities", optionalValue: true},
+	{path: "doctor", syntax: "acs doctor [--target devin|sandbox|codex-auth|grok] [--json] [--check-linux-capabilities]", description: "Inspect passive host and backend-file prerequisites. Optional targets check executable availability only.\nBy default no processes run or files change. --check-linux-capabilities explicitly runs bounded Linux helpers and creates/removes a disposable delegated cgroup.\nVersions, authentication and actual sandbox enforcement remain unchecked. A failed Linux prerequisite probe refuses every launch.\ncodex-auth describes named authentication workflows; use Codex dry-run to inspect a Profile launch plan.", example: "acs doctor\n  acs doctor --target devin --json\n  acs doctor --check-linux-capabilities --json", valueFlag: "--target", boolFlag: "--json", secondBoolFlag: "--check-linux-capabilities", optionalValue: true},
 	{path: "profile validate", syntax: "acs profile validate NAME [--json]", description: "Validate stored Profile structure and selected Skill-source resolution without a launch plan.\nPlatform, backend, executables, authentication and runtime remain unchecked. No files change.", example: "acs profile validate backend-review\n  acs profile validate --json backend-review", boolFlag: "--json", nameOperand: true},
 	{path: "run", syntax: "acs run --profile <name> [--dry-run] [--expect-authority-digest DIGEST] -- COMMAND [ARG...]", description: "Run one literal argv with common Profile authority and the required native sandbox.\nNo shell, target overlay, credentials, or host PATH is inherited.", example: "acs run --profile backend-review -- /usr/bin/git status\n  acs run --dry-run --profile backend-review -- ./tool --flag", valueFlag: "--profile", boolFlag: "--dry-run", thirdValueFlag: "--expect-authority-digest", optionalThirdValue: true},
 	{path: "devin", syntax: "acs devin --profile <name> [--dry-run] [--expect-authority-digest DIGEST]", description: "Launch Devin with a saved Profile. --dry-run inspects the plan without creating a Session.\nUse create-profile to open the interactive Profile Builder.", example: "acs devin --profile backend-review --dry-run\n  acs devin --profile backend-review", valueFlag: "--profile", boolFlag: "--dry-run", thirdValueFlag: "--expect-authority-digest", optionalThirdValue: true},
 	{path: "devin create-profile", syntax: "acs devin create-profile --name <name>", description: "Create a new Profile using interactive stdin and stdout. Existing names are never overwritten.\nSelect Skills with Space/Enter; return with Left/Esc; choose Create Profile to save.\nCtrl+C cancels without saving (exit 130).", example: "acs devin create-profile --name backend-review", valueFlag: "--name"},
+	{path: "grok", syntax: "acs grok --profile <name> [--dry-run] [--expect-authority-digest DIGEST]", description: "Launch Grok Build with a saved Profile. --dry-run inspects the plan without creating a Session.\nAuthentication copies ~/.grok/auth.json when present, or uses a selected XAI_API_KEY. No login runs inside the sandbox.", example: "acs grok --profile backend-review --dry-run\n  acs grok --profile backend-review", valueFlag: "--profile", boolFlag: "--dry-run", thirdValueFlag: "--expect-authority-digest", optionalThirdValue: true},
+	{path: "grok create-profile", syntax: "acs grok create-profile --name <name>", description: "Create a new Profile with a Grok overlay using interactive stdin and stdout. Existing names are never overwritten.", example: "acs grok create-profile --name backend-review", valueFlag: "--name"},
 	{path: "sandbox", syntax: "acs sandbox --profile <name> [--dry-run] [--expect-authority-digest DIGEST]", description: "Open /bin/zsh -f in the Profile sandbox without Devin credentials.\n--dry-run inspects the plan without creating a Session or starting a shell.", example: "acs sandbox --dry-run --profile backend-review\n  acs sandbox --profile backend-review", valueFlag: "--profile", boolFlag: "--dry-run", thirdValueFlag: "--expect-authority-digest", optionalThirdValue: true},
 	{path: "codex", syntax: "acs codex --profile <name> [--auth <ref>] [--dry-run] [--expect-authority-digest DIGEST]", description: "Launch interactive Codex with a common Profile and one ACS-owned named ChatGPT identity.\n--auth overrides the Profile authRef for this run. --dry-run validates syntax only and reports authentication unchecked.", example: "acs codex --profile backend-review --auth work --dry-run\n  acs codex --profile backend-review", valueFlag: "--profile", auxValueFlag: "--auth", optionalAuxValue: true, boolFlag: "--dry-run", thirdValueFlag: "--expect-authority-digest", optionalThirdValue: true},
 	{path: "codex create-profile", syntax: "acs codex create-profile --name <name> [--auth <ref>]", description: "Create a common Profile with a supported Codex overlay through the interactive Profile Builder.\nWhen supplied, only the opaque named authentication reference is stored; credentials are never stored in a Profile.\nA Profile without authRef requires --auth on every real launch.", example: "acs codex create-profile --name backend-review --auth work", valueFlag: "--name", auxValueFlag: "--auth", optionalAuxValue: true},
 	{path: "codex auth", syntax: "acs codex auth <command> [flags]", description: "Manage ACS-owned ChatGPT identities in the macOS Keychain.\nLogin and status require a reviewed Codex CLI version and the required sandbox.\nThese commands do not launch interactive Codex or use the global Codex login.", example: "acs codex auth login --name work\n  acs codex auth status --name work", group: true},
-	{path: "codex auth provider", syntax: "acs codex auth provider [--select file|secret-service|keychain]", description: "Show the credential provider choice or persist an explicit selection.\nOn Linux, file opts into private plaintext-at-rest storage; secret-service reserves a future desktop keyring choice.\nLinux launches remain unavailable. An existing choice cannot be switched.\nmacOS retains Keychain and ignores Linux configuration.", example: "acs codex auth provider\n  acs codex auth provider --select file", valueFlag: "--select", optionalValue: true},
+	{path: "codex auth provider", syntax: "acs codex auth provider [--select file|secret-service|keychain]", description: "Show the credential provider choice or persist an explicit selection.\nOn Linux, file opts into private plaintext-at-rest storage; secret-service reserves a future desktop keyring choice.\nQualified linux/amd64 launches use the file provider inside the sandbox. An existing choice cannot be switched.\nmacOS retains Keychain and ignores Linux configuration.", example: "acs codex auth provider\n  acs codex auth provider --select file", valueFlag: "--select", optionalValue: true},
 	{path: "codex auth login", syntax: "acs codex auth login --name <name> [--device-auth]", description: "Create a named ChatGPT identity; requires interactive stdin/stdout and a reviewed Codex CLI version.\n--device-auth selects the device login flow. Existing names are never replaced.", example: "acs codex auth login --device-auth --name work", valueFlag: "--name", boolFlag: "--device-auth"},
 	{path: "codex auth list", syntax: "acs codex auth list", description: "List non-secret metadata for ACS-owned identities in the macOS Keychain.", example: "acs codex auth list"},
 	{path: "codex auth status", syntax: "acs codex auth status --name <name>", description: "Verify one named identity in a contained status Session using a reviewed Codex CLI version.", example: "acs codex auth status --name work", valueFlag: "--name"},
 	{path: "codex auth recover", syntax: "acs codex auth recover --name <name>", description: "Recover a quarantined identity after proving its protected Session is inactive.", example: "acs codex auth recover --name work", valueFlag: "--name"},
 	{path: "codex auth logout", syntax: "acs codex auth logout --name <name>", description: "Remove an ACS-owned identity. An absent valid name succeeds; global Codex login is untouched.", example: "acs codex auth logout --name work", valueFlag: "--name"},
 	{path: "version", syntax: "acs version", description: "Print the ACS build version.", example: "acs version"},
-	{path: "update", syntax: "acs update [--check | vMAJOR.MINOR.PATCH]", description: "Check or install a published stable ACS release for macOS 26 Apple Silicon.\n--check only reads release metadata. An explicit version permits reinstall or downgrade; stored data is never changed.", example: "acs update --check\n  acs update\n  acs update v0.4.0", boolFlag: "--check", nameOperand: true},
+	{path: "update", syntax: "acs update [--check | vMAJOR.MINOR.PATCH]", description: "Check or install a published stable ACS release for macOS 26 Apple Silicon or linux/amd64.\n--check only reads release metadata. An explicit version permits reinstall or downgrade; stored data is never changed.\nlinux/arm64 and other hosts are refused.", example: "acs update --check\n  acs update\n  acs update v0.4.0", boolFlag: "--check", nameOperand: true},
 }
 
 type invocation struct {
@@ -138,7 +141,7 @@ func parseCommand(args []string) (inv invocation, problem string) {
 				inv.operand = arg
 				continue
 			}
-			if helpCommand || consumed == 0 || inv.command.group || (i == 0 && inv.command.path == "devin") {
+			if helpCommand || consumed == 0 || inv.command.group || (i == 0 && (inv.command.path == "devin" || inv.command.path == "grok")) {
 				return inv, "unknown command " + publicToken(arg)
 			}
 			return inv, "unsupported positional argument"
@@ -183,8 +186,8 @@ func parseCommand(args []string) (inv invocation, problem string) {
 			inv.thirdEnabled = true
 		}
 	}
-	if inv.command.path == "doctor" && inv.value != "" && inv.value != "devin" && inv.value != "sandbox" && inv.value != "codex-auth" {
-		return inv, "target must be devin, sandbox or codex-auth"
+	if inv.command.path == "doctor" && inv.value != "" && inv.value != "devin" && inv.value != "sandbox" && inv.value != "codex-auth" && inv.value != "grok" {
+		return inv, "target must be devin, sandbox, codex-auth or grok"
 	}
 	if inv.command.path == "session list" {
 		if inv.value != "" {
@@ -215,8 +218,8 @@ func parseCommand(args []string) (inv invocation, problem string) {
 		if profile.ValidateName(inv.value) != nil {
 			return inv, "invalid Profile name"
 		}
-		if inv.auxValue != "devin" && inv.auxValue != "codex" && inv.auxValue != "sandbox" {
-			return inv, "target must be devin, codex or sandbox"
+		if inv.auxValue != "devin" && inv.auxValue != "codex" && inv.auxValue != "grok" && inv.auxValue != "sandbox" {
+			return inv, "target must be devin, codex, grok or sandbox"
 		}
 		if inv.thirdEnabled && (inv.auxValue != "codex" || inv.thirdValue == "") {
 			return inv, "--check-authentication requires target codex and explicit --auth NAME"
@@ -394,13 +397,19 @@ func (app App) printHelp(command commandSpec) {
 	if runtime.GOOS == "linux" {
 		switch command.path {
 		case "sandbox":
-			command.description = "The experimental Linux recipe uses /bin/bash --noprofile --norc with a private Session HOME.\nProduction Linux launches remain disabled; there is no CLI or environment bypass.\n--dry-run inspects the plan without creating a Session or starting a shell."
+			command.description = "Open /bin/bash --noprofile --norc in the qualified Linux sandbox with a private Session HOME.\nMissing Bubblewrap, Landlock ABI 6, cgroup v2 delegation, or unprivileged user namespaces refuses the launch.\nThere is no unsandboxed fallback. --dry-run inspects the plan without creating a Session or starting a shell."
 		case "run":
-			command.description += "\nExperimental Linux recipes accept native amd64 ELF commands and bounded runtime files.\nProduction Linux launches remain disabled; scripts and custom ELF search paths are not qualified."
+			command.description += "\nQualified linux/amd64 runs accept native amd64 ELF commands and bounded runtime files.\nGrok is not a qualified Linux target. Scripts and custom ELF search paths are not qualified."
+		case "grok":
+			command.description += "\nGrok is not a qualified Linux target. The launch is refused."
+		case "codex auth":
+			command.description = "Manage ACS-owned ChatGPT identities with the Linux file provider.\nLogin and status require a reviewed Codex CLI version and the required sandbox.\nThese commands do not launch interactive Codex or use the global Codex login."
+		case "codex auth list":
+			command.description = "List non-secret metadata for ACS-owned identities in the Linux file provider."
 		}
 	}
 	fmt.Fprintf(app.Output, "Usage: %s\n\n%s\n", command.syntax, command.description)
-	if command.group || command.path == "devin" || command.path == "codex" {
+	if command.group || command.path == "devin" || command.path == "codex" || command.path == "grok" {
 		fmt.Fprintln(app.Output, "\nCommands:")
 		for _, child := range commands[1:] {
 			if command.path == "" || strings.HasPrefix(child.path, command.path+" ") {
@@ -424,7 +433,7 @@ func (app App) printHelp(command commandSpec) {
 			if command.valueFlag == "--state" {
 				fmt.Fprintln(app.Output, "  --state STATE  Optional exact lifecycle-state filter")
 			} else {
-				fmt.Fprintln(app.Output, "  --target devin|sandbox|codex-auth  Optional workflow; not a backend selector")
+				fmt.Fprintln(app.Output, "  --target devin|sandbox|codex-auth|grok  Optional workflow; not a backend selector")
 			}
 		} else {
 			fmt.Fprintf(app.Output, "  %s <name>  Required name\n", command.valueFlag)
@@ -502,6 +511,9 @@ func (app App) RunInformational(args []string) (handled bool, code int) {
 		}
 		if inv.command.path == "devin" {
 			fmt.Fprintln(app.ErrorOutput, "ACS will not start Devin without the required sandbox")
+		}
+		if inv.command.path == "grok" {
+			fmt.Fprintln(app.ErrorOutput, "ACS will not start Grok without the required sandbox")
 		}
 		if len(args) != 0 && args[0] == "session" {
 			// Session operations reserve 2 for grammar/admission failures;

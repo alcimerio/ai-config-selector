@@ -111,7 +111,7 @@ func bindDocument(admitted admittedDocument, bindingData []byte, name string, re
 	overlays := make(map[string]profile.OverlayPayload, len(doc.Profile.Overlays))
 	for id, payload := range doc.Profile.Overlays {
 		switch id {
-		case "devin":
+		case "devin", "grok":
 			if payload.Version != 1 || payload.AuthBinding != "" {
 				result.Code = CodeUnsupportedContent
 				return result

@@ -1337,7 +1337,7 @@ func validState(state State) bool {
 }
 func validTarget(target string) bool {
 	switch target {
-	case "shell", "devin", "codex", "codex-auth", "command":
+	case "shell", "devin", "codex", "codex-auth", "command", "grok":
 		return true
 	}
 	return false

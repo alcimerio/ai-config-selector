@@ -10,7 +10,6 @@ import (
 	"strings"
 
 	"github.com/alcimerio/ai-config-selector/internal/authority"
-	"github.com/alcimerio/ai-config-selector/internal/commonprofile"
 	"github.com/alcimerio/ai-config-selector/internal/profile"
 	"github.com/alcimerio/ai-config-selector/internal/runcommand"
 )
@@ -76,6 +75,9 @@ func (app App) RunExplanation(ctx context.Context, args []string) (bool, int) {
 	if mode == "codex" {
 		store, registry = app.CodexProfiles, app.CodexCategories
 	}
+	if mode == "grok" {
+		store, registry = app.GrokProfiles, app.GrokCategories
+	}
 	if store == nil || registry == nil {
 		return fail("target_unavailable", "The selected target explanation is unavailable.")
 	}
@@ -87,7 +89,7 @@ func (app App) RunExplanation(ctx context.Context, args []string) (bool, int) {
 		return fail("explanation_too_large", "The semantic explanation exceeds a declared format bound.")
 	}
 	overlay := ""
-	if mode == "devin" || mode == "codex" {
+	if mode == "devin" || mode == "codex" || mode == "grok" {
 		overlay = mode
 	}
 	resolved, err := registry.ResolveFor(ctx, loaded, overlay)
@@ -114,9 +116,6 @@ func (app App) RunExplanation(ctx context.Context, args []string) (bool, int) {
 	limitations := []explanationLimitation{
 		{"semantic_digest_only", "The digest excludes local paths, file contents, argument values, credentials, concrete project files, and host readiness; equal digests do not mean file-level execution-plan equality."},
 		{"native_readiness_not_launch_readiness", "Native readiness, when requested, does not check target version, authentication, materialization, generated policy, preflights, or cleanup."},
-	}
-	if runtime.GOOS == "linux" {
-		limitations = append(limitations, explanationLimitation{"linux_loopback_unenforced", commonprofile.LinuxLoopbackGap})
 	}
 	limitations = append(limitations, appendInactiveOverlays(&semantic, loaded, overlay)...)
 	sort.Slice(limitations, func(i, j int) bool {
@@ -172,6 +171,8 @@ func (app App) RunExplanation(ctx context.Context, args []string) (bool, int) {
 		status, code, detail = "fail", "backend_not_ready", "The fixed native backend readiness observation did not pass."
 		if readiness.Ready {
 			status, code, detail = "pass", "backend_ready", "The fixed native backend readiness observation passed; launch-specific checks remain."
+		} else if readiness.Failure != nil {
+			detail = readiness.Failure.Error()
 		}
 		checks[len(checks)-1] = explanationCheck{"native.backend", status, code, detail}
 		if !readiness.Supported || !readiness.Ready {

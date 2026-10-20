@@ -85,7 +85,7 @@ func Read(dist, version string, linuxCandidate bool) ([]byte, error) {
 			return nil, fmt.Errorf("archive %q: %w", archive, err)
 		}
 		if linuxCandidate {
-			if err := verifyLinuxBinary(executable); err != nil {
+			if err := VerifyLinuxBinary(executable); err != nil {
 				return nil, err
 			}
 		}
@@ -234,7 +234,8 @@ func readBounded(path string, limit int64) ([]byte, error) {
 	return contents, nil
 }
 
-func verifyLinuxBinary(binary []byte) error {
+// VerifyLinuxBinary checks that packaged bytes are a static linux/amd64 ACS executable.
+func VerifyLinuxBinary(binary []byte) error {
 	executable, err := elf.NewFile(bytes.NewReader(binary))
 	if err != nil {
 		return fmt.Errorf("candidate executable is not ELF")

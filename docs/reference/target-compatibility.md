@@ -13,6 +13,8 @@ Both versions use the same ACS recipe: file credentials in the private Session,
 forced ChatGPT identity and workspace, fixed provider and entrypoint, untrusted
 project configuration, disabled plugins/apps and externally contained execution.
 ACS keeps ownership of containment, process settlement and projection readback.
+The same two Codex versions are the qualified `linux/amd64` pair. Native Linux
+locks are in `scripts/codex-linux-test-targets.lock`. `linux/arm64` is not admitted.
 The named identity validator still rejects unsupported authentication shapes;
 new upstream authentication mechanisms do not become supported automatically.
 The separate optional extension/plugin discovery experiment remains pinned to
@@ -51,3 +53,18 @@ synchronizing managed preferences under the existing ACS confinement. The
 [upstream application-policy change](https://github.com/openai/codex/commit/22a3f6d5d89c026c6b4f606ae5604f9e00059b23)
 introduced this strict prerequisite. ACS does not bypass it or add host preference
 authority to admit that target.
+
+## Grok Build
+
+ACS admits only `grok 1.0.62`, and only on macOS. Grok is not a qualified Linux
+target. The version probe may include one parenthesized
+lowercase commit suffix; prereleases, nearby versions, and extra text fail
+closed before credentials are copied or the interactive process starts. Callers
+cannot override this pin. The authority digest names `grok-cli-exact-1.0.62`.
+
+The reviewed recipe disables Grok auto-update, compatibility scanners, plugins,
+and Grok's own sandbox, and it leaves project folder trust ungranted. Host
+`~/.grok` is not mounted into the sandbox. The only credential projection is
+`~/.grok/auth.json`, or a Profile-selected `XAI_API_KEY`. Native checksums for
+the zstd CLI artifacts are in `scripts/grok-test-targets.lock`. Real account
+login and hosted inference stay outside automated acceptance.

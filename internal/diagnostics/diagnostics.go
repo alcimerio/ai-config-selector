@@ -65,7 +65,7 @@ func doctor(target string, host func() (launch.Platform, error), backend func() 
 	if err != nil {
 		r.set("host.platform", "fail", "platform_unavailable", "Native host version could not be read; use a supported macOS 26 Apple Silicon host.")
 	} else if platformErr := launch.ValidatePlatform(p); platformErr != nil {
-		next := "Use supported macOS 26 on Apple Silicon (arm64); Intel, Linux, and other platforms are unsupported."
+		next := "Use supported macOS 26 on Apple Silicon (arm64) or qualified linux/amd64; other platforms are unsupported."
 		if p.OS == "linux" {
 			next = platformErr.Error()
 		}
@@ -73,16 +73,19 @@ func doctor(target string, host func() (launch.Platform, error), backend func() 
 	} else {
 		r.set("host.platform", "pass", "supported_platform", "The host matches the supported platform policy.")
 	}
-	if err == nil && p.OS == "darwin" {
+	switch {
+	case err == nil && p.OS == "darwin":
 		if backend() {
 			r.set("backend.file", "pass", "backend_available", "Trusted backend file is available; actual enforcement remains unchecked.")
 		} else {
 			r.set("backend.file", "fail", "backend_unavailable", "Restore the system-provided sandbox-exec file and its trusted ownership and permissions.")
 		}
-	} else {
-		r.set("backend.file", "unchecked", "no_supported_backend", "Use a supported macOS host to inspect the native backend file.")
+	case err == nil && p.OS == "linux" && p.Architecture == "amd64":
+		r.set("backend.file", "unchecked", "use_capability_probe", "Run acs doctor --check-linux-capabilities to test Bubblewrap, Landlock, user namespaces, seccomp, and cgroup delegation. A failed probe refuses every launch.")
+	default:
+		r.set("backend.file", "unchecked", "no_supported_backend", "Use a supported macOS 26 Apple Silicon or qualified linux/amd64 host to inspect the native backend.")
 	}
-	name := map[string]string{"devin": "devin", "sandbox": "/bin/zsh", "codex-auth": "codex"}[target]
+	name := map[string]string{"devin": "devin", "sandbox": "/bin/zsh", "codex-auth": "codex", "grok": "grok"}[target]
 	if target == "sandbox" {
 		name, _ = launch.ShellRecipe(p.OS)
 	}

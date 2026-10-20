@@ -35,13 +35,16 @@ func TestExplainLinuxReadinessIncludesUnsupportedBackendGuidance(t *testing.T) {
 		if jsonOutput {
 			args = append(args, "--json")
 		}
-		if code := app.Run(context.Background(), args); code != 1 {
-			t.Fatalf("explain exit = %d, stderr = %s", code, stderr.String())
-		}
-		for _, want := range []string{"Linux sandbox backend is not available yet", "ACS never runs targets unsandboxed", "docs/design/linux-support.md"} {
-			if !strings.Contains(output.String(), want) {
-				t.Errorf("explanation output %q does not contain %q", output.String(), want)
+		code := app.Run(context.Background(), args)
+		text := output.String()
+		if strings.Contains(text, "backend_ready") {
+			if code != 0 {
+				t.Fatalf("ready Linux explain exit = %d, stderr = %s", code, stderr.String())
 			}
+			continue
+		}
+		if code != 1 || !strings.Contains(text, "ACS will not start the requested process without the required sandbox") {
+			t.Fatalf("unready Linux explain = %d %q", code, text)
 		}
 	}
 }

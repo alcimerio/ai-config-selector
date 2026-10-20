@@ -37,10 +37,8 @@ cmp -s "$workspace/expected/acs" "$install_directory/acs" || fail "updater chang
 
 reject_launch() {
   if HOME="$workspace/home" "$install_directory/acs" "$@" >"$workspace/rejected" 2>&1; then
-    fail "production Linux launch was admitted"
+    fail "Linux launch completed without a Profile"
   fi
-  grep -F 'Linux sandbox backend is not available yet' "$workspace/rejected" >/dev/null || fail "missing disabled admission diagnostic"
-  grep -F 'ACS never runs targets unsandboxed' "$workspace/rejected" >/dev/null || fail "missing containment diagnostic"
 }
 reject_launch run --profile missing -- /usr/bin/touch "$workspace/unexpected"
 reject_launch sandbox --profile missing
@@ -48,9 +46,10 @@ reject_launch devin --profile missing
 reject_launch codex --profile missing
 reject_launch codex auth login --name candidate
 reject_launch codex auth status --name candidate
-[ ! -e "$workspace/unexpected" ] && [ ! -e "$workspace/home/.acs" ] || fail "disabled launch produced state"
-if HOME="$workspace/home" "$install_directory/acs" update --check >"$workspace/update" 2>&1; then
-  fail "production Linux updater was admitted"
-fi
-grep -F 'updates require macOS 26 on Apple Silicon' "$workspace/update" >/dev/null || fail "unexpected production update rejection"
-printf '%s\n' 'Linux candidate packaging passed: exact install/update bytes and closed production admission; sandbox qualification is separate.'
+[ ! -e "$workspace/unexpected" ] || fail "refused launch produced the target file"
+[ ! -d "$workspace/home/.acs/sessions" ] || fail "refused launch created a Session"
+before="$(cksum "$install_directory/acs")"
+HOME="$workspace/home" "$install_directory/acs" update --check >"$workspace/update" 2>&1 || true
+grep -F 'updates require macOS 26 on Apple Silicon' "$workspace/update" >/dev/null && fail "linux/amd64 update is still refused as macOS-only"
+[ "$(cksum "$install_directory/acs")" = "$before" ] || fail "update check changed the installed binary"
+printf '%s\n' 'Linux candidate packaging passed: exact install bytes, fail-closed missing-profile launches, and linux/amd64 update is no longer macOS-only.'

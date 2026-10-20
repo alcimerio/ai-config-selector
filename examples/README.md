@@ -10,13 +10,15 @@ named logins, and are checked in CI with the same codec as
 
 | Example | Demonstrates | Targets |
 | --- | --- | --- |
-| [review-readonly](profiles/review-readonly.json) | Default read-only workspace; nothing else selected | Devin, Codex, sandbox |
-| [dev-secrets-excluded](profiles/dev-secrets-excluded.json) | Writable workspace with `.env`, `.env.local` and `secrets/` denied | Devin, Codex, sandbox |
-| [dev-local-service](profiles/dev-local-service.json) | Writable workspace with outbound localhost:3000 for a local dev service | Devin, Codex, sandbox |
-| [dev-scoped-token](profiles/dev-scoped-token.json) | One secret passed by reference and renamed; one optional non-secret | Devin, Codex, sandbox |
-| [docs-writer](profiles/docs-writer.json) | Read-only workspace with only `docs/` writable, plus a selected instruction file | Devin, Codex, sandbox |
-| [skill-review-isolated](profiles/skill-review-isolated.json) | One selected global Skill; repository `.agents/skills` and `.devin/skills` denied | Devin, Codex, sandbox |
+| [review-readonly](profiles/review-readonly.json) | Default read-only workspace; nothing else selected | Devin, Codex, Grok, sandbox |
+| [dev-secrets-excluded](profiles/dev-secrets-excluded.json) | Writable workspace with `.env`, `.env.local` and `secrets/` denied | Devin, Codex, Grok, sandbox |
+| [dev-local-service](profiles/dev-local-service.json) | Writable workspace with outbound localhost:3000 for a local dev service | Devin, Codex, Grok, sandbox |
+| [dev-scoped-token](profiles/dev-scoped-token.json) | One secret passed by reference and renamed; one optional non-secret | Devin, Codex, Grok, sandbox |
+| [docs-writer](profiles/docs-writer.json) | Read-only workspace with only `docs/` writable, plus a selected instruction file | Devin, Codex, Grok, sandbox |
+| [skill-review-isolated](profiles/skill-review-isolated.json) | One selected global Skill; repository `.agents/skills` and `.devin/skills` denied | Devin, Codex, Grok, sandbox |
 | [sandbox-tools-only](profiles/sandbox-tools-only.json) | No target overlay; `git` visibility for `acs sandbox` and `acs run` | sandbox, run |
+
+Grok examples run only on macOS. Qualified `linux/amd64` can use the Devin, Codex, sandbox, and `acs run` examples when the host probe passes. `linux/arm64` is not supported.
 
 ## Use an example
 
@@ -37,6 +39,7 @@ file and change `name`. Launch a target with:
 ```sh
 acs devin --profile review-readonly
 acs codex --profile review-readonly --auth REF
+acs grok --profile review-readonly
 acs run --profile sandbox-tools-only -- /usr/bin/git status
 ```
 
@@ -57,9 +60,10 @@ See [interactive Codex](../docs/guides/codex.md#interactive-launch).
   contain the selected Skill and the launch fails closed.
 - Exclusions are pathname based. They do not hide Git history, copies or names
   in parent listings; see [filesystem exclusions](../docs/reference/common-profile-format.md#filesystem-exclusions).
-- macOS loopback outbound is denied by default. **dev-local-service** explicitly
-  allows port 3000; other loopback ports stay denied. Linux ignores the selection
-  and reports the enforcement gap in explain/dry-run.
+- Loopback outbound is denied by default. **dev-local-service** explicitly
+  allows port 3000; other loopback ports stay denied. Qualified `linux/amd64`
+  enforces that selection, including the whole 127.0.0.0/8. Other Linux hosts
+  are refused.
 - ACS is not an egress firewall: a target can transmit data it can read.
 
 To share your own variant without local paths, use

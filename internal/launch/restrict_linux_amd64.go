@@ -2,6 +2,7 @@ package launch
 
 import (
 	"fmt"
+	"os"
 	"runtime"
 	"strings"
 	"unsafe"
@@ -21,6 +22,7 @@ type linuxExecBoundary struct {
 	argv     **byte
 	env      **byte
 	terminal int64 // -1 or a private slave duplicated above all protocol FDs
+	notify   int64 // socket that receives the seccomp listener; must be > 2
 }
 
 //go:noescape
@@ -90,10 +92,10 @@ func linuxExecStrings(values []string) ([]*byte, error) {
 // Called only by the test harness at present. It deliberately returns a PID,
 // not a Process/Session or cleanup proof. Containment integration is separate.
 func linuxStartRestricted(rules []linuxLandlockRule, path string, args, env []string, status, gate int) (int, error) {
-	return linuxStartRestrictedTerminal(rules, path, args, env, status, gate, -1)
+	return linuxStartRestrictedTerminal(rules, path, args, env, status, gate, -1, linuxLoopbackPolicy{})
 }
 
-func linuxStartRestrictedTerminal(rules []linuxLandlockRule, path string, args, env []string, status, gate, terminal int) (int, error) {
+func linuxStartRestrictedTerminal(rules []linuxLandlockRule, path string, args, env []string, status, gate, terminal int, policy linuxLoopbackPolicy) (int, error) {
 	if !linuxCanonicalPlanPath(path) || len(args) == 0 || args[0] != path || status < 3 || gate < 3 || status == gate {
 		return -1, errLinuxSeal
 	}
@@ -140,9 +142,33 @@ func linuxStartRestrictedTerminal(rules []linuxLandlockRule, path string, args, 
 		}
 		defer unix.Close(terminalCopy)
 	}
-	filter := linuxSeccompFilter()
+	if err := linuxLoopbackNotifSizes(); err != nil {
+		return -1, err
+	}
+	// The child installs its notification filter and only then can create the
+	// listener. Sending that fd with sendmsg would block on the filter itself,
+	// so the child publishes a byte and this process steals the known fd.
+	pair, err := unix.Socketpair(unix.AF_UNIX, unix.SOCK_STREAM|unix.SOCK_CLOEXEC, 0)
+	if err != nil {
+		return -1, linuxStepError(errLinuxSeal, "create loopback handshake socket", err)
+	}
+	handshake := os.NewFile(uintptr(pair[0]), "loopback-handshake")
+	closeHandshake := func() {
+		if handshake != nil {
+			_ = handshake.Close()
+			handshake = nil
+		}
+	}
+	defer closeHandshake()
+	notifyCopy, err := unix.FcntlInt(uintptr(pair[1]), unix.F_DUPFD_CLOEXEC, 128)
+	_ = unix.Close(pair[1])
+	if err != nil {
+		return -1, linuxStepError(errLinuxSeal, "duplicate loopback handshake socket", err)
+	}
+	defer unix.Close(notifyCopy)
+	filter := linuxSeccompFilter(policy.Callback)
 	program := unix.SockFprog{Len: uint16(len(filter)), Filter: &filter[0]}
-	config := linuxExecBoundary{int64(ruleset), int64(statusCopy), int64(gateCopy), &program, argv[0], &argv[0], &envp[0], int64(terminalCopy)}
+	config := linuxExecBoundary{int64(ruleset), int64(statusCopy), int64(gateCopy), &program, argv[0], &argv[0], &envp[0], int64(terminalCopy), int64(notifyCopy)}
 	runtime.LockOSThread()
 	pid, errno := linuxForkExec(&config)
 	runtime.UnlockOSThread()
@@ -152,5 +178,17 @@ func linuxStartRestrictedTerminal(rules []linuxLandlockRule, path string, args, 
 	if errno != 0 {
 		return -1, linuxStepError(errLinuxSeal, "fork restricted child", errno)
 	}
+	listener, err := linuxHandoffListener(int(pid), int(handshake.Fd()))
+	closeHandshake()
+	if err != nil {
+		if pidfd, openErr := unix.PidfdOpen(int(pid), 0); openErr == nil {
+			_ = unix.PidfdSendSignal(pidfd, unix.SIGKILL, nil, 0)
+			_ = unix.Close(pidfd)
+		}
+		var status unix.WaitStatus
+		_, _ = unix.Wait4(int(pid), &status, 0, nil)
+		return -1, linuxStepError(errLinuxSeal, "receive loopback listener", err)
+	}
+	go linuxServeNotifications(listener, policy)
 	return int(pid), nil
 }

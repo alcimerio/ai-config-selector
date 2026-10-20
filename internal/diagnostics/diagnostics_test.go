@@ -29,7 +29,7 @@ func TestDoctorRequestedChecksAndPlatformPolicy(t *testing.T) {
 	for _, tc := range []struct {
 		os, arch, release string
 		ok                bool
-	}{{"darwin", "arm64", "26", true}, {"darwin", "amd64", "26.1.2", false}, {"darwin", "arm64", "25.6", false}, {"darwin", "arm64", "27", false}, {"darwin", "386", "26", false}, {"darwin", "arm64", "26.x", false}, {"darwin", "arm64", "26.", false}, {"linux", "amd64", "26", false}, {"windows", "amd64", "26", false}} {
+	}{{"darwin", "arm64", "26", true}, {"darwin", "amd64", "26.1.2", false}, {"darwin", "arm64", "25.6", false}, {"darwin", "arm64", "27", false}, {"darwin", "386", "26", false}, {"darwin", "arm64", "26.x", false}, {"darwin", "arm64", "26.", false}, {"linux", "amd64", "6.12", true}, {"linux", "arm64", "6.12", false}, {"windows", "amd64", "26", false}} {
 		t.Run(tc.os+tc.arch+tc.release, func(t *testing.T) {
 			r := doctor("", func() (launch.Platform, error) {
 				return launch.Platform{OS: tc.os, Architecture: tc.arch, Release: tc.release}, nil
@@ -55,7 +55,7 @@ func TestDoctorRequestedChecksAndPlatformPolicy(t *testing.T) {
 			}
 		})
 	}
-	for target, name := range map[string]string{"devin": "devin", "sandbox": "/bin/zsh", "codex-auth": "codex"} {
+	for target, name := range map[string]string{"devin": "devin", "sandbox": "/bin/zsh", "codex-auth": "codex", "grok": "grok"} {
 		for _, available := range []bool{false, true} {
 			calls := 0
 			r := doctor(target, func() (launch.Platform, error) {

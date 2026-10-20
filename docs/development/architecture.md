@@ -4,9 +4,11 @@
 
 ACS resolves a persisted Profile into an immutable authority plan, materializes
 selected content in an ephemeral Session, and runs a registered target or an
-explicit command through a required native process sandbox. The supported
-runtime is macOS 26 on Apple Silicon (`darwin/arm64`), using the verified system
-Seatbelt backend. Unsupported hosts have no sandbox backend and fail closed.
+explicit command through a required native process sandbox. Supported runtimes
+are macOS 26 on Apple Silicon (`darwin/arm64`), using Seatbelt, and qualified
+native `linux/amd64` (Linux 6.12+, Landlock ABI 6, Bubblewrap, unprivileged user
+namespaces, and an owned cgroup v2 delegation). Other hosts have no sandbox
+backend and fail closed. `linux/arm64` is not supported.
 
 ## Domain model
 
@@ -21,8 +23,8 @@ Seatbelt backend. Unsupported hosts have no sandbox backend and fail closed.
   home and temporary directories, materialized content, and cleanup state.
 - Process sandbox: validates platform and paths, prepares containment and a
   clean environment, and supplies process-tree cleanup proof.
-- Execution recipe: registered Devin or Codex, fixed `/bin/zsh -f`, or the
-  literal executable and argv supplied to `acs run`.
+- Execution recipe: registered Devin or Codex, Grok Build on macOS, fixed `/bin/zsh -f` or `/bin/bash --noprofile --norc`, or the
+  literal executable and argv supplied to `acs run`. Grok is not a qualified Linux target.
 
 See the [common Profile format](../reference/common-profile-format.md) for schemas and
 [effective capability explanation](../guides/diagnostics.md#effective-capability-explanation) for the
@@ -38,13 +40,13 @@ plan's public inspection commands.
 | `internal/authority` | Immutable semantic authority plan and digest |
 | `internal/adapter/devin`, `internal/adapter/codex` | Target discovery, Profile editing, projections, and declarative launch requirements |
 | `internal/runcommand`, `internal/genericrun` | Resolve literal command identity and argv, then submit them to the shared executor |
-| `internal/sandboxshell` | Fixed `/bin/zsh -f` request facade |
+| `internal/sandboxshell` | Fixed macOS `/bin/zsh -f` facade. Qualified `linux/amd64` uses `/bin/bash --noprofile --norc`. |
 | `internal/session` | Target-independent Session creation, leasing, retention, and removal |
 | `internal/profilerepo` | Conditional Profile persistence, history publication, and transaction recovery |
 | `internal/executor` | Required sandbox selection, target preflights, credentials projection, process attachment, and cleanup ordering |
 | `internal/codexauth` | Public named-authentication configuration and typed API facade |
 | `internal/codexauthresource` | Credential validation, Keychain access, locks, marker generations, and secure projection/readback |
-| `internal/launch` | Platform/path/environment validation, Seatbelt policy, signals, terminal handling, descendant settlement, and sanitized failures |
+| `internal/launch` | Platform/path/environment validation, Seatbelt or the qualified linux/amd64 Bubblewrap launcher, signals, terminal handling, descendant settlement, and sanitized failures |
 
 Adapters declare requirements. The executor selects the backend, manages
 process handles and Session leases, and applies the cleanup policy. The
@@ -128,6 +130,24 @@ interrupted login into a credential record. See
 [interactive Codex](../guides/codex.md#interactive-launch) for the operator
 contract.
 
+### Grok Build
+
+1. Validate the native backend, executable, workspace, and registered Grok
+   semantics. Reject Profile environment names that would retarget Grok's home,
+   trust, sandbox, updater, or compatibility scanners.
+2. Create the Session and project selected Skills, instructions, and stdio MCP
+   servers. Write a Session `config.toml` that disables auto-update, compatibility
+   scanners, plugins, and Grok's own sandbox.
+3. Probe `grok --version` with no credential and no selected environment. Only
+   `grok 1.0.62`, with an optional parenthesized commit, continues.
+4. Copy `~/.grok/auth.json` when it is present, or require a selected
+   `XAI_API_KEY`. Write-protect the generated config and `trusted_folders.toml`.
+5. Attach plain `grok` through the shared process executor and remove the
+   Session after cleanup is proven.
+
+ACS does not pass `--trust` and does not import host managed configuration.
+See [Grok Build](../guides/grok.md).
+
 ### Sandbox shell and generic commands
 
 Both paths validate containment, create and materialize a generic Session, and
@@ -135,7 +155,7 @@ use the shared attached-process lifecycle. Neither selects a target overlay,
 projects target authentication, or runs Devin preflights. Explicit common
 environment selections may still include secrets.
 
-The shell always runs `/bin/zsh -f`, ignoring `$SHELL` and startup files.
+On macOS the shell runs `/bin/zsh -f`. On qualified `linux/amd64` it runs `/bin/bash --noprofile --norc`. Neither consults `$SHELL` or startup files.
 `RunCommand` accepts only a resolved literal executable and argv plus the
 common authority plan. It revalidates executable identity after materialization
 and immediately before native preparation; it adds no inferred authority.
@@ -144,6 +164,8 @@ See [generic commands](../guides/generic-run.md) for usage and argv semantics.
 ## Filesystem and environment policy
 
 Seatbelt starts with `deny default` and validated canonical path parameters.
+Qualified `linux/amd64` applies the same grants through Bubblewrap mounts,
+Landlock, and seccomp.
 The generated policy grants:
 
 - workspace reads, with writes only when selected (Profiles default to

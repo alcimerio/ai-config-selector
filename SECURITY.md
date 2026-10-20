@@ -1,6 +1,7 @@
 # Security policy
 
-ACS runs coding agents and commands inside the native macOS Seatbelt sandbox.
+ACS runs coding agents and commands inside a required native sandbox: Seatbelt
+on macOS, and Bubblewrap with Landlock and seccomp on qualified `linux/amd64`.
 This page explains how to report a vulnerability and which reports are in scope.
 The [security model](docs/reference/security-model.md) owns the full boundary
 contract.
@@ -15,8 +16,9 @@ with `acs version` and reproduce on the latest release before reporting.
 | Version | Supported |
 | --- | --- |
 | Latest release on macOS 26 Apple Silicon (`darwin/arm64`) | Yes |
+| Qualified native `linux/amd64` (Linux 6.12+, Landlock ABI 6, Bubblewrap, unprivileged user namespaces, and an owned cgroup v2 delegation) | Yes, for source that registers that backend. The published archive is added by the next release; until then a Linux `acs update` fails closed because the release is missing the archive. |
 | Older releases | No |
-| Intel Macs and Linux, including historical v0.4.0 Intel and v0.3.3 Linux assets | No |
+| Intel Macs, `linux/arm64`, WSL, containers, and historical v0.4.0 Intel and v0.3.3 Linux assets | No |
 
 Source builds report `acs devel`. `main` can describe changes that have not
 shipped; say so if your report depends on unreleased code.
@@ -35,7 +37,7 @@ reproduction or affected component in that issue.
 
 A useful private report includes:
 
-- the ACS version or commit, macOS version and architecture
+- the ACS version or commit, host OS, kernel or macOS version, and architecture
 - the affected command shape and Profile selections, sanitized
 - the expected boundary, what happened instead and the
   [security model](docs/reference/security-model.md) statement it contradicts
@@ -51,7 +53,7 @@ This policy does not promise a response time or a disclosure date.
 
 In scope are failures of a boundary ACS claims to enforce, for example:
 
-- a target or descendant escaping the Seatbelt policy, or gaining filesystem
+- a target or descendant escaping the sandbox policy, or gaining filesystem
   access beyond its Profile grants and exclusions
 - any path that launches a target without the sandbox; there is no unsandboxed
   fallback

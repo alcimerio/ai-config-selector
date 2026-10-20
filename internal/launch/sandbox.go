@@ -223,10 +223,12 @@ func sandboxError(category SandboxErrorCategory, cause error) error {
 	return result
 }
 
+var errLinuxReleaseUnavailable = errors.New("linux release unavailable")
+
 func unsupportedPlatformError(operatingSystem string) *SandboxError {
 	remediation := ""
 	if operatingSystem == "linux" {
-		remediation = "Linux sandbox backend is not available yet; ACS never runs targets unsandboxed; see docs/design/linux-support.md"
+		remediation = "Linux support requires native linux/amd64 on a qualified host; ACS never runs targets unsandboxed; see docs/design/linux-support.md"
 	}
 	return newSandboxError(SandboxUnsupportedPlatform, remediation)
 }
@@ -246,6 +248,10 @@ func ValidatePlatform(platform Platform) error {
 	switch platform.OS {
 	case "darwin":
 		supported = platform.Architecture == "arm64" && releaseLine(platform.Release, "26")
+	case "linux":
+		// Kernel, Landlock, Bubblewrap, user namespaces and cgroup delegation are
+		// host prerequisites checked by the backend. arm64 stays closed.
+		supported = platform.Architecture == "amd64"
 	}
 	if !supported {
 		return unsupportedPlatformError(platform.OS)
@@ -282,6 +288,12 @@ func CurrentPlatform() (Platform, error) {
 			return Platform{}, sandboxError(SandboxUnsupportedPlatform, err)
 		}
 		platform.Release = strings.TrimSpace(string(output))
+	case "linux":
+		release, err := currentLinuxRelease()
+		if err != nil {
+			return Platform{}, unsupportedPlatformError("linux")
+		}
+		platform.Release = release
 	default:
 		return Platform{}, unsupportedPlatformError(runtime.GOOS)
 	}
@@ -591,6 +603,8 @@ func nativeBackendName(operatingSystem string) string {
 	switch operatingSystem {
 	case "darwin":
 		return "Seatbelt"
+	case "linux":
+		return "Bubblewrap"
 	default:
 		return "None"
 	}
@@ -680,10 +694,12 @@ func (sandbox *nativeProcessSandbox) checkEnvironmentTransport() error {
 	if err := ValidatePlatform(platform); err != nil {
 		return err
 	}
-	if platform.OS != "darwin" {
+	switch platform.OS {
+	case "darwin", "linux":
+		return nil
+	default:
 		return sandboxError(SandboxBackendUnavailable, errors.New("selected environment transport is unsupported"))
 	}
-	return nil
 }
 
 type sanitizedProcess struct {
