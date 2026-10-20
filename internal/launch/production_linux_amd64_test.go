@@ -7,11 +7,24 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/alcimerio/ai-config-selector/internal/linuxprobe"
 )
 
 func TestLinuxProductionCommandRunsInsideTheSandbox(t *testing.T) {
 	linuxNativePrerequisites(t)
+	report := linuxprobe.Probe(context.Background())
+	if !report.PrerequisitesPassed() {
+		var missing []string
+		for _, check := range report.Checks {
+			if check.Status != "pass" {
+				missing = append(missing, check.ID+":"+check.Code)
+			}
+		}
+		linuxNativeUnavailable(t, strings.Join(missing, ", "))
+	}
 	base := t.TempDir()
 	sessions := filepath.Join(base, "sessions")
 	workspace := filepath.Join(base, "work")

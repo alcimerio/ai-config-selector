@@ -81,7 +81,8 @@ run_suite containment ./internal/launch '^TestLinux' \
   TestLinuxNativeRecipeStartupAndLiteralArguments TestLinuxNativeRecipeInteractiveShell \
   TestLinuxNativeRecipeComposition TestLinuxDevinPublishedBytes TestLinuxNativeDevinPreflights \
   TestLinuxCodexPublishedPairs TestLinuxNativeCodexPairs \
-  TestLinuxHasNoSandboxBackend TestLinuxSandboxFailsClosed
+  TestLinuxAmd64RegistersTheQualifiedBackend TestLinuxProductionCommandRunsInsideTheSandbox \
+  TestLinuxSandboxFailsClosed
 run_suite credentials ./internal/codexauthresource '^TestLinux' \
   TestLinuxFileProviderConformance TestLinuxFileProviderRequiresDurableOptIn \
   TestLinuxFileProviderStoreRefreshAndQuarantine TestLinuxFileProviderRecoveryRefresh \
