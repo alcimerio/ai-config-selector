@@ -53,6 +53,7 @@ return 2); consult their contextual help and
 | Inspect / restore history | `acs profile history NAME`, `acs profile restore NAME --revision EVENT --dry-run` | [Profile history](../guides/profile-history.md) |
 | Run Devin | `acs devin --profile NAME` | [Target conformance](shared-target-conformance.md) |
 | Run Codex | `acs codex --profile NAME [--auth REF]` | [Interactive Codex](../guides/codex.md#interactive-launch) |
+| Run Grok Build | `acs grok --profile NAME` | [Grok Build](../guides/grok.md) |
 | Manage named login | `acs codex auth login --name REF` | [Codex authentication](../guides/codex.md#named-authentication) |
 | Inspect or select credential provider | `acs codex auth provider [--select file\|secret-service\|keychain]` | Explicit durable choice; Linux launches remain unavailable |
 | Open a sandbox shell | `acs sandbox --profile NAME` | [Get started](../guides/getting-started.md) |

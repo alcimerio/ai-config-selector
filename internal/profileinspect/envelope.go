@@ -203,7 +203,7 @@ func decodeEnvelope(entry Entry, envelope map[string]json.RawMessage) Entry {
 			return entry.failed("invalid_structure")
 		}
 		support := "inactive-unknown"
-		if id == "devin" {
+		if id == "devin" || id == "grok" {
 			support = "unsupported"
 			if overlayVersion == 1 && !unknown(payload, "version") {
 				support = "supported"

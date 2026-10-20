@@ -54,7 +54,7 @@ func TestUnifiedCreationPTYSharedTargetsAndCancellation(t *testing.T) {
 			if cancelCreation {
 				writePTY(t, master, "\x03")
 			} else {
-				writePTY(t, master, " \x1b[B \x1b[B\x1b[B\r")
+				writePTY(t, master, " \x1b[B \x1b[B\x1b[B\x1b[B\r")
 				waitForPTYOutput(t, capture, "Targets: Devin, Codex")
 				writePTY(t, master, "\x1b[B\r")
 				waitForPTYOutput(t, capture, "Confirm: Create an empty Profile?")

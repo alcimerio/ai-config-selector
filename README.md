@@ -12,7 +12,7 @@
   <a href="LICENSE"><img src="https://img.shields.io/github/license/alcimerio/ai-config-selector" alt="MIT License"></a>
 </p>
 
-AI Config Selector (`acs`) is a Go CLI that runs Devin, Codex, a shell, or any
+AI Config Selector (`acs`) is a Go CLI that runs Devin, Codex, Grok Build, a shell, or any
 command inside the native macOS Seatbelt sandbox. Run directly, a coding agent
 can usually reach your whole home directory, every installed Skill and any
 credentials it finds. ACS makes that access explicit and repeatable: save the local
@@ -26,14 +26,14 @@ project.
 
 > [!IMPORTANT]
 > ACS supports macOS 26 on Apple Silicon (`darwin/arm64`). Linux and Intel Macs
-> are not supported runtimes. Devin and Codex are installed separately; you can
+> are not supported runtimes. Devin, Codex, and Grok Build are installed separately; you can
 > try the sandbox without an AI account.
 
 ## Why ACS?
 
 - **Explicit access.** New Profiles default to a read-only workspace; write
   access and extra paths are opt-in. See [Profiles](docs/guides/profiles.md).
-- **One Profile, many targets.** The same selections drive Devin, Codex, a
+- **One Profile, many targets.** The same selections drive Devin, Codex, Grok Build, a
   sandbox shell or a [literal command](docs/guides/generic-run.md), from any
   project directory.
 - **Inspect before you launch.** `acs explain` reports requested and effective
@@ -52,7 +52,7 @@ project.
 
 ```text
 Profile ──► immutable authority plan ──► private Session ──► Seatbelt sandbox ──► target
-(saved      (resolved before any         (synthetic home,      (macOS native,       devin | codex |
+(saved      (resolved before any         (synthetic home,      (macOS native,       devin | codex | grok |
 selections)  Session exists)              selected material)    no fallback)         /bin/zsh -f | your command
 ```
 
@@ -61,7 +61,7 @@ selections)  Session exists)              selected material)    no fallback)    
 | **Profile** | Saved capability selections under `~/.acs/profiles`: Skills, instructions, workspace and path access, executables, environment references, MCP servers and optional per-target overlays. It stores references, not copies of files or secret values. |
 | **Skill** | A local bundle with a `SKILL.md` entry file, discovered under `~/.agents/skills` and `~/.config/devin/skills`. ACS does not install or download Skills. |
 | **Session** | The private, temporary home and state for one launch. ACS removes it only after proving the contained process tree has settled. |
-| **Target** | What runs inside the sandbox: Devin, Codex, the sandbox shell (`/bin/zsh -f`), or a literal command passed to `acs run`. |
+| **Target** | What runs inside the sandbox: Devin, Codex, Grok Build, the sandbox shell (`/bin/zsh -f`), or a literal command passed to `acs run`. |
 
 The [architecture](docs/development/architecture.md) and
 [security model](docs/reference/security-model.md) describe each step in detail.
@@ -184,11 +184,13 @@ target overlay in the Profile builder. Then launch it with the Profile:
 ```sh
 acs devin --profile NAME
 acs codex --profile NAME
+acs grok --profile NAME
 ```
 
 Follow [Get started](docs/guides/getting-started.md) to add a Skill and continue
 with Devin, [interactive Codex](docs/guides/codex.md#interactive-launch) for its
-ACS-owned named login, and [target conformance](docs/reference/shared-target-conformance.md)
+ACS-owned named login, [Grok Build](docs/guides/grok.md) for its host login or
+selected `XAI_API_KEY`, and [target conformance](docs/reference/shared-target-conformance.md)
 for integration differences.
 
 To start from a ready-made Profile instead of the builder, see the

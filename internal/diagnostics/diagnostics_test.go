@@ -55,7 +55,7 @@ func TestDoctorRequestedChecksAndPlatformPolicy(t *testing.T) {
 			}
 		})
 	}
-	for target, name := range map[string]string{"devin": "devin", "sandbox": "/bin/zsh", "codex-auth": "codex"} {
+	for target, name := range map[string]string{"devin": "devin", "sandbox": "/bin/zsh", "codex-auth": "codex", "grok": "grok"} {
 		for _, available := range []bool{false, true} {
 			calls := 0
 			r := doctor(target, func() (launch.Platform, error) {

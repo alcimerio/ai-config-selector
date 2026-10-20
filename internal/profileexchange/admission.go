@@ -131,7 +131,7 @@ func validateSymbolicIntent(doc document) Code {
 			return CodeUnsupportedContent
 		}
 		switch id {
-		case "devin":
+		case "devin", "grok":
 			if overlay.AuthBinding != "" {
 				return CodeUnsupportedContent
 			}

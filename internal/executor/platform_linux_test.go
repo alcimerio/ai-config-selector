@@ -7,11 +7,12 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/alcimerio/ai-config-selector/internal/authority"
 	"github.com/alcimerio/ai-config-selector/internal/launch"
 )
 
 func TestLinuxLaunchFailsBeforeSessionCreation(t *testing.T) {
-	for _, target := range []string{"shell", "devin", "devin verification"} {
+	for _, target := range []string{"shell", "devin", "devin verification", "grok"} {
 		t.Run(target, func(t *testing.T) {
 			root := t.TempDir()
 			sessions := filepath.Join(root, "sessions")
@@ -35,6 +36,9 @@ func TestLinuxLaunchFailsBeforeSessionCreation(t *testing.T) {
 				_, err = executor.RunDevin(context.Background(), request)
 			case "devin verification":
 				err = executor.VerifyDevin(context.Background(), request)
+			case "grok":
+				plan := authority.New(nil, launch.WorkspaceAccessReadOnly, "grok", authority.TargetRequirements{Recipe: authority.RecipeGrok, Executable: "missing-grok", Semantics: authority.GrokSemantics()})
+				_, err = executor.RunGrok(context.Background(), GrokRequest{SessionsDirectory: sessions, WorkingDirectory: request.WorkingDirectory, ResolvedPlan: &plan})
 			}
 			var failure *launch.SandboxError
 			if !errors.As(err, &failure) || failure.Category != launch.SandboxUnsupportedPlatform {

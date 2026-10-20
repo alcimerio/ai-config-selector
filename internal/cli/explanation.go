@@ -76,6 +76,9 @@ func (app App) RunExplanation(ctx context.Context, args []string) (bool, int) {
 	if mode == "codex" {
 		store, registry = app.CodexProfiles, app.CodexCategories
 	}
+	if mode == "grok" {
+		store, registry = app.GrokProfiles, app.GrokCategories
+	}
 	if store == nil || registry == nil {
 		return fail("target_unavailable", "The selected target explanation is unavailable.")
 	}
@@ -87,7 +90,7 @@ func (app App) RunExplanation(ctx context.Context, args []string) (bool, int) {
 		return fail("explanation_too_large", "The semantic explanation exceeds a declared format bound.")
 	}
 	overlay := ""
-	if mode == "devin" || mode == "codex" {
+	if mode == "devin" || mode == "codex" || mode == "grok" {
 		overlay = mode
 	}
 	resolved, err := registry.ResolveFor(ctx, loaded, overlay)

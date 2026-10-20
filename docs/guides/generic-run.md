@@ -53,7 +53,7 @@ instruction files under `$HOME/.acs/common/v1/instructions/<source>/<relative-pa
 in the synthetic Session home. It does not create Devin rules paths or apply
 Devin activation semantics. It neither projects target MCP configuration nor
 automatically starts selected MCP servers; their separately selected common
-resource grants still apply. Inactive Devin, Codex, and unknown overlay
+resource grants still apply. Inactive Devin, Codex, Grok, and unknown overlay
 payloads stay inert. A Profile's workspace is read-only unless the user
 explicitly chose coding write.
 

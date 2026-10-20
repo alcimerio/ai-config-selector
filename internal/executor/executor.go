@@ -200,6 +200,37 @@ func (mode retainedSignalMode) String() string {
 	}
 }
 
+func resolvePlannedExecution(plan *authority.Plan, workingDirectory, sessionsDirectory, executable string) (launch.RuntimeAuthority, []launch.FilesystemExclusion, []launch.FilesystemGrant, []launch.ExecutableGrant, string, error) {
+	if plan == nil {
+		return launch.RuntimeAuthority{}, nil, nil, nil, executable, nil
+	}
+	runtime := plan.RuntimeAuthority()
+	exclusions, err := plan.ResolveFilesystemExclusions(workingDirectory, sessionsDirectory)
+	if err != nil {
+		return runtime, nil, nil, nil, executable, err
+	}
+	grants, err := plan.ResolveFilesystemGrantsForPreflight(workingDirectory, sessionsDirectory)
+	if err != nil {
+		return runtime, exclusions, nil, nil, executable, &launch.SandboxError{Category: launch.SandboxUnsafePath}
+	}
+	executableGrants, err := plan.ResolveExecutableGrants(workingDirectory, sessionsDirectory)
+	if err != nil {
+		return runtime, exclusions, grants, nil, executable, &launch.SandboxError{Category: launch.SandboxUnsafePath}
+	}
+	if hasWritableFilesystemGrant(grants) {
+		resolved, resolveErr := launch.ResolveExecutablePath(executable)
+		if resolveErr != nil {
+			return runtime, exclusions, grants, executableGrants, executable, &launch.SandboxError{Category: launch.SandboxUnsafePath}
+		}
+		executable = resolved
+		grants, err = plan.ResolveFilesystemGrantsForExecutable(workingDirectory, sessionsDirectory, executable)
+		if err != nil {
+			return runtime, exclusions, grants, executableGrants, executable, &launch.SandboxError{Category: launch.SandboxUnsafePath}
+		}
+	}
+	return runtime, exclusions, grants, executableGrants, executable, nil
+}
+
 func hasWritableFilesystemGrant(grants []launch.FilesystemGrant) bool {
 	for _, grant := range grants {
 		if grant.Access == launch.PathAccessReadWrite {
@@ -406,26 +437,12 @@ func (e *Executor) RunDevin(ctx context.Context, request DevinRequest) (exitCode
 	}
 	request.Executable, request.RuntimeInputs, request.ExistingHomeDirectory = requirements.Executable, requirements.RuntimeInputs, requirements.ExistingHomeDirectory
 	resolvedGrants := phasetiming.Start("devin.resolve-grants")
+	runtimeAuthority, exclusions, grants, executableGrants, executable, err := resolvePlannedExecution(request.ResolvedPlan, request.WorkingDirectory, request.SessionsDirectory, request.Executable)
+	if err != nil {
+		return 1, err
+	}
 	if request.ResolvedPlan != nil {
-		request.RuntimeAuthority = request.ResolvedPlan.RuntimeAuthority()
-		var err error
-		request.FilesystemExclusions, err = request.ResolvedPlan.ResolveFilesystemExclusions(request.WorkingDirectory, request.SessionsDirectory)
-		if err != nil {
-			return 1, err
-		}
-		request.FilesystemGrants, err = request.ResolvedPlan.ResolveFilesystemGrantsForPreflight(request.WorkingDirectory, request.SessionsDirectory)
-		if err == nil {
-			request.ExecutableGrants, err = request.ResolvedPlan.ResolveExecutableGrants(request.WorkingDirectory, request.SessionsDirectory)
-		}
-		if err == nil && hasWritableFilesystemGrant(request.FilesystemGrants) {
-			request.Executable, err = launch.ResolveExecutablePath(request.Executable)
-		}
-		if err == nil && hasWritableFilesystemGrant(request.FilesystemGrants) {
-			request.FilesystemGrants, err = request.ResolvedPlan.ResolveFilesystemGrantsForExecutable(request.WorkingDirectory, request.SessionsDirectory, request.Executable)
-		}
-		if err != nil {
-			return 1, &launch.SandboxError{Category: launch.SandboxUnsafePath}
-		}
+		request.RuntimeAuthority, request.FilesystemExclusions, request.FilesystemGrants, request.ExecutableGrants, request.Executable = runtimeAuthority, exclusions, grants, executableGrants, executable
 	}
 	resolvedGrants()
 	preflightContext, cancelPreflight := context.WithCancel(ctx)
@@ -436,7 +453,7 @@ func (e *Executor) RunDevin(ctx context.Context, request DevinRequest) (exitCode
 	requiresEnvironment := request.ResolvedPlan != nil && len(request.ResolvedPlan.EnvironmentIntents()) != 0
 	defer phasetiming.Start("devin.total")()
 	checked := phasetiming.Start("sandbox.check")
-	err := e.sandbox.Check(preflightContext, launch.SandboxCheck{Workspace: request.WorkingDirectory, WorkspaceAccess: request.WorkspaceAccess, SessionsDirectory: request.SessionsDirectory, Executable: request.Executable, RuntimeInputs: request.RuntimeInputs, RuntimeAuthority: request.RuntimeAuthority, FilesystemExclusions: request.FilesystemExclusions, FilesystemGrants: request.FilesystemGrants, ExecutableGrants: request.ExecutableGrants, RequiresEnvironment: requiresEnvironment})
+	err = e.sandbox.Check(preflightContext, launch.SandboxCheck{Workspace: request.WorkingDirectory, WorkspaceAccess: request.WorkspaceAccess, SessionsDirectory: request.SessionsDirectory, Executable: request.Executable, RuntimeInputs: request.RuntimeInputs, RuntimeAuthority: request.RuntimeAuthority, FilesystemExclusions: request.FilesystemExclusions, FilesystemGrants: request.FilesystemGrants, ExecutableGrants: request.ExecutableGrants, RequiresEnvironment: requiresEnvironment})
 	checked()
 	if err != nil {
 		return 1, err
@@ -526,26 +543,12 @@ func (e *Executor) VerifyDevin(ctx context.Context, request DevinRequest) (resul
 		request.ExpectedInstructions = request.ResolvedPlan.DevinExpectedInstructions()
 	}
 	request.Executable, request.RuntimeInputs, request.ExistingHomeDirectory = requirements.Executable, requirements.RuntimeInputs, requirements.ExistingHomeDirectory
+	runtimeAuthority, exclusions, grants, executableGrants, executable, err := resolvePlannedExecution(request.ResolvedPlan, request.WorkingDirectory, request.SessionsDirectory, request.Executable)
+	if err != nil {
+		return err
+	}
 	if request.ResolvedPlan != nil {
-		request.RuntimeAuthority = request.ResolvedPlan.RuntimeAuthority()
-		var err error
-		request.FilesystemExclusions, err = request.ResolvedPlan.ResolveFilesystemExclusions(request.WorkingDirectory, request.SessionsDirectory)
-		if err != nil {
-			return err
-		}
-		request.FilesystemGrants, err = request.ResolvedPlan.ResolveFilesystemGrantsForPreflight(request.WorkingDirectory, request.SessionsDirectory)
-		if err == nil {
-			request.ExecutableGrants, err = request.ResolvedPlan.ResolveExecutableGrants(request.WorkingDirectory, request.SessionsDirectory)
-		}
-		if err == nil && hasWritableFilesystemGrant(request.FilesystemGrants) {
-			request.Executable, err = launch.ResolveExecutablePath(request.Executable)
-		}
-		if err == nil && hasWritableFilesystemGrant(request.FilesystemGrants) {
-			request.FilesystemGrants, err = request.ResolvedPlan.ResolveFilesystemGrantsForExecutable(request.WorkingDirectory, request.SessionsDirectory, request.Executable)
-		}
-		if err != nil {
-			return &launch.SandboxError{Category: launch.SandboxUnsafePath}
-		}
+		request.RuntimeAuthority, request.FilesystemExclusions, request.FilesystemGrants, request.ExecutableGrants, request.Executable = runtimeAuthority, exclusions, grants, executableGrants, executable
 	}
 	if err := e.sandbox.Check(ctx, launch.SandboxCheck{Workspace: request.WorkingDirectory, WorkspaceAccess: request.WorkspaceAccess, SessionsDirectory: request.SessionsDirectory, Executable: request.Executable, RuntimeInputs: request.RuntimeInputs, RuntimeAuthority: request.RuntimeAuthority, FilesystemExclusions: request.FilesystemExclusions, FilesystemGrants: request.FilesystemGrants, ExecutableGrants: request.ExecutableGrants}); err != nil {
 		return err
@@ -617,7 +620,7 @@ func projectDevinSession(created *session.Session, request DevinRequest) (DevinR
 	request.reserveMCPConfigNames = true
 	request.sessionProtections = mcpSessionProtections(recipeDirectory, selectedMCPConfig)
 	request.sessionProtections = append(request.sessionProtections, launch.SessionProtection{Path: devinUserConfig})
-	if err := copyDevinCredentialIfPresent(filepath.Join(request.ExistingHomeDirectory, ".local", "share", "devin", "credentials.toml"), filepath.Join(created.HomeDirectory(), ".local", "share", "devin", "credentials.toml")); err != nil {
+	if err := copyAllowlistedCredential(filepath.Join(request.ExistingHomeDirectory, ".local", "share", "devin", "credentials.toml"), filepath.Join(created.HomeDirectory(), ".local", "share", "devin", "credentials.toml")); err != nil {
 		return request, err
 	}
 	return request, nil
@@ -1114,6 +1117,10 @@ func (e *Executor) prepareDevinInteractive(ctx context.Context, created *session
 }
 
 func copyDevinCredentialIfPresent(source, destination string) error {
+	return copyAllowlistedCredential(source, destination)
+}
+
+func copyAllowlistedCredential(source, destination string) error {
 	info, err := os.Stat(source)
 	if os.IsNotExist(err) {
 		return nil

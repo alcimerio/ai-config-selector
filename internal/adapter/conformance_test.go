@@ -11,6 +11,7 @@ import (
 
 	codexadapter "github.com/alcimerio/ai-config-selector/internal/adapter/codex"
 	"github.com/alcimerio/ai-config-selector/internal/adapter/devin"
+	grokadapter "github.com/alcimerio/ai-config-selector/internal/adapter/grok"
 	"github.com/alcimerio/ai-config-selector/internal/category"
 	"github.com/alcimerio/ai-config-selector/internal/launch"
 	"github.com/alcimerio/ai-config-selector/internal/profile"
@@ -18,7 +19,7 @@ import (
 )
 
 // TestMaintainedTargetsShareCommonSkillsAndWorkspaceContract is the common
-// behavioral suite for the two maintained adapters. Target-specific lifecycle
+// behavioral suite for the maintained adapters. Target-specific lifecycle
 // and credential proofs remain in their owning executor packages.
 func TestMaintainedTargetsShareCommonSkillsAndWorkspaceContract(t *testing.T) {
 	home := t.TempDir()
@@ -42,11 +43,16 @@ func TestMaintainedTargetsShareCommonSkillsAndWorkspaceContract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	grokTarget, err := grokadapter.New(grokadapter.Config{BinaryPath: "/usr/bin/true", ExistingHomeDir: home})
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	for _, access := range []launch.WorkspaceAccess{launch.WorkspaceAccessReadOnly, launch.WorkspaceAccessReadWrite} {
 		candidate := commonProfile(t, "shared", selected, access, map[string]profile.OverlayPayload{
 			"devin": {Version: 1},
 			"codex": {Version: 1, AuthRef: "work"},
+			"grok":  {Version: 1},
 		})
 		for _, target := range []struct {
 			name       string
@@ -77,6 +83,16 @@ func TestMaintainedTargetsShareCommonSkillsAndWorkspaceContract(t *testing.T) {
 				},
 				projection: func(reference skills.SkillReference) string {
 					return filepath.Join(".codex/skills", string(reference.Source), reference.RelativePath, "SKILL.md")
+				},
+				absent: []string{projectAgent, projectDevin},
+			},
+			{
+				name: "grok", registry: grokTarget.Categories(),
+				plan: func(resolved category.ResolvedProfile) (launch.Plan, error) {
+					return grokTarget.PlanLaunch(context.Background(), filepath.Join(t.TempDir(), "sessions"), workspace, resolved)
+				},
+				projection: func(reference skills.SkillReference) string {
+					return filepath.Join(".grok/skills", string(reference.Source), reference.RelativePath, "SKILL.md")
 				},
 				absent: []string{projectAgent, projectDevin},
 			},

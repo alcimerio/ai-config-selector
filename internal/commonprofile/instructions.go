@@ -82,8 +82,12 @@ func (c InstructionsContribution) PlanResolved(ctx context.Context, _ string, ov
 		}
 		logical := filepath.ToSlash(filepath.Join("session-home/.acs/common/v1/instructions", item.Reference.Source, item.Reference.RelativePath))
 		details := []launch.PlanDetail{{Label: "identity", Value: item.Reference.Source + ":" + item.Reference.RelativePath}, {Label: "common", Value: logical}}
-		if overlay == "devin" && c.projection.ID() == "devin" {
-			details = append(details, launch.PlanDetail{Label: "target projection", Value: "session-home/.devin/rules/" + instructions.DestinationName(item.Reference)})
+		if overlay == c.projection.ID() && (overlay == "devin" || overlay == "grok") {
+			root := "session-home/.devin/rules/"
+			if overlay == "grok" {
+				root = "session-home/.grok/rules/"
+			}
+			details = append(details, launch.PlanDetail{Label: "target projection", Value: root + instructions.DestinationName(item.Reference)})
 		}
 		section.Items = append(section.Items, launch.PlanItem{Label: filepath.Base(item.Reference.RelativePath), Details: details})
 	}
@@ -121,8 +125,12 @@ func (c InstructionsContribution) SemanticFacts(overlay string) authority.Facts 
 		return authority.Facts{}
 	}
 	f := authority.Facts{Requested: []authority.Fact{{ID: "common.instructions", Kind: "capability", Value: authority.FactValue{Mode: "selected-exact-identities"}, Reason: "stored_selection", Source: authority.FactSource{Kind: "profile", ID: InstructionsCapabilityID, Version: InstructionsCapabilityVersion}}}}
-	if overlay == "devin" && c.projection.ID() == "devin" && len(c.selected) > 0 {
-		f.TargetAdded = append(f.TargetAdded, authority.Fact{ID: "instructions.target-projection", Kind: "target-projection", Value: authority.FactValue{Mode: "selected-always-on-rules"}, Reason: "registered_projection", Source: authority.FactSource{Kind: "target", ID: c.projection.ID(), Version: c.projection.Version()}})
+	if overlay == c.projection.ID() && len(c.selected) > 0 && (overlay == "devin" || overlay == "grok") {
+		mode := "selected-always-on-rules"
+		if overlay == "grok" {
+			mode = "selected-global-rules"
+		}
+		f.TargetAdded = append(f.TargetAdded, authority.Fact{ID: "instructions.target-projection", Kind: "target-projection", Value: authority.FactValue{Mode: mode}, Reason: "registered_projection", Source: authority.FactSource{Kind: "target", ID: c.projection.ID(), Version: c.projection.Version()}})
 	}
 	for _, v := range c.selected {
 		id := v.Reference.Source + ":" + v.Reference.RelativePath
