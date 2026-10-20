@@ -72,8 +72,15 @@ trap 'exit 143' TERM
 zstd -d -q -f -o "$workspace/grok" "$archive" || fail "archive extraction failed"
 [ -f "$workspace/grok" ] && [ ! -L "$workspace/grok" ] || fail "extracted target is not a regular file"
 chmod 0500 "$workspace/grok" || fail "extracted target could not be secured"
-version="$("$workspace/grok" --version 2>/dev/null || true)"
-printf '%s\n' "$version" | grep -Eq '^grok 1\.0\.62( \([0-9a-f]+\))?$' || fail "installed target reported an unexpected version"
+# Linux execution belongs to the contained native harness. Darwin still checks
+# the reported version here because that host has no contained Grok gate.
+case "$(uname -s)" in
+  Linux) ;;
+  *)
+    version="$("$workspace/grok" --version 2>/dev/null || true)"
+    printf '%s\n' "$version" | grep -Eq '^grok 1\.0\.62( \([0-9a-f]+\))?$' || fail "installed target reported an unexpected version"
+    ;;
+esac
 publish_started=1
 mv "$workspace/grok" "$output_path" || fail "extracted target could not be published"
 publish_complete=1

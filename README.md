@@ -31,7 +31,7 @@ project.
 > namespaces, and an owned cgroup v2 delegation). Intel Macs and `linux/arm64`
 > are not supported. A missing prerequisite refuses the launch. Devin, Codex,
 > and Grok Build are installed separately; you can try the sandbox without an
-> AI account. Grok is not a qualified Linux target.
+> AI account.
 
 ## Why ACS?
 
@@ -56,9 +56,9 @@ project.
 
 ```text
 Profile ──► immutable authority plan ──► private Session ──► native sandbox ──► target
-(saved      (resolved before any         (synthetic home,     (Seatbelt on macOS;  devin | codex |
-selections)  Session exists)              selected material)   Bubblewrap on        grok on macOS |
-                                                              linux/amd64;         shell or command
+(saved      (resolved before any         (synthetic home,     (Seatbelt on macOS;  devin | codex | grok |
+selections)  Session exists)              selected material)   Bubblewrap on        shell or command
+                                                              linux/amd64;
                                                               no fallback)
 ```
 
@@ -67,7 +67,7 @@ selections)  Session exists)              selected material)   Bubblewrap on    
 | **Profile** | Saved capability selections under `~/.acs/profiles`: Skills, instructions, workspace and path access, executables, environment references, MCP servers and optional per-target overlays. It stores references, not copies of files or secret values. |
 | **Skill** | A local bundle with a `SKILL.md` entry file, discovered under `~/.agents/skills` and `~/.config/devin/skills`. ACS does not install or download Skills. |
 | **Session** | The private, temporary home and state for one launch. ACS removes it only after proving the contained process tree has settled. |
-| **Target** | What runs inside the sandbox: Devin, Codex, Grok Build on macOS, the sandbox shell (`/bin/zsh -f` on macOS, `/bin/bash --noprofile --norc` on linux/amd64), or a literal command passed to `acs run`. Grok is not a qualified Linux target. |
+| **Target** | What runs inside the sandbox: Devin, Codex, Grok Build, the sandbox shell (`/bin/zsh -f` on macOS, `/bin/bash --noprofile --norc` on linux/amd64), or a literal command passed to `acs run`. |
 
 The [architecture](docs/development/architecture.md) and
 [security model](docs/reference/security-model.md) describe each step in detail.

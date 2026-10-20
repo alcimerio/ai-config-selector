@@ -56,8 +56,9 @@ authority to admit that target.
 
 ## Grok Build
 
-ACS admits only `grok 1.0.62`, and only on macOS. Grok is not a qualified Linux
-target. The version probe may include one parenthesized
+ACS admits only `grok` 1.0.62 on macOS and qualified `linux/amd64`. The Linux
+binary is the locked static amd64 artifact; `linux/arm64` stays refused. The
+version probe may include one parenthesized
 lowercase commit suffix; prereleases, nearby versions, and extra text fail
 closed before credentials are copied or the interactive process starts. Callers
 cannot override this pin. The authority digest names `grok-cli-exact-1.0.62`.

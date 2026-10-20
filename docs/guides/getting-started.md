@@ -25,7 +25,7 @@ prerequisites. On macOS that includes the system `/usr/bin/sandbox-exec` and
 `acs doctor --check-linux-capabilities` before a launch; the shell is
 `/bin/bash`. Doctor does not execute a containment test. On an unsupported
 host, or when a Linux prerequisite fails, stop here; there is no bypass or
-unsandboxed fallback. Grok is not a qualified Linux target.
+unsandboxed fallback.
 
 ## 2. Add an optional first Skill
 

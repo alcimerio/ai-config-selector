@@ -23,8 +23,8 @@ backend and fail closed. `linux/arm64` is not supported.
   home and temporary directories, materialized content, and cleanup state.
 - Process sandbox: validates platform and paths, prepares containment and a
   clean environment, and supplies process-tree cleanup proof.
-- Execution recipe: registered Devin or Codex, Grok Build on macOS, fixed `/bin/zsh -f` or `/bin/bash --noprofile --norc`, or the
-  literal executable and argv supplied to `acs run`. Grok is not a qualified Linux target.
+- Execution recipe: registered Devin, Codex, or Grok Build, fixed `/bin/zsh -f` or `/bin/bash --noprofile --norc`, or the
+  literal executable and argv supplied to `acs run`.
 
 See the [common Profile format](../reference/common-profile-format.md) for schemas and
 [effective capability explanation](../guides/diagnostics.md#effective-capability-explanation) for the

@@ -66,7 +66,8 @@ func TestLinuxNativeGateFailsClosed(t *testing.T) {
 			if mode == "success" {
 				for _, required := range []string{
 					"install-devin-test-target.sh", "fetch-codex-test-targets.sh",
-					"install-codex-test-target.sh", "0.149.1", "0.156.0",
+					"install-codex-test-target.sh", "fetch-grok-test-target.sh",
+					"install-grok-test-target.sh", "0.149.1", "0.156.0",
 					"./internal/launch", "./internal/codexauthresource", "./internal/executor",
 					"required=1 cgo=0",
 				} {
@@ -138,7 +139,7 @@ case "$*" in
 esac
 cat "$NATIVE_GATE_TRANSCRIPT"
 `)
-	for _, name := range []string{"install-devin-test-target.sh", "fetch-codex-test-targets.sh", "install-codex-test-target.sh"} {
+	for _, name := range []string{"install-devin-test-target.sh", "fetch-codex-test-targets.sh", "install-codex-test-target.sh", "fetch-grok-test-target.sh", "install-grok-test-target.sh"} {
 		writeFakeExecutable(t, filepath.Join(scripts, name), `#!/bin/sh
 printf '%s %s\n' "$0" "$*" >> "$NATIVE_GATE_CALLS"
 if [ "$NATIVE_GATE_MODE" = install ]; then exit 1; fi

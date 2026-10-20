@@ -104,7 +104,10 @@ func linuxProductionKind(request validatedProcessRequest) (linuxRecipeKind, erro
 		return linuxCodexRecipe, nil
 	}
 	if filepath.Base(request.executable) == "grok" {
-		return 0, newSandboxError(SandboxUnsupportedPlatform, "Grok is not a qualified Linux target; ACS never runs targets unsandboxed; see docs/design/linux-support.md")
+		if linuxGrokArguments(request.arguments, false) || linuxGrokArguments(request.arguments, true) {
+			return linuxGrokRecipe, nil
+		}
+		return 0, errLinuxRecipe
 	}
 	if request.executable == "" {
 		return 0, errLinuxRecipe
