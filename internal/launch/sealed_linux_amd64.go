@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"io"
+	"net/netip"
 	"os"
 	"os/exec"
 	"strconv"
@@ -38,6 +39,9 @@ type linuxLaunchWire struct {
 	CodexHome                  string               `json:",omitempty"`
 	LoopbackPorts              []int                `json:",omitempty"`
 	LoopbackCallback           bool                 `json:",omitempty"`
+	// Host resolver addresses, snapshotted before the sandbox mount namespace
+	// exists. The broker must not re-read /etc/resolv.conf inside Bubblewrap.
+	Resolvers []string `json:",omitempty"`
 }
 
 func (w linuxLaunchWire) validate() error {
@@ -66,6 +70,14 @@ func (w linuxLaunchWire) validate() error {
 	if err != nil || w.LoopbackCallback && (len(ports.LoopbackPorts) != 1 || ports.LoopbackPorts[0] != linuxCodexCallbackPort) {
 		return errLinuxSeal
 	}
+	if len(w.Resolvers) > 8 {
+		return errLinuxSeal
+	}
+	for _, resolver := range w.Resolvers {
+		if _, err := netip.ParseAddr(resolver); err != nil {
+			return errLinuxSeal
+		}
+	}
 	return nil
 }
 
@@ -92,6 +104,9 @@ func linuxSealedMemfd(data []byte) (*os.File, error) {
 }
 
 func linuxWriteTransport(w linuxLaunchWire, env *environmentresource.Lease) (*os.File, error) {
+	// Caller-supplied resolvers are ignored. The host file is the only source,
+	// and this write happens before Bubblewrap replaces the mount namespace.
+	w.Resolvers = linuxResolverStrings()
 	if err := w.validate(); err != nil {
 		return nil, err
 	}

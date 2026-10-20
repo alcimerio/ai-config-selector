@@ -155,7 +155,7 @@ func TestLinuxSealHelper(t *testing.T) {
 		_ = unix.Close(status)
 		_ = unix.Close(gate)
 	} else {
-		pid, err = linuxStartRestrictedTerminal(rules, w.Executable, w.Argv, env, 4, 5, -1, linuxLoopbackPolicy{Ports: w.LoopbackPorts, Callback: w.LoopbackCallback})
+		pid, err = linuxStartRestrictedTerminal(rules, w.Executable, w.Argv, env, 4, 5, -1, linuxLoopbackPolicy{Ports: w.LoopbackPorts, Callback: w.LoopbackCallback, Resolvers: linuxWireResolvers(w.Resolvers)})
 		if err != nil {
 			os.Exit(125)
 		}

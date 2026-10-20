@@ -170,9 +170,25 @@ func linuxTestWire() linuxLaunchWire {
 		Home: "/session/home", Temporary: "/session/tmp", Directory: "/work/project"}
 }
 
+func TestLinuxWireRejectsResolverList(t *testing.T) {
+	w := linuxTestWire()
+	w.Resolvers = []string{"not-an-ip"}
+	if err := w.validate(); err == nil {
+		t.Fatal("invalid resolver accepted")
+	}
+	w.Resolvers = make([]string, 9)
+	for i := range w.Resolvers {
+		w.Resolvers[i] = "10.0.0.1"
+	}
+	if err := w.validate(); err == nil {
+		t.Fatal("oversized resolver list accepted")
+	}
+}
+
 func TestLinuxPrivateTransport(t *testing.T) {
 	t.Setenv("UNSELECTED_SECRET", "ambient-secret")
 	want := linuxTestWire()
+	want.Resolvers = linuxResolverStrings()
 	f, err := linuxWriteTransport(want, linuxTestLease(t, map[string]string{"SELECTED": "synthetic-secret"}))
 	if err != nil {
 		t.Fatal(err)

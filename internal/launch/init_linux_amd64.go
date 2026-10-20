@@ -69,7 +69,7 @@ func linuxRunContainedInit(w linuxLaunchWire, env []string, status, control *os.
 	}
 	step = "start restricted child"
 	pid, err := linuxStartRestrictedTerminal(rules, w.Executable, w.Argv, env, int(report.Fd()), int(gate.Fd()), terminalFD,
-		linuxLoopbackPolicy{Ports: append([]int(nil), w.LoopbackPorts...), Callback: w.LoopbackCallback})
+		linuxLoopbackPolicy{Ports: append([]int(nil), w.LoopbackPorts...), Callback: w.LoopbackCallback, Resolvers: linuxWireResolvers(w.Resolvers)})
 	if err != nil {
 		return err
 	}

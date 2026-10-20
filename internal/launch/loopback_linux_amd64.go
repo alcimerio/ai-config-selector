@@ -28,8 +28,9 @@ const (
 )
 
 type linuxLoopbackPolicy struct {
-	Ports    []int
-	Callback bool
+	Ports     []int
+	Callback  bool
+	Resolvers []netip.Addr
 }
 
 type linuxSeccompData struct {
@@ -116,7 +117,6 @@ func linuxHandoffListener(pid, conn int) (int, error) {
 
 func linuxServeNotifications(listener int, policy linuxLoopbackPolicy) {
 	defer unix.Close(listener)
-	resolvers := linuxResolvers()
 	for {
 		var req linuxSeccompNotif
 		_, _, errno := unix.Syscall(unix.SYS_IOCTL, uintptr(listener), unix.SECCOMP_IOCTL_NOTIF_RECV, uintptr(unsafe.Pointer(&req)))
@@ -126,7 +126,7 @@ func linuxServeNotifications(listener int, policy linuxLoopbackPolicy) {
 		if errno != 0 {
 			return
 		}
-		go linuxLoopbackDispatch(listener, req, policy, resolvers)
+		go linuxLoopbackDispatch(listener, req, policy, policy.Resolvers)
 	}
 }
 
@@ -277,6 +277,30 @@ func linuxResolvers() []netip.Addr {
 		return nil
 	}
 	return linuxParseResolvers(string(data))
+}
+
+func linuxResolverStrings() []string {
+	addrs := linuxResolvers()
+	if len(addrs) == 0 {
+		return nil
+	}
+	out := make([]string, len(addrs))
+	for i, addr := range addrs {
+		out[i] = addr.String()
+	}
+	return out
+}
+
+func linuxWireResolvers(values []string) []netip.Addr {
+	var out []netip.Addr
+	for _, value := range values {
+		addr, err := netip.ParseAddr(value)
+		if err != nil {
+			continue
+		}
+		out = append(out, addr)
+	}
+	return out
 }
 
 func linuxParseResolvers(text string) []netip.Addr {
