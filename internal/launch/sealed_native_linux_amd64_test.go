@@ -851,6 +851,16 @@ func TestLinuxLoopbackCallbackProbe(t *testing.T) {
 	if len(os.Args) < 2 || os.Args[len(os.Args)-1] != "acs-loopback-callback" {
 		return
 	}
+	// Denied binds run before the successful listens so port 1455 is free.
+	// Rebinding it after an accepted connection races with socket close.
+	for _, address := range []string{"127.0.0.2:1455", "127.0.0.1:1456", "0.0.0.0:1455"} {
+		if _, err := net.Listen("tcp4", address); !errors.Is(err, unix.EPERM) {
+			t.Fatalf("listen %s: %v", address, err)
+		}
+	}
+	if _, err := net.Listen("tcp6", "[::]:1455"); !errors.Is(err, unix.EPERM) {
+		t.Fatalf("wildcard ipv6 listen: %v", err)
+	}
 	ln, err := net.Listen("tcp4", "127.0.0.1:1455")
 	if err != nil {
 		t.Fatal(err)
@@ -880,11 +890,6 @@ func TestLinuxLoopbackCallbackProbe(t *testing.T) {
 	if err := <-errCh; err != nil {
 		t.Fatal(err)
 	}
-	for _, address := range []string{"127.0.0.2:1455", "127.0.0.1:1456", "0.0.0.0:1455"} {
-		if _, err := net.Listen("tcp4", address); !errors.Is(err, unix.EPERM) {
-			t.Fatalf("listen %s: %v", address, err)
-		}
-	}
 	ln6, err := net.Listen("tcp6", "[::1]:1455")
 	if err != nil {
 		t.Fatal(err)
@@ -906,9 +911,6 @@ func TestLinuxLoopbackCallbackProbe(t *testing.T) {
 	}
 	_ = conn.Close()
 	_ = ln6.Close()
-	if _, err := net.Listen("tcp6", "[::]:1455"); !errors.Is(err, unix.EPERM) {
-		t.Fatalf("wildcard ipv6 listen: %v", err)
-	}
 }
 
 func linuxRequireComposed(t *testing.T) {
