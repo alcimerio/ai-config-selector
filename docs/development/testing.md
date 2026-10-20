@@ -3,7 +3,8 @@
 [Documentation index](../README.md) · [Contributing](../../CONTRIBUTING.md) · [Release procedure](releasing.md)
 
 Run the normal and race suites in [local setup](../../CONTRIBUTING.md#local-setup)
-on macOS 26 Apple Silicon. Native tests require a normal terminal; another
+on macOS 26 Apple Silicon. Qualified `linux/amd64` evidence is the native Linux
+gate later in this page. Native tests require a normal terminal; another
 restrictive sandbox can invalidate their results. Never weaken macOS security
 settings to make a test pass.
 
@@ -27,10 +28,10 @@ For cross-target capability and lifecycle checks, use
 OS-specific filesystem and terminal shims keep shared code testable on Linux.
 The `Portable Linux tests` CI job on `ubuntu-24.04` checks formatting, vets
 linux/amd64 and darwin/arm64, builds linux/amd64 and linux/arm64, runs
-`go test ./...`, and confirms that a Linux launch fails closed because no Linux
-backend exists yet. To compile without running anything, use `go test -c`, not
+`go test ./...`, and confirms that a missing Profile cannot create Session state
+and that `linux/arm64` stays refused. To compile without running anything, use `go test -c`, not
 `go test -run '^$'`, which starts test executables and package initialization. Portable unit tests supplement
-native checks; they establish neither Linux runtime support nor containment.
+native checks. They do not establish containment.
 
 Run the same Staticcheck gates as CI with:
 
@@ -64,8 +65,8 @@ kernel 6.12+, Landlock ABI 6+, working unprivileged user/mount/PID namespaces,
 seccomp, trusted `/usr/bin/bwrap`, and an owned delegated cgroup v2 domain.
 The probe temporarily creates one child cgroup and kills/reaps its fixed helper;
 it does not allocate an ACS Session. Landlock ABI availability and a probe
-seccomp filter do not establish the full containment contract. Linux production
-launch admission stays disabled. See the [diagnostic probe scope](../guides/diagnostics.md#experimental-linux-capability-probes).
+seccomp filter do not establish the full containment contract. See the
+[diagnostic probe scope](../guides/diagnostics.md#experimental-linux-capability-probes).
 
 ### Native Linux containment CI (roadmap item 14)
 
@@ -121,9 +122,9 @@ authenticated cleanup and credential-free target preflights. Provider lifecycle
 and failure-injection fixtures also run, but their modeled settlement is not
 independent native process proof. This job is a normal, static Go build; it
 does not claim race-instrumented native evidence. The existing macOS normal,
-race and release gates remain separate and unchanged. Production Linux launch
-admission and Linux release publication remain disabled pending the remaining
-qualification and activation work.
+race and release gates remain separate and unchanged. Qualified `linux/amd64`
+launch admission is enabled. Linux release publication is still a separate
+macOS-only asset set until a release adds the staged Linux archive.
 
 ### Native arm64 deferred (roadmap item 15)
 

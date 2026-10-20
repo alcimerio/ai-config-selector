@@ -16,12 +16,13 @@ func TestCreationRequiresExplicitDevelopmentAndCapturesSharedTargets(t *testing.
 		return "profile", nil
 	}, func(_ *category.Draft, development bool) error { preset = development; return nil })
 	key := func(code rune) { next, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: code})); m = next.(Model) }
-	if m.creation.Development || m.creation.Devin || m.creation.Codex {
+	if m.creation.Development || m.creation.Devin || m.creation.Codex || m.creation.Grok {
 		t.Fatal("creation default expands authority")
 	}
 	key(tea.KeySpace)
 	key(tea.KeyDown)
 	key(tea.KeySpace)
+	key(tea.KeyDown)
 	key(tea.KeyDown)
 	key(tea.KeySpace)
 	key(tea.KeyDown)
@@ -32,7 +33,7 @@ func TestCreationRequiresExplicitDevelopmentAndCapturesSharedTargets(t *testing.
 	if _, err := m.save(context.Background(), m.draft); err != nil {
 		t.Fatal(err)
 	}
-	if !saved.Devin || !saved.Codex || !saved.Development {
+	if !saved.Devin || !saved.Codex || saved.Grok || !saved.Development {
 		t.Fatalf("saved %+v", saved)
 	}
 }

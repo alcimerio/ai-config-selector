@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 
@@ -140,9 +139,6 @@ func TestExplainUnknownInactiveOverlaysAreSanitizedLimitationsOutsidePlanAndDige
 			t.Fatalf("unknown overlay order changed digest: %q != %q", result.Plan.Digest, baselineDigest)
 		}
 		wantCodes := []string{"inactive_overlay_unknown", "inactive_overlay_unknown", "native_readiness_not_launch_readiness", "semantic_digest_only"}
-		if runtime.GOOS == "linux" {
-			wantCodes = []string{"inactive_overlay_unknown", "inactive_overlay_unknown", "linux_loopback_unenforced", "native_readiness_not_launch_readiness", "semantic_digest_only"}
-		}
 		if len(result.Limitations) != len(wantCodes) {
 			t.Fatalf("limitations = %#v, want codes %v", result.Limitations, wantCodes)
 		}

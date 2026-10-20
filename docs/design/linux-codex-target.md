@@ -3,10 +3,10 @@
 [Documentation index](../README.md)
 
 This implements the lock, fixed recipe and qualification harness for
-[roadmap item 13](linux-support.md#stack-5--targets). Production Linux admission
-remains closed. No backend registration, production helper, user bypass, release
-matrix change or Linux arm64 admission is added. Darwin keeps its existing lock,
-version probe, recipes and tests.
+[roadmap item 13](linux-support.md#stack-5--targets). Qualified `linux/amd64`
+admission uses the registered Bubblewrap backend and the file credential
+provider. There is no user bypass. Linux arm64 stays unpublished. Darwin keeps
+its existing lock, version probe, recipes and tests.
 
 ## Exact inputs
 

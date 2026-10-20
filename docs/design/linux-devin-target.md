@@ -3,11 +3,10 @@
 [Documentation index](../README.md)
 
 This implements the amd64 inputs and qualification harness for
-[roadmap item 12](linux-support.md#stack-5--targets). Production Linux admission
-remains closed. There is no Linux backend registration or production helper
-entry point. Linux arm64 is explicitly deferred; its presence in the upstream
-manifest does not create an ACS lock row or support claim. macOS behavior and
-its native gates are unchanged.
+[roadmap item 12](linux-support.md#stack-5--targets). Qualified `linux/amd64`
+admission uses the registered Bubblewrap backend. Linux arm64 stays deferred;
+its presence in the upstream manifest does not create an ACS lock row or support
+claim. macOS behavior and its native gates are unchanged.
 
 ## Published bytes and runtime bundle
 

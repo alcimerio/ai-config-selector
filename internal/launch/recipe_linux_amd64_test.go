@@ -22,10 +22,12 @@ func TestLinuxRecipeAdmissionIsClosed(t *testing.T) {
 	assertLinuxUnsupported(t, err)
 	t.Setenv("ACS_LINUX_EXPERIMENTAL", "1")
 	t.Setenv("ACS_LINUX_NATIVE_REQUIRED", "1")
-	if len(nativeSandboxBackends()) != 0 {
-		t.Fatal("environment registered a production backend")
+	if _, ok := nativeSandboxBackends()["linux"]; !ok {
+		t.Fatal("linux/amd64 backend is not registered")
 	}
-	assertLinuxUnsupported(t, NewProcessSandbox().Check(context.Background(), SandboxCheck{}))
+	if err := NewProcessSandbox().Check(context.Background(), SandboxCheck{}); err == nil || !strings.Contains(err.Error(), requiredSandboxNotice) {
+		t.Fatalf("empty check admitted a launch: %v", err)
+	}
 }
 
 func TestLinuxRecipePreparationFailureSettlesOrQuarantines(t *testing.T) {

@@ -5,6 +5,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -53,7 +54,7 @@ func TestLinuxCredentialProviderCommandRunsBeforeRuntime(t *testing.T) {
 		if code != tc.code || !strings.Contains(out.String()+errOut.String(), tc.want) {
 			t.Fatalf("%s = %d, stdout=%q stderr=%q", tc.args, code, out.String(), errOut.String())
 		}
-		if code == 0 && !strings.Contains(out.String(), "Linux launches remain unavailable") {
+		if code == 0 && !strings.Contains(out.String(), "Qualified linux/amd64 launches use this provider") {
 			t.Fatal("selection implied Linux availability")
 		}
 		if strings.Contains(errOut.String(), "private-invalid-value") || strings.Contains(errOut.String(), home) {
@@ -64,7 +65,12 @@ func TestLinuxCredentialProviderCommandRunsBeforeRuntime(t *testing.T) {
 		t.Fatalf("provider command touched runtime state: %v", err)
 	}
 	var output bytes.Buffer
-	if handled, code := (App{ErrorOutput: &output}).RunUnsupportedExecution([]string{"codex", "auth", "login", "--name", "work"}); !handled || code != 1 {
-		t.Fatalf("selected file provider enabled launch: (%v, %d)", handled, code)
+	handled, code := (App{ErrorOutput: &output}).RunUnsupportedExecution([]string{"codex", "auth", "login", "--name", "work"})
+	if runtime.GOARCH == "amd64" {
+		if handled || code != 0 {
+			t.Fatalf("qualified host rejected before the sandbox: (%v, %d)", handled, code)
+		}
+	} else if !handled || code != 1 {
+		t.Fatalf("unqualified host was admitted: (%v, %d)", handled, code)
 	}
 }

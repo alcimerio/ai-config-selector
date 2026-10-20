@@ -2,8 +2,9 @@
 
 [Documentation index](../README.md) · [CLI guide](../reference/cli.md) · [Security model](../reference/security-model.md)
 
-Start with a credential-free shell on macOS 26 Apple Silicon to inspect
-workspace access and the temporary home before adding an AI target or account.
+Start with a credential-free shell on macOS 26 Apple Silicon or qualified
+native `linux/amd64` to inspect workspace access and the temporary home before
+adding an AI target or account.
 For an installed release, use the documentation at its Git tag.
 
 ## 1. Install and check the host
@@ -19,9 +20,12 @@ acs doctor --target sandbox
 
 `command -v` should identify the executable you deliberately installed. Release
 builds print a version; source builds print `acs devel`. `doctor` checks passive
-prerequisites, including the system `/usr/bin/sandbox-exec` and shell availability.
-It does not execute a containment test. On an unsupported host, stop here;
-there is no bypass or unsandboxed fallback.
+prerequisites. On macOS that includes the system `/usr/bin/sandbox-exec` and
+`/bin/zsh`. On qualified `linux/amd64`, run
+`acs doctor --check-linux-capabilities` before a launch; the shell is
+`/bin/bash`. Doctor does not execute a containment test. On an unsupported
+host, or when a Linux prerequisite fails, stop here; there is no bypass or
+unsandboxed fallback. Grok is not a qualified Linux target.
 
 ## 2. Add an optional first Skill
 
@@ -96,7 +100,7 @@ acs sandbox --profile first-review
 - `validate` checks structure and selected Skill sources, not complete launch readiness
 - `explain` describes effective authority; native readiness is unchecked unless requested
 - Sandbox dry-run resolves the plan and checks bounded native readiness, without a Session
-- The final command starts `/bin/zsh -f` inside a private Session
+- The final command starts `/bin/zsh -f` on macOS, or `/bin/bash --noprofile --norc` on qualified `linux/amd64`, inside a private Session
 
 Inside the shell, try:
 

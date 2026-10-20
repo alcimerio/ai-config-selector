@@ -18,7 +18,7 @@ import (
 // A small interpreter proves the generated classic-BPF branches, including
 // otherwise uncallable foreign architectures and the x32 syscall-number bit.
 func linuxEvaluateFilter(t *testing.T, arch, nr uint32, args [6]uint64) uint32 {
-	return linuxEvaluateProgram(t, linuxSeccompFilter(), arch, nr, args)
+	return linuxEvaluateProgram(t, linuxSeccompFilter(false), arch, nr, args)
 }
 
 func linuxEvaluateProgram(t *testing.T, f []unix.SockFilter, arch, nr uint32, args [6]uint64) uint32 {
@@ -102,6 +102,15 @@ func TestLinuxSeccompPolicy(t *testing.T) {
 		{unix.SYS_SOCKETPAIR, deny, [6]uint64{unix.AF_UNIX, unix.SOCK_SEQPACKET}},
 		{unix.SYS_READ, unix.SECCOMP_RET_ALLOW, [6]uint64{}},
 		{unix.SYS_EXECVE, unix.SECCOMP_RET_ALLOW, [6]uint64{}},
+		{unix.SYS_CONNECT, unix.SECCOMP_RET_USER_NOTIF, [6]uint64{}},
+		{unix.SYS_SENDMSG, unix.SECCOMP_RET_USER_NOTIF, [6]uint64{}},
+		{unix.SYS_SENDMMSG, unix.SECCOMP_RET_USER_NOTIF, [6]uint64{}},
+		{unix.SYS_SENDTO, unix.SECCOMP_RET_ALLOW, [6]uint64{}},
+		{unix.SYS_SENDTO, unix.SECCOMP_RET_USER_NOTIF, [6]uint64{0, 0, 0, 0, 1}},
+		{unix.SYS_SENDTO, unix.SECCOMP_RET_USER_NOTIF, [6]uint64{0, 0, 0, 0, 1 << 32}},
+		{unix.SYS_SECCOMP, deny, [6]uint64{}},
+		{unix.SYS_PRCTL, deny, [6]uint64{unix.PR_SET_SECCOMP}},
+		{unix.SYS_PRCTL, unix.SECCOMP_RET_ALLOW, [6]uint64{unix.PR_GET_NO_NEW_PRIVS}},
 	} {
 		if got := linuxEvaluateFilter(t, unix.AUDIT_ARCH_X86_64, tc.nr, tc.args); got != tc.want {
 			t.Errorf("syscall %d args %v = %#x want %#x", tc.nr, tc.args, got, tc.want)
@@ -120,6 +129,23 @@ func TestLinuxSeccompPolicy(t *testing.T) {
 	}
 	if linuxEvaluateFilter(t, unix.AUDIT_ARCH_X86_64, 0x40000000|unix.SYS_READ, [6]uint64{}) != unix.SECCOMP_RET_KILL_PROCESS {
 		t.Fatal("x32 allowed")
+	}
+	user := uint32(unix.SECCOMP_RET_USER_NOTIF)
+	for _, nr := range []uint32{unix.SYS_LISTEN, unix.SYS_ACCEPT, unix.SYS_ACCEPT4} {
+		if linuxEvaluateProgram(t, linuxSeccompFilter(true), unix.AUDIT_ARCH_X86_64, nr, [6]uint64{}) != user {
+			t.Fatalf("callback syscall %d was not notified", nr)
+		}
+	}
+	for _, nr := range []uint32{unix.SYS_CONNECT, unix.SYS_SECCOMP, unix.SYS_PIDFD_GETFD, unix.SYS_PROCESS_VM_READV, unix.SYS_PROCESS_VM_WRITEV, unix.SYS_SENDMSG, unix.SYS_LISTEN, unix.SYS_ACCEPT, unix.SYS_ACCEPT4} {
+		if got := linuxEvaluateProgram(t, linuxSeccompFilterForSetup(false), unix.AUDIT_ARCH_X86_64, nr, [6]uint64{}); got != unix.SECCOMP_RET_ALLOW {
+			t.Fatalf("setup filter blocked syscall %d: %#x", nr, got)
+		}
+	}
+	if got := linuxEvaluateProgram(t, linuxSeccompFilterForSetup(false), unix.AUDIT_ARCH_X86_64, unix.SYS_IOCTL, [6]uint64{0, unix.SECCOMP_IOCTL_NOTIF_RECV}); got != unix.SECCOMP_RET_ALLOW {
+		t.Fatalf("setup filter blocked notification ioctl: %#x", got)
+	}
+	if got := linuxEvaluateFilter(t, unix.AUDIT_ARCH_X86_64, unix.SYS_IOCTL, [6]uint64{0, unix.SECCOMP_IOCTL_NOTIF_RECV}); got != deny {
+		t.Fatalf("target filter allowed notification ioctl: %#x", got)
 	}
 }
 
@@ -144,9 +170,25 @@ func linuxTestWire() linuxLaunchWire {
 		Home: "/session/home", Temporary: "/session/tmp", Directory: "/work/project"}
 }
 
+func TestLinuxWireRejectsResolverList(t *testing.T) {
+	w := linuxTestWire()
+	w.Resolvers = []string{"not-an-ip"}
+	if err := w.validate(); err == nil {
+		t.Fatal("invalid resolver accepted")
+	}
+	w.Resolvers = make([]string, 9)
+	for i := range w.Resolvers {
+		w.Resolvers[i] = "10.0.0.1"
+	}
+	if err := w.validate(); err == nil {
+		t.Fatal("oversized resolver list accepted")
+	}
+}
+
 func TestLinuxPrivateTransport(t *testing.T) {
 	t.Setenv("UNSELECTED_SECRET", "ambient-secret")
 	want := linuxTestWire()
+	want.Resolvers = linuxResolverStrings()
 	f, err := linuxWriteTransport(want, linuxTestLease(t, map[string]string{"SELECTED": "synthetic-secret"}))
 	if err != nil {
 		t.Fatal(err)

@@ -52,14 +52,17 @@ jobs:
       - name: Run portable tests
         run: CGO_ENABLED=0 go test ./...
 
-      - name: Linux launch fails closed without a backend
+      - name: Linux launch stays fail-closed
         run: |
+          # Qualified linux/amd64 launches use the sandbox. ACS never runs targets unsandboxed.
           home="$(mktemp -d)"
           set +e
           output="$(HOME="$home" /tmp/acs-linux-amd64 devin --profile linux-ci-probe 2>&1)"
           status=$?
+          update="$(HOME="$home" /tmp/acs-linux-amd64 update --check 2>&1)"
           set -e
           printf '%s\n' "$output"
+          printf '%s\n' "$update"
           test "$status" -ne 0
-          printf '%s' "$output" | grep -q 'Linux sandbox backend is not available yet'
-          printf '%s' "$output" | grep -q 'never runs targets unsandboxed'
+          printf '%s' "$update" | grep -q 'updates require macOS' && exit 1
+          test ! -e "$home/.acs/sessions"

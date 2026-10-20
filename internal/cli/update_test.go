@@ -29,7 +29,10 @@ func TestUpdateHelpAndGrammarBeforeDependencies(t *testing.T) {
 	var out, errs bytes.Buffer
 	app := App{Version: "v0.4.0", Output: &out, ErrorOutput: &errs}
 	handled, code := app.RunUpdate(context.Background(), []string{"update", "--check"}, selfupdate.Config{PlatformOS: "linux", PlatformArch: "amd64"})
-	if !handled || code == 0 || !strings.Contains(errs.String(), "macOS") {
+	if !handled || code == 0 || strings.Contains(errs.String(), "updates require macOS 26 on Apple Silicon") && !strings.Contains(errs.String(), "linux/amd64") {
 		t.Fatalf("unexpected platform result %t %d %s", handled, code, errs.String())
+	}
+	if !strings.Contains(errs.String(), "missing required assets") && !strings.Contains(errs.String(), "release metadata unavailable") && !strings.Contains(errs.String(), "network request failed") {
+		t.Fatalf("linux update did not fail closed: %s", errs.String())
 	}
 }

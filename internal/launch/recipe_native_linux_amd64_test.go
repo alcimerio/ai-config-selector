@@ -373,6 +373,11 @@ func TestLinuxNativeRecipeComposition(t *testing.T) {
 func linuxNativeRecipeScenario(t *testing.T, mode string) {
 	root := t.TempDir()
 	owner, client := linuxTestSocketpair(t)
+	// The shared pair starts with a short deadline. This scenario also waits
+	// for interactive shell output, so refresh it before the handshake.
+	deadline := time.Now().Add(30 * time.Second)
+	_ = owner.SetDeadline(deadline)
+	_ = client.SetDeadline(deadline)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "/proc/self/exe", "-test.run=^TestLinuxRecipeSupervisorHelper$")

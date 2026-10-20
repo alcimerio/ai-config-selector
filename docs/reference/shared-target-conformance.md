@@ -1,10 +1,11 @@
-# Shared Devin and Codex behavior
+# Shared Devin, Codex, and Grok behavior
 
 [Documentation index](../README.md) · [Common Profile format](common-profile-format.md)
 
-ACS supports common Profile capabilities across its Devin and Codex adapters on
-macOS 26 Apple Silicon. Target configuration, discovery, and authentication
-remain adapter-specific.
+ACS supports common Profile capabilities across its Devin, Codex, and Grok Build
+adapters on macOS 26 Apple Silicon, and across Devin and Codex on qualified
+native `linux/amd64`. Grok is not a qualified Linux target. Target configuration,
+discovery, and authentication remain adapter-specific.
 
 ## Common intent and target differences
 
@@ -14,12 +15,12 @@ targets consume the same resolved common copy under `.acs/common/v1/skills`;
 unselected global bundles are excluded. ACS creates the private writable
 Session, applies containment and manages the process lifecycle.
 
-| Behavior | Devin | Codex |
-| --- | --- | --- |
-| Selected global Skills | Projected to `.config/devin/skills` and `.agents/skills`, according to source | Projected to `.codex/skills/<source>/<relativePath>` |
-| Repository-local Skills | Plan reports inherited `.devin/skills` and `.agents/skills` | Permitted workspace `.agents/skills` may be discovered by Codex; ACS does not report them as selected global material |
-| Authentication | Copies only `.local/share/devin/credentials.toml` when present; verifies with contained `auth status` | Uses one ACS-owned named identity; no fallback to global Codex authentication |
-| Dry run | Resolves selected material and may run the bounded sandbox-readiness probe | Checks stored structure and authRef syntax without discovery, credentials, target execution, or Session creation |
+| Behavior | Devin | Codex | Grok Build |
+| --- | --- | --- | --- |
+| Selected global Skills | Projected to `.config/devin/skills` and `.agents/skills`, according to source | Projected to `.codex/skills/<source>/<relativePath>` | Projected to `.grok/skills/<source>/<relativePath>` |
+| Repository-local Skills | Plan reports inherited `.devin/skills` and `.agents/skills` | Permitted workspace `.agents/skills` may be discovered by Codex; ACS does not report them as selected global material | `.grok/skills` stays inactive unless the operator accepts Grok's folder-trust prompt; ACS does not report those files as selected |
+| Authentication | Copies only `.local/share/devin/credentials.toml` when present; verifies with contained `auth status` | Uses one ACS-owned named identity; no fallback to global Codex authentication | Copies only `~/.grok/auth.json` when present, or uses a selected `XAI_API_KEY`; no sandbox login |
+| Dry run | Resolves selected material and may run the bounded sandbox-readiness probe | Checks stored structure and authRef syntax without discovery, credentials, target execution, or Session creation | Resolves selected material and may run the bounded sandbox-readiness probe; it does not copy credentials or probe the Grok version |
 
 Read-only workspace access still permits project reads; it does not hide project
 files or target-owned configuration. Common
@@ -28,10 +29,10 @@ files or target-owned configuration. Common
 projections and limitations. Tool filtering and agent permissions are target
 features, not separate ACS OS-level isolation.
 
-## Use a Profile with both targets
+## Use one Profile with every target
 
 Each interactive builder creates its own target overlay. To share one stored
-Profile, explicitly include both supported version-1 overlays using
+Profile, explicitly include the supported version-1 overlays using
 [declarative Profile creation](../guides/profiles.md#declarative-creation) and the
 [common-format example](common-profile-format.md). Alternatively, create separate
 Profiles with the same common selections using the
@@ -46,8 +47,10 @@ acs profile validate review
 acs profile show review
 acs explain devin --profile review
 acs explain codex --profile review
+acs explain grok --profile review
 acs devin --profile review --dry-run
 acs codex --profile review --dry-run
+acs grok --profile review --dry-run
 ```
 
 Codex dry-run does not check whether the identity exists or works. Follow
@@ -64,11 +67,11 @@ Run the credential-free adapter and lifecycle suites when changing common
 capabilities, projections, or execution:
 
 ```sh
-go test ./internal/adapter ./internal/executor ./internal/codexauth ./internal/codexauthresource
+go test ./internal/adapter ./internal/executor ./internal/grokcompat ./internal/codexauth ./internal/codexauthresource
 ```
 
 The [adapter conformance tests](../../internal/adapter/conformance_test.go) exercise
-both registries through resolution, planning, and materialization. They check
+the maintained registries through resolution, planning, and materialization. They check
 common identities, workspace intent, selected/unselected bytes, target
 projections, repository inheritance, and legacy/unsupported-overlay behavior.
 Executor and authentication tests cover preflight ordering, credential ownership,
@@ -81,8 +84,9 @@ acceptance uses a credential-free Devin behavioral fixture to check placement,
 workspace grants, unrelated-path denial, and cleanup. Separate
 installed-target tests exercise the checksum-locked Devin and Codex artifacts,
 real Seatbelt, PTY behavior, Keychain recovery, and descendants. Follow
-[testing](../development/testing.md) for their setup; Linux or Intel results do not
-establish supported native behavior.
+[testing](../development/testing.md) for their setup. Intel results do not
+establish supported native behavior. Qualified `linux/amd64` evidence is the
+native Linux gate.
 
 For a compatibility bug, record the ACS version/commit and artifact SHA-256,
 target version, workspace intent, stable public result, and whether the relevant

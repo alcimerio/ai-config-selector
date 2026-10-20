@@ -90,7 +90,9 @@ func TestLinuxCodexProductionAdmissionRemainsClosed(t *testing.T) {
 	_, err := linuxCompileRecipe(linuxRecipeAdmission{}, linuxCodexRecipe, validatedProcessRequest{}, nil, false)
 	assertLinuxUnsupported(t, err)
 	t.Setenv("ACS_LINUX_EXPERIMENTAL", "1")
-	assertLinuxUnsupported(t, NewProcessSandbox().Check(context.Background(), SandboxCheck{Executable: "codex"}))
+	if err := NewProcessSandbox().Check(context.Background(), SandboxCheck{Executable: "codex"}); err == nil || !strings.Contains(err.Error(), requiredSandboxNotice) {
+		t.Fatalf("bare Codex name was admitted: %v", err)
+	}
 	for _, args := range [][]string{nil, {"--version"}, {"login"}, {"exec", "prompt"}, {"mcp", "add", "evil"}} {
 		_, err := linuxCompileRecipe(linuxRecipeAdmission{true}, linuxCodexRecipe,
 			validatedProcessRequest{executable: "/usr/bin/codex", workspace: "/work", arguments: args}, nil, false)

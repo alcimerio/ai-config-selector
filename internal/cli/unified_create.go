@@ -43,6 +43,9 @@ func (app App) createUnifiedProfile(ctx context.Context, name string) int {
 		if options.Codex {
 			candidate.Overlays["codex"] = profile.OverlayPayload{Version: 1}
 		}
+		if options.Grok {
+			candidate.Overlays["grok"] = profile.OverlayPayload{Version: 1}
+		}
 		return app.Profiles.CreateContext(ctx, candidate)
 	}
 	outcome, err := app.UnifiedBuilder.BuildUnifiedProfile(ctx, name, app.Categories.NewDraft(), save, app.Input, app.Output)

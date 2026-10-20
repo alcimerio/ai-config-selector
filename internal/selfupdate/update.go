@@ -9,10 +9,12 @@ import (
 	"crypto/sha256"
 	"debug/buildinfo"
 	"debug/macho"
+
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/alcimerio/ai-config-selector/internal/release/artifacts"
 	"golang.org/x/sys/unix"
 	"io"
 	"net/http"
@@ -114,8 +116,9 @@ func Run(ctx context.Context, current, pin string, check bool, cfg Config) (Resu
 	if cfg.CandidateDirectory != "" {
 		return runLinuxCandidate(ctx, current, pin, check, cfg)
 	}
-	if cfg.PlatformOS != "darwin" || cfg.PlatformArch != "arm64" {
-		return out, errors.New("updates require macOS 26 on Apple Silicon")
+	archiveSuffix, platformErr := releaseArchiveSuffix(cfg.PlatformOS, cfg.PlatformArch)
+	if platformErr != nil {
+		return out, platformErr
 	}
 	base := cfg.APIBase
 	if base == "" {
@@ -142,7 +145,7 @@ func Run(ctx context.Context, current, pin string, check bool, cfg Config) (Resu
 		return out, errors.New("release is not a published stable numeric version")
 	}
 	out.Target = rel.Tag
-	archiveName := "acs_" + strings.TrimPrefix(rel.Tag, "v") + "_darwin_arm64.tar.gz"
+	archiveName := "acs_" + strings.TrimPrefix(rel.Tag, "v") + "_" + archiveSuffix + ".tar.gz"
 	assets := map[string]string{}
 	for _, a := range rel.Assets {
 		if a.Name == archiveName || a.Name == "SHA256SUMS" {
@@ -220,7 +223,7 @@ func Run(ctx context.Context, current, pin string, check bool, cfg Config) (Resu
 	if e != nil {
 		return out, e
 	}
-	if e = verifyBinary(binary); e != nil {
+	if e = verifyBinary(binary, cfg.PlatformOS, cfg.PlatformArch); e != nil {
 		return out, e
 	}
 	if e = ctx.Err(); e != nil {
@@ -272,7 +275,10 @@ func get(ctx context.Context, c *http.Client, where string, limit int64) ([]byte
 func checksum(raw []byte, name string) ([32]byte, error) {
 	var out [32]byte
 	seen := map[string]bool{}
-	version := strings.TrimSuffix(strings.TrimPrefix(name, "acs_"), "_darwin_arm64.tar.gz")
+	version, versionErr := checksumArchiveVersion(name)
+	if versionErr != nil {
+		return out, versionErr
+	}
 	allowed := regexp.MustCompile(`^acs_` + regexp.QuoteMeta(version) + `_(darwin|linux)_(arm64|amd64)\.tar\.gz$`)
 	for _, line := range strings.Split(strings.TrimSuffix(string(raw), "\n"), "\n") {
 		if strings.ContainsRune(line, '\r') {
@@ -296,7 +302,37 @@ func checksum(raw []byte, name string) ([32]byte, error) {
 	}
 	return out, nil
 }
-func verifyBinary(binary []byte) error {
+func releaseArchiveSuffix(operatingSystem, architecture string) (string, error) {
+	switch operatingSystem + "/" + architecture {
+	case "darwin/arm64":
+		return "darwin_arm64", nil
+	case "linux/amd64":
+		return "linux_amd64", nil
+	default:
+		return "", errors.New("updates require macOS 26 on Apple Silicon or native linux/amd64")
+	}
+}
+
+func checksumArchiveVersion(name string) (string, error) {
+	rest, ok := strings.CutPrefix(name, "acs_")
+	if !ok {
+		return "", errors.New("checksum manifest is malformed")
+	}
+	for _, suffix := range []string{"_darwin_arm64.tar.gz", "_linux_amd64.tar.gz"} {
+		if strings.HasSuffix(rest, suffix) {
+			return strings.TrimSuffix(rest, suffix), nil
+		}
+	}
+	return "", errors.New("checksum manifest is malformed")
+}
+
+func verifyBinary(binary []byte, operatingSystem, architecture string) error {
+	if operatingSystem == "linux" && architecture == "amd64" {
+		if err := artifacts.VerifyLinuxBinary(binary); err != nil {
+			return errors.New("archive executable is not a static linux/amd64 ACS binary")
+		}
+		return nil
+	}
 	m, e := macho.NewFile(bytes.NewReader(binary))
 	if e != nil || m.Cpu != macho.CpuArm64 {
 		return errors.New("archive executable is not Apple Silicon Mach-O")

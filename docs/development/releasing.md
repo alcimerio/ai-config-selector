@@ -53,19 +53,22 @@ race, and black-box acceptance tests, attests the archive and
 checksum manifest, and publishes through the protected `release` environment.
 
 The same build also stages `dist/linux-candidate/` with only
-`acs_1.2.3_linux_amd64.tar.gz`, its own `SHA256SUMS`, and `install.sh`. This is a
-separate maintenance candidate, never a public Release asset set. The publisher
-continues to accept only the macOS set. Neither Linux arm64 nor Intel macOS is
-built. Production Linux launches and `acs update` remain disabled.
+`acs_1.2.3_linux_amd64.tar.gz`, its own `SHA256SUMS`, and `install.sh`. Neither
+Linux arm64 nor Intel macOS is built. Qualified `linux/amd64` hosts are admitted
+by `ValidatePlatform` and the registered Bubblewrap backend. `acs update` on
+`linux/amd64` selects `acs_*_linux_amd64.tar.gz` from the published Release and
+refuses every other Linux architecture. The publisher still uploads only the
+macOS asset set. A release that claims Linux update support must add the staged
+Linux archive and its checksum row to that set before the tag is pushed.
 
 Both build targets receive the source vulnerability scan. The Linux packaging
 job installs the supplied bytes on native amd64, exercises the local updater,
-checks that production launch paths still refuse execution, and scans the exact
-installed executable. Trusted pushes attest the staged Linux archive and its
-manifest; pull requests run the same packaging checks without attestations. The
-installer is not an attestation subject. This is packaging evidence only;
-kernel, Bubblewrap, Landlock, seccomp, cgroup, credential and target qualification
-remain separate activation requirements.
+checks that a missing Profile cannot create state, and scans the exact installed
+executable. Trusted pushes attest the staged Linux archive and its manifest;
+pull requests run the same packaging checks without attestations. The installer
+is not an attestation subject. Native kernel, Bubblewrap, Landlock, seccomp,
+cgroup, credential, and target gates remain the qualification evidence. A failed
+prerequisite refuses the launch.
 
 After obtaining the candidate and trusted digests from the workflow handoff,
 restore the executable bit on `install.sh` if artifact transport removed it.
@@ -121,7 +124,7 @@ merged source separately; equal trees do not change build provenance. An expired
 artifact must be replaced by a newly identified build, not rebuilt under its old
 identity. The validator is a repository maintenance tool, not a release channel.
 
-Start `/bin/bash --noprofile --norc` on a supported Mac. Supply all inputs below:
+Start `/bin/bash --noprofile --norc` on macOS 26 Apple Silicon. The qualified `linux/amd64` candidate procedure is above. Supply all inputs below:
 the directory must contain only `install.sh`, `SHA256SUMS` and the named Apple
 Silicon archive. Use a new private, absolute, direct maintenance directory outside
 repositories or shared folders. The known-good binary must already be trusted.

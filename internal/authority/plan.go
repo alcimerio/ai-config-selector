@@ -32,6 +32,7 @@ const (
 	RecipeShell   Recipe = "shell"
 	RecipeDevin   Recipe = "devin"
 	RecipeCodex   Recipe = "codex"
+	RecipeGrok    Recipe = "grok"
 	RecipeCommand Recipe = "command"
 )
 
@@ -78,6 +79,19 @@ func DevinSemantics() TargetSemantics {
 		CredentialProjection: "optional-allowlisted-value-omitted"}
 }
 
+func GrokSemantics() TargetSemantics {
+	return TargetSemantics{Version: 1, Configuration: []ConfigurationDecision{
+		{ID: "grok.auto-update", Mode: "disabled"}, {ID: "grok.compat", Mode: "disabled"},
+		{ID: "grok.folder-trust", Mode: "untrusted-project-scope"}, {ID: "grok.mcp", Mode: "disabled"},
+		{ID: "grok.plugins", Mode: "disabled"}, {ID: "grok.sandbox", Mode: "off-under-acs"},
+	}, Preflights: []ConfigurationDecision{{ID: "grok.preflight.version", Mode: "contained-exact-version"}}, Unsupported: []ConfigurationDecision{
+		{ID: "grok.global-auth-fallback", Mode: "disabled"}, {ID: "grok.host-managed-config", Mode: "not-imported"}, {ID: "grok.target-sandbox-enforcement", Mode: "disabled-under-acs"},
+	}, Inheritance: []InheritanceRule{
+		{ID: "grok.project-skills", LogicalRoots: []string{".grok/skills"}},
+		{ID: "grok.project-instructions", LogicalRoots: []string{"AGENTS.md", ".grok/rules"}},
+	}, CredentialProjection: "optional-allowlisted-value-omitted"}
+}
+
 func CodexSemantics() TargetSemantics {
 	return TargetSemantics{Version: 1, AuthenticationMode: "required-value-omitted", Configuration: []ConfigurationDecision{
 		{ID: "codex.approval", Mode: "never"}, {ID: "codex.apps", Mode: "disabled"},
@@ -95,21 +109,27 @@ func (value TargetSemantics) Supports(recipe Recipe) bool {
 	case RecipeDevin:
 		return reflect.DeepEqual(value, DevinSemantics())
 	case RecipeCodex:
-		if reflect.DeepEqual(value, CodexSemantics()) {
-			return true
-		}
-		selectedMCP := value.Clone()
-		found := false
-		for index := range selectedMCP.Configuration {
-			if selectedMCP.Configuration[index].ID == "codex.mcp" && selectedMCP.Configuration[index].Mode == "selected-session-stdio" {
-				selectedMCP.Configuration[index].Mode = "disabled"
-				found = true
-			}
-		}
-		return found && reflect.DeepEqual(selectedMCP, CodexSemantics())
+		return supportsSelectedMCP(value, CodexSemantics(), "codex.mcp")
+	case RecipeGrok:
+		return supportsSelectedMCP(value, GrokSemantics(), "grok.mcp")
 	default:
 		return value.Version == 0 && value.AuthenticationMode == "" && len(value.Configuration) == 0 && len(value.Preflights) == 0 && len(value.Unsupported) == 0 && len(value.Inheritance) == 0 && value.CredentialProjection == ""
 	}
+}
+
+func supportsSelectedMCP(value, baseline TargetSemantics, id string) bool {
+	if reflect.DeepEqual(value, baseline) {
+		return true
+	}
+	selected := value.Clone()
+	found := false
+	for index := range selected.Configuration {
+		if selected.Configuration[index].ID == id && selected.Configuration[index].Mode == "selected-session-stdio" {
+			selected.Configuration[index].Mode = "disabled"
+			found = true
+		}
+	}
+	return found && reflect.DeepEqual(selected, baseline)
 }
 
 func (value TargetSemantics) ConfigurationMode(id string) (string, bool) {
@@ -259,6 +279,9 @@ func New(contributions []Contribution, workspaceAccess launch.WorkspaceAccess, o
 		if requirements.Recipe == RecipeDevin {
 			requirements.Semantics = DevinSemantics()
 		}
+		if requirements.Recipe == RecipeGrok {
+			requirements.Semantics = GrokSemantics()
+		}
 	}
 	plan := Plan{contributions: append([]Contribution(nil), contributions...), workspaceAccess: workspaceAccess, overlay: overlay, requirements: requirements, runtimeAuthority: launch.DefaultRuntimeAuthority()}
 	for _, contribution := range plan.contributions {
@@ -286,9 +309,16 @@ func New(contributions []Contribution, workspaceAccess launch.WorkspaceAccess, o
 	}
 	// Selected MCP declarations change Codex's generated target recipe. Leave
 	// the no-MCP semantics and digest exactly as they were before this capability.
-	if requirements.Recipe == RecipeCodex && len(plan.mcpServerIntents) != 0 {
+	if len(plan.mcpServerIntents) != 0 {
+		mcpID := ""
+		switch requirements.Recipe {
+		case RecipeCodex:
+			mcpID = "codex.mcp"
+		case RecipeGrok:
+			mcpID = "grok.mcp"
+		}
 		for index := range plan.requirements.Semantics.Configuration {
-			if plan.requirements.Semantics.Configuration[index].ID == "codex.mcp" {
+			if mcpID != "" && plan.requirements.Semantics.Configuration[index].ID == mcpID {
 				plan.requirements.Semantics.Configuration[index].Mode = "selected-session-stdio"
 			}
 		}
@@ -602,11 +632,11 @@ func recipeFacts(plan Plan) Facts {
 	for _, decision := range semantics.Configuration {
 		fact := Fact{ID: decision.ID, Kind: "generated-configuration", Value: FactValue{Mode: decision.Mode}, Reason: "fixed_target_recipe", Source: FactSource{Kind: "target", ID: recipe, Version: semantics.Version}}
 		result.TargetAdded = append(result.TargetAdded, fact)
-		if decision.ID == "codex.apps" || decision.ID == "codex.plugins" || (decision.ID == "codex.mcp" && decision.Mode == "disabled") {
+		if decision.ID == "codex.apps" || decision.ID == "codex.plugins" || decision.ID == "grok.plugins" || ((decision.ID == "codex.mcp" || decision.ID == "grok.mcp") && decision.Mode == "disabled") {
 			result.Unsupported = append(result.Unsupported, fact)
 		}
 	}
-	if len(plan.mcpServerIntents) != 0 && (plan.requirements.Recipe == RecipeDevin || plan.requirements.Recipe == RecipeCodex) {
+	if len(plan.mcpServerIntents) != 0 && (plan.requirements.Recipe == RecipeDevin || plan.requirements.Recipe == RecipeCodex || plan.requirements.Recipe == RecipeGrok) {
 		serverIDs := make([]string, 0, len(plan.mcpServerIntents))
 		for _, server := range plan.mcpServerIntents {
 			serverIDs = append(serverIDs, server.ID)
@@ -634,7 +664,7 @@ func recipeFacts(plan Plan) Facts {
 		count := plan.commandArguments
 		result.Requested = append(result.Requested, Fact{ID: "run.literal-argv", Kind: "command", Value: FactValue{Mode: plan.commandForm, Count: &count}, Reason: "validated_command_recipe", Source: FactSource{Kind: "command", ID: "run"}})
 	}
-	if plan.requirements.Recipe == RecipeDevin || plan.requirements.Recipe == RecipeCodex {
+	if plan.requirements.Recipe == RecipeDevin || plan.requirements.Recipe == RecipeCodex || plan.requirements.Recipe == RecipeGrok {
 		if plan.requirements.ExecutableRequirementID != "" {
 			result.TargetAdded = append(result.TargetAdded, Fact{ID: "target.executable", Kind: "executable", Value: FactValue{RequirementID: plan.requirements.ExecutableRequirementID}, Reason: "registered_requirement", Source: FactSource{Kind: "target", ID: recipe, Version: semantics.Version}})
 			result.Effective = append(result.Effective, Fact{ID: "target.executable-access", Kind: "filesystem", Value: FactValue{Access: "read-execute", RequirementID: plan.requirements.ExecutableRequirementID}, Reason: "registered_requirement", Source: FactSource{Kind: "target", ID: recipe, Version: semantics.Version}})

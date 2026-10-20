@@ -2,15 +2,17 @@
 
 [Documentation index](../README.md) · [Architecture](../development/architecture.md) · [Troubleshooting](../guides/troubleshooting.md)
 
-This guide describes the current-source boundary on macOS 26 Apple Silicon. It
+This guide describes the current-source boundary on macOS 26 Apple Silicon and
+qualified native `linux/amd64`. It
 explains the access ACS controls and the trust still required of
 targets, selected material and external services. It does not establish a
 complete security audit.
 
 ## What ACS controls
 
-ACS starts the selected target through a required native Seatbelt sandbox and
-applies the policy to its descendants. It verifies the trusted system backend,
+ACS starts the selected target through a required native sandbox and
+applies the policy to its descendants. macOS uses Seatbelt. Qualified
+`linux/amd64` uses Bubblewrap, Landlock, and seccomp. It verifies the trusted system backend,
 constructs a clean environment and synthetic home, projects selected material,
 and owns process settlement and Session cleanup. There is no unsandboxed fallback.
 
@@ -46,10 +48,14 @@ If a target can read a file, selected secret, credential projection, or prompt,
 it may be able to send that data to its provider or another network destination.
 Read-only access denies filesystem writes to that grant. It still permits
 reading and transmitting the data.
-General destination filtering is not a shipped capability. Linux currently
-ignores the loopback capability and reports that gap in explain/dry-run; its
-production launch admission remains closed. Native transport experiments do
-not extend this network contract.
+General destination filtering is not a shipped capability. The Linux launcher
+enforces the same port selection by emulating `connect`, `sendto`, `sendmsg`,
+and `sendmmsg` from a copied sockaddr: the whole 127.0.0.0/8, `::1`, and
+IPv4-mapped loopback are denied unless the port is selected. DNS to the exact
+nameservers in the host `/etc/resolv.conf` stays allowed on port 53. Managed
+Codex login can accept only on 127.0.0.1:1455 and `[::1]:1455`. Qualified
+`linux/amd64` hosts use this launcher; every other Linux host is refused.
+Native transport experiments do not extend this network contract.
 
 ### Code and instructions inside the Session
 
@@ -143,7 +149,9 @@ quarantines the Session. Do not force-delete that state. Use
 ## Release integrity and evidence
 
 The release pipeline validates exact candidate bytes on macOS Apple Silicon and
-records checksums and GitHub provenance. SHA-256 only proves identity relative to
+records checksums and GitHub provenance. Qualified `linux/amd64` evidence is the
+native Linux gate. The publisher still uploads only the macOS asset set until a
+release adds the staged Linux archive. SHA-256 only proves identity relative to
 trusted expected bytes. The archive and checksum manifest are attestation subjects;
 the installer is part of the byte-matched set but is not itself an attestation subject.
 

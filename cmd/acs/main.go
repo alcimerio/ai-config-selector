@@ -13,6 +13,7 @@ import (
 
 	codexadapter "github.com/alcimerio/ai-config-selector/internal/adapter/codex"
 	"github.com/alcimerio/ai-config-selector/internal/adapter/devin"
+	grokadapter "github.com/alcimerio/ai-config-selector/internal/adapter/grok"
 	"github.com/alcimerio/ai-config-selector/internal/cli"
 	"github.com/alcimerio/ai-config-selector/internal/codexauth"
 	"github.com/alcimerio/ai-config-selector/internal/executor"
@@ -184,10 +185,16 @@ func main() {
 			fmt.Fprintln(os.Stderr, "acs: configure Codex explanation")
 			os.Exit(1)
 		}
+		grokTarget, err := grokadapter.New(grokadapter.Config{BinaryPath: "grok", ExistingHomeDir: existingHome})
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "acs: configure Grok explanation")
+			os.Exit(1)
+		}
 		acsHome := filepath.Join(existingHome, ".acs")
 		application := cli.App{
 			Categories: devinTarget.Categories(), Profiles: profile.NewStore(acsHome, devinTarget.Categories()),
 			CodexTarget: codexTarget, CodexCategories: codexTarget.Categories(), CodexProfiles: profile.NewStore(acsHome, codexTarget.Categories()),
+			GrokPlanner: grokTarget, GrokTarget: grokTarget, GrokCategories: grokTarget.Categories(), GrokProfiles: profile.NewStore(acsHome, grokTarget.Categories()),
 			GenericTarget: genericrun.New(), NativeReadiness: executor.New(), WorkingDirectory: workingDirectory,
 			Input: os.Stdin, Output: os.Stdout, ErrorOutput: os.Stderr,
 		}
@@ -231,6 +238,11 @@ func main() {
 		fmt.Fprintf(os.Stderr, "acs: configure Codex Adapter: %v\n", err)
 		os.Exit(1)
 	}
+	grokTarget, err := grokadapter.New(grokadapter.Config{BinaryPath: "grok", ExistingHomeDir: existingHome})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "acs: configure Grok Adapter: %v\n", err)
+		os.Exit(1)
+	}
 	shellLauncher := sandboxshell.New()
 
 	application := cli.App{
@@ -246,6 +258,11 @@ func main() {
 		CodexCategories:   codexTarget.Categories(),
 		CodexBuilder:      codexTarget,
 		CodexProfiles:     profile.NewStore(acsHome, codexTarget.Categories()),
+		GrokTarget:        grokTarget,
+		GrokPlanner:       grokTarget,
+		GrokCategories:    grokTarget.Categories(),
+		GrokBuilder:       grokTarget,
+		GrokProfiles:      profile.NewStore(acsHome, grokTarget.Categories()),
 		Profiles:          profile.NewStore(acsHome, adapter.Categories()),
 		SessionsDirectory: sessionsDirectory,
 		WorkingDirectory:  workingDirectory,

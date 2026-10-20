@@ -28,7 +28,7 @@ func (app App) RunCredentialProvider(args []string) (bool, int) {
 		if provider == codexauthresource.ProviderFile {
 			fmt.Fprintln(app.Output, "File credentials use private plaintext-at-rest storage.")
 		}
-		fmt.Fprintln(app.Output, "Linux launches remain unavailable.")
+		fmt.Fprintln(app.Output, "Qualified linux/amd64 launches use this provider inside the sandbox.")
 	}
 	return true, 0
 }

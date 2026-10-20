@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 
@@ -50,9 +49,6 @@ func TestExplainAndDryRunReportLoopbackPortsAndDefaultDenial(t *testing.T) {
 				}
 				if len(test.ports) > 0 && (!strings.Contains(output, "1455") || !strings.Contains(output, "8080")) {
 					t.Fatalf("missing selected ports: %s", output)
-				}
-				if runtime.GOOS == "linux" && !strings.Contains(output, commonprofile.LinuxLoopbackGap) {
-					t.Fatalf("missing Linux enforcement gap: %s", output)
 				}
 				if args[len(args)-1] == "--json" {
 					var document struct {

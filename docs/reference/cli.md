@@ -53,8 +53,9 @@ return 2); consult their contextual help and
 | Inspect / restore history | `acs profile history NAME`, `acs profile restore NAME --revision EVENT --dry-run` | [Profile history](../guides/profile-history.md) |
 | Run Devin | `acs devin --profile NAME` | [Target conformance](shared-target-conformance.md) |
 | Run Codex | `acs codex --profile NAME [--auth REF]` | [Interactive Codex](../guides/codex.md#interactive-launch) |
+| Run Grok Build | `acs grok --profile NAME` | [Grok Build](../guides/grok.md) |
 | Manage named login | `acs codex auth login --name REF` | [Codex authentication](../guides/codex.md#named-authentication) |
-| Inspect or select credential provider | `acs codex auth provider [--select file\|secret-service\|keychain]` | Explicit durable choice; Linux launches remain unavailable |
+| Inspect or select credential provider | `acs codex auth provider [--select file\|secret-service\|keychain]` | Explicit durable choice; qualified linux/amd64 launches use the file provider inside the sandbox |
 | Open a sandbox shell | `acs sandbox --profile NAME` | [Get started](../guides/getting-started.md) |
 | Run literal argv | `acs run --profile NAME -- COMMAND [ARG...]` | [Generic run](../guides/generic-run.md) |
 | Inspect / recover a Session | `acs session list`, `acs session inspect ID`, `acs session recover ID` | [Session operations](../guides/session-operations.md) |
@@ -68,8 +69,10 @@ their own confirmation requirements.
 `acs codex auth provider` reports the selected provider. On Linux,
 `--select file` explicitly opts into private plaintext-at-rest credential storage;
 `--select secret-service` selects the future, unavailable desktop keyring provider.
-There is no automatic fallback. This command does not enable Linux launches or
-contained login/status operations.
+There is no automatic fallback. Selecting a provider records the credential
+store. It does not bypass sandbox prerequisites, and Secret Service is not
+implemented. Qualified `linux/amd64` Codex launches use the file provider
+inside the sandbox.
 The choice is stored in `$XDG_CONFIG_HOME/acs/credential-provider.json`, defaulting
 to `~/.config/acs/credential-provider.json`. The ACS directory must be 0700 and
 the file 0600; unsafe ownership, symlinks, relative XDG paths and malformed records
@@ -90,8 +93,9 @@ The backend reuses the existing identity, refresh and quarantine contract.
 Interrupted writes may leave private `.credential-*` temporary files. They are
 never promoted or listed as identities. A failed directory sync is an uncertain
 commit and preserves quarantine; a successful rename alone is not durability
-proof. File deletion is logical removal, not secure erasure. Native Linux launch
-integration and Secret Service remain follow-up work.
+proof. File deletion is logical removal, not secure erasure. Qualified
+`linux/amd64` launches use this file provider inside the sandbox. Secret
+Service remains follow-up work.
 
 ## What each check proves
 
@@ -99,7 +103,7 @@ integration and Secret Service remain follow-up work.
 | --- | --- | --- |
 | `profile list` / `show` | Reads saved structure and sanitized selections | Source availability, credentials, target readiness |
 | `profile validate` | Checks supported stored structure and selected Skill-source resolution | Full instruction/path/env/MCP/runtime readiness |
-| `doctor` | Checks passive host/backend-file prerequisites; optional target availability; `--check-linux-capabilities` opts into bounded experimental Linux probes | Target versions, authentication, actual containment; Linux launch admission remains disabled |
+| `doctor` | Checks passive host/backend-file prerequisites; optional target availability; `--check-linux-capabilities` opts into bounded Linux probes | Target versions, authentication, actual containment; a failed probe still refuses launch |
 | `explain` | Reports requested/added/effective/unsupported authority | Local content identity or readiness from a semantic digest alone |
 | `explain --check-native-readiness` | Adds the explicit bounded native readiness check | An end-to-end target launch |
 | `sandbox`, `devin`, or `run --dry-run` | Plans supported launch inputs and bounded backend readiness; no Session | Successful target execution or hosted-account behavior |
