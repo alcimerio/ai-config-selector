@@ -15,7 +15,7 @@ permissions:
 
 jobs:
   packaging:
-    name: Native Linux amd64 packaging (admission disabled)
+    name: Native Linux amd64 packaging
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:

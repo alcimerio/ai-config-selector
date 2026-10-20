@@ -162,9 +162,9 @@ func TestInstallerRejectsUnsupportedInputsBeforeDownloading(t *testing.T) {
 		want     string
 	}{
 		{name: "unsupported operating system", hostOS: "FreeBSD", hostArch: "amd64", want: "unsupported operating system"},
-		{name: "unsupported Linux", hostOS: "Linux", hostArch: "amd64", want: "ACS release installers support macOS only"},
+		{name: "unsupported Linux arm64", hostOS: "Linux", hostArch: "aarch64", want: "linux/amd64"},
 		{name: "unsupported architecture", hostOS: "Darwin", hostArch: "riscv64", want: "unsupported architecture"},
-		{name: "unsupported Intel Mac", hostOS: "Darwin", hostArch: "x86_64", want: "Apple Silicon (arm64) only"},
+		{name: "unsupported Intel Mac", hostOS: "Darwin", hostArch: "x86_64", want: "linux/amd64"},
 		{name: "unknown argument", hostOS: "Darwin", hostArch: "arm64", args: func(_ *testing.T, _ *installerFixture) []string { return []string{"--version", "v9.9.9"} }, want: "unknown argument"},
 		{name: "missing option value", hostOS: "Darwin", hostArch: "arm64", args: func(_ *testing.T, _ *installerFixture) []string { return []string{"--bin-dir"} }, want: "--bin-dir requires a value"},
 		{name: "relative destination", hostOS: "Darwin", hostArch: "arm64", args: func(_ *testing.T, _ *installerFixture) []string { return []string{"--bin-dir", "relative/bin"} }, want: "must be an absolute path"},

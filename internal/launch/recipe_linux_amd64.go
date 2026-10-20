@@ -20,8 +20,9 @@ const (
 	linuxCodexRecipe
 )
 
-// The zero value refuses admission. Only tests opt in: no registered backend,
-// environment variable, command-line flag, or production re-exec entry exists.
+// The zero value refuses admission. The registered linux/amd64 backend is the
+// only production opt-in. Environment variables and command-line flags cannot
+// enable it, and every other architecture stays closed.
 type linuxRecipeAdmission struct{ experimental bool }
 
 type linuxRecipe struct {
@@ -120,7 +121,9 @@ func linuxCompileRecipe(admission linuxRecipeAdmission, kind linuxRecipeKind, re
 	}
 	wire := linuxLaunchWire{Version: 1, Executable: executable,
 		Argv: append([]string{executable}, request.arguments...), Home: request.sessionHome,
-		Temporary: request.temporaryDirectory, Directory: request.workspace}
+		Temporary: request.temporaryDirectory, Directory: request.workspace,
+		LoopbackPorts:    append([]int(nil), request.runtimeAuthority.LoopbackPorts...),
+		LoopbackCallback: request.runtimeAuthority.CodexLoginCallback}
 	if kind == linuxCodexRecipe {
 		wire.CodexHome = filepath.Join(request.sessionHome, ".codex")
 	}

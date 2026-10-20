@@ -4,7 +4,9 @@
 
 These pages follow this checkout. Check `acs version` and use your release's Git
 tag for installed behavior; main can describe changes that have not shipped.
-The supported runtime is macOS 26 Apple Silicon.
+Supported runtimes are macOS 26 Apple Silicon and qualified native `linux/amd64`
+(Linux 6.12+, Landlock ABI 6, Bubblewrap, unprivileged user namespaces, and an
+owned cgroup v2 delegation). `linux/arm64` is not supported.
 
 ## Start here
 
@@ -44,14 +46,14 @@ Devin and the fixed sandbox shell start in [Get started](guides/getting-started.
 - [Testing](development/testing.md): native/portable checks, dependency scanning, authenticated smoke and research harnesses
 - [Releasing](development/releasing.md): tag preparation, immutable publication and candidate verification
 - [Native transport research](development/native-transport-research.md): opt-in probes and evidence limits
-- [Linux support design](design/linux-support.md): proposed security contract and staged implementation; Linux execution remains unsupported
+- [Linux support design](design/linux-support.md): security contract for qualified `linux/amd64` admission; `linux/arm64` stays unpublished
 - [Linux filesystem compiler](design/linux-filesystem-plan.md): pure mount/Landlock planning, rejection gates and remaining native proof
-- [Sealed Linux launcher](design/linux-sealed-launcher.md): test-only Bubblewrap, Landlock and seccomp boundary; production Linux remains disabled
+- [Sealed Linux launcher](design/linux-sealed-launcher.md): Bubblewrap, Landlock and seccomp boundary used by qualified linux/amd64 admission
 - [Linux Session containment](design/linux-session-containment.md): delegated cgroups, pidfds, gated supervision and remaining native qualification
 - [Linux cleanup and recovery](design/linux-cleanup-recovery.md): authenticated settlement, retained leases, quarantine and terminal restoration
-- [Linux shell and command recipes](design/linux-shell-recipes.md): test-only ELF runtime, private terminal and cgroup integration; production admission stays closed
-- [Linux Devin qualification](design/linux-devin-target.md): verified amd64 target bytes and contained preflight harness; arm64 deferred and production admission closed
-- [Linux Codex qualification](design/linux-codex-target.md): exact amd64 CLI/companion pairs, file-provider fixtures and native harness; production admission closed
+- [Linux shell and command recipes](design/linux-shell-recipes.md): ELF runtime, private terminal and cgroup integration for qualified linux/amd64
+- [Linux Devin qualification](design/linux-devin-target.md): verified amd64 target bytes and contained preflight harness; arm64 stays deferred
+- [Linux Codex qualification](design/linux-codex-target.md): exact amd64 CLI/companion pairs, file-provider fixtures and native harness; arm64 stays unpublished
 
 [Release-note sources](releases/) are reviewed version-specific records consumed
 by publication. Use [GitHub Releases](https://github.com/alcimerio/ai-config-selector/releases)

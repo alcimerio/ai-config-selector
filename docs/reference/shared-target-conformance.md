@@ -3,8 +3,9 @@
 [Documentation index](../README.md) · [Common Profile format](common-profile-format.md)
 
 ACS supports common Profile capabilities across its Devin, Codex, and Grok Build
-adapters on macOS 26 Apple Silicon. Target configuration, discovery, and
-authentication remain adapter-specific.
+adapters on macOS 26 Apple Silicon, and across Devin and Codex on qualified
+native `linux/amd64`. Grok is not a qualified Linux target. Target configuration,
+discovery, and authentication remain adapter-specific.
 
 ## Common intent and target differences
 
@@ -83,8 +84,9 @@ acceptance uses a credential-free Devin behavioral fixture to check placement,
 workspace grants, unrelated-path denial, and cleanup. Separate
 installed-target tests exercise the checksum-locked Devin and Codex artifacts,
 real Seatbelt, PTY behavior, Keychain recovery, and descendants. Follow
-[testing](../development/testing.md) for their setup; Linux or Intel results do not
-establish supported native behavior.
+[testing](../development/testing.md) for their setup. Intel results do not
+establish supported native behavior. Qualified `linux/amd64` evidence is the
+native Linux gate.
 
 For a compatibility bug, record the ACS version/commit and artifact SHA-256,
 target version, workspace intent, stable public result, and whether the relevant

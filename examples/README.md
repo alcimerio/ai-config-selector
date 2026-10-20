@@ -18,6 +18,8 @@ named logins, and are checked in CI with the same codec as
 | [skill-review-isolated](profiles/skill-review-isolated.json) | One selected global Skill; repository `.agents/skills` and `.devin/skills` denied | Devin, Codex, Grok, sandbox |
 | [sandbox-tools-only](profiles/sandbox-tools-only.json) | No target overlay; `git` visibility for `acs sandbox` and `acs run` | sandbox, run |
 
+Grok examples run only on macOS. Qualified `linux/amd64` can use the Devin, Codex, sandbox, and `acs run` examples when the host probe passes. `linux/arm64` is not supported.
+
 ## Use an example
 
 From a checkout of this repository, preview and create the Profile, then
@@ -58,9 +60,10 @@ See [interactive Codex](../docs/guides/codex.md#interactive-launch).
   contain the selected Skill and the launch fails closed.
 - Exclusions are pathname based. They do not hide Git history, copies or names
   in parent listings; see [filesystem exclusions](../docs/reference/common-profile-format.md#filesystem-exclusions).
-- macOS loopback outbound is denied by default. **dev-local-service** explicitly
-  allows port 3000; other loopback ports stay denied. Linux ignores the selection
-  and reports the enforcement gap in explain/dry-run.
+- Loopback outbound is denied by default. **dev-local-service** explicitly
+  allows port 3000; other loopback ports stay denied. Qualified `linux/amd64`
+  enforces that selection, including the whole 127.0.0.0/8. Other Linux hosts
+  are refused.
 - ACS is not an egress firewall: a target can transmit data it can read.
 
 To share your own variant without local paths, use

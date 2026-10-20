@@ -2,12 +2,10 @@
 
 [Documentation index](../README.md)
 
-This implements [roadmap item 11](linux-support.md#stack-5--targets). Production
-Linux admission remains closed. The private `linuxRecipeAdmission` value is false
-by default; only test code enables it. There is no registered Linux backend,
-production helper entry point, CLI flag, or environment bypass. Neither releases
-nor the supported host matrix change. Darwin retains `/bin/zsh -f` and its
-existing sandbox, authority and terminal implementation.
+This implements [roadmap item 11](linux-support.md#stack-5--targets). The private
+`linuxRecipeAdmission` value is still false by default. The registered
+`linux/amd64` backend is the only production opt-in. Darwin retains `/bin/zsh -f`
+and its existing sandbox, authority and terminal implementation.
 
 ## Recipes and runtime files
 

@@ -2,8 +2,9 @@
 
 [Documentation index](../README.md)
 
-Status: proposed; no Linux runtime or release support is added by this document.
-Research baseline: `c5477ebb4b0115b83617cd15c1966eeb34256256`, 2026-10-09.
+Status: design record. Qualified native `linux/amd64` admission is the registered
+Bubblewrap backend. This document does not publish a release. `linux/arm64` stays
+unpublished. Research baseline: `c5477ebb4b0115b83617cd15c1966eeb34256256`, 2026-10-09.
 Repository citations use `path:line` at that commit unless a historical ref is
 specified. External references were checked on the research date. This was a
 read-only investigation; no builds, native probes, or target installers were run.
@@ -12,10 +13,10 @@ Recommendation: retain the shared launch contract; implement a Linux backend
 combining a private filesystem view, Landlock, seccomp, and supervised process
 containment. Prefer verified system Bubblewrap for namespace setup over writing
 a new mount launcher. Initially qualify Linux 6.12+ with Landlock ABI 6+, cgroups
-v2 delegation, and working unprivileged namespaces. These are proposed floors,
-not sufficient conditions: probe the actual features and reject missing ones.
-Keep Linux execution disabled until the complete composition passes native
-tests, especially exclusions, Unix sockets, credentials, and supervisor loss.
+v2 delegation, and working unprivileged namespaces. These floors are not
+sufficient on their own: the host probe rejects a missing feature. Qualified
+`linux/amd64` launches only after that probe passes. A missing prerequisite
+refuses the launch. There is no unsandboxed fallback.
 
 ## 1. What changed, and why
 
@@ -36,9 +37,12 @@ tests, especially exclusions, Unix sockets, credentials, and supervisor loss.
   `bubblewrap_supervisor_linux.go`, `sandbox_backends_linux.go`, their tests, and
   `acceptance/promoted_artifact_native_linux_test.go`. These were not deleted
   in the v0.4.0 transition itself.
-- Current support is narrower still: macOS 26 Apple Silicon only, with no support
-  for historical Linux or Intel assets (`SECURITY.md:15-22`,
-  `README.md:27-30`, `docs/releases/v0.5.0.md:87-92`).
+- At the research baseline, support was macOS 26 Apple Silicon only, with no
+  support for historical Linux or Intel assets. Qualified native `linux/amd64`
+  is now admitted by `ValidatePlatform` and the registered Bubblewrap backend.
+  `linux/arm64`, Intel Macs, WSL, containers, and historical Linux or Intel
+  assets stay unsupported. The publisher still uploads only the macOS asset set
+  until a release adds the staged Linux archive.
 
 The documented reason is a deliberate narrowing of the supported, natively
 validated release surface to macOS alongside the new shell. The inspected
@@ -76,9 +80,14 @@ instead of adding target-specific Linux execution paths.
 
 ### Files requiring platform treatment
 
+This inventory is the 2026-10-09 research baseline. Qualified `linux/amd64`
+admission, the file credential provider, doctor probes, and the `linux/amd64`
+updater are now in place. The publisher still uploads only the macOS asset set.
+`linux/arm64` stays unpublished.
+
 | Area | Exact current files and evidence | Linux work |
 | --- | --- | --- |
-| Selection | `internal/launch/sandbox.go:223-267,478-497`; `internal/launch/sandbox_backends_darwin.go:1-7`; `internal/launch/sandbox_backends_other.go:1-5` | macOS-only admission; `!darwin` returns no backend. Add a Linux registration only after qualification. |
+| Selection | `internal/launch/sandbox.go:223-267,478-497`; `internal/launch/sandbox_backends_darwin.go:1-7`; `internal/launch/sandbox_backends_other.go:1-5` | Research baseline was macOS-only. Qualified `linux/amd64` now registers the Bubblewrap backend. Other architectures still return no backend. |
 | Policy/launch | `internal/launch/seatbelt_darwin.go:1,31-37,60-90,93-126,858,1042` | Darwin build tag, `/usr/bin/sandbox-exec`, Seatbelt policy and process implementation. Implement separately. |
 | Supervisor | `internal/launch/seatbelt_supervisor_darwin.go:1,27-75,140,598-778` | Darwin helper entrypoints, descriptor sealing, process identity ledger and settlement. Preserve protocol properties, replace process APIs. |
 | Process inspection | `internal/launch/seatbelt_proc_darwin.go:1,74` | Loads `/usr/lib/libSystem.B.dylib`; Darwin process enumeration is not portable. |
@@ -89,7 +98,7 @@ instead of adding target-specific Linux execution paths.
 | Credential provider | `internal/codexauthresource/keychain_darwin.go:1,92-105`; `internal/codexauthresource/keychain_other.go:1-5`; `internal/codexauthresource/keychain_provider.go:29-71` | Security/CoreFoundation via purego; non-Darwin provider is unavailable. Introduce Linux provider behind the existing store seam. |
 | Credential store | `internal/codexauthresource/store.go:24-45,78-86` | Provider interface exists, but production constructor hardcodes Keychain. Locks, markers and validated projection should remain shared. |
 | Diagnostics | `internal/diagnostics/host_darwin.go`; `internal/diagnostics/host_other.go:1-12`; `internal/diagnostics/files_unix.go` | Add Linux feature reporting; don't confuse a platform label with backend readiness. |
-| Distribution | `.goreleaser.yaml:5-20`; `internal/selfupdate/update.go:111-139`; `scripts/install.sh.tmpl:36-42,155-168` | macOS-only build, updater and installer predicates; change together at release time. |
+| Distribution | `.goreleaser.yaml:5-20`; `internal/selfupdate/update.go:111-139`; `scripts/install.sh.tmpl:36-42,155-168` | The updater and installer accept `linux/amd64`. The publisher still uploads only the macOS set until a release adds the staged archive. `linux/arm64` stays unpublished. |
 
 Existing Linux shims should be preserved: `internal/launch/path_grants_open_linux.go:1-9`,
 `internal/launch/executable_ctime_linux.go:1-7`,
@@ -116,11 +125,11 @@ lease retention in `internal/launch/session.go:391-500`; and recovery framing in
 `internal/launch/recovery_proof.go:12-45`. Reuse the Devin/Codex adapters and
 `internal/genericrun/`, while reviewing their platform runtime dependencies.
 
-Current Ubuntu CI is only nonblocking compile observation: it uses `go test -c`
-and builds `cmd/acs`, never executes tests (`.github/workflows/ci.yml:17-42`).
-A manual check at the research baseline found that `GOOS=linux go build ./...`
-succeeds and `go test ./...` passes on a Linux amd64 host, because the macOS
-backend is excluded by build tags and Linux has no registered backend.
+At the research baseline, Ubuntu CI was only nonblocking compile observation.
+Portable tests now run on `ubuntu-24.04`. A manual check at that baseline found
+that `GOOS=linux go build ./...` succeeded, because the macOS backend was
+excluded by build tags and Linux had no registered backend. Qualified
+`linux/amd64` now registers the Bubblewrap backend.
 
 ## 3. Security contract and sandbox choices
 
@@ -479,9 +488,10 @@ release notes; they describe the old matrix, not present support.
 
 ## 9. Phased roadmap: small PR stacks
 
-Each PR must preserve macOS gates. Until the final activation PR, production
-Linux launch admission remains closed; test-only backend construction must not
-be reachable via a user bypass flag. Dependencies below use PR numbers in this
+Each PR must preserve macOS gates. Stacks before item 17 kept production Linux
+launch admission closed; test-only backend construction must not be reachable
+via a user bypass flag. Item 17 is the qualified `linux/amd64` admission switch.
+The notes below record each earlier stack's scope. Dependencies below use PR numbers in this
 proposal, not GitHub issue numbers. Split implementation further if review grows.
 
 ### Stack 1 — foundations
@@ -620,9 +630,9 @@ proposal, not GitHub issue numbers. Split implementation further if review grows
 
 ## 10. Decisions
 
-These are the smallest choices consistent with this design. Production admission
-stays off until stack 7's qualified-host switch; this section does not publish
-a release.
+These are the smallest choices consistent with this design. Qualified
+`linux/amd64` admission is the stack 7 host switch. This section does not
+publish a release. `linux/arm64` stays closed.
 
 1. **Sandbox composition:** system Bubblewrap plus Landlock ABI 6 plus seccomp.
    No separate launcher. Loopback uses seccomp notification emulation, not

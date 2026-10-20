@@ -109,4 +109,6 @@ deleting live state. Use the [Session operations guide](session-operations.md)
 to inspect and recover retained state; do not remove private Session or lease
 files by hand.
 
-The supported runtime is macOS 26 on Apple Silicon.
+Supported runtimes are macOS 26 on Apple Silicon and qualified native
+`linux/amd64` (Linux 6.12+, Landlock ABI 6, Bubblewrap, unprivileged user
+namespaces, and an owned cgroup v2 delegation). `linux/arm64` is not supported.

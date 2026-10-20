@@ -6,9 +6,10 @@ import (
 	"github.com/alcimerio/ai-config-selector/internal/launch"
 )
 
-// RunUnsupportedExecution rejects Linux execution before main constructs
-// target or credential dependencies. Passive commands and dry-runs still use
-// their normal paths, including structured readiness and doctor reports.
+// RunUnsupportedExecution rejects unqualified Linux execution before main
+// constructs target or credential dependencies. Qualified linux/amd64 continues
+// into the sandbox. Passive commands and dry-runs still use their normal paths,
+// including structured readiness and doctor reports.
 func (app App) RunUnsupportedExecution(args []string) (bool, int) {
 	if runtime.GOOS != "linux" {
 		return false, 0
@@ -26,5 +27,8 @@ func (app App) RunUnsupportedExecution(args []string) (bool, int) {
 	default:
 		return false, 0
 	}
-	return true, app.fail("%v", launch.ValidatePlatform(launch.Platform{OS: runtime.GOOS, Architecture: runtime.GOARCH}))
+	if err := launch.ValidatePlatform(launch.Platform{OS: runtime.GOOS, Architecture: runtime.GOARCH}); err != nil {
+		return true, app.fail("%v", err)
+	}
+	return false, 0
 }

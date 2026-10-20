@@ -109,7 +109,7 @@ func TestReleaseArtifactContractKeepsLinuxCandidatesSeparate(t *testing.T) {
 		}
 	}
 	installer := readRepositoryFile(t, repository, filepath.Join("scripts", "install.sh.tmpl"))
-	if !strings.Contains(installer, `[ -n "$candidate_directory" ] || fail "ACS release installers support macOS only`) || !strings.Contains(installer, "--candidate-dir)") {
+	if !strings.Contains(installer, `local candidate installation is only available for linux/amd64`) || !strings.Contains(installer, "--candidate-dir)") {
 		t.Fatal("installer does not reject unsupported Linux hosts clearly")
 	}
 	publication := readRepositoryFile(t, repository, "internal/release/publication/plan.go")
@@ -170,8 +170,8 @@ func TestPortableLinuxTestsDoNotClaimRuntimeSupport(t *testing.T) {
 		"CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go vet ./...",
 		"CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build",
 		"CGO_ENABLED=0 go test ./...",
-		"Linux launch fails closed without a backend",
-		"Linux sandbox backend is not available yet",
+		"Linux launch stays fail-closed",
+		"ACS never runs targets unsandboxed",
 	} {
 		if !strings.Contains(ci, required) {
 			t.Errorf("Portable Linux job omits %q", required)

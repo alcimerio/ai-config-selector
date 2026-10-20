@@ -196,6 +196,28 @@ func ReadFrame(reader io.Reader, intrinsic []string) ([]string, error) {
 	return selected, nil
 }
 
+// Restore rebuilds a lease from assignments already checked by ReadFrame.
+// The caller owns the source bytes and must clear them after the call.
+func Restore(assignments []string) (*Lease, error) {
+	if len(assignments) > environmentintent.MaximumEntries {
+		return nil, ErrInvalidValue
+	}
+	lease := &Lease{entries: make([]entry, 0, len(assignments))}
+	seen := make(map[string]bool, len(assignments))
+	total := 0
+	for _, assignment := range assignments {
+		name, value, ok := strings.Cut(assignment, "=")
+		if !ok || !environmentintent.ValidName(name) || environmentintent.ReservedDestination(name) || seen[name] || strings.ContainsRune(value, 0) || len(value) > environmentintent.MaximumValueBytes || total > environmentintent.MaximumAggregateBytes-len(value) {
+			lease.Release()
+			return nil, ErrInvalidValue
+		}
+		seen[name] = true
+		total += len(value)
+		lease.entries = append(lease.entries, entry{destination: name, value: []byte(value)})
+	}
+	return lease, nil
+}
+
 func (lease *Lease) Release() {
 	if lease == nil {
 		return

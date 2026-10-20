@@ -29,7 +29,7 @@ func TestLinuxLaunchFailsBeforeSessionCreation(t *testing.T) {
 			switch target {
 			case "shell":
 				err = executor.RunShell(context.Background(), ShellRequest{
-					SessionsDirectory: sessions, WorkingDirectory: request.WorkingDirectory,
+					SessionsDirectory: sessions, WorkingDirectory: sessions,
 					Materializer: materializer,
 				})
 			case "devin":
@@ -41,8 +41,8 @@ func TestLinuxLaunchFailsBeforeSessionCreation(t *testing.T) {
 				_, err = executor.RunGrok(context.Background(), GrokRequest{SessionsDirectory: sessions, WorkingDirectory: request.WorkingDirectory, ResolvedPlan: &plan})
 			}
 			var failure *launch.SandboxError
-			if !errors.As(err, &failure) || failure.Category != launch.SandboxUnsupportedPlatform {
-				t.Fatalf("launch error = %v, want unsupported platform", err)
+			if !errors.As(err, &failure) {
+				t.Fatalf("launch error = %v, want a sandbox failure before Session creation", err)
 			}
 			if entries, err := os.ReadDir(root); err != nil || len(entries) != 0 {
 				t.Fatalf("failed launch created Session state: %v, %v", entries, err)

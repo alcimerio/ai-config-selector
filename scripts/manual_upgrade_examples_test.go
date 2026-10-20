@@ -183,7 +183,7 @@ func TestManualUpgradeExamplesRejectUnsupportedArchitecture(t *testing.T) {
 	fixture := newManualUpgradeFixture(t, "x86_64")
 	before := fixture.protectedSnapshot()
 	output, err := fixture.run("")
-	if err == nil || !strings.Contains(output, "Apple Silicon (arm64) only") {
+	if err == nil || !strings.Contains(output, "linux/amd64") {
 		t.Fatalf("unsupported Intel host was not rejected: %v\n%s", err, output)
 	}
 	fixture.assertProtectedUnchanged(before)

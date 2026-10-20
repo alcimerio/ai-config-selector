@@ -24,7 +24,7 @@ func TestValidatePlatformCoversSupportedMatrix(t *testing.T) {
 	}{
 		{name: "macOS 26 arm64", platform: Platform{OS: "darwin", Architecture: "arm64", Release: "26.0"}, accepted: true},
 		{name: "unsupported macOS 26 Intel", platform: Platform{OS: "darwin", Architecture: "amd64", Release: "26.9.1"}},
-		{name: "unsupported Linux amd64", platform: Platform{OS: "linux", Architecture: "amd64", Release: "24.04"}},
+		{name: "linux amd64", platform: Platform{OS: "linux", Architecture: "amd64", Release: "6.12.0"}, accepted: true},
 		{name: "unsupported Linux arm64", platform: Platform{OS: "linux", Architecture: "arm64", Release: "24.04.3"}},
 		{name: "old macOS", platform: Platform{OS: "darwin", Architecture: "arm64", Release: "15.6"}},
 		{name: "future macOS", platform: Platform{OS: "darwin", Architecture: "amd64", Release: "27.0"}},
@@ -447,6 +447,10 @@ func TestNativeSandboxBackendsAreRegisteredOnlyForTheNativeOperatingSystem(t *te
 	switch runtime.GOOS {
 	case "darwin":
 		wantOS = runtime.GOOS
+	case "linux":
+		if runtime.GOARCH == "amd64" {
+			wantOS = runtime.GOOS
+		}
 	}
 	if wantOS == "" {
 		if len(backends) != 0 {
@@ -831,14 +835,24 @@ func validProcessRequest(t *testing.T) ProcessRequest {
 }
 
 func TestCurrentPlatformRejectsUnsupportedOperatingSystems(t *testing.T) {
-	if runtime.GOOS == "darwin" {
-		t.Skip("unsupported-platform check requires a non-macOS host")
+	platform, err := CurrentPlatform()
+	switch runtime.GOOS {
+	case "darwin", "linux":
+		if runtime.GOOS == "linux" && runtime.GOARCH != "amd64" {
+			if err == nil {
+				t.Fatal("unqualified Linux architecture was admitted")
+			}
+			return
+		}
+		if err != nil || platform.OS != runtime.GOOS || platform.Architecture != runtime.GOARCH || platform.Release == "" {
+			t.Fatalf("current platform = %+v, %v", platform, err)
+		}
+	default:
+		if err == nil {
+			t.Fatal("unsupported host was probed as an available platform")
+		}
+		assertSandboxCategory(t, err, SandboxUnsupportedPlatform)
 	}
-	_, err := CurrentPlatform()
-	if err == nil {
-		t.Fatal("unsupported host was probed as an available platform")
-	}
-	assertSandboxCategory(t, err, SandboxUnsupportedPlatform)
 }
 
 func TestRuntimeAuthorityAdmitsOnlyValidatedLoopbackPortsAndScopedCallback(t *testing.T) {
