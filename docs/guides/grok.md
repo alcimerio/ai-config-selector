@@ -2,7 +2,7 @@
 
 [Documentation index](../README.md) · [Target compatibility](../reference/target-compatibility.md) · [CLI reference](../reference/cli.md)
 
-ACS runs the reviewed Grok Build CLI (`grok` 1.0.62) inside the macOS Seatbelt sandbox. Grok is not a qualified Linux target.
+ACS runs the reviewed Grok Build CLI (`grok` 1.0.62) inside the required sandbox on macOS and qualified `linux/amd64`.
 Install Grok separately. ACS does not download it during a launch and does not
 start `grok login` inside a Session.
 
@@ -63,5 +63,7 @@ the directory is untrusted.
 Grok's built-in web tools use ACS's coarse outbound network. Tool filtering is
 a Grok feature, not a separate ACS boundary.
 
-Grok is not a qualified Linux target. A `linux/amd64` Grok launch is refused.
-Dry-run, explain, doctor, and check still report the plan and passive facts.
+Qualified `linux/amd64` admits only the locked static `grok` 1.0.62 binary, and only
+`grok --version` or an interactive `grok` with no extra arguments. `linux/arm64`
+stays refused. Dry-run, explain, doctor, and check still report the plan and
+passive facts.

@@ -60,7 +60,7 @@ run_suite prerequisites ./internal/linuxprobe '^TestNative' \
 # Fetch only after the actual kernel, userns, Landlock, seccomp, bwrap provenance
 # and cgroup placement/kill/empty/removal probes pass. Installers verify bytes
 # and never execute Linux targets outside the test-only containment harness.
-mkdir -m 0700 -- "$gate_root/devin" "$gate_root/codex"
+mkdir -m 0700 -- "$gate_root/devin" "$gate_root/codex" "$gate_root/grok"
 bash scripts/install-devin-test-target.sh scripts/devin-test-targets.lock \
   "$gate_root/devin" "$gate_root/devin/devin"
 bash scripts/fetch-codex-test-targets.sh scripts/codex-linux-test-targets.lock "$gate_root/codex-archives"
@@ -69,8 +69,12 @@ for version in 0.149.1 0.156.0; do
   bash scripts/install-codex-test-target.sh scripts/codex-linux-test-targets.lock \
     "$gate_root/codex-archives" amd64 "$gate_root/codex/$version/codex" "$version"
 done
+bash scripts/fetch-grok-test-target.sh scripts/grok-test-targets.lock "$gate_root/grok/grok.zst"
+bash scripts/install-grok-test-target.sh scripts/grok-test-targets.lock \
+  "$gate_root/grok/grok.zst" amd64 "$gate_root/grok/grok"
 export ACS_TEST_DEVIN_BINARY="$gate_root/devin/devin"
 export ACS_TEST_CODEX_LINUX_ROOT="$gate_root/codex"
+export ACS_TEST_GROK_BINARY="$gate_root/grok/grok"
 
 run_suite containment ./internal/launch '^TestLinux' \
   TestLinuxNativeRestrictionControls TestLinuxNativeSetupFailuresNeverExec \
@@ -81,6 +85,7 @@ run_suite containment ./internal/launch '^TestLinux' \
   TestLinuxNativeRecipeStartupAndLiteralArguments TestLinuxNativeRecipeInteractiveShell \
   TestLinuxNativeRecipeComposition TestLinuxDevinPublishedBytes TestLinuxNativeDevinPreflights \
   TestLinuxCodexPublishedPairs TestLinuxNativeCodexPairs \
+  TestLinuxGrokPublishedBytes TestLinuxNativeGrokProbes \
   TestLinuxAmd64RegistersTheQualifiedBackend TestLinuxProductionCommandRunsInsideTheSandbox \
   TestLinuxSandboxFailsClosed
 run_suite credentials ./internal/codexauthresource '^TestLinux' \

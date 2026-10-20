@@ -3,8 +3,8 @@
 [Documentation index](../README.md) · [Common Profile format](common-profile-format.md)
 
 ACS supports common Profile capabilities across its Devin, Codex, and Grok Build
-adapters on macOS 26 Apple Silicon, and across Devin and Codex on qualified
-native `linux/amd64`. Grok is not a qualified Linux target. Target configuration,
+adapters on macOS 26 Apple Silicon and qualified native `linux/amd64`.
+Target configuration,
 discovery, and authentication remain adapter-specific.
 
 ## Common intent and target differences

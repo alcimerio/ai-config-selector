@@ -87,8 +87,9 @@ helper, prove empty membership and remove its child. WSL and containers are
 rejected. Missing delegation, old kernels and any other missing prerequisite
 **fail the job**; there is no successful skip or weaker fallback.
 
-After prerequisites pass, the script installs checksum-locked Linux Devin and
-both reviewed Codex CLI/companion pairs without running them uncontained. It
+After prerequisites pass, the script installs checksum-locked Linux Devin,
+both reviewed Codex CLI/companion pairs, and the locked Grok 1.0.62 binary
+without running them uncontained. It
 runs the Linux probe, launch, file-provider and executor suites. Every selected
 test, including subtests, must avoid skips, and the named containment and denial
 tests must report a pass; an empty or renamed suite cannot qualify the platform.

@@ -18,6 +18,7 @@ const (
 	linuxCommandRecipe
 	linuxDevinRecipe
 	linuxCodexRecipe
+	linuxGrokRecipe
 )
 
 // The zero value refuses admission. The registered linux/amd64 backend is the
@@ -65,6 +66,11 @@ func linuxCompileRecipe(admission linuxRecipeAdmission, kind linuxRecipeKind, re
 			return linuxRecipe{}, errLinuxRecipe
 		}
 		request.arguments = append([]string(nil), request.arguments...)
+	case linuxGrokRecipe:
+		if !filepath.IsAbs(request.executable) || !linuxGrokArguments(request.arguments, interactive) {
+			return linuxRecipe{}, errLinuxRecipe
+		}
+		request.arguments = append([]string(nil), request.arguments...)
 	default:
 		return linuxRecipe{}, errLinuxRecipe
 	}
@@ -74,11 +80,14 @@ func linuxCompileRecipe(admission linuxRecipeAdmission, kind linuxRecipeKind, re
 	}
 	request.executable = executable
 	var files []linuxRuntimeFile
-	if kind == linuxDevinRecipe {
+	switch kind {
+	case linuxDevinRecipe:
 		files, err = linuxDevinRuntime(executable)
-	} else if kind == linuxCodexRecipe {
+	case linuxCodexRecipe:
 		files, err = linuxCodexRuntime(executable)
-	} else {
+	case linuxGrokRecipe:
+		files, err = linuxGrokRuntime(executable)
+	default:
 		files, err = linuxDiscoverRuntime(executable, interactive)
 	}
 	if err != nil {

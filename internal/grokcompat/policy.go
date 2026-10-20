@@ -8,6 +8,13 @@ import "strings"
 const Version = "1.0.62"
 const ExecutableRequirementID = "grok-cli-exact-1.0.62"
 
+// Extracted linux/amd64 CLI bytes. The zstd archive digest stays in
+// scripts/grok-test-targets.lock. Linux arm64 is not admitted.
+const (
+	LinuxAMD64BinarySize   int64 = 191715904
+	LinuxAMD64BinarySHA256       = "2a46d9e4d7ebd7a9cff7f95716714b19dad5f21dd2a497822400b1fb128969aa"
+)
+
 // AcceptsOutput admits only the bounded version probe's complete output.
 // The optional parenthesized suffix is the upstream commit, which is not pinned.
 func AcceptsOutput(output string) bool {
