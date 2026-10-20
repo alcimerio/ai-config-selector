@@ -3,7 +3,6 @@ package commonprofile
 import (
 	"context"
 	"encoding/json"
-	"runtime"
 	"strconv"
 	"strings"
 
@@ -15,7 +14,6 @@ import (
 
 const NetworkCapabilityID = "network"
 const NetworkCapabilityVersion = 1
-const LinuxLoopbackGap = "Linux ignores common.network.selection.loopbackPorts: loopback denial and port exceptions are not enforced; network behavior is unchanged."
 
 type NetworkSelection = networkintent.Selection
 type NetworkContribution struct{ ports []int }
@@ -58,9 +56,6 @@ func (value NetworkContribution) Plan(_ context.Context, _ string, plan *launch.
 		allowed = strings.Join(ports, ", ") + " (all other loopback ports denied)"
 	}
 	section := launch.PlanSection{Title: "Loopback network (macOS):", Items: []launch.PlanItem{{Label: "allowed ports", Details: []launch.PlanDetail{{Label: "access", Value: allowed}}}}}
-	if runtime.GOOS == "linux" {
-		section.Items = append(section.Items, launch.PlanItem{Label: LinuxLoopbackGap})
-	}
 	plan.Sections = append(plan.Sections, section)
 	return nil
 }

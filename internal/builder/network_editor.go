@@ -3,7 +3,6 @@ package builder
 import (
 	"context"
 	"fmt"
-	"runtime"
 	"strconv"
 	"strings"
 
@@ -112,9 +111,6 @@ func (editor networkEditor) View() tea.View {
 		fmt.Fprintf(&out, "\nPort: %s\nEnter adds; Esc cancels.\n%s", *editor.form, editor.err)
 	} else {
 		out.WriteString("\na adds; d removes; arrows select.")
-	}
-	if runtime.GOOS == "linux" {
-		out.WriteString("\n" + commonprofile.LinuxLoopbackGap)
 	}
 	return tea.NewView(out.String())
 }

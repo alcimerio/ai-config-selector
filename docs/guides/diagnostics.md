@@ -260,10 +260,11 @@ network authority. Codex facts include fixed generated configuration and state
 that its full-permission/no-approval settings remain subordinate to ACS.
 
 Local-IP grants permit socket binding only, not `listen`, inbound service
-authority. macOS loopback outbound is denied except for Profile ports in
+authority. Loopback outbound is denied except for Profile ports in
 `common.network` v1 `selection.loopbackPorts`; explain/dry-run show those ports
-and default denial. Other outbound IP and macOS DNS remain coarse. Linux reports
-that the loopback capability is ignored and enforcement is unchanged.
+and default denial. Other outbound IP and macOS DNS remain coarse. Linux
+enforces that selection in the experimental launcher, including the whole
+127.0.0.0/8; production Linux admission stays closed.
 
 Executable selections are requested logical facts. A workspace-relative entry
 already covered by workspace read is marked

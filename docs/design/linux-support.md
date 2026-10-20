@@ -237,14 +237,15 @@ Current Seatbelt allows local IP bind and coarse outbound IP/DNS, with loopback
 outbound denied except for `common.network` v1 `selection.loopbackPorts`. It has
 no ordinary inbound grant; managed Codex browser login alone receives the
 localhost:1455 callback exception. Unrelated Unix sockets remain denied.
-The Linux prototype shares the host network namespace and ignores this capability
-for enforcement. Explain/dry-run report unchanged Linux behavior explicitly.
-Landlock TCP port rules cannot distinguish loopback from remote destinations,
-and seccomp BPF cannot dereference sockaddr pointers. See the
-[loopback policy gap](linux-sealed-launcher.md#loopback-policy-gap) before claiming
-network parity. Blocking `listen` alone does not restrict UDP reception; record
-that distinction and test it. Do not advertise Linux loopback isolation or an
-egress firewall.
+The Linux launcher keeps the host network namespace and enforces
+`selection.loopbackPorts` by seccomp user notification. The supervisor copies
+the sockaddr and emulates the call; it never continues the original syscall.
+Landlock TCP port rules are not used, because they cannot distinguish loopback
+from a remote destination on the same port. See
+[loopback enforcement](linux-sealed-launcher.md#loopback-enforcement). Blocking
+`listen` alone does not restrict UDP reception; record that distinction and
+test it. Do not advertise an egress firewall. Production admission stays closed
+until the qualified-host switch in stack 7.
 
 Private mounts hide pathname Unix sockets; ABI 6 scopes abstract sockets.
 Audit sockets reachable inside writable grants too: on ABI 6, hiding `/run` alone
@@ -617,23 +618,27 @@ proposal, not GitHub issue numbers. Split implementation further if review grows
     update and recovery examples are checked; release approval uses the existing
     maintainer workflow. This research task does not authorize publication.
 
-## 10. Decisions needed from the maintainer
+## 10. Decisions
 
-1. **Sandbox composition:** approve system Bubblewrap + Landlock + seccomp, or
-   fund a dedicated launcher. Decide how absent exclusions and pathname sockets
-   inside grants are enforced before committing to a kernel floor.
-2. **Minimum host:** accept proposed ABI 6/Linux 6.12+ plus tested delegation and
-   AppArmor prerequisites, or require ABI 9 for socket mediation. Start with one
-   certified Ubuntu/kernel combination; distinguish GA 6.8 from qualified HWE
-   hosts. Decide whether non-systemd, WSL and containers are explicitly excluded.
-3. **Credentials:** desktop Secret Service first, explicit file provider first,
-   or both; choose libsecret/CGO versus reviewed D-Bus implementation. Confirm
-   plaintext-at-rest disclosure and Linux XDG paths without moving existing state.
-4. **arm64 evidence:** select/budget native hosted or self-hosted arm64 CI;
-   otherwise ship amd64 first with arm64 unsupported, adjusting the artifact set.
-5. **Process lifetime:** require delegation for all launches initially, including
-   SSH/headless hosts; decide how to provision it and recover after reboot without
-   treating missing cgroup state as proof.
+These are the smallest choices consistent with this design. Production admission
+stays off until stack 7's qualified-host switch; this section does not publish
+a release.
+
+1. **Sandbox composition:** system Bubblewrap plus Landlock ABI 6 plus seccomp.
+   No separate launcher. Loopback uses seccomp notification emulation, not
+   Landlock port rules and not `CONTINUE`.
+2. **Minimum host:** Linux 6.12+ and Landlock ABI 6, cgroup v2 delegation, and
+   working unprivileged user namespaces. WSL, containers, and non-systemd hosts
+   are excluded. An AppArmor unprivileged-userns restriction is an administrator
+   prerequisite. ACS does not ship a profile and does not disable that sysctl.
+3. **Credentials:** the explicit XDG mode-0600 file provider is the first
+   provider. Secret Service can follow as pure Go, without CGO and without a
+   silent plaintext fallback.
+4. **arm64:** amd64 is the first qualified architecture. arm64 stays unpublished
+   until a native runner exists. QEMU is not evidence.
+5. **Process lifetime:** cgroup delegation is required for every launch,
+   including SSH and headless sessions. Missing cgroup state is not proof that
+   a Session is empty.
 
 ## External and historical references
 

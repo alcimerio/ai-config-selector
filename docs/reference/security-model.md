@@ -46,10 +46,14 @@ If a target can read a file, selected secret, credential projection, or prompt,
 it may be able to send that data to its provider or another network destination.
 Read-only access denies filesystem writes to that grant. It still permits
 reading and transmitting the data.
-General destination filtering is not a shipped capability. Linux currently
-ignores the loopback capability and reports that gap in explain/dry-run; its
-production launch admission remains closed. Native transport experiments do
-not extend this network contract.
+General destination filtering is not a shipped capability. The Linux launcher
+enforces the same port selection by emulating `connect`, `sendto`, `sendmsg`,
+and `sendmmsg` from a copied sockaddr: the whole 127.0.0.0/8, `::1`, and
+IPv4-mapped loopback are denied unless the port is selected. DNS to the exact
+nameservers in the host `/etc/resolv.conf` stays allowed on port 53. Managed
+Codex login can accept only on 127.0.0.1:1455 and `[::1]:1455`. Production
+Linux launch admission remains closed. Native transport experiments do not
+extend this network contract.
 
 ### Code and instructions inside the Session
 

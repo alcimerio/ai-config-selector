@@ -3,7 +3,6 @@ package commonprofile
 import (
 	"context"
 	"reflect"
-	"runtime"
 	"strings"
 	"testing"
 
@@ -73,7 +72,7 @@ func TestNetworkAuthorityDefaultsPortsDigestAndPlan(t *testing.T) {
 				}
 			}
 		}
-		if !strings.Contains(body, test.want) || (runtime.GOOS == "linux" && !strings.Contains(body, LinuxLoopbackGap)) {
+		if !strings.Contains(body, test.want) {
 			t.Fatalf("plan missing policy: %s", body)
 		}
 	}
