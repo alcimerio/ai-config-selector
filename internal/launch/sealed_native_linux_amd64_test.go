@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/netip"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -348,12 +349,30 @@ func linuxProbeLoopback(t *testing.T, remote string) {
 	if errno, n := linuxProbeSendmmsg(host, linuxPort(port)); errno == unix.EPERM || (errno == 0 && n != 1) {
 		t.Fatalf("sendmmsg non-loopback: %v len %d", errno, n)
 	}
-	if resolver := os.Getenv("PROBE_RESOLVER"); resolver != "" {
-		if errno := linuxProbeUDP(resolver, 53); errno == unix.EPERM {
-			t.Fatalf("resolver %s:53 denied", resolver)
+	// The broker allowlists every nameserver from the host file, not only the
+	// first. systemd-resolved configurations often list an uplink and the
+	// 127.0.0.53 stub together; the stub is then a listed resolver.
+	if listed, ok := os.LookupEnv("PROBE_RESOLVERS"); ok {
+		var resolvers []string
+		if listed != "" {
+			resolvers = strings.Split(listed, ",")
 		}
-		if resolver != "127.0.0.53" && linuxProbeUDP("127.0.0.53", 53) != unix.EPERM {
-			t.Fatal("unlisted loopback resolver was allowed")
+		for _, resolver := range resolvers {
+			addr, err := netip.ParseAddr(resolver)
+			if err != nil || !addr.Unmap().Is4() {
+				continue
+			}
+			if errno := linuxProbeUDP(addr.Unmap().String(), 53); errno == unix.EPERM {
+				t.Fatalf("resolver %s:53 denied", resolver)
+			}
+		}
+		for _, ip := range []string{"127.0.0.1", "127.0.0.53", "127.0.0.54"} {
+			if linuxProbeResolverListed(resolvers, ip) {
+				continue
+			}
+			if errno := linuxProbeUDP(ip, 53); errno != unix.EPERM {
+				t.Fatalf("unlisted loopback resolver %s:53 was allowed: %v", ip, errno)
+			}
 		}
 	}
 	if allow := os.Getenv("PROBE_LOOPBACK_ALLOW"); allow != "" {
@@ -485,18 +504,32 @@ func linuxNativeIPv4(t *testing.T) string {
 	return ""
 }
 
-func linuxProbeResolver() string {
-	data, err := os.ReadFile("/etc/resolv.conf")
-	if err != nil {
-		return ""
+func TestLinuxProbeResolverListedUsesEveryNameserver(t *testing.T) {
+	resolvers := []string{"10.0.0.2", "127.0.0.53", "::ffff:127.0.0.54"}
+	if linuxProbeResolverListed(resolvers, "127.0.0.1") {
+		t.Fatal("unrelated loopback was treated as a nameserver")
 	}
-	for _, line := range strings.Split(string(data), "\n") {
-		fields := strings.Fields(line)
-		if len(fields) >= 2 && fields[0] == "nameserver" {
-			return fields[1]
+	if !linuxProbeResolverListed(resolvers, "127.0.0.53") || !linuxProbeResolverListed(resolvers, "127.0.0.54") {
+		t.Fatal("a later or IPv4-mapped nameserver was treated as unlisted")
+	}
+	if linuxProbeResolverListed(nil, "127.0.0.53") {
+		t.Fatal("empty nameserver list contains the stub")
+	}
+}
+
+func linuxProbeResolverListed(resolvers []string, ip string) bool {
+	want, err := netip.ParseAddr(ip)
+	if err != nil {
+		return false
+	}
+	parsed := make([]netip.Addr, 0, len(resolvers))
+	for _, resolver := range resolvers {
+		addr, err := netip.ParseAddr(resolver)
+		if err == nil {
+			parsed = append(parsed, addr)
 		}
 	}
-	return ""
+	return linuxResolverMatch(want, parsed)
 }
 
 type linuxNativeFixture struct {
@@ -600,9 +633,9 @@ func linuxRunNativeFixture(t *testing.T, f linuxNativeFixture, mode string, comp
 	}
 	defer listener.Close()
 	values["PROBE_TCP"] = listener.Addr().String()
-	if resolver := linuxProbeResolver(); resolver != "" {
-		values["PROBE_RESOLVER"] = resolver
-	}
+	// Same parser the broker snapshots into the sealed transport. An empty
+	// value still arms the probe so unlisted loopback port 53 stays denied.
+	values["PROBE_RESOLVERS"] = strings.Join(linuxResolverStrings(), ",")
 	if !composed {
 		values["PROBE_LOCALHOST"] = "1"
 	}
